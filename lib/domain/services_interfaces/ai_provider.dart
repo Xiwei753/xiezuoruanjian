@@ -1,13 +1,4 @@
-class AITask {
-  final String id;
-  final String targetId;
-  AITask({required this.id, required this.targetId});
-}
-
-class AIResult {
-  final String content;
-  AIResult({required this.content});
-}
+import '../models/ai_models.dart';
 
 class CancellationToken {
   bool isCancelled = false;
@@ -15,5 +6,11 @@ class CancellationToken {
 }
 
 abstract class IAIProvider {
-  Future<AIResult> analyze(AITask request, CancellationToken token);
+  /// Base API for completing multi-turn conversations and potentially invoking tools.
+  Future<AIResult> executeTask(
+    AITask task,
+    List<AIMessage> messages,
+    List<AIToolDefinition> tools,
+    CancellationToken token,
+  );
 }
