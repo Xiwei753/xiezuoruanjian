@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:path/path.dart' as p;
 
+import 'dart:io';
+
 import '../../core/utils/content_utils.dart';
 import '../../domain/models/chapter.dart';
 import '../../domain/models/manifests.dart';
@@ -50,8 +52,26 @@ class ChapterRepositoryImpl implements IChapterRepository {
   }
 
   @override
+  Future<String> readChapterContent(Chapter chapter) async {
+    final chaptersDir = p.join(
+      _workspaceRoot,
+      'projects',
+      chapter.projectId,
+      'volumes',
+      chapter.volumeId,
+      'chapters',
+    );
+    final mdPath = p.join(chaptersDir, '${chapter.id}.md');
+    final file = File(mdPath);
+    if (await file.exists()) {
+      return await file.readAsString();
+    }
+    return '';
+  }
+
+  @override
   Future<void> rebuildIndexFromWorkspace(String projectId) async {
-    // To be implemented in next step via DatabaseHelper
+    // To be implemented via DatabaseHelper
     throw UnimplementedError();
   }
 }
