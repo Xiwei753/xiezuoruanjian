@@ -33,10 +33,15 @@ void main() {
       storageService = AtomicWriter();
       writeQueue = FileWriteQueue(storageService);
       workspaceService = WorkspaceService(storageService);
-      chapterRepository = ChapterRepositoryImpl(writeQueue, tempWorkspace.path);
-      dbHelper = DatabaseHelper(tempWorkspace.path);
       trashService = TrashServiceImpl();
       backupService = BackupServiceImpl();
+      chapterRepository = ChapterRepositoryImpl(
+        writeQueue,
+        tempWorkspace.path,
+        trashService,
+        backupService,
+      );
+      dbHelper = DatabaseHelper(tempWorkspace.path);
     });
 
     tearDown(() async {

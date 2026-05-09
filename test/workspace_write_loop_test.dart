@@ -9,6 +9,8 @@ import 'package:writer_app/application/services/workspace_service.dart';
 import 'package:writer_app/domain/models/chapter.dart';
 import 'package:writer_app/infrastructure/repositories/chapter_repository_impl.dart';
 import 'package:writer_app/infrastructure/database/database_helper.dart';
+import 'package:writer_app/infrastructure/storage/trash_service_impl.dart';
+import 'package:writer_app/infrastructure/backup/backup_service_impl.dart';
 
 void main() {
   setUpAll(() {
@@ -29,7 +31,12 @@ void main() {
       storageService = AtomicWriter();
       writeQueue = FileWriteQueue(storageService);
       workspaceService = WorkspaceService(storageService);
-      chapterRepository = ChapterRepositoryImpl(writeQueue, tempWorkspace.path);
+      chapterRepository = ChapterRepositoryImpl(
+        writeQueue,
+        tempWorkspace.path,
+        TrashServiceImpl(),
+        BackupServiceImpl(),
+      );
       dbHelper = DatabaseHelper(tempWorkspace.path);
     });
 
