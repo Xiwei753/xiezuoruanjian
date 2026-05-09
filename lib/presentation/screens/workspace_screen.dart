@@ -34,7 +34,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   void _onControllerUpdate() {
     if (mounted) {
-      if (_textController.text != _controller.currentContent && !_controller.isSaving) {
+      if (_textController.text != _controller.currentContent &&
+          !_controller.isSaving) {
         _textController.text = _controller.currentContent;
       }
       setState(() {});
@@ -68,15 +69,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       ),
     );
 
-    if (result != null && result.isNotEmpty && result != _controller.selectedChapter!.title) {
-      final updatedChapter = _controller.selectedChapter!.copyWith(title: result);
+    if (result != null &&
+        result.isNotEmpty &&
+        result != _controller.selectedChapter!.title) {
+      final updatedChapter = _controller.selectedChapter!.copyWith(
+        title: result,
+      );
       _controller.selectedChapter = updatedChapter;
       await _saveCurrentChapter();
     }
   }
 
   Future<bool> _promptUnsavedChanges() async {
-    if (_controller.selectedChapter == null || _controller.currentContent == _textController.text) {
+    if (_controller.selectedChapter == null ||
+        _controller.currentContent == _textController.text) {
       return true;
     }
 
@@ -86,8 +92,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         title: const Text('未保存的更改'),
         content: const Text('当前章节有未保存的内容，是否放弃更改？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('放弃更改', style: TextStyle(color: Colors.red))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('放弃更改', style: TextStyle(color: Colors.red)),
+          ),
           TextButton(
             onPressed: () async {
               await _saveCurrentChapter();
@@ -95,10 +107,10 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                 Navigator.pop(context, true);
               }
             },
-            child: const Text('保存')
+            child: const Text('保存'),
           ),
         ],
-      )
+      ),
     );
 
     return result ?? false;
@@ -128,12 +140,20 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除章节'),
-        content: Text('确定要删除《${_controller.selectedChapter!.title}》吗？\n文件将被移动到回收站。'),
+        content: Text(
+          '确定要删除《${_controller.selectedChapter!.title}》吗？\n文件将被移动到回收站。',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('确认删除', style: TextStyle(color: Colors.red))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('确认删除', style: TextStyle(color: Colors.red)),
+          ),
         ],
-      )
+      ),
     );
 
     if (confirm != true) return;
@@ -149,7 +169,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     try {
       await _controller.backupProject();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('项目备份成功！')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('项目备份成功！')));
       }
     } catch (e) {
       _showError('备份失败: $e');
@@ -158,7 +180,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   void _showError(String message) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     }
   }
 

@@ -9,10 +9,10 @@ class AITools {
     parametersJsonSchema: {
       "type": "object",
       "properties": {
-        "projectId": {"type": "string"}
+        "projectId": {"type": "string"},
       },
-      "required": ["projectId"]
-    }
+      "required": ["projectId"],
+    },
   );
 
   static const readChapter = AIToolDefinition(
@@ -23,10 +23,10 @@ class AITools {
     parametersJsonSchema: {
       "type": "object",
       "properties": {
-        "chapterId": {"type": "string"}
+        "chapterId": {"type": "string"},
       },
-      "required": ["chapterId"]
-    }
+      "required": ["chapterId"],
+    },
   );
 
   static const searchText = AIToolDefinition(
@@ -38,10 +38,10 @@ class AITools {
       "type": "object",
       "properties": {
         "projectId": {"type": "string"},
-        "query": {"type": "string"}
+        "query": {"type": "string"},
       },
-      "required": ["projectId", "query"]
-    }
+      "required": ["projectId", "query"],
+    },
   );
 
   static const listCharacterCards = AIToolDefinition(
@@ -52,10 +52,10 @@ class AITools {
     parametersJsonSchema: {
       "type": "object",
       "properties": {
-        "projectId": {"type": "string"}
+        "projectId": {"type": "string"},
       },
-      "required": ["projectId"]
-    }
+      "required": ["projectId"],
+    },
   );
 
   static const saveCharacterExtraction = AIToolDefinition(
@@ -69,11 +69,11 @@ class AITools {
         "projectId": {"type": "string"},
         "characters": {
           "type": "array",
-          "items": {"type": "object"}
-        }
+          "items": {"type": "object"},
+        },
       },
-      "required": ["projectId", "characters"]
-    }
+      "required": ["projectId", "characters"],
+    },
   );
 
   static const saveChapterSummary = AIToolDefinition(
@@ -85,10 +85,10 @@ class AITools {
       "type": "object",
       "properties": {
         "chapterId": {"type": "string"},
-        "summary": {"type": "string"}
+        "summary": {"type": "string"},
       },
-      "required": ["chapterId", "summary"]
-    }
+      "required": ["chapterId", "summary"],
+    },
   );
 
   static const saveConsistencyReport = AIToolDefinition(
@@ -100,10 +100,10 @@ class AITools {
       "type": "object",
       "properties": {
         "projectId": {"type": "string"},
-        "report": {"type": "string"}
+        "report": {"type": "string"},
       },
-      "required": ["projectId", "report"]
-    }
+      "required": ["projectId", "report"],
+    },
   );
 
   // Example of a blocked tool
@@ -116,10 +116,10 @@ class AITools {
       "type": "object",
       "properties": {
         "chapterId": {"type": "string"},
-        "content": {"type": "string"}
+        "content": {"type": "string"},
       },
-      "required": ["chapterId", "content"]
-    }
+      "required": ["chapterId", "content"],
+    },
   );
 
   static final List<AIToolDefinition> allTools = [

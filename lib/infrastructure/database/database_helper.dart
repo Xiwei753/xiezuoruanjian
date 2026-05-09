@@ -58,13 +58,25 @@ class DatabaseHelper {
 
     // 1. Clear existing cache for this project
     batch.delete('projects_cache', where: 'id = ?', whereArgs: [projectId]);
-    batch.delete('volumes_cache', where: 'project_id = ?', whereArgs: [projectId]);
-    batch.delete('chapters_cache', where: 'project_id = ?', whereArgs: [projectId]);
+    batch.delete(
+      'volumes_cache',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+    );
+    batch.delete(
+      'chapters_cache',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+    );
 
     // 2. Read project.json
-    final projectFile = File(p.join(_workspaceRoot, 'projects', projectId, 'project.json'));
+    final projectFile = File(
+      p.join(_workspaceRoot, 'projects', projectId, 'project.json'),
+    );
     if (await projectFile.exists()) {
-      final pMeta = ProjectManifest.fromJson(jsonDecode(await projectFile.readAsString()));
+      final pMeta = ProjectManifest.fromJson(
+        jsonDecode(await projectFile.readAsString()),
+      );
       batch.insert('projects_cache', {
         'id': pMeta.id,
         'title': pMeta.title,
@@ -73,7 +85,9 @@ class DatabaseHelper {
     }
 
     // 3. Read file system
-    final volumesDir = Directory(p.join(_workspaceRoot, 'projects', projectId, 'volumes'));
+    final volumesDir = Directory(
+      p.join(_workspaceRoot, 'projects', projectId, 'volumes'),
+    );
     if (!await volumesDir.exists()) return;
 
     final volumeEntities = await volumesDir.list().toList();
@@ -82,13 +96,15 @@ class DatabaseHelper {
         // Read volume.json
         final volFile = File(p.join(vEntity.path, 'volume.json'));
         if (await volFile.exists()) {
-           final vMeta = VolumeMeta.fromJson(jsonDecode(await volFile.readAsString()));
-           batch.insert('volumes_cache', {
-             'id': vMeta.id,
-             'project_id': projectId,
-             'title': vMeta.title,
-             'created_at': vMeta.createdAt.toIso8601String(),
-           });
+          final vMeta = VolumeMeta.fromJson(
+            jsonDecode(await volFile.readAsString()),
+          );
+          batch.insert('volumes_cache', {
+            'id': vMeta.id,
+            'project_id': projectId,
+            'title': vMeta.title,
+            'created_at': vMeta.createdAt.toIso8601String(),
+          });
         }
 
         final chaptersDir = Directory(p.join(vEntity.path, 'chapters'));
@@ -126,6 +142,10 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getChapters(String projectId) async {
     if (_db == null) throw StateError("Database not initialized");
-    return await _db!.query('chapters_cache', where: 'project_id = ?', whereArgs: [projectId]);
+    return await _db!.query(
+      'chapters_cache',
+      where: 'project_id = ?',
+      whereArgs: [projectId],
+    );
   }
 }

@@ -18,12 +18,12 @@ class ContentUtils {
     final words = content.split(RegExp(r'\s+'));
     for (var word in words) {
       if (word.isNotEmpty) {
-         // rough approximation: if it has CJK characters, count them individually
-         if (RegExp(r'[\u4e00-\u9fa5]').hasMatch(word)) {
-           count += word.runes.length;
-         } else {
-           count += 1;
-         }
+        // rough approximation: if it has CJK characters, count them individually
+        if (RegExp(r'[\u4e00-\u9fa5]').hasMatch(word)) {
+          count += word.runes.length;
+        } else {
+          count += 1;
+        }
       }
     }
     return count;

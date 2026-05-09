@@ -1,8 +1,4 @@
-enum AIRiskLevel {
-  readOnly,
-  writeDraft,
-  dangerous,
-}
+enum AIRiskLevel { readOnly, writeDraft, dangerous }
 
 class AIToolDefinition {
   final String name;
@@ -52,7 +48,12 @@ class AIMessage {
   final List<AIToolCall>? toolCalls;
   final AIToolResult? toolResult;
 
-  AIMessage({required this.role, this.content, this.toolCalls, this.toolResult});
+  AIMessage({
+    required this.role,
+    this.content,
+    this.toolCalls,
+    this.toolResult,
+  });
 }
 
 class PromptVersion {
@@ -60,7 +61,11 @@ class PromptVersion {
   final String versionString;
   final DateTime createdAt;
 
-  PromptVersion({required this.id, required this.versionString, required this.createdAt});
+  PromptVersion({
+    required this.id,
+    required this.versionString,
+    required this.createdAt,
+  });
 }
 
 class PromptTemplate {

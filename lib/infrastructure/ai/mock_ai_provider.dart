@@ -14,7 +14,7 @@ class MockAIProvider implements IAIProvider {
     AITask task,
     List<AIMessage> messages,
     List<AIToolDefinition> tools,
-    CancellationToken token
+    CancellationToken token,
   ) async {
     if (token.isCancelled) {
       throw Exception("Task cancelled");
@@ -35,13 +35,14 @@ class MockAIProvider implements IAIProvider {
       content: responseMsg.content ?? '',
       rawRequest: {'mock': 'request', 'messages_count': messages.length},
       rawResponse: {
-        'tool_calls': responseMsg.toolCalls?.map((tc) => {
-          'id': tc.id,
-          'function': {
-            'name': tc.name,
-            'arguments': tc.arguments
-          }
-        }).toList()
+        'tool_calls': responseMsg.toolCalls
+            ?.map(
+              (tc) => {
+                'id': tc.id,
+                'function': {'name': tc.name, 'arguments': tc.arguments},
+              },
+            )
+            .toList(),
       },
       sourceChapterIds: task.sourceChapterIds,
       modelName: task.modelName,

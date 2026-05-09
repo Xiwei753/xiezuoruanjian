@@ -36,8 +36,14 @@ class _ChapterTitleDialogState extends State<ChapterTitleDialog> {
         onChanged: (val) => _inputTitle = val,
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-        TextButton(onPressed: () => Navigator.pop(context, _inputTitle), child: Text(widget.confirmText)),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _inputTitle),
+          child: Text(widget.confirmText),
+        ),
       ],
     );
   }

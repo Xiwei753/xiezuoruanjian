@@ -48,7 +48,10 @@ void main() {
 
     test('ContentUtils computes words and hash correctly', () {
       final content = "Hello world 这是测试";
-      expect(ContentUtils.calculateWordCount(content), 6); // Hello, world, 这, 是, 测, 试
+      expect(
+        ContentUtils.calculateWordCount(content),
+        6,
+      ); // Hello, world, 这, 是, 测, 试
       expect(ContentUtils.calculateHash(content).length, 64);
     });
 
@@ -59,8 +62,17 @@ void main() {
       final volumeId = 'vol-1';
 
       await workspaceService.createWorkspace(tempWorkspace.path, workspaceId);
-      await workspaceService.createProject(tempWorkspace.path, projectId, 'My Book');
-      await workspaceService.createVolume(tempWorkspace.path, projectId, volumeId, 'Volume 1');
+      await workspaceService.createProject(
+        tempWorkspace.path,
+        projectId,
+        'My Book',
+      );
+      await workspaceService.createVolume(
+        tempWorkspace.path,
+        projectId,
+        volumeId,
+        'Volume 1',
+      );
 
       // 2. Save a Chapter
       final chapterContent = "This is the very first chapter.";
@@ -81,8 +93,10 @@ void main() {
       await Future.delayed(Duration(milliseconds: 100));
 
       // 3. Verify Files Written
-      final mdPath = '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters/chap-1.md';
-      final metaPath = '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters/chap-1.meta.json';
+      final mdPath =
+          '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters/chap-1.md';
+      final metaPath =
+          '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters/chap-1.meta.json';
 
       expect(await File(mdPath).exists(), isTrue);
       expect(await File(metaPath).exists(), isTrue);
