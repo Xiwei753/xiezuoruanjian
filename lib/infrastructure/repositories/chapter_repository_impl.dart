@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:path/path.dart' as p;
 
+import '../../core/utils/content_utils.dart';
 import '../../domain/models/chapter.dart';
 import '../../domain/models/manifests.dart';
 import '../../domain/repositories/chapter_repository.dart';
@@ -29,16 +30,20 @@ class ChapterRepositoryImpl implements IChapterRepository {
     // 1. Enqueue Markdown write
     await _writeQueue.enqueueWrite(mdPath, content);
 
-    // 2. Generate and Enqueue Meta write
+    // 2. Recalculate hash and word count from raw content (Do not trust caller)
+    final realHash = ContentUtils.calculateHash(content);
+    final realWordCount = ContentUtils.calculateWordCount(content);
+
+    // 3. Generate and Enqueue Meta write
     final meta = ChapterMeta(
       id: chapter.id,
       volumeId: chapter.volumeId,
       projectId: chapter.projectId,
       title: chapter.title,
       createdAt: chapter.createdAt,
-      updatedAt: chapter.updatedAt,
-      contentHash: chapter.contentHash,
-      wordCount: chapter.wordCount,
+      updatedAt: DateTime.now(),
+      contentHash: realHash,
+      wordCount: realWordCount,
     );
 
     await _writeQueue.enqueueWrite(metaPath, jsonEncode(meta.toJson()));

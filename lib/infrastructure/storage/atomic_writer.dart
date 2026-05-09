@@ -4,7 +4,16 @@ import '../../domain/services_interfaces/storage_service.dart';
 class AtomicWriter implements IStorageService {
   @override
   Future<void> atomicWrite(String filePath, String content) async {
-    final tempFile = File('$filePath.tmp');
+    final file = File(filePath);
+    final parentDir = file.parent;
+
+    if (!await parentDir.exists()) {
+      await parentDir.create(recursive: true);
+    }
+
+    // Use a unique tmp file name to prevent collision
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final tempFile = File('${filePath}_$timestamp.tmp');
 
     try {
       // 1. Write to a temporary file
