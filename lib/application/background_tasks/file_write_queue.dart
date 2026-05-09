@@ -17,8 +17,16 @@ class FileWriteQueue {
   FileWriteQueue(this._storageService);
 
   Future<void> enqueueWrite(String filePath, String content) {
-    // Basic debounce / deduplication logic could be added here
-    // For MVP, we just queue them sequentially to prevent concurrent writes to the same file
+    // Deduplication logic: If a task for this path is already in the pending queue,
+    // we simply update its content and return the existing future, rather than adding a new task.
+    final existingTaskIndex = _queue.indexWhere((t) => t.filePath == filePath);
+
+    if (existingTaskIndex != -1) {
+      final existingTask = _queue[existingTaskIndex];
+      // Update content to the latest
+      _queue[existingTaskIndex] = WriteTask(filePath, content, existingTask.completer);
+      return existingTask.completer.future;
+    }
 
     final completer = Completer<void>();
     _queue.add(WriteTask(filePath, content, completer));
