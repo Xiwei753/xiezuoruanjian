@@ -43,8 +43,10 @@
     *   `lib/infrastructure/database/database_helper.dart`: SQLite 数据库连接的桩代码。勾勒了所需的表结构（`projects_cache`, `chapters_cache`），并明确了最关键的要求：整个数据库必须能随时被清空，并根据 `workspacePath` 里的文件原貌重新构建出来。
 
 ### 4. 表现/UI 层 (`lib/presentation/` & `lib/main.dart`)
-*(目前除了 Flutter 默认脚手架外暂无内容)。*
-这一层将包含 Flutter 的 Widgets 和状态管理（如 Riverpod）。它严格只调用应用层的 `UseCases`，绝不能直接实例化任何基础设施层的具体类（如不能直接操作 File）。
+目前包含了一个最小可行性（MVP）的三栏写作界面。它严格遵循整洁架构：
+*   **不接触文件系统**：所有的数据读写、删除、重命名全部委托给 `ChapterRepositoryImpl` 和 `WorkspaceService`。
+*   **不直接依赖 SQLite**：UI 通过 `DatabaseHelper.getChapters` 获取章节列表，并且在任何文件变动（保存、删除、新建）后，都会指令底层重新从文件系统重建 SQLite 缓存（`rebuildCacheFromWorkspace`），以保证界面的数据永远和硬盘文件状态一致。
+*   **包含基本操作**：新建章节、修改标题、未保存防误触提示、一键备份当前项目、安全删除（移入回收站并自动备份）。
 
 ---
 

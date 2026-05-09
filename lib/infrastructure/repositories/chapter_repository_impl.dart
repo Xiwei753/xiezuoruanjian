@@ -7,13 +7,22 @@ import '../../core/utils/content_utils.dart';
 import '../../domain/models/chapter.dart';
 import '../../domain/models/manifests.dart';
 import '../../domain/repositories/chapter_repository.dart';
+import '../../domain/services_interfaces/trash_service.dart';
+import '../../domain/services_interfaces/backup_service.dart';
 import '../../application/background_tasks/file_write_queue.dart';
 
 class ChapterRepositoryImpl implements IChapterRepository {
   final FileWriteQueue _writeQueue;
   final String _workspaceRoot;
+  final ITrashService _trashService;
+  final IBackupService _backupService;
 
-  ChapterRepositoryImpl(this._writeQueue, this._workspaceRoot);
+  ChapterRepositoryImpl(
+    this._writeQueue,
+    this._workspaceRoot,
+    this._trashService,
+    this._backupService,
+  );
 
   @override
   Future<void> saveChapter(Chapter chapter, String content) async {
@@ -67,6 +76,28 @@ class ChapterRepositoryImpl implements IChapterRepository {
       return await file.readAsString();
     }
     return '';
+  }
+
+  @override
+  Future<void> deleteChapter(Chapter chapter) async {
+    final chaptersDir = p.join(
+      _workspaceRoot,
+      'projects',
+      chapter.projectId,
+      'volumes',
+      chapter.volumeId,
+      'chapters',
+    );
+    final mdPath = p.join(chaptersDir, '${chapter.id}.md');
+    final metaPath = p.join(chaptersDir, '${chapter.id}.meta.json');
+
+    // 1. Backup single files before deletion as a safeguard
+    await _backupService.backupFile(_workspaceRoot, mdPath);
+    await _backupService.backupFile(_workspaceRoot, metaPath);
+
+    // 2. Move to trash instead of physical delete
+    await _trashService.moveToTrash(_workspaceRoot, mdPath);
+    await _trashService.moveToTrash(_workspaceRoot, metaPath);
   }
 
   @override
