@@ -1,19 +1,24 @@
 import 'dart:convert';
+import 'dart:developer';
+import 'dart:io';
 import 'package:path/path.dart' as p;
 import '../../domain/models/ai_models.dart';
 import '../../domain/services_interfaces/ai_tool_executor.dart';
 import '../../domain/services_interfaces/storage_service.dart';
+import '../../infrastructure/database/database_helper.dart';
 
 class AIToolExecutorImpl implements IAIToolExecutor, AIToolRegistry {
   final List<AIToolDefinition> _registeredTools;
   final String _workspaceRoot;
   final IStorageService _storageService;
+  final DatabaseHelper? _dbHelper;
 
   AIToolExecutorImpl(
     this._registeredTools,
     this._workspaceRoot,
-    this._storageService,
-  );
+    this._storageService, [
+    this._dbHelper,
+  ]);
 
   @override
   List<AIToolDefinition> get availableTools => _registeredTools;
@@ -51,7 +56,8 @@ class AIToolExecutorImpl implements IAIToolExecutor, AIToolRegistry {
     try {
       final result = await _dispatch(call);
       return AIToolResult(toolCallId: call.id, name: call.name, result: result);
-    } catch (e) {
+    } catch (e, stack) {
+      log('Error executing tool ${call.name}: $e\n$stack');
       return AIToolResult(
         toolCallId: call.id,
         name: call.name,
@@ -63,11 +69,107 @@ class AIToolExecutorImpl implements IAIToolExecutor, AIToolRegistry {
 
   Future<Map<String, dynamic>> _dispatch(AIToolCall call) async {
     switch (call.name) {
+      case 'list_chapters':
+        final projectId = call.arguments['projectId'] as String;
+        if (_dbHelper != null) {
+          final chapters = await _dbHelper.getChapters(projectId);
+          return {'chapters': chapters};
+        }
+        return {'chapters': []};
+
       case 'read_chapter':
         final chapterId = call.arguments['chapterId'] as String;
-        // Simplified for MVP. In reality, we query the DB to get volume/project paths.
-        // For tests, we mock finding it.
+        if (_dbHelper != null) {
+          final chapter = await _dbHelper.getChapter(chapterId);
+          if (chapter != null) {
+            final projectId = chapter['project_id'] as String;
+            final volumeId = chapter['volume_id'] as String;
+            final path = p.join(
+              _workspaceRoot,
+              'projects',
+              projectId,
+              'volumes',
+              volumeId,
+              'chapters',
+              '$chapterId.md',
+            );
+            final file = File(path);
+            if (await file.exists()) {
+              final content = await file.readAsString();
+              return {'content': content};
+            }
+          }
+        }
         return {'content': 'Simulated content for $chapterId'};
+
+      case 'search_text':
+        final projectId = call.arguments['projectId'] as String;
+        final query = call.arguments['query'] as String;
+        final results = [];
+
+        if (_dbHelper != null) {
+          final chapters = await _dbHelper.getChapters(projectId);
+          for (final chapter in chapters) {
+            final chapterId = chapter['id'] as String;
+            final title = chapter['title'] as String;
+            final volumeId = chapter['volume_id'] as String;
+
+            final mdPath = p.join(
+              _workspaceRoot,
+              'projects',
+              projectId,
+              'volumes',
+              volumeId,
+              'chapters',
+              '$chapterId.md',
+            );
+
+            final file = File(mdPath);
+            if (await file.exists()) {
+              final content = await file.readAsString();
+              final index = content.indexOf(query);
+              if (index != -1) {
+                // extract snippet
+                final start = (index - 20).clamp(0, content.length);
+                final end = (index + query.length + 20).clamp(
+                  0,
+                  content.length,
+                );
+                final snippet = content.substring(start, end);
+
+                results.add({
+                  'chapterId': chapterId,
+                  'title': title,
+                  'matchedSnippet': snippet,
+                  'offset': index,
+                });
+              }
+            }
+          }
+        }
+        return {'results': results};
+
+      case 'list_character_cards':
+        final projectId = call.arguments['projectId'] as String;
+        final charDir = Directory(
+          p.join(_workspaceRoot, 'projects', projectId, 'characters'),
+        );
+        final characters = [];
+
+        if (await charDir.exists()) {
+          final entities = await charDir.list().toList();
+          for (final entity in entities) {
+            if (entity is File &&
+                (entity.path.endsWith('.json') ||
+                    entity.path.endsWith('.md'))) {
+              characters.add({
+                'fileName': p.basename(entity.path),
+                'path': entity.path,
+              });
+            }
+          }
+        }
+        return {'characters': characters};
 
       case 'save_chapter_summary':
         final chapterId = call.arguments['chapterId'] as String;

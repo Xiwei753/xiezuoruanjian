@@ -148,4 +148,18 @@ class DatabaseHelper {
       whereArgs: [projectId],
     );
   }
+
+  Future<Map<String, dynamic>?> getChapter(String chapterId) async {
+    if (_db == null) throw StateError("Database not initialized");
+    final results = await _db!.query(
+      'chapters_cache',
+      where: 'id = ?',
+      whereArgs: [chapterId],
+      limit: 1,
+    );
+    if (results.isNotEmpty) {
+      return results.first;
+    }
+    return null;
+  }
 }
