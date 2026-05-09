@@ -17,7 +17,7 @@ class DeepSeekProviderStub implements IAIProvider {
     AITask task,
     List<AIMessage> messages,
     List<AIToolDefinition> tools,
-    CancellationToken token
+    CancellationToken token,
   ) async {
     // This is just a stub showing where the http library and JSON decoding would go.
     // In a real implementation:

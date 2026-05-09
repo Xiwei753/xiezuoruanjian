@@ -55,7 +55,12 @@ class WorkspaceController extends ChangeNotifier {
     final projectDir = Directory(p.join(workspacePath, 'projects', projectId));
     if (!await projectDir.exists()) {
       await workspaceService.createProject(workspacePath, projectId, '默认项目');
-      await workspaceService.createVolume(workspacePath, projectId, volumeId, '默认卷');
+      await workspaceService.createVolume(
+        workspacePath,
+        projectId,
+        volumeId,
+        '默认卷',
+      );
     }
 
     await _dbHelper.initDatabase();
@@ -76,16 +81,20 @@ class WorkspaceController extends ChangeNotifier {
 
   Future<void> loadChapters() async {
     final rawChapters = await _dbHelper.getChapters(projectId);
-    final loaded = rawChapters.map((c) => Chapter(
-      id: c['id'] as String,
-      volumeId: c['volume_id'] as String,
-      projectId: c['project_id'] as String,
-      title: c['title'] as String,
-      createdAt: DateTime.now(), // Approximate MVP
-      updatedAt: DateTime.parse(c['updated_at'] as String),
-      contentHash: c['content_hash'] as String,
-      wordCount: c['word_count'] as int,
-    )).toList();
+    final loaded = rawChapters
+        .map(
+          (c) => Chapter(
+            id: c['id'] as String,
+            volumeId: c['volume_id'] as String,
+            projectId: c['project_id'] as String,
+            title: c['title'] as String,
+            createdAt: DateTime.now(), // Approximate MVP
+            updatedAt: DateTime.parse(c['updated_at'] as String),
+            contentHash: c['content_hash'] as String,
+            wordCount: c['word_count'] as int,
+          ),
+        )
+        .toList();
 
     loaded.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     chapters = loaded;

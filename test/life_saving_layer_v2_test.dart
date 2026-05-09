@@ -29,7 +29,9 @@ void main() {
     late BackupServiceImpl backupService;
 
     setUp(() async {
-      tempWorkspace = await Directory.systemTemp.createTemp('writer_app_test_v2_');
+      tempWorkspace = await Directory.systemTemp.createTemp(
+        'writer_app_test_v2_',
+      );
       storageService = AtomicWriter();
       writeQueue = FileWriteQueue(storageService);
       workspaceService = WorkspaceService(storageService);
@@ -50,41 +52,55 @@ void main() {
       }
     });
 
-    test('ChapterRepository recalculates hash and word count regardless of input', () async {
-      final projectId = 'proj-2';
-      final volumeId = 'vol-2';
-      await workspaceService.createWorkspace(tempWorkspace.path, 'ws-2');
-      await workspaceService.createProject(tempWorkspace.path, projectId, 'Proj 2');
-      await workspaceService.createVolume(tempWorkspace.path, projectId, volumeId, 'Vol 2');
+    test(
+      'ChapterRepository recalculates hash and word count regardless of input',
+      () async {
+        final projectId = 'proj-2';
+        final volumeId = 'vol-2';
+        await workspaceService.createWorkspace(tempWorkspace.path, 'ws-2');
+        await workspaceService.createProject(
+          tempWorkspace.path,
+          projectId,
+          'Proj 2',
+        );
+        await workspaceService.createVolume(
+          tempWorkspace.path,
+          projectId,
+          volumeId,
+          'Vol 2',
+        );
 
-      final fakeHash = "fakeHash";
-      final fakeCount = 999;
+        final fakeHash = "fakeHash";
+        final fakeCount = 999;
 
-      final chapterContent = "Real Content Here";
-      final realHash = ContentUtils.calculateHash(chapterContent);
-      final realCount = ContentUtils.calculateWordCount(chapterContent);
+        final chapterContent = "Real Content Here";
+        final realHash = ContentUtils.calculateHash(chapterContent);
 
-      final chapter = Chapter(
-        id: 'chap-2',
-        projectId: projectId,
-        volumeId: volumeId,
-        title: 'Chap 2',
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-        contentHash: fakeHash, // Intentionally wrong
-        wordCount: fakeCount,  // Intentionally wrong
-      );
+        final chapter = Chapter(
+          id: 'chap-2',
+          projectId: projectId,
+          volumeId: volumeId,
+          title: 'Chap 2',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          contentHash: fakeHash, // Intentionally wrong
+          wordCount: fakeCount, // Intentionally wrong
+        );
 
-      await chapterRepository.saveChapter(chapter, chapterContent);
-      await Future.delayed(Duration(milliseconds: 100)); // wait for write queue
+        await chapterRepository.saveChapter(chapter, chapterContent);
+        await Future.delayed(
+          Duration(milliseconds: 100),
+        ); // wait for write queue
 
-      final metaPath = '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters/chap-2.meta.json';
-      final metaContent = await File(metaPath).readAsString();
+        final metaPath =
+            '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters/chap-2.meta.json';
+        final metaContent = await File(metaPath).readAsString();
 
-      expect(metaContent.contains(fakeHash), isFalse);
-      expect(metaContent.contains(realHash), isTrue);
-      expect(metaContent.contains('"$fakeCount"'), isFalse);
-    });
+        expect(metaContent.contains(fakeHash), isFalse);
+        expect(metaContent.contains(realHash), isTrue);
+        expect(metaContent.contains('"$fakeCount"'), isFalse);
+      },
+    );
 
     test('TrashService moves files instead of deleting', () async {
       final filePath = '${tempWorkspace.path}/test_file.txt';
@@ -106,19 +122,35 @@ void main() {
       final projectId = 'proj-3';
       final volumeId = 'vol-3';
       await workspaceService.createWorkspace(tempWorkspace.path, 'ws-3');
-      await workspaceService.createProject(tempWorkspace.path, projectId, 'Proj 3');
-      await workspaceService.createVolume(tempWorkspace.path, projectId, volumeId, 'Vol 3');
+      await workspaceService.createProject(
+        tempWorkspace.path,
+        projectId,
+        'Proj 3',
+      );
+      await workspaceService.createVolume(
+        tempWorkspace.path,
+        projectId,
+        volumeId,
+        'Vol 3',
+      );
 
-      final chapDir = '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters';
+      final chapDir =
+          '${tempWorkspace.path}/projects/$projectId/volumes/$volumeId/chapters';
 
       // Create ONLY meta json, no MD file
-      await File('$chapDir/chap-3.meta.json').writeAsString('{"id":"chap-3", "projectId":"$projectId", "volumeId":"$volumeId", "title":"Chap 3", "createdAt":"2023-01-01T00:00:00.000", "updatedAt":"2023-01-01T00:00:00.000", "contentHash":"hash", "wordCount":0}');
+      await File('$chapDir/chap-3.meta.json').writeAsString(
+        '{"id":"chap-3", "projectId":"$projectId", "volumeId":"$volumeId", "title":"Chap 3", "createdAt":"2023-01-01T00:00:00.000", "updatedAt":"2023-01-01T00:00:00.000", "contentHash":"hash", "wordCount":0}',
+      );
 
       await dbHelper.initDatabase();
       await dbHelper.rebuildCacheFromWorkspace(projectId);
 
       final chapters = await dbHelper.getChapters(projectId);
-      expect(chapters.isEmpty, isTrue, reason: 'Should ignore chapter without paired MD file');
+      expect(
+        chapters.isEmpty,
+        isTrue,
+        reason: 'Should ignore chapter without paired MD file',
+      );
     });
   });
 }

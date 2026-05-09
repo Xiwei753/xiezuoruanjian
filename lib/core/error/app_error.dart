@@ -1,9 +1,4 @@
-enum ErrorCode {
-  unknown,
-  saveFailure,
-  fileSystemError,
-  cacheRebuildError,
-}
+enum ErrorCode { unknown, saveFailure, fileSystemError, cacheRebuildError }
 
 class AppError implements Exception {
   final ErrorCode code;

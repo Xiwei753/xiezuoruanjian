@@ -9,7 +9,9 @@ class BackupServiceImpl implements IBackupService {
     if (!await projectDir.exists()) return;
 
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final backupDir = Directory(p.join(workspaceRoot, 'backups', 'project_${projectId}_$timestamp'));
+    final backupDir = Directory(
+      p.join(workspaceRoot, 'backups', 'project_${projectId}_$timestamp'),
+    );
 
     await _copyDirectory(projectDir, backupDir);
   }
@@ -35,7 +37,9 @@ class BackupServiceImpl implements IBackupService {
     await destination.create(recursive: true);
     await for (final entity in source.list(recursive: false)) {
       if (entity is Directory) {
-        final newDirectory = Directory(p.join(destination.absolute.path, p.basename(entity.path)));
+        final newDirectory = Directory(
+          p.join(destination.absolute.path, p.basename(entity.path)),
+        );
         await _copyDirectory(entity, newDirectory);
       } else if (entity is File) {
         await entity.copy(p.join(destination.path, p.basename(entity.path)));

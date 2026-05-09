@@ -24,7 +24,11 @@ class FileWriteQueue {
     if (existingTaskIndex != -1) {
       final existingTask = _queue[existingTaskIndex];
       // Update content to the latest
-      _queue[existingTaskIndex] = WriteTask(filePath, content, existingTask.completer);
+      _queue[existingTaskIndex] = WriteTask(
+        filePath,
+        content,
+        existingTask.completer,
+      );
       return existingTask.completer.future;
     }
 

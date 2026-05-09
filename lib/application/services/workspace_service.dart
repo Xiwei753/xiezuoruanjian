@@ -26,33 +26,55 @@ class WorkspaceService {
     await Directory(p.join(rootPath, 'sqlite_cache')).create();
 
     // Create manifest
-    final manifest = WorkspaceManifest(id: workspaceId, createdAt: DateTime.now());
+    final manifest = WorkspaceManifest(
+      id: workspaceId,
+      createdAt: DateTime.now(),
+    );
     await _storageService.atomicWrite(
       p.join(rootPath, 'workspace_manifest.json'),
       jsonEncode(manifest.toJson()),
     );
   }
 
-  Future<void> createProject(String rootPath, String projectId, String title) async {
+  Future<void> createProject(
+    String rootPath,
+    String projectId,
+    String title,
+  ) async {
     final projectDir = Directory(p.join(rootPath, 'projects', projectId));
     await projectDir.create(recursive: true);
 
     await Directory(p.join(projectDir.path, 'volumes')).create();
     await Directory(p.join(projectDir.path, 'characters')).create();
 
-    final manifest = ProjectManifest(id: projectId, title: title, createdAt: DateTime.now());
+    final manifest = ProjectManifest(
+      id: projectId,
+      title: title,
+      createdAt: DateTime.now(),
+    );
     await _storageService.atomicWrite(
       p.join(projectDir.path, 'project.json'),
       jsonEncode(manifest.toJson()),
     );
   }
 
-  Future<void> createVolume(String rootPath, String projectId, String volumeId, String title) async {
-    final volumeDir = Directory(p.join(rootPath, 'projects', projectId, 'volumes', volumeId));
+  Future<void> createVolume(
+    String rootPath,
+    String projectId,
+    String volumeId,
+    String title,
+  ) async {
+    final volumeDir = Directory(
+      p.join(rootPath, 'projects', projectId, 'volumes', volumeId),
+    );
     await volumeDir.create(recursive: true);
     await Directory(p.join(volumeDir.path, 'chapters')).create();
 
-    final meta = VolumeMeta(id: volumeId, title: title, createdAt: DateTime.now());
+    final meta = VolumeMeta(
+      id: volumeId,
+      title: title,
+      createdAt: DateTime.now(),
+    );
     await _storageService.atomicWrite(
       p.join(volumeDir.path, 'volume.json'),
       jsonEncode(meta.toJson()),

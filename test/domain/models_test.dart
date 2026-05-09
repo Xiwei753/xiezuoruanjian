@@ -6,7 +6,12 @@ void main() {
   group('Domain Models Tests', () {
     test('Project copyWith should update fields correctly', () {
       final now = DateTime.now();
-      final project = Project(id: '1', title: 'My Novel', createdAt: now, updatedAt: now);
+      final project = Project(
+        id: '1',
+        title: 'My Novel',
+        createdAt: now,
+        updatedAt: now,
+      );
 
       final updatedProject = project.copyWith(title: 'Updated Novel');
 
@@ -29,7 +34,10 @@ void main() {
         wordCount: 100,
       );
 
-      final updatedChapter = chapter.copyWith(wordCount: 200, contentHash: 'newHash');
+      final updatedChapter = chapter.copyWith(
+        wordCount: 200,
+        contentHash: 'newHash',
+      );
 
       expect(updatedChapter.id, 'c1');
       expect(updatedChapter.title, 'Chapter 1');

@@ -7,20 +7,23 @@ import 'package:writer_app/infrastructure/ai/mock_ai_provider.dart';
 import 'package:writer_app/application/ai_tools/ai_tools.dart';
 import 'package:writer_app/application/ai_tools/ai_tool_executor_impl.dart';
 import 'package:writer_app/infrastructure/storage/atomic_writer.dart';
-import 'package:writer_app/infrastructure/database/database_helper.dart';
 
 void main() {
   group('AI Tool Calling Architecture Tests', () {
     late Directory tempWorkspace;
     late AtomicWriter storageService;
-    late DatabaseHelper dbHelper;
     late AIToolExecutorImpl toolExecutor;
 
     setUp(() async {
-      tempWorkspace = await Directory.systemTemp.createTemp('writer_app_ai_test_');
+      tempWorkspace = await Directory.systemTemp.createTemp(
+        'writer_app_ai_test_',
+      );
       storageService = AtomicWriter();
-      dbHelper = DatabaseHelper(tempWorkspace.path);
-      toolExecutor = AIToolExecutorImpl(AITools.allTools, tempWorkspace.path, dbHelper, storageService);
+      toolExecutor = AIToolExecutorImpl(
+        AITools.allTools,
+        tempWorkspace.path,
+        storageService,
+      );
     });
 
     tearDown(() async {
@@ -29,46 +32,61 @@ void main() {
       }
     });
 
-    test('MockAIProvider successfully simulates returning a tool call', () async {
-      final mockResponse = AIMessage(
-        role: AIMessageRole.assistant,
-        toolCalls: [
-          AIToolCall(
-            id: 'call_123',
-            name: 'read_chapter',
-            arguments: {'chapterId': 'chap-1'}
-          )
-        ]
-      );
+    test(
+      'MockAIProvider successfully simulates returning a tool call',
+      () async {
+        final mockResponse = AIMessage(
+          role: AIMessageRole.assistant,
+          toolCalls: [
+            AIToolCall(
+              id: 'call_123',
+              name: 'read_chapter',
+              arguments: {'chapterId': 'chap-1'},
+            ),
+          ],
+        );
 
-      final provider = MockAIProvider([mockResponse]);
-      final dummyTask = AITask(
-        id: 'task1',
-        projectId: 'proj1',
-        sourceChapterIds: [],
-        promptTemplate: PromptTemplate(
-          id: 'p1',
-          name: 'p1',
-          templateText: '',
-          currentVersion: PromptVersion(id: 'v1', versionString: 'v1', createdAt: DateTime.now())
-        ),
-        inputHash: '',
-        modelName: 'mock-model',
-        providerName: 'mock'
-      );
+        final provider = MockAIProvider([mockResponse]);
+        final dummyTask = AITask(
+          id: 'task1',
+          projectId: 'proj1',
+          sourceChapterIds: [],
+          promptTemplate: PromptTemplate(
+            id: 'p1',
+            name: 'p1',
+            templateText: '',
+            currentVersion: PromptVersion(
+              id: 'v1',
+              versionString: 'v1',
+              createdAt: DateTime.now(),
+            ),
+          ),
+          inputHash: '',
+          modelName: 'mock-model',
+          providerName: 'mock',
+        );
 
-      final result = await provider.executeTask(dummyTask, [], AITools.allTools, CancellationToken());
+        final result = await provider.executeTask(
+          dummyTask,
+          [],
+          AITools.allTools,
+          CancellationToken(),
+        );
 
-      // Validate the parsing contract for tool calls
-      expect(result.rawResponse['tool_calls'], isNotNull);
-      expect(result.rawResponse['tool_calls'][0]['function']['name'], 'read_chapter');
-    });
+        // Validate the parsing contract for tool calls
+        expect(result.rawResponse['tool_calls'], isNotNull);
+        expect(
+          result.rawResponse['tool_calls'][0]['function']['name'],
+          'read_chapter',
+        );
+      },
+    );
 
     test('AIToolExecutor strictly blocks dangerous tools', () async {
       final dangerousCall = AIToolCall(
         id: 'call_danger',
         name: 'rewrite_chapter_content',
-        arguments: {'chapterId': 'c1', 'content': 'hacked'}
+        arguments: {'chapterId': 'c1', 'content': 'hacked'},
       );
 
       final result = await toolExecutor.executeTool(dangerousCall);
@@ -80,7 +98,7 @@ void main() {
       final safeCall = AIToolCall(
         id: 'call_safe_read',
         name: 'read_chapter',
-        arguments: {'chapterId': 'c2'}
+        arguments: {'chapterId': 'c2'},
       );
 
       final result = await toolExecutor.executeTool(safeCall);
@@ -94,8 +112,10 @@ void main() {
         name: 'save_character_extraction',
         arguments: {
           'projectId': 'p1',
-          'characters': [{'name': 'Alice'}]
-        }
+          'characters': [
+            {'name': 'Alice'},
+          ],
+        },
       );
 
       final result = await toolExecutor.executeTool(saveCall);

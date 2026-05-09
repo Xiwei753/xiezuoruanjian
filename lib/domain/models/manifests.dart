@@ -10,12 +10,13 @@ class WorkspaceManifest {
   });
 
   Map<String, dynamic> toJson() => {
-        'schemaVersion': schemaVersion,
-        'id': id,
-        'createdAt': createdAt.toIso8601String(),
-      };
+    'schemaVersion': schemaVersion,
+    'id': id,
+    'createdAt': createdAt.toIso8601String(),
+  };
 
-  factory WorkspaceManifest.fromJson(Map<String, dynamic> json) => WorkspaceManifest(
+  factory WorkspaceManifest.fromJson(Map<String, dynamic> json) =>
+      WorkspaceManifest(
         schemaVersion: json['schemaVersion'] as int? ?? 1,
         id: json['id'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
@@ -34,12 +35,13 @@ class ProjectManifest {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'createdAt': createdAt.toIso8601String(),
-      };
+    'id': id,
+    'title': title,
+    'createdAt': createdAt.toIso8601String(),
+  };
 
-  factory ProjectManifest.fromJson(Map<String, dynamic> json) => ProjectManifest(
+  factory ProjectManifest.fromJson(Map<String, dynamic> json) =>
+      ProjectManifest(
         id: json['id'] as String,
         title: json['title'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
@@ -51,23 +53,19 @@ class VolumeMeta {
   final String title;
   final DateTime createdAt;
 
-  VolumeMeta({
-    required this.id,
-    required this.title,
-    required this.createdAt,
-  });
+  VolumeMeta({required this.id, required this.title, required this.createdAt});
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'createdAt': createdAt.toIso8601String(),
-      };
+    'id': id,
+    'title': title,
+    'createdAt': createdAt.toIso8601String(),
+  };
 
   factory VolumeMeta.fromJson(Map<String, dynamic> json) => VolumeMeta(
-        id: json['id'] as String,
-        title: json['title'] as String,
-        createdAt: DateTime.parse(json['createdAt'] as String),
-      );
+    id: json['id'] as String,
+    title: json['title'] as String,
+    createdAt: DateTime.parse(json['createdAt'] as String),
+  );
 }
 
 class ChapterMeta {
@@ -92,24 +90,24 @@ class ChapterMeta {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'volumeId': volumeId,
-        'projectId': projectId,
-        'title': title,
-        'createdAt': createdAt.toIso8601String(),
-        'updatedAt': updatedAt.toIso8601String(),
-        'contentHash': contentHash,
-        'wordCount': wordCount,
-      };
+    'id': id,
+    'volumeId': volumeId,
+    'projectId': projectId,
+    'title': title,
+    'createdAt': createdAt.toIso8601String(),
+    'updatedAt': updatedAt.toIso8601String(),
+    'contentHash': contentHash,
+    'wordCount': wordCount,
+  };
 
   factory ChapterMeta.fromJson(Map<String, dynamic> json) => ChapterMeta(
-        id: json['id'] as String,
-        volumeId: json['volumeId'] as String,
-        projectId: json['projectId'] as String,
-        title: json['title'] as String,
-        createdAt: DateTime.parse(json['createdAt'] as String),
-        updatedAt: DateTime.parse(json['updatedAt'] as String),
-        contentHash: json['contentHash'] as String,
-        wordCount: json['wordCount'] as int,
-      );
+    id: json['id'] as String,
+    volumeId: json['volumeId'] as String,
+    projectId: json['projectId'] as String,
+    title: json['title'] as String,
+    createdAt: DateTime.parse(json['createdAt'] as String),
+    updatedAt: DateTime.parse(json['updatedAt'] as String),
+    contentHash: json['contentHash'] as String,
+    wordCount: json['wordCount'] as int,
+  );
 }

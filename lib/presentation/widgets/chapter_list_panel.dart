@@ -22,7 +22,10 @@ class ChapterListPanel extends StatelessWidget {
       child: Column(
         children: [
           ListTile(
-            title: const Text('默认项目 / 默认卷', style: TextStyle(fontWeight: FontWeight.bold)),
+            title: const Text(
+              '默认项目 / 默认卷',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             trailing: IconButton(
               icon: const Icon(Icons.add),
               onPressed: onAddChapter,
@@ -43,7 +46,7 @@ class ChapterListPanel extends StatelessWidget {
                 );
               },
             ),
-          )
+          ),
         ],
       ),
     );
