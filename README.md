@@ -25,7 +25,7 @@
 *   **服务接口 (Service Interfaces):**
     *   `lib/domain/services_interfaces/storage_service.dart`: `IStorageService` 接口，定义了底层的文件写入操作。
     *   `lib/domain/services_interfaces/sync_service.dart`: `ISyncService` 和 `IGitClient` 接口，定义了非破坏性的同步流程，特别强调了冲突处理机制。
-    *   `lib/domain/services_interfaces/ai_provider.dart`: `IAIProvider` 接口，用于接入 AI 服务（如 DeepSeek）。确保 AI 逻辑解耦且任务可随时取消。
+    *   `lib/domain/services_interfaces/ai_provider.dart` & `ai_tool_executor.dart`: `IAIProvider` 接口，用于接入 AI 服务（如 DeepSeek）。包含 Function Calling / Tool Call 的严格权限分级底层。AI 的写操作被严格限制在 `ai/` 或草稿区，**绝对不允许自动修改用户正文**。
     *   `lib/domain/services_interfaces/correction_engine.dart`: `ICorrectionEngine` 接口，用于本地文本纠错功能。
 
 ### 2. 应用层 (`lib/application/`)
