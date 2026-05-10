@@ -61,15 +61,24 @@ class WriterApp extends StatelessWidget {
             useMaterial3: true,
           ),
           themeMode: _getThemeMode(),
-          home: settingsController.localSettings.lastOpenedProjectId.isNotEmpty
-              ? WorkspaceScreen(
-                  settingsController: settingsController,
-                  projectId:
-                      settingsController.localSettings.lastOpenedProjectId,
-                )
-              : ProjectHomeScreen(settingsController: settingsController),
+          home: _getHomeWidget(),
         );
       },
     );
+  }
+
+  Widget _getHomeWidget() {
+    final startupBehavior = settingsController.syncableSettings.startupBehavior;
+    final lastOpenedProjectId =
+        settingsController.localSettings.lastOpenedProjectId;
+
+    if (startupBehavior == 'continueLastSession' &&
+        lastOpenedProjectId.isNotEmpty) {
+      return WorkspaceScreen(
+        settingsController: settingsController,
+        projectId: lastOpenedProjectId,
+      );
+    }
+    return ProjectHomeScreen(settingsController: settingsController);
   }
 }

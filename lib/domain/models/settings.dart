@@ -9,6 +9,12 @@ class LocalSettings {
   final bool useSystemProxy;
   final String manualProxyUrl;
 
+  final int lastCursorOffset;
+  final int lastSelectionBaseOffset;
+  final int lastSelectionExtentOffset;
+  final double lastScrollOffset;
+  final DateTime? lastEditorStateUpdatedAt;
+
   const LocalSettings({
     this.workspacePath = '',
     this.lastOpenedProjectId = '',
@@ -19,6 +25,11 @@ class LocalSettings {
     this.deviceName = 'My Device',
     this.useSystemProxy = true,
     this.manualProxyUrl = '',
+    this.lastCursorOffset = -1,
+    this.lastSelectionBaseOffset = -1,
+    this.lastSelectionExtentOffset = -1,
+    this.lastScrollOffset = 0.0,
+    this.lastEditorStateUpdatedAt,
   });
 
   LocalSettings copyWith({
@@ -31,6 +42,11 @@ class LocalSettings {
     String? deviceName,
     bool? useSystemProxy,
     String? manualProxyUrl,
+    int? lastCursorOffset,
+    int? lastSelectionBaseOffset,
+    int? lastSelectionExtentOffset,
+    double? lastScrollOffset,
+    DateTime? lastEditorStateUpdatedAt,
   }) {
     return LocalSettings(
       workspacePath: workspacePath ?? this.workspacePath,
@@ -42,6 +58,14 @@ class LocalSettings {
       deviceName: deviceName ?? this.deviceName,
       useSystemProxy: useSystemProxy ?? this.useSystemProxy,
       manualProxyUrl: manualProxyUrl ?? this.manualProxyUrl,
+      lastCursorOffset: lastCursorOffset ?? this.lastCursorOffset,
+      lastSelectionBaseOffset:
+          lastSelectionBaseOffset ?? this.lastSelectionBaseOffset,
+      lastSelectionExtentOffset:
+          lastSelectionExtentOffset ?? this.lastSelectionExtentOffset,
+      lastScrollOffset: lastScrollOffset ?? this.lastScrollOffset,
+      lastEditorStateUpdatedAt:
+          lastEditorStateUpdatedAt ?? this.lastEditorStateUpdatedAt,
     );
   }
 
@@ -56,6 +80,11 @@ class LocalSettings {
       'deviceName': deviceName,
       'useSystemProxy': useSystemProxy,
       'manualProxyUrl': manualProxyUrl,
+      'lastCursorOffset': lastCursorOffset,
+      'lastSelectionBaseOffset': lastSelectionBaseOffset,
+      'lastSelectionExtentOffset': lastSelectionExtentOffset,
+      'lastScrollOffset': lastScrollOffset,
+      'lastEditorStateUpdatedAt': lastEditorStateUpdatedAt?.toIso8601String(),
     };
   }
 
@@ -70,6 +99,14 @@ class LocalSettings {
       deviceName: json['deviceName'] as String? ?? 'My Device',
       useSystemProxy: json['useSystemProxy'] as bool? ?? true,
       manualProxyUrl: json['manualProxyUrl'] as String? ?? '',
+      lastCursorOffset: json['lastCursorOffset'] as int? ?? -1,
+      lastSelectionBaseOffset: json['lastSelectionBaseOffset'] as int? ?? -1,
+      lastSelectionExtentOffset:
+          json['lastSelectionExtentOffset'] as int? ?? -1,
+      lastScrollOffset: (json['lastScrollOffset'] as num?)?.toDouble() ?? 0.0,
+      lastEditorStateUpdatedAt: json['lastEditorStateUpdatedAt'] != null
+          ? DateTime.parse(json['lastEditorStateUpdatedAt'] as String)
+          : null,
     );
   }
 }
@@ -78,6 +115,7 @@ class SyncableSettings {
   final int schemaVersion;
 
   // 通用
+  final String startupBehavior;
   final bool autoSaveEnabled;
   final int autoSaveIntervalSeconds;
   final bool backupBeforeSync;
@@ -118,6 +156,7 @@ class SyncableSettings {
 
   const SyncableSettings({
     this.schemaVersion = 1,
+    this.startupBehavior = 'projectHome',
     this.autoSaveEnabled = true,
     this.autoSaveIntervalSeconds = 60,
     this.backupBeforeSync = true,
@@ -151,6 +190,7 @@ class SyncableSettings {
 
   SyncableSettings copyWith({
     int? schemaVersion,
+    String? startupBehavior,
     bool? autoSaveEnabled,
     int? autoSaveIntervalSeconds,
     bool? backupBeforeSync,
@@ -183,6 +223,7 @@ class SyncableSettings {
   }) {
     return SyncableSettings(
       schemaVersion: schemaVersion ?? this.schemaVersion,
+      startupBehavior: startupBehavior ?? this.startupBehavior,
       autoSaveEnabled: autoSaveEnabled ?? this.autoSaveEnabled,
       autoSaveIntervalSeconds:
           autoSaveIntervalSeconds ?? this.autoSaveIntervalSeconds,
@@ -228,6 +269,7 @@ class SyncableSettings {
   Map<String, dynamic> toJson() {
     return {
       'schemaVersion': schemaVersion,
+      'startupBehavior': startupBehavior,
       'autoSaveEnabled': autoSaveEnabled,
       'autoSaveIntervalSeconds': autoSaveIntervalSeconds,
       'backupBeforeSync': backupBeforeSync,
@@ -263,6 +305,7 @@ class SyncableSettings {
   factory SyncableSettings.fromJson(Map<String, dynamic> json) {
     return SyncableSettings(
       schemaVersion: json['schemaVersion'] as int? ?? 1,
+      startupBehavior: json['startupBehavior'] as String? ?? 'projectHome',
       autoSaveEnabled: json['autoSaveEnabled'] as bool? ?? true,
       autoSaveIntervalSeconds: json['autoSaveIntervalSeconds'] as int? ?? 60,
       backupBeforeSync: json['backupBeforeSync'] as bool? ?? true,

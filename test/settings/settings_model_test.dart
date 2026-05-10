@@ -7,6 +7,7 @@ void main() {
       const settings = SyncableSettings();
 
       expect(settings.schemaVersion, 1);
+      expect(settings.startupBehavior, 'projectHome');
       expect(settings.autoSaveEnabled, true);
       expect(settings.autoSaveIntervalSeconds, 60);
       expect(settings.backupBeforeSync, true);
@@ -27,6 +28,7 @@ void main() {
 
     test('can save and read JSON', () {
       const original = SyncableSettings(
+        startupBehavior: 'continueLastSession',
         autoSaveEnabled: false,
         autoSaveIntervalSeconds: 120,
         editorFontSize: 18.0,
@@ -41,6 +43,7 @@ void main() {
       final json = original.toJson();
       final restored = SyncableSettings.fromJson(json);
 
+      expect(restored.startupBehavior, 'continueLastSession');
       expect(restored.autoSaveEnabled, false);
       expect(restored.autoSaveIntervalSeconds, 120);
       expect(restored.editorFontSize, 18.0);
@@ -68,12 +71,20 @@ void main() {
       const settings = LocalSettings();
       expect(settings.workspacePath, '');
       expect(settings.deviceName, 'My Device');
+      expect(settings.lastCursorOffset, -1);
+      expect(settings.lastScrollOffset, 0.0);
     });
 
     test('can save and read JSON', () {
-      const original = LocalSettings(
+      final now = DateTime.now();
+      final original = LocalSettings(
         workspacePath: '/test/path',
         deviceName: 'Test PC',
+        lastCursorOffset: 42,
+        lastSelectionBaseOffset: 42,
+        lastSelectionExtentOffset: 45,
+        lastScrollOffset: 100.5,
+        lastEditorStateUpdatedAt: now,
       );
 
       final json = original.toJson();
@@ -81,6 +92,13 @@ void main() {
 
       expect(restored.workspacePath, '/test/path');
       expect(restored.deviceName, 'Test PC');
+      expect(restored.lastCursorOffset, 42);
+      expect(restored.lastSelectionExtentOffset, 45);
+      expect(restored.lastScrollOffset, 100.5);
+      expect(
+        restored.lastEditorStateUpdatedAt?.toIso8601String(),
+        now.toIso8601String(),
+      );
     });
   });
 }

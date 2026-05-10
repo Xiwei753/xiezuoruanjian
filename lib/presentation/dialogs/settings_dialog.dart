@@ -121,6 +121,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 16),
+        DropdownButtonFormField<String>(
+          initialValue: _draftSyncableSettings.startupBehavior,
+          decoration: const InputDecoration(
+            labelText: '启动行为',
+            border: OutlineInputBorder(),
+          ),
+          items: const [
+            DropdownMenuItem(value: 'projectHome', child: Text('作品管理页')),
+            DropdownMenuItem(
+              value: 'continueLastSession',
+              child: Text('继续上次写作'),
+            ),
+          ],
+          onChanged: (val) {
+            if (val != null) {
+              _updateDraftSyncable(
+                _draftSyncableSettings.copyWith(startupBehavior: val),
+              );
+            }
+          },
+        ),
+        const SizedBox(height: 16),
         TextFormField(
           initialValue: _draftLocalSettings.workspacePath,
           readOnly: true,

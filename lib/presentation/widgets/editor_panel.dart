@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 class EditorPanel extends StatefulWidget {
   final bool hasChapter;
   final TextEditingController textController;
+  final ScrollController scrollController;
   final Function(String) onChanged;
 
   const EditorPanel({
     super.key,
     required this.hasChapter,
     required this.textController,
+    required this.scrollController,
     required this.onChanged,
   });
 
@@ -25,6 +27,7 @@ class _EditorPanelState extends State<EditorPanel> {
           ? const Center(child: Text('无章节，请新建或选择章节。'))
           : TextField(
               controller: widget.textController,
+              scrollController: widget.scrollController,
               maxLines: null,
               expands: true,
               decoration: const InputDecoration(
