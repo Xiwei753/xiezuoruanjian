@@ -22,15 +22,20 @@
     *   `lib/domain/models/chapter.dart`: `Chapter` 实体，代表单个章节。包含 `contentHash` 字段，用于后续的同步追踪和冲突检测。
 *   **存储库接口 (Repository Interfaces):**
     *   `lib/domain/repositories/chapter_repository.dart`: `IChapterRepository` 抽象接口，定义了如何保存章节以及如何重建缓存索引。它向更上层隐藏了与底层存储和缓存交互的复杂性。
+*   **配置模型 (Settings):**
+    *   `lib/domain/models/settings.dart`: 区分 `LocalSettings` (本机不同步设置) 和 `SyncableSettings` (随仓库同步的统一配置)。API 密钥等允许以明文存入同步配置以方便多端流转。
 *   **服务接口 (Service Interfaces):**
     *   `lib/domain/services_interfaces/storage_service.dart`: `IStorageService` 接口，定义了底层的文件写入操作。
     *   `lib/domain/services_interfaces/sync_service.dart`: `ISyncService` 和 `IGitClient` 接口，定义了非破坏性的同步流程，特别强调了冲突处理机制。
+    *   `lib/domain/services_interfaces/settings_service.dart`: `ISettingsService` 接口，定义了配置加载、保存及容灾处理。
     *   `lib/domain/services_interfaces/ai_provider.dart` & `ai_tool_executor.dart`: `IAIProvider` 接口，用于接入 AI 服务（如 DeepSeek）。包含 Function Calling / Tool Call 的严格权限分级底层。AI 的写操作被严格限制在 `ai/` 或草稿区，**绝对不允许自动修改用户正文**。
     *   `lib/domain/services_interfaces/correction_engine.dart`: `ICorrectionEngine` 接口，用于本地文本纠错功能。
 
 ### 2. 应用层 (`lib/application/`)
 负责协调领域对象以执行实际的业务用例 (Use Cases)。通过接口将 UI 层和底层基础设施连接起来。
 
+*   **状态与控制器 (Controllers):**
+    *   `lib/application/controllers/settings_controller.dart`: 统一的设置状态管理（ChangeNotifier），供 UI 订阅并安全保存修改。
 *   **后台任务 (Background Tasks):**
     *   `lib/application/background_tasks/file_write_queue.dart`: **极其关键的安全文件。** 实现了 `FileWriteQueue`。它通过防抖（debounce）和队列机制，强制所有的文件保存操作串行执行。这保证了在用户快速输入引发的频繁自动保存中，绝对不会发生并发写入导致的文件损坏。
 
@@ -43,10 +48,11 @@
     *   `lib/infrastructure/database/database_helper.dart`: SQLite 数据库连接的桩代码。勾勒了所需的表结构（`projects_cache`, `chapters_cache`），并明确了最关键的要求：整个数据库必须能随时被清空，并根据 `workspacePath` 里的文件原貌重新构建出来。
 
 ### 4. 表现/UI 层 (`lib/presentation/` & `lib/main.dart`)
-目前包含了一个最小可行性（MVP）的三栏写作界面。它严格遵循整洁架构：
-*   **不接触文件系统**：所有的数据读写、删除、重命名全部委托给 `ChapterRepositoryImpl` 和 `WorkspaceService`。
+目前包含了一个最小可行性（MVP）的三栏写作界面与设置面板。它严格遵循整洁架构：
+*   **不接触文件系统**：所有的数据读写、删除、重命名全部委托给 `ChapterRepositoryImpl`、`WorkspaceService` 和 `SettingsController`。
 *   **不直接依赖 SQLite**：UI 通过 `DatabaseHelper.getChapters` 获取章节列表，并且在任何文件变动（保存、删除、新建）后，都会指令底层重新从文件系统重建 SQLite 缓存（`rebuildCacheFromWorkspace`），以保证界面的数据永远和硬盘文件状态一致。
 *   **包含基本操作**：新建章节、修改标题、未保存防误触提示、一键备份当前项目、安全删除（移入回收站并自动备份）。
+*   **设置系统与免责提示**：在设置界面修改可同步设置时，使用专门的 Draft 状态处理。对于 API Key 这种明文存储的字段，UI 会固定展示免责声明而不采用阻断式的强制弹窗。
 
 ---
 
