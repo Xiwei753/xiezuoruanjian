@@ -19,8 +19,9 @@ class WorkspaceController extends ChangeNotifier {
   bool isSaving = false;
 
   String workspacePath = '';
-  final String projectId = 'default_project';
-  final String volumeId = 'default_volume';
+  String projectId = '';
+  // MVP only uses a default volume per project
+  final String volumeId = 'vol_default';
 
   late DatabaseHelper _dbHelper;
   late IChapterRepository _chapterRepository;
@@ -30,7 +31,11 @@ class WorkspaceController extends ChangeNotifier {
   Chapter? selectedChapter;
   String currentContent = '';
 
-  Future<void> initWorkspace() async {
+  Future<void> initWorkspace(
+    String projectId, {
+    String? lastOpenedChapterId,
+  }) async {
+    this.projectId = projectId;
     isLoading = true;
     notifyListeners();
 
@@ -54,7 +59,8 @@ class WorkspaceController extends ChangeNotifier {
     await workspaceService.createWorkspace(workspacePath, 'workspace_1');
     final projectDir = Directory(p.join(workspacePath, 'projects', projectId));
     if (!await projectDir.exists()) {
-      await workspaceService.createProject(workspacePath, projectId, '默认项目');
+      // Create project if it somehow doesn't exist but is selected
+      await workspaceService.createProject(workspacePath, projectId, '未命名项目');
       await workspaceService.createVolume(
         workspacePath,
         projectId,
@@ -73,6 +79,17 @@ class WorkspaceController extends ChangeNotifier {
 
     isLoading = false;
     if (chapters.isNotEmpty) {
+      if (lastOpenedChapterId != null && lastOpenedChapterId.isNotEmpty) {
+        try {
+          final target = chapters.firstWhere(
+            (c) => c.id == lastOpenedChapterId,
+          );
+          await selectChapter(target);
+          return;
+        } catch (_) {
+          // Fallback if not found
+        }
+      }
       await selectChapter(chapters.first);
     } else {
       notifyListeners();
