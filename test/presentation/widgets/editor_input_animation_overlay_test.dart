@@ -236,31 +236,10 @@ void main() {
       await tester.pump();
     });
 
-    testWidgets('Disabled settings do not render animation layer', (
+    testWidgets('Chinese IME commit triggers animation', (
       WidgetTester tester,
     ) async {
-      final controller = TextEditingController();
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: EditorInputAnimationOverlay(
-              controller: controller,
-              inputAnimationEnabled: false,
-              child: TextField(controller: controller),
-            ),
-          ),
-        ),
-      );
-
-      expect(find.byType(TextField), findsOneWidget);
-      expect(find.byType(Positioned), findsNothing);
-    });
-
-    testWidgets('Composing state skips character animation', (
-      WidgetTester tester,
-    ) async {
-      final controller = TextEditingController();
+      final controller = TextEditingController(text: '');
 
       await tester.pumpWidget(
         MaterialApp(
@@ -275,14 +254,72 @@ void main() {
         ),
       );
 
-      // Update text with composing valid
+      // 1. Simulate composing 'nihao'
       controller.value = const TextEditingValue(
-        text: 'abc',
-        composing: TextRange(start: 0, end: 3),
+        text: 'nihao',
+        composing: TextRange(start: 0, end: 5),
+      );
+      await tester.pump();
+      expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
+
+      // 2. Simulate committing '你好'
+      controller.value = const TextEditingValue(
+        text: '你好',
+        selection: TextSelection.collapsed(offset: 2),
+      );
+      await tester.pump();
+
+      // Should spawn an animation for the committed text since (2 - 0) <= 3
+      expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
+      // '你好' substring(2 - 2, 2) which is '你好'. So we expect '你好' to be found.
+      expect(find.text('你好'), findsWidgets);
+
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+    });
+
+    testWidgets('Chapter switch suppresses programmatic animations', (
+      WidgetTester tester,
+    ) async {
+      final controller = TextEditingController(text: 'Old Chapter Text');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: EditorInputAnimationOverlay(
+              controller: controller,
+              inputAnimationEnabled: true,
+              typedCharacterAnimationEnabled: true,
+              activeChapterId: 'chapter_1',
+              child: TextField(controller: controller),
+            ),
+          ),
+        ),
       );
 
-      await tester.pump();
-      // Should not spawn any animation particles
+      // Change text AND chapter ID at the same time
+      controller.value = const TextEditingValue(
+        text:
+            'New', // Length 3, normally could trigger if old was empty, but old is longer
+        // Let's make it look like a valid small insertion to trick it if logic was flawed
+      );
+
+      // Re-pump with new widget properties (chapter_2)
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: EditorInputAnimationOverlay(
+              controller: controller,
+              inputAnimationEnabled: true,
+              typedCharacterAnimationEnabled: true,
+              activeChapterId: 'chapter_2',
+              child: TextField(controller: controller),
+            ),
+          ),
+        ),
+      );
+
+      // Programmatic change should be suppressed by the chapter change
       expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
     });
   });

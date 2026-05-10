@@ -411,6 +411,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   .settingsController
                   .syncableSettings
                   .cursorAnimationEnhanced,
+              editorFontSize:
+                  widget.settingsController.syncableSettings.editorFontSize,
+              editorLineHeight:
+                  widget.settingsController.syncableSettings.editorLineHeight,
+              editorContentWidth:
+                  widget.settingsController.syncableSettings.editorContentWidth,
+              activeChapterId: _controller.selectedChapter?.id,
               onChanged: (val) {
                 // To keep state logic simple for prompt trigger
               },

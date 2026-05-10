@@ -7,6 +7,8 @@ class EditorInputAnimationOverlay extends StatefulWidget {
   final bool inputAnimationEnabled;
   final bool typedCharacterAnimationEnabled;
   final bool cursorAnimationEnhanced;
+  final double editorFontSize;
+  final String? activeChapterId; // Used to detect programmatic resets
 
   const EditorInputAnimationOverlay({
     super.key,
@@ -15,6 +17,8 @@ class EditorInputAnimationOverlay extends StatefulWidget {
     this.inputAnimationEnabled = false,
     this.typedCharacterAnimationEnabled = false,
     this.cursorAnimationEnhanced = false,
+    this.editorFontSize = 16.0,
+    this.activeChapterId,
   });
 
   @override
@@ -25,6 +29,7 @@ class EditorInputAnimationOverlay extends StatefulWidget {
 class _EditorInputAnimationOverlayState
     extends State<EditorInputAnimationOverlay> {
   TextEditingValue _lastValue = TextEditingValue.empty;
+  TextEditingValue _lastCommittedValue = TextEditingValue.empty;
   final List<_AnimationParticle> _particles = [];
   int _particleIdCounter = 0;
 
@@ -32,6 +37,7 @@ class _EditorInputAnimationOverlayState
   void initState() {
     super.initState();
     _lastValue = widget.controller.value;
+    _lastCommittedValue = widget.controller.value;
     widget.controller.addListener(_onTextChanged);
   }
 
@@ -42,6 +48,12 @@ class _EditorInputAnimationOverlayState
       oldWidget.controller.removeListener(_onTextChanged);
       widget.controller.addListener(_onTextChanged);
       _lastValue = widget.controller.value;
+      _lastCommittedValue = widget.controller.value;
+    }
+    // Suppress animation on chapter switch
+    if (oldWidget.activeChapterId != widget.activeChapterId) {
+      _lastValue = widget.controller.value;
+      _lastCommittedValue = widget.controller.value;
     }
   }
 
@@ -54,6 +66,7 @@ class _EditorInputAnimationOverlayState
   void _onTextChanged() {
     if (!widget.inputAnimationEnabled) {
       _lastValue = widget.controller.value;
+      _lastCommittedValue = widget.controller.value;
       return;
     }
 
@@ -65,19 +78,23 @@ class _EditorInputAnimationOverlayState
       return;
     }
 
-    final textChanged = _lastValue.text != newValue.text;
+    // Suppress animation if the text was completely replaced programmatically (like load chapter)
+    // We can infer this if the length difference is huge, but we already handle bulk paste skipping below.
+    // However, if we just switched chapters, didUpdateWidget already updated _lastCommittedValue.
+
+    final textChanged = _lastCommittedValue.text != newValue.text;
     final selectionChanged = _lastValue.selection != newValue.selection;
 
     if (textChanged && widget.typedCharacterAnimationEnabled) {
-      final oldLen = _lastValue.text.length;
+      final oldLen = _lastCommittedValue.text.length;
       final newLen = newValue.text.length;
 
-      // Only animate single character insertions, skip deletions and bulk paste
-      if (newLen > oldLen && (newLen - oldLen) == 1) {
+      // Allow animating a few characters for Chinese commit
+      if (newLen > oldLen && (newLen - oldLen) <= 3) {
         if (newValue.selection.isCollapsed &&
-            newValue.selection.baseOffset > 0) {
+            newValue.selection.baseOffset >= (newLen - oldLen)) {
           final insertedChar = newValue.text.substring(
-            newValue.selection.baseOffset - 1,
+            newValue.selection.baseOffset - (newLen - oldLen),
             newValue.selection.baseOffset,
           );
 
@@ -93,6 +110,7 @@ class _EditorInputAnimationOverlayState
     }
 
     _lastValue = newValue;
+    _lastCommittedValue = newValue;
   }
 
   RenderEditable? _findRenderEditable(RenderObject? root) {
@@ -171,7 +189,7 @@ class _EditorInputAnimationOverlayState
     });
 
     // Auto remove after animation
-    Future.delayed(const Duration(milliseconds: 300), () {
+    Future.delayed(const Duration(milliseconds: 150), () {
       if (mounted) {
         setState(() {
           _particles.removeWhere((p) => p.id == id);
@@ -186,6 +204,9 @@ class _EditorInputAnimationOverlayState
       return widget.child;
     }
 
+    final textColor =
+        Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
+
     return Stack(
       children: [
         widget.child,
@@ -193,7 +214,9 @@ class _EditorInputAnimationOverlayState
         Positioned.fill(
           child: IgnorePointer(
             child: Stack(
-              children: _particles.map((p) => _buildParticleWidget(p)).toList(),
+              children: _particles
+                  .map((p) => _buildParticleWidget(p, textColor))
+                  .toList(),
             ),
           ),
         ),
@@ -201,38 +224,41 @@ class _EditorInputAnimationOverlayState
     );
   }
 
-  Widget _buildParticleWidget(_AnimationParticle particle) {
+  Widget _buildParticleWidget(_AnimationParticle particle, Color textColor) {
     return Positioned(
       left: particle.offsetX,
       top: particle.offsetY,
       child: TweenAnimationBuilder<double>(
         key: ValueKey(particle.id),
         tween: Tween(begin: 0.0, end: 1.0),
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
         builder: (context, value, child) {
           if (particle.isCursor) {
             // Cursor pulse
             return Opacity(
-              opacity: 1.0 - value,
+              opacity: 0.5 * (1.0 - value),
               child: Container(
                 width: 2,
-                height: 20,
-                color: Colors.blueAccent.withAlpha(150),
+                height: widget.editorFontSize * 1.2,
+                color: textColor.withAlpha(100),
               ),
             );
           } else {
-            // Typed character slide up and fade
+            // Typed character scale up and fade out
             return Opacity(
               opacity: 1.0 - value,
-              child: Transform.translate(
-                offset: Offset(0, -10 * value),
-                child: Text(
-                  particle.text,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    color: Colors.blueAccent,
-                    fontWeight: FontWeight.bold,
+              child: Transform.scale(
+                scale: 0.96 + (0.04 * value),
+                child: Transform.translate(
+                  offset: Offset(0, -2 * value), // Very slight upward movement
+                  child: Text(
+                    particle.text,
+                    style: TextStyle(
+                      fontSize: widget.editorFontSize,
+                      color: textColor,
+                      fontWeight: FontWeight.normal,
+                    ),
                   ),
                 ),
               ),

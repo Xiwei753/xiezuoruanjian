@@ -12,6 +12,12 @@ class EditorPanel extends StatefulWidget {
   final bool typedCharacterAnimationEnabled;
   final bool cursorAnimationEnhanced;
 
+  final double editorFontSize;
+  final double editorLineHeight;
+  final double editorContentWidth;
+  final String? activeChapterId;
+  // Note: editorParagraphSpacing is currently deferred as TextField does not natively support paragraph spacing out-of-the-box easily without replacing the text rendering engine.
+
   const EditorPanel({
     super.key,
     required this.hasChapter,
@@ -21,6 +27,10 @@ class EditorPanel extends StatefulWidget {
     this.inputAnimationEnabled = false,
     this.typedCharacterAnimationEnabled = false,
     this.cursorAnimationEnhanced = false,
+    this.editorFontSize = 16.0,
+    this.editorLineHeight = 1.6,
+    this.editorContentWidth = 800.0,
+    this.activeChapterId,
   });
 
   @override
@@ -46,18 +56,31 @@ class _EditorPanelState extends State<EditorPanel> {
         border: InputBorder.none,
         hintText: '开始你的创作...',
       ),
-      style: const TextStyle(fontSize: 16, height: 1.6),
+      style: TextStyle(
+        fontSize: widget.editorFontSize,
+        height: widget.editorLineHeight,
+      ),
       onChanged: widget.onChanged,
     );
 
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: EditorInputAnimationOverlay(
-        controller: widget.textController,
-        inputAnimationEnabled: widget.inputAnimationEnabled,
-        typedCharacterAnimationEnabled: widget.typedCharacterAnimationEnabled,
-        cursorAnimationEnhanced: widget.cursorAnimationEnhanced,
-        child: textField,
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: widget.editorContentWidth),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: EditorInputAnimationOverlay(
+            controller: widget.textController,
+            inputAnimationEnabled: widget.inputAnimationEnabled,
+            typedCharacterAnimationEnabled:
+                widget.typedCharacterAnimationEnabled,
+            cursorAnimationEnhanced: widget.cursorAnimationEnhanced,
+            editorFontSize:
+                widget.editorFontSize, // Pass font size for particles
+            activeChapterId: widget.activeChapterId,
+            child: textField,
+          ),
+        ),
       ),
     );
   }
