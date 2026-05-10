@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../application/controllers/workspace_controller.dart';
+import '../../application/controllers/settings_controller.dart';
 import '../../domain/models/chapter.dart';
 import '../dialogs/chapter_title_dialog.dart';
+import '../dialogs/settings_dialog.dart';
 import '../widgets/chapter_list_panel.dart';
 import '../widgets/editor_panel.dart';
 import '../widgets/chapter_info_panel.dart';
@@ -15,10 +17,12 @@ class WorkspaceScreen extends StatefulWidget {
 
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final WorkspaceController _controller = WorkspaceController();
+  late final SettingsController _settingsController;
   final TextEditingController _textController = TextEditingController();
 
   @override
   void initState() {
+    _settingsController = SettingsController();
     super.initState();
     _controller.addListener(_onControllerUpdate);
     _controller.initWorkspace();
@@ -28,6 +32,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void dispose() {
     _controller.removeListener(_onControllerUpdate);
     _controller.dispose();
+    _settingsController.dispose();
     _textController.dispose();
     super.dispose();
   }
@@ -38,6 +43,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           !_controller.isSaving) {
         _textController.text = _controller.currentContent;
       }
+
+      // Sync workspace path to settings controller when loaded
+      if (!_controller.isLoading &&
+          _controller.workspacePath.isNotEmpty &&
+          _settingsController.workspacePath != _controller.workspacePath) {
+        _settingsController.initWithWorkspacePath(_controller.workspacePath);
+      }
+
       setState(() {});
     }
   }
@@ -178,6 +191,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     }
   }
 
+  Future<void> _showSettingsDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => SettingsDialog(controller: _settingsController),
+    );
+  }
+
   void _showError(String message) {
     if (mounted) {
       ScaffoldMessenger.of(
@@ -196,6 +217,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       appBar: AppBar(
         title: const Text('Writer App (Local First MVP)'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: _showSettingsDialog,
+            tooltip: '设置',
+          ),
           IconButton(
             icon: const Icon(Icons.backup),
             onPressed: _backupProject,
