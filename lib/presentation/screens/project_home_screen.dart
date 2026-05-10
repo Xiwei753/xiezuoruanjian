@@ -1,0 +1,185 @@
+import 'package:flutter/material.dart';
+import '../../application/controllers/settings_controller.dart';
+import '../../application/controllers/project_controller.dart';
+import '../../domain/models/manifests.dart';
+import 'workspace_screen.dart';
+import '../dialogs/settings_dialog.dart';
+
+class ProjectHomeScreen extends StatefulWidget {
+  final SettingsController settingsController;
+
+  const ProjectHomeScreen({super.key, required this.settingsController});
+
+  @override
+  State<ProjectHomeScreen> createState() => _ProjectHomeScreenState();
+}
+
+class _ProjectHomeScreenState extends State<ProjectHomeScreen> {
+  final ProjectController _projectController = ProjectController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProjects();
+  }
+
+  Future<void> _loadProjects() async {
+    final workspacePath = widget.settingsController.workspacePath;
+    if (workspacePath.isNotEmpty) {
+      await _projectController.loadProjects(workspacePath);
+    }
+  }
+
+  Future<void> _createNewProject() async {
+    final titleController = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('新建作品'),
+        content: TextField(
+          controller: titleController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '作品标题',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, titleController.text),
+            child: const Text('创建'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty) {
+      final newProject = await _projectController.createNewProject(
+        widget.settingsController.workspacePath,
+        result,
+      );
+      if (newProject != null) {
+        _openProject(newProject);
+      }
+    }
+  }
+
+  void _openProject(ProjectManifest project) {
+    // Update LocalSettings with lastOpenedProjectId
+    final newLocalSettings = widget.settingsController.localSettings.copyWith(
+      lastOpenedProjectId: project.id,
+    );
+    widget.settingsController.updateLocalSettings(newLocalSettings);
+    widget.settingsController.save();
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) => WorkspaceScreen(
+          settingsController: widget.settingsController,
+          projectId: project.id,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSettingsDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) =>
+          SettingsDialog(controller: widget.settingsController),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Writer App - 作品管理'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: _showSettingsDialog,
+            tooltip: '设置',
+          ),
+        ],
+      ),
+      body: ListenableBuilder(
+        listenable: _projectController,
+        builder: (context, _) {
+          if (_projectController.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (_projectController.errorMessage != null) {
+            return Center(
+              child: Text(
+                _projectController.errorMessage!,
+                style: const TextStyle(color: Colors.red),
+              ),
+            );
+          }
+
+          if (_projectController.projects.isEmpty) {
+            return const Center(child: Text('没有发现任何作品。点击右下角按钮创建一个新作品。'));
+          }
+
+          return GridView.builder(
+            padding: const EdgeInsets.all(16.0),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              childAspectRatio: 3 / 4,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 16,
+            ),
+            itemCount: _projectController.projects.length,
+            itemBuilder: (context, index) {
+              final project = _projectController.projects[index];
+              return Card(
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: () => _openProject(project),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.book,
+                          size: 48,
+                          color: Colors.blueGrey,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          project.title,
+                          style: Theme.of(context).textTheme.titleLarge,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const Spacer(),
+                        Text(
+                          '创建于: ${project.createdAt.toLocal().toString().split('.')[0]}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _createNewProject,
+        icon: const Icon(Icons.add),
+        label: const Text('新建作品'),
+      ),
+    );
+  }
+}

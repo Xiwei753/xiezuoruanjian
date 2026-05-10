@@ -58,6 +58,33 @@ class WorkspaceService {
     );
   }
 
+  Future<List<ProjectManifest>> listProjects(String rootPath) async {
+    final projectsDir = Directory(p.join(rootPath, 'projects'));
+    if (!await projectsDir.exists()) {
+      return [];
+    }
+
+    final List<ProjectManifest> projects = [];
+    final entities = await projectsDir.list().toList();
+
+    for (var entity in entities) {
+      if (entity is Directory) {
+        final projectFile = File(p.join(entity.path, 'project.json'));
+        if (await projectFile.exists()) {
+          try {
+            final json = jsonDecode(await projectFile.readAsString());
+            projects.add(ProjectManifest.fromJson(json));
+          } catch (e) {
+            // Ignore corrupted project manifest for now
+          }
+        }
+      }
+    }
+
+    projects.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return projects;
+  }
+
   Future<void> createVolume(
     String rootPath,
     String projectId,

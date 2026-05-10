@@ -7,11 +7,17 @@ import '../dialogs/settings_dialog.dart';
 import '../widgets/chapter_list_panel.dart';
 import '../widgets/editor_panel.dart';
 import '../widgets/chapter_info_panel.dart';
+import 'project_home_screen.dart';
 
 class WorkspaceScreen extends StatefulWidget {
   final SettingsController settingsController;
+  final String projectId;
 
-  const WorkspaceScreen({super.key, required this.settingsController});
+  const WorkspaceScreen({
+    super.key,
+    required this.settingsController,
+    required this.projectId,
+  });
 
   @override
   State<WorkspaceScreen> createState() => _WorkspaceScreenState();
@@ -26,7 +32,12 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void initState() {
     super.initState();
     _controller.addListener(_onControllerUpdate);
-    _controller.initWorkspace();
+    final lastOpenedChapterId =
+        widget.settingsController.localSettings.lastOpenedChapterId;
+    _controller.initWorkspace(
+      widget.projectId,
+      lastOpenedChapterId: lastOpenedChapterId,
+    );
   }
 
   @override
@@ -154,9 +165,26 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     if (!await _promptUnsavedChanges()) return;
     try {
       await _controller.selectChapter(chapter);
+
+      // Update last opened chapter in LocalSettings
+      final newLocalSettings = widget.settingsController.localSettings.copyWith(
+        lastOpenedChapterId: chapter.id,
+      );
+      widget.settingsController.updateLocalSettings(newLocalSettings);
+      widget.settingsController.save();
     } catch (e) {
       _showError('读取章节失败: $e');
     }
+  }
+
+  void _backToHome() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            ProjectHomeScreen(settingsController: widget.settingsController),
+      ),
+    );
   }
 
   Future<void> _saveCurrentChapter() async {
@@ -237,6 +265,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _backToHome,
+          tooltip: '返回作品列表',
+        ),
         title: const Text('Writer App (Local First MVP)'),
         actions: [
           IconButton(

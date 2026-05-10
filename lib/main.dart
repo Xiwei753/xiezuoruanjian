@@ -4,6 +4,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'application/controllers/settings_controller.dart';
 import 'presentation/screens/workspace_screen.dart';
+import 'presentation/screens/project_home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,7 +61,13 @@ class WriterApp extends StatelessWidget {
             useMaterial3: true,
           ),
           themeMode: _getThemeMode(),
-          home: WorkspaceScreen(settingsController: settingsController),
+          home: settingsController.localSettings.lastOpenedProjectId.isNotEmpty
+              ? WorkspaceScreen(
+                  settingsController: settingsController,
+                  projectId:
+                      settingsController.localSettings.lastOpenedProjectId,
+                )
+              : ProjectHomeScreen(settingsController: settingsController),
         );
       },
     );
