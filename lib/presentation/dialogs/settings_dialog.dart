@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../application/controllers/settings_controller.dart';
+import '../../domain/models/settings.dart';
 
 class SettingsDialog extends StatefulWidget {
   final SettingsController controller;
@@ -15,11 +16,18 @@ class _SettingsDialogState extends State<SettingsDialog> {
   bool _obscureDeepSeekApiKey = true;
   bool _obscureGithubToken = true;
 
+  late LocalSettings _draftLocalSettings;
+  late SyncableSettings _draftSyncableSettings;
+  bool _isDirty = false;
+  bool _isSaving = false;
+
   final List<String> _categories = ['通用', '编辑器', 'AI 设置', '纠错', '同步 (Beta)'];
 
   @override
   void initState() {
     super.initState();
+    _draftLocalSettings = widget.controller.localSettings;
+    _draftSyncableSettings = widget.controller.syncableSettings;
     widget.controller.addListener(_onControllerUpdated);
   }
 
@@ -30,7 +38,49 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   void _onControllerUpdated() {
-    setState(() {});
+    if (mounted) {
+      if (!_isDirty && !widget.controller.isLoading) {
+        setState(() {
+          _draftLocalSettings = widget.controller.localSettings;
+          _draftSyncableSettings = widget.controller.syncableSettings;
+        });
+      }
+    }
+  }
+
+  void _updateDraftLocal(LocalSettings newSettings) {
+    setState(() {
+      _draftLocalSettings = newSettings;
+      _isDirty =
+          _draftLocalSettings != widget.controller.localSettings ||
+          _draftSyncableSettings != widget.controller.syncableSettings;
+    });
+  }
+
+  void _updateDraftSyncable(SyncableSettings newSettings) {
+    setState(() {
+      _draftSyncableSettings = newSettings;
+      _isDirty =
+          _draftLocalSettings != widget.controller.localSettings ||
+          _draftSyncableSettings != widget.controller.syncableSettings;
+    });
+  }
+
+  Future<void> _saveSettings() async {
+    setState(() {
+      _isSaving = true;
+    });
+
+    widget.controller.updateLocalSettings(_draftLocalSettings);
+    widget.controller.updateSyncableSettings(_draftSyncableSettings);
+    await widget.controller.save();
+
+    if (mounted) {
+      setState(() {
+        _isSaving = false;
+        _isDirty = false;
+      });
+    }
   }
 
   Widget _buildContent() {
@@ -64,9 +114,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Widget _buildGeneralSettings() {
-    final local = widget.controller.localSettings;
-    final syncable = widget.controller.syncableSettings;
-
     return ListView(
       children: [
         const Text(
@@ -75,7 +122,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: local.workspacePath,
+          initialValue: _draftLocalSettings.workspacePath,
           readOnly: true,
           decoration: const InputDecoration(
             labelText: '工作区路径 (只读)',
@@ -84,15 +131,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: local.deviceName,
+          initialValue: _draftLocalSettings.deviceName,
           decoration: const InputDecoration(
             labelText: '设备名称',
             border: OutlineInputBorder(),
           ),
           onChanged: (val) {
-            widget.controller.updateLocalSettings(
-              local.copyWith(deviceName: val),
-            );
+            _updateDraftLocal(_draftLocalSettings.copyWith(deviceName: val));
           },
         ),
         const SizedBox(height: 32),
@@ -103,10 +148,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const SizedBox(height: 16),
         SwitchListTile(
           title: const Text('启用自动保存'),
-          value: syncable.autoSaveEnabled,
+          value: _draftSyncableSettings.autoSaveEnabled,
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(autoSaveEnabled: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(autoSaveEnabled: val),
             );
           },
         ),
@@ -115,14 +160,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
           trailing: SizedBox(
             width: 100,
             child: TextFormField(
-              initialValue: syncable.autoSaveIntervalSeconds.toString(),
+              initialValue: _draftSyncableSettings.autoSaveIntervalSeconds
+                  .toString(),
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(border: OutlineInputBorder()),
               onChanged: (val) {
                 final intVal = int.tryParse(val);
                 if (intVal != null) {
-                  widget.controller.updateSyncableSettings(
-                    syncable.copyWith(autoSaveIntervalSeconds: intVal),
+                  _updateDraftSyncable(
+                    _draftSyncableSettings.copyWith(
+                      autoSaveIntervalSeconds: intVal,
+                    ),
                   );
                 }
               },
@@ -134,8 +182,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Widget _buildEditorSettings() {
-    final syncable = widget.controller.syncableSettings;
-
     return ListView(
       children: [
         const Text(
@@ -148,14 +194,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
           trailing: SizedBox(
             width: 100,
             child: TextFormField(
-              initialValue: syncable.editorFontSize.toString(),
+              initialValue: _draftSyncableSettings.editorFontSize.toString(),
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(border: OutlineInputBorder()),
               onChanged: (val) {
                 final doubleVal = double.tryParse(val);
                 if (doubleVal != null) {
-                  widget.controller.updateSyncableSettings(
-                    syncable.copyWith(editorFontSize: doubleVal),
+                  _updateDraftSyncable(
+                    _draftSyncableSettings.copyWith(editorFontSize: doubleVal),
                   );
                 }
               },
@@ -167,14 +213,16 @@ class _SettingsDialogState extends State<SettingsDialog> {
           trailing: SizedBox(
             width: 100,
             child: TextFormField(
-              initialValue: syncable.editorLineHeight.toString(),
+              initialValue: _draftSyncableSettings.editorLineHeight.toString(),
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(border: OutlineInputBorder()),
               onChanged: (val) {
                 final doubleVal = double.tryParse(val);
                 if (doubleVal != null) {
-                  widget.controller.updateSyncableSettings(
-                    syncable.copyWith(editorLineHeight: doubleVal),
+                  _updateDraftSyncable(
+                    _draftSyncableSettings.copyWith(
+                      editorLineHeight: doubleVal,
+                    ),
                   );
                 }
               },
@@ -186,14 +234,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
           trailing: SizedBox(
             width: 100,
             child: TextFormField(
-              initialValue: syncable.editorParagraphSpacing.toString(),
+              initialValue: _draftSyncableSettings.editorParagraphSpacing
+                  .toString(),
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(border: OutlineInputBorder()),
               onChanged: (val) {
                 final doubleVal = double.tryParse(val);
                 if (doubleVal != null) {
-                  widget.controller.updateSyncableSettings(
-                    syncable.copyWith(editorParagraphSpacing: doubleVal),
+                  _updateDraftSyncable(
+                    _draftSyncableSettings.copyWith(
+                      editorParagraphSpacing: doubleVal,
+                    ),
                   );
                 }
               },
@@ -205,14 +256,17 @@ class _SettingsDialogState extends State<SettingsDialog> {
           trailing: SizedBox(
             width: 100,
             child: TextFormField(
-              initialValue: syncable.editorContentWidth.toString(),
+              initialValue: _draftSyncableSettings.editorContentWidth
+                  .toString(),
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(border: OutlineInputBorder()),
               onChanged: (val) {
                 final doubleVal = double.tryParse(val);
                 if (doubleVal != null) {
-                  widget.controller.updateSyncableSettings(
-                    syncable.copyWith(editorContentWidth: doubleVal),
+                  _updateDraftSyncable(
+                    _draftSyncableSettings.copyWith(
+                      editorContentWidth: doubleVal,
+                    ),
                   );
                 }
               },
@@ -221,7 +275,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<String>(
-          initialValue: syncable.themeMode,
+          initialValue: _draftSyncableSettings.themeMode,
           decoration: const InputDecoration(
             labelText: '主题模式',
             border: OutlineInputBorder(),
@@ -233,8 +287,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
           ],
           onChanged: (val) {
             if (val != null) {
-              widget.controller.updateSyncableSettings(
-                syncable.copyWith(themeMode: val),
+              _updateDraftSyncable(
+                _draftSyncableSettings.copyWith(themeMode: val),
               );
             }
           },
@@ -242,19 +296,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const SizedBox(height: 16),
         SwitchListTile(
           title: const Text('打字机模式'),
-          value: syncable.typewriterModeEnabled,
+          value: _draftSyncableSettings.typewriterModeEnabled,
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(typewriterModeEnabled: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(typewriterModeEnabled: val),
             );
           },
         ),
         SwitchListTile(
           title: const Text('专注模式'),
-          value: syncable.focusModeEnabled,
+          value: _draftSyncableSettings.focusModeEnabled,
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(focusModeEnabled: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(focusModeEnabled: val),
             );
           },
         ),
@@ -263,8 +317,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Widget _buildAISettings() {
-    final syncable = widget.controller.syncableSettings;
-
     return ListView(
       children: [
         const Text(
@@ -273,7 +325,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<String>(
-          initialValue: syncable.defaultAIProvider,
+          initialValue: _draftSyncableSettings.defaultAIProvider,
           decoration: const InputDecoration(
             labelText: 'AI 提供商',
             border: OutlineInputBorder(),
@@ -284,22 +336,22 @@ class _SettingsDialogState extends State<SettingsDialog> {
           ],
           onChanged: (val) {
             if (val != null) {
-              widget.controller.updateSyncableSettings(
-                syncable.copyWith(defaultAIProvider: val),
+              _updateDraftSyncable(
+                _draftSyncableSettings.copyWith(defaultAIProvider: val),
               );
             }
           },
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.defaultAIModel,
+          initialValue: _draftSyncableSettings.defaultAIModel,
           decoration: const InputDecoration(
             labelText: '默认模型名称',
             border: OutlineInputBorder(),
           ),
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(defaultAIModel: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(defaultAIModel: val),
             );
           },
         ),
@@ -310,20 +362,20 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.deepSeekBaseUrl,
+          initialValue: _draftSyncableSettings.deepSeekBaseUrl,
           decoration: const InputDecoration(
             labelText: 'Base URL',
             border: OutlineInputBorder(),
           ),
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(deepSeekBaseUrl: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(deepSeekBaseUrl: val),
             );
           },
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.deepSeekApiKey,
+          initialValue: _draftSyncableSettings.deepSeekApiKey,
           obscureText: _obscureDeepSeekApiKey,
           decoration: InputDecoration(
             labelText: 'API Key',
@@ -342,8 +394,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
             ),
           ),
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(deepSeekApiKey: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(deepSeekApiKey: val),
             );
           },
         ),
@@ -362,25 +414,26 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const SizedBox(height: 16),
         SwitchListTile(
           title: const Text('启用 AI Tools'),
-          value: syncable.aiToolsEnabled,
+          value: _draftSyncableSettings.aiToolsEnabled,
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(aiToolsEnabled: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(aiToolsEnabled: val),
             );
           },
         ),
         SwitchListTile(
           title: const Text('启用 AI 思考模式'),
-          value: syncable.aiThinkingModeEnabled,
+          value: _draftSyncableSettings.aiThinkingModeEnabled,
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(aiThinkingModeEnabled: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(aiThinkingModeEnabled: val),
             );
           },
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.aiPromptTemplateVersion.toString(),
+          initialValue: _draftSyncableSettings.aiPromptTemplateVersion
+              .toString(),
           readOnly: true,
           decoration: const InputDecoration(
             labelText: 'Prompt 模板版本 (只读)',
@@ -389,7 +442,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.aiToolDefinitionVersion.toString(),
+          initialValue: _draftSyncableSettings.aiToolDefinitionVersion
+              .toString(),
           readOnly: true,
           decoration: const InputDecoration(
             labelText: 'Tool Definition 版本 (只读)',
@@ -398,7 +452,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.aiSerializerVersion.toString(),
+          initialValue: _draftSyncableSettings.aiSerializerVersion.toString(),
           readOnly: true,
           decoration: const InputDecoration(
             labelText: 'Serializer 版本 (只读)',
@@ -410,8 +464,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Widget _buildCorrectionSettings() {
-    final syncable = widget.controller.syncableSettings;
-
     return ListView(
       children: [
         const Text(
@@ -421,10 +473,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
         const SizedBox(height: 16),
         SwitchListTile(
           title: const Text('启用拼写/语法纠错'),
-          value: syncable.correctionEnabled,
+          value: _draftSyncableSettings.correctionEnabled,
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(correctionEnabled: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(correctionEnabled: val),
             );
           },
         ),
@@ -433,8 +485,6 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Widget _buildSyncSettings() {
-    final syncable = widget.controller.syncableSettings;
-
     return ListView(
       children: [
         const Text(
@@ -448,33 +498,33 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 24),
         TextFormField(
-          initialValue: syncable.githubRepoUrl,
+          initialValue: _draftSyncableSettings.githubRepoUrl,
           decoration: const InputDecoration(
             labelText: 'Repository URL',
             border: OutlineInputBorder(),
           ),
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(githubRepoUrl: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(githubRepoUrl: val),
             );
           },
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.githubBranch,
+          initialValue: _draftSyncableSettings.githubBranch,
           decoration: const InputDecoration(
             labelText: 'Branch',
             border: OutlineInputBorder(),
           ),
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(githubBranch: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(githubBranch: val),
             );
           },
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<String>(
-          initialValue: syncable.githubSyncMethod,
+          initialValue: _draftSyncableSettings.githubSyncMethod,
           decoration: const InputDecoration(
             labelText: '同步方式',
             border: OutlineInputBorder(),
@@ -485,15 +535,15 @@ class _SettingsDialogState extends State<SettingsDialog> {
           ],
           onChanged: (val) {
             if (val != null) {
-              widget.controller.updateSyncableSettings(
-                syncable.copyWith(githubSyncMethod: val),
+              _updateDraftSyncable(
+                _draftSyncableSettings.copyWith(githubSyncMethod: val),
               );
             }
           },
         ),
         const SizedBox(height: 16),
         TextFormField(
-          initialValue: syncable.githubToken,
+          initialValue: _draftSyncableSettings.githubToken,
           obscureText: _obscureGithubToken,
           decoration: InputDecoration(
             labelText: 'GitHub Token',
@@ -510,8 +560,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
             ),
           ),
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(githubToken: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(githubToken: val),
             );
           },
         ),
@@ -526,10 +576,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
         SwitchListTile(
           title: const Text('允许明文同步 API Keys 和 Tokens'),
           subtitle: const Text('当前设计为明文存入 settings.sync.json。'),
-          value: syncable.syncApiKeysInPlaintext,
+          value: _draftSyncableSettings.syncApiKeysInPlaintext,
           onChanged: (val) {
-            widget.controller.updateSyncableSettings(
-              syncable.copyWith(syncApiKeysInPlaintext: val),
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(syncApiKeysInPlaintext: val),
             );
           },
         ),
@@ -604,7 +654,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
-                        if (widget.controller.isDirty)
+                        if (_isDirty)
                           const Padding(
                             padding: EdgeInsets.only(right: 16.0),
                             child: Text(
@@ -621,14 +671,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                         const SizedBox(width: 16),
                         ElevatedButton(
-                          onPressed:
-                              widget.controller.isDirty &&
-                                  !widget.controller.isSaving
-                              ? () async {
-                                  await widget.controller.save();
-                                }
+                          onPressed: _isDirty && !_isSaving
+                              ? _saveSettings
                               : null,
-                          child: widget.controller.isSaving
+                          child: _isSaving
                               ? const SizedBox(
                                   width: 16,
                                   height: 16,

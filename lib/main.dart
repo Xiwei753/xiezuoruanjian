@@ -43,6 +43,7 @@ class WriterApp extends StatelessWidget {
       listenable: settingsController,
       builder: (context, _) {
         return MaterialApp(
+          debugShowCheckedModeBanner: false,
           title: 'Writer App',
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(

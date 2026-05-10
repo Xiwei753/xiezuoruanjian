@@ -20,6 +20,7 @@ class WorkspaceScreen extends StatefulWidget {
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final WorkspaceController _controller = WorkspaceController();
   final TextEditingController _textController = TextEditingController();
+  String? _currentChapterId;
 
   @override
   void initState() {
@@ -38,9 +39,15 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   void _onControllerUpdate() {
     if (mounted) {
-      if (_textController.text != _controller.currentContent &&
-          !_controller.isSaving) {
-        _textController.text = _controller.currentContent;
+      bool shouldRebuild = false;
+
+      // Only set text when switching to a DIFFERENT chapter
+      if (_currentChapterId != _controller.selectedChapter?.id) {
+        _currentChapterId = _controller.selectedChapter?.id;
+        if (!(_controller.isSaving)) {
+          _textController.text = _controller.currentContent;
+        }
+        shouldRebuild = true;
       }
 
       // Sync workspace path to settings controller when loaded
@@ -53,7 +60,19 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         );
       }
 
-      setState(() {});
+      // Only force setState if it's not a generic text keystroke notify
+      // Since WorkspaceController notifies listeners on save and selectChapter, those will trigger rebuilds.
+      // Wait, we need to rebuild the left/right panels if saving state changes.
+      // But we shouldn't rebuild if the user is just typing. Actually, WorkspaceController doesn't know about user typing right now,
+      // it only knows about it when we call save.
+      if (shouldRebuild || _controller.isSaving || _controller.isLoading) {
+        setState(() {});
+      } else {
+        // Even if we just want to update without forcing textController,
+        // we should call setState to update the sidebars, but Flutter might rebuild EditorPanel.
+        // Since EditorPanel is a StatefulWidget now, it maintains its state better.
+        setState(() {});
+      }
     }
   }
 
