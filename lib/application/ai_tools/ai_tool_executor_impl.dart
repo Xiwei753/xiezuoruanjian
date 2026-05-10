@@ -100,7 +100,7 @@ class AIToolExecutorImpl implements IAIToolExecutor, AIToolRegistry {
             }
           }
         }
-        return {'content': 'Simulated content for $chapterId'};
+        return {'error': 'Chapter not found'};
 
       case 'search_text':
         final projectId = call.arguments['projectId'] as String;

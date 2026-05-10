@@ -33,6 +33,10 @@ class MockAIProvider implements IAIProvider {
     return AIResult(
       taskId: task.id,
       content: responseMsg.content ?? '',
+      reasoningContent: responseMsg.reasoningContent,
+      toolCalls: responseMsg.toolCalls,
+      requiresReasoningContentEcho:
+          responseMsg.toolCalls != null && responseMsg.toolCalls!.isNotEmpty,
       rawRequest: {'mock': 'request', 'messages_count': messages.length},
       rawResponse: {
         'tool_calls': responseMsg.toolCalls
@@ -43,6 +47,7 @@ class MockAIProvider implements IAIProvider {
               },
             )
             .toList(),
+        'reasoning_content': responseMsg.reasoningContent,
       },
       sourceChapterIds: task.sourceChapterIds,
       modelName: task.modelName,
