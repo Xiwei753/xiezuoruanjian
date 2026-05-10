@@ -45,14 +45,18 @@ enum AIMessageRole { system, user, assistant, tool }
 class AIMessage {
   final AIMessageRole role;
   final String? content;
+  final String? reasoningContent;
   final List<AIToolCall>? toolCalls;
   final AIToolResult? toolResult;
+  final Map<String, dynamic>? providerMetadata;
 
   AIMessage({
     required this.role,
     this.content,
+    this.reasoningContent,
     this.toolCalls,
     this.toolResult,
+    this.providerMetadata,
   });
 }
 
@@ -105,6 +109,9 @@ class AITask {
 class AIResult {
   final String taskId;
   final String content;
+  final String? reasoningContent;
+  final List<AIToolCall>? toolCalls;
+  final bool requiresReasoningContentEcho;
   final Map<String, dynamic>? jsonOutput;
   final Map<String, dynamic> rawRequest;
   final Map<String, dynamic> rawResponse;
@@ -120,6 +127,9 @@ class AIResult {
   AIResult({
     required this.taskId,
     required this.content,
+    this.reasoningContent,
+    this.toolCalls,
+    this.requiresReasoningContentEcho = false,
     this.jsonOutput,
     required this.rawRequest,
     required this.rawResponse,
@@ -129,5 +139,25 @@ class AIResult {
     required this.promptVersion,
     required this.inputHash,
     required this.createdAt,
+  });
+}
+
+class AIConversationSession {
+  final String taskId;
+  final String providerName;
+  final String modelName;
+  final List<AIMessage> messages;
+  final bool requiresReasoningContentEcho;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  AIConversationSession({
+    required this.taskId,
+    required this.providerName,
+    required this.modelName,
+    required this.messages,
+    this.requiresReasoningContentEcho = false,
+    required this.createdAt,
+    required this.updatedAt,
   });
 }
