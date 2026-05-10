@@ -88,6 +88,15 @@ class SettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> saveLocal() async {
+    try {
+      await _settingsService.saveLocalSettings(_localSettings);
+    } catch (e) {
+      _errorMessage = 'Failed to save local settings: $e';
+      notifyListeners();
+    }
+  }
+
   Future<void> save() async {
     if (!_isDirty) return;
 

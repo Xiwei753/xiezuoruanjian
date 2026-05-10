@@ -70,3 +70,10 @@ app.*.symbols
 
 # Obfuscation related
 app.*.map.json
+
+# Temporary files and logs
+logs/
+tmp/
+
+# Settings
+settings.local.json

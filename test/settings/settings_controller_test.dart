@@ -137,5 +137,31 @@ void main() {
       // We verify the saveSyncableSettings was called but its parameter didn't magically get these fields.
       expect(mockService.savedWorkspacePath, '/test');
     });
+
+    test('saveLocal() strictly avoids updating syncable settings', () async {
+      await controller.init();
+
+      controller.updateLocalSettings(
+        controller.localSettings.copyWith(
+          workspacePath: '/test_local_only',
+          deviceName: 'Only Local Device',
+        ),
+      );
+
+      // Mutate sync settings but DONT call standard save()
+      controller.updateSyncableSettings(
+        controller.syncableSettings.copyWith(autoSaveIntervalSeconds: 999),
+      );
+
+      // Save strictly local
+      await controller.saveLocal();
+
+      // The local settings should be saved
+      expect(mockService.local.deviceName, 'Only Local Device');
+
+      // The sync settings should NOT be flushed
+      expect(mockService.savedWorkspacePath, isNot('/test_local_only'));
+      expect(mockService.syncable.autoSaveIntervalSeconds, isNot(999));
+    });
   });
 }

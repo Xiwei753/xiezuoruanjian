@@ -167,5 +167,123 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pump();
     });
+
+    testWidgets('Out-of-bounds offset does not crash cursor animation', (
+      WidgetTester tester,
+    ) async {
+      final controller = TextEditingController(text: 'Hello');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: EditorInputAnimationOverlay(
+              controller: controller,
+              inputAnimationEnabled: true,
+              cursorAnimationEnhanced: true,
+              typedCharacterAnimationEnabled: false,
+              child: TextField(controller: controller),
+            ),
+          ),
+        ),
+      );
+
+      // Set out of bounds offset
+      controller.value = const TextEditingValue(
+        text: 'Hello',
+        selection: TextSelection.collapsed(offset: 100), // Exceeds 5
+      );
+
+      await tester.pump();
+
+      // Should spawn one TweenAnimationBuilder (cursor pulse), safely clamped
+      expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+    });
+
+    testWidgets('Empty text handling does not crash', (
+      WidgetTester tester,
+    ) async {
+      final controller = TextEditingController(text: '');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: EditorInputAnimationOverlay(
+              controller: controller,
+              inputAnimationEnabled: true,
+              cursorAnimationEnhanced: true,
+              typedCharacterAnimationEnabled: true,
+              child: TextField(controller: controller),
+            ),
+          ),
+        ),
+      );
+
+      // Simulate inserting 'A' into empty
+      controller.value = const TextEditingValue(
+        text: 'A',
+        selection: TextSelection.collapsed(offset: 1),
+      );
+
+      await tester.pump();
+
+      // Should spawn one TweenAnimationBuilder
+      expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+    });
+
+    testWidgets('Disabled settings do not render animation layer', (
+      WidgetTester tester,
+    ) async {
+      final controller = TextEditingController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: EditorInputAnimationOverlay(
+              controller: controller,
+              inputAnimationEnabled: false,
+              child: TextField(controller: controller),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.byType(Positioned), findsNothing);
+    });
+
+    testWidgets('Composing state skips character animation', (
+      WidgetTester tester,
+    ) async {
+      final controller = TextEditingController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: EditorInputAnimationOverlay(
+              controller: controller,
+              inputAnimationEnabled: true,
+              typedCharacterAnimationEnabled: true,
+              child: TextField(controller: controller),
+            ),
+          ),
+        ),
+      );
+
+      // Update text with composing valid
+      controller.value = const TextEditingValue(
+        text: 'abc',
+        composing: TextRange(start: 0, end: 3),
+      );
+
+      await tester.pump();
+      // Should not spawn any animation particles
+      expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
+    });
   });
 }
