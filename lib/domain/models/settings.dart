@@ -15,6 +15,12 @@ class LocalSettings {
   final double lastScrollOffset;
   final DateTime? lastEditorStateUpdatedAt;
 
+  // Logging
+  final bool loggingEnabled;
+  final bool debugLoggingEnabled;
+  final bool performanceLoggingEnabled;
+  final int slowOperationThresholdMs;
+
   const LocalSettings({
     this.workspacePath = '',
     this.lastOpenedProjectId = '',
@@ -30,6 +36,10 @@ class LocalSettings {
     this.lastSelectionExtentOffset = -1,
     this.lastScrollOffset = 0.0,
     this.lastEditorStateUpdatedAt,
+    this.loggingEnabled = true,
+    this.debugLoggingEnabled = false,
+    this.performanceLoggingEnabled = true,
+    this.slowOperationThresholdMs = 100,
   });
 
   LocalSettings copyWith({
@@ -47,6 +57,10 @@ class LocalSettings {
     int? lastSelectionExtentOffset,
     double? lastScrollOffset,
     DateTime? lastEditorStateUpdatedAt,
+    bool? loggingEnabled,
+    bool? debugLoggingEnabled,
+    bool? performanceLoggingEnabled,
+    int? slowOperationThresholdMs,
   }) {
     return LocalSettings(
       workspacePath: workspacePath ?? this.workspacePath,
@@ -66,6 +80,12 @@ class LocalSettings {
       lastScrollOffset: lastScrollOffset ?? this.lastScrollOffset,
       lastEditorStateUpdatedAt:
           lastEditorStateUpdatedAt ?? this.lastEditorStateUpdatedAt,
+      loggingEnabled: loggingEnabled ?? this.loggingEnabled,
+      debugLoggingEnabled: debugLoggingEnabled ?? this.debugLoggingEnabled,
+      performanceLoggingEnabled:
+          performanceLoggingEnabled ?? this.performanceLoggingEnabled,
+      slowOperationThresholdMs:
+          slowOperationThresholdMs ?? this.slowOperationThresholdMs,
     );
   }
 
@@ -85,6 +105,10 @@ class LocalSettings {
       'lastSelectionExtentOffset': lastSelectionExtentOffset,
       'lastScrollOffset': lastScrollOffset,
       'lastEditorStateUpdatedAt': lastEditorStateUpdatedAt?.toIso8601String(),
+      'loggingEnabled': loggingEnabled,
+      'debugLoggingEnabled': debugLoggingEnabled,
+      'performanceLoggingEnabled': performanceLoggingEnabled,
+      'slowOperationThresholdMs': slowOperationThresholdMs,
     };
   }
 
@@ -107,6 +131,11 @@ class LocalSettings {
       lastEditorStateUpdatedAt: json['lastEditorStateUpdatedAt'] != null
           ? DateTime.parse(json['lastEditorStateUpdatedAt'] as String)
           : null,
+      loggingEnabled: json['loggingEnabled'] as bool? ?? true,
+      debugLoggingEnabled: json['debugLoggingEnabled'] as bool? ?? false,
+      performanceLoggingEnabled:
+          json['performanceLoggingEnabled'] as bool? ?? true,
+      slowOperationThresholdMs: json['slowOperationThresholdMs'] as int? ?? 100,
     );
   }
 }
