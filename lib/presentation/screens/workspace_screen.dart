@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../application/controllers/workspace_controller.dart';
 import '../../application/controllers/settings_controller.dart';
@@ -26,12 +27,20 @@ class WorkspaceScreen extends StatefulWidget {
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final WorkspaceController _controller = WorkspaceController();
   final TextEditingController _textController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
   String? _currentChapterId;
+
+  Timer? _stateDebounceTimer;
+  bool _isRestoringState = false;
 
   @override
   void initState() {
     super.initState();
     _controller.addListener(_onControllerUpdate);
+
+    _textController.addListener(_onEditorStateChanged);
+    _scrollController.addListener(_onEditorStateChanged);
+
     final lastOpenedChapterId =
         widget.settingsController.localSettings.lastOpenedChapterId;
     _controller.initWorkspace(
@@ -42,10 +51,33 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   @override
   void dispose() {
+    _stateDebounceTimer?.cancel();
     _controller.removeListener(_onControllerUpdate);
     _controller.dispose();
     _textController.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onEditorStateChanged() {
+    if (_isRestoringState || _controller.selectedChapter == null) return;
+
+    _stateDebounceTimer?.cancel();
+    _stateDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      final localSettings = widget.settingsController.localSettings;
+      final newSettings = localSettings.copyWith(
+        lastCursorOffset: _textController.selection.baseOffset,
+        lastSelectionBaseOffset: _textController.selection.baseOffset,
+        lastSelectionExtentOffset: _textController.selection.extentOffset,
+        lastScrollOffset: _scrollController.hasClients
+            ? _scrollController.offset
+            : 0.0,
+        lastEditorStateUpdatedAt: DateTime.now(),
+      );
+      widget.settingsController.updateLocalSettings(newSettings);
+      widget.settingsController.save();
+    });
   }
 
   void _onControllerUpdate() {
@@ -56,7 +88,49 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       if (_currentChapterId != _controller.selectedChapter?.id) {
         _currentChapterId = _controller.selectedChapter?.id;
         if (!(_controller.isSaving)) {
+          _isRestoringState = true;
           _textController.text = _controller.currentContent;
+
+          // Restore state if available for this chapter
+          final localSettings = widget.settingsController.localSettings;
+          if (localSettings.lastOpenedChapterId == _currentChapterId) {
+            final contentLen = _controller.currentContent.length;
+
+            // Clamp selection
+            var base = localSettings.lastSelectionBaseOffset;
+            var extent = localSettings.lastSelectionExtentOffset;
+
+            if (base >= 0 && extent >= 0) {
+              if (base > contentLen) base = contentLen;
+              if (extent > contentLen) extent = contentLen;
+
+              _textController.selection = TextSelection(
+                baseOffset: base,
+                extentOffset: extent,
+              );
+            } else if (localSettings.lastCursorOffset >= 0) {
+              var offset = localSettings.lastCursorOffset;
+              if (offset > contentLen) offset = contentLen;
+              _textController.selection = TextSelection.collapsed(
+                offset: offset,
+              );
+            }
+
+            // Restore scroll
+            if (localSettings.lastScrollOffset > 0 &&
+                _scrollController.hasClients) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (_scrollController.hasClients) {
+                  final maxScroll = _scrollController.position.maxScrollExtent;
+                  var targetScroll = localSettings.lastScrollOffset;
+                  if (targetScroll > maxScroll) targetScroll = maxScroll;
+                  _scrollController.jumpTo(targetScroll);
+                }
+              });
+            }
+          }
+
+          _isRestoringState = false;
         }
         shouldRebuild = true;
       }
@@ -169,6 +243,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       // Update last opened chapter in LocalSettings
       final newLocalSettings = widget.settingsController.localSettings.copyWith(
         lastOpenedChapterId: chapter.id,
+        // Reset offsets when explicitly switching chapters
+        lastCursorOffset: -1,
+        lastSelectionBaseOffset: -1,
+        lastSelectionExtentOffset: -1,
+        lastScrollOffset: 0.0,
       );
       widget.settingsController.updateLocalSettings(newLocalSettings);
       widget.settingsController.save();
@@ -309,6 +388,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
             child: EditorPanel(
               hasChapter: _controller.selectedChapter != null,
               textController: _textController,
+              scrollController: _scrollController,
               onChanged: (val) {
                 // To keep state logic simple for prompt trigger
               },
