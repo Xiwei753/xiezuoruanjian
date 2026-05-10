@@ -21,7 +21,14 @@ class _SettingsDialogState extends State<SettingsDialog> {
   bool _isDirty = false;
   bool _isSaving = false;
 
-  final List<String> _categories = ['通用', '编辑器', 'AI 设置', '纠错', '同步 (Beta)'];
+  final List<String> _categories = [
+    '通用',
+    '编辑器',
+    'AI 设置',
+    '纠错',
+    '同步 (Beta)',
+    '日志/诊断',
+  ];
 
   @override
   void initState() {
@@ -108,6 +115,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
         return _buildCorrectionSettings();
       case 4:
         return _buildSyncSettings();
+      case 5:
+        return _buildLogSettings();
       default:
         return const Center(child: Text('Unknown category'));
     }
@@ -575,6 +584,73 @@ class _SettingsDialogState extends State<SettingsDialog> {
               _draftSyncableSettings.copyWith(correctionEnabled: val),
             );
           },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLogSettings() {
+    return ListView(
+      children: [
+        const Text(
+          '日志/诊断',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          title: const Text('启用日志'),
+          value: _draftLocalSettings.loggingEnabled,
+          onChanged: (val) {
+            _updateDraftLocal(
+              _draftLocalSettings.copyWith(loggingEnabled: val),
+            );
+          },
+        ),
+        SwitchListTile(
+          title: const Text('启用调试日志'),
+          value: _draftLocalSettings.debugLoggingEnabled,
+          onChanged: (val) {
+            _updateDraftLocal(
+              _draftLocalSettings.copyWith(debugLoggingEnabled: val),
+            );
+          },
+        ),
+        SwitchListTile(
+          title: const Text('启用性能日志'),
+          value: _draftLocalSettings.performanceLoggingEnabled,
+          onChanged: (val) {
+            _updateDraftLocal(
+              _draftLocalSettings.copyWith(performanceLoggingEnabled: val),
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+        TextFormField(
+          initialValue: _draftLocalSettings.slowOperationThresholdMs.toString(),
+          decoration: const InputDecoration(
+            labelText: '慢操作阈值 (ms)',
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: TextInputType.number,
+          onChanged: (val) {
+            final ms = int.tryParse(val);
+            if (ms != null) {
+              _updateDraftLocal(
+                _draftLocalSettings.copyWith(slowOperationThresholdMs: ms),
+              );
+            }
+          },
+        ),
+        const SizedBox(height: 24),
+        TextFormField(
+          initialValue: _draftLocalSettings.workspacePath.isNotEmpty
+              ? '${_draftLocalSettings.workspacePath}/app-meta/logs'
+              : '未初始化',
+          readOnly: true,
+          decoration: const InputDecoration(
+            labelText: '日志目录路径',
+            border: OutlineInputBorder(),
+          ),
         ),
       ],
     );
