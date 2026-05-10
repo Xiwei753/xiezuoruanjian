@@ -20,6 +20,9 @@ void main() {
       expect(settings.githubToken, '');
       expect(settings.syncApiKeysInPlaintext, true);
       expect(settings.correctionEnabled, false);
+      expect(settings.inputAnimationEnabled, false);
+      expect(settings.typedCharacterAnimationEnabled, false);
+      expect(settings.cursorAnimationEnhanced, false);
     });
 
     test('can save and read JSON', () {
@@ -30,6 +33,9 @@ void main() {
         themeMode: 'dark',
         deepSeekApiKey: 'test_api_key',
         githubToken: 'test_github_token',
+        inputAnimationEnabled: true,
+        typedCharacterAnimationEnabled: true,
+        cursorAnimationEnhanced: true,
       );
 
       final json = original.toJson();
@@ -41,6 +47,9 @@ void main() {
       expect(restored.themeMode, 'dark');
       expect(restored.deepSeekApiKey, 'test_api_key');
       expect(restored.githubToken, 'test_github_token');
+      expect(restored.inputAnimationEnabled, true);
+      expect(restored.typedCharacterAnimationEnabled, true);
+      expect(restored.cursorAnimationEnhanced, true);
     });
 
     test('can contain deepSeekApiKey and githubToken', () {

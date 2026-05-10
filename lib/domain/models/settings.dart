@@ -91,6 +91,9 @@ class SyncableSettings {
   final String themeMode;
   final bool typewriterModeEnabled;
   final bool focusModeEnabled;
+  final bool inputAnimationEnabled;
+  final bool typedCharacterAnimationEnabled;
+  final bool cursorAnimationEnhanced;
 
   // AI
   final String defaultAIProvider;
@@ -126,6 +129,9 @@ class SyncableSettings {
     this.themeMode = 'system',
     this.typewriterModeEnabled = false,
     this.focusModeEnabled = false,
+    this.inputAnimationEnabled = false,
+    this.typedCharacterAnimationEnabled = false,
+    this.cursorAnimationEnhanced = false,
     this.defaultAIProvider = 'deepseek',
     this.defaultAIModel = 'deepseek-chat',
     this.deepSeekBaseUrl = 'https://api.deepseek.com',
@@ -156,6 +162,9 @@ class SyncableSettings {
     String? themeMode,
     bool? typewriterModeEnabled,
     bool? focusModeEnabled,
+    bool? inputAnimationEnabled,
+    bool? typedCharacterAnimationEnabled,
+    bool? cursorAnimationEnhanced,
     String? defaultAIProvider,
     String? defaultAIModel,
     String? deepSeekBaseUrl,
@@ -188,6 +197,12 @@ class SyncableSettings {
       typewriterModeEnabled:
           typewriterModeEnabled ?? this.typewriterModeEnabled,
       focusModeEnabled: focusModeEnabled ?? this.focusModeEnabled,
+      inputAnimationEnabled:
+          inputAnimationEnabled ?? this.inputAnimationEnabled,
+      typedCharacterAnimationEnabled:
+          typedCharacterAnimationEnabled ?? this.typedCharacterAnimationEnabled,
+      cursorAnimationEnhanced:
+          cursorAnimationEnhanced ?? this.cursorAnimationEnhanced,
       defaultAIProvider: defaultAIProvider ?? this.defaultAIProvider,
       defaultAIModel: defaultAIModel ?? this.defaultAIModel,
       deepSeekBaseUrl: deepSeekBaseUrl ?? this.deepSeekBaseUrl,
@@ -224,6 +239,9 @@ class SyncableSettings {
       'themeMode': themeMode,
       'typewriterModeEnabled': typewriterModeEnabled,
       'focusModeEnabled': focusModeEnabled,
+      'inputAnimationEnabled': inputAnimationEnabled,
+      'typedCharacterAnimationEnabled': typedCharacterAnimationEnabled,
+      'cursorAnimationEnhanced': cursorAnimationEnhanced,
       'defaultAIProvider': defaultAIProvider,
       'defaultAIModel': defaultAIModel,
       'deepSeekBaseUrl': deepSeekBaseUrl,
@@ -258,6 +276,11 @@ class SyncableSettings {
       themeMode: json['themeMode'] as String? ?? 'system',
       typewriterModeEnabled: json['typewriterModeEnabled'] as bool? ?? false,
       focusModeEnabled: json['focusModeEnabled'] as bool? ?? false,
+      inputAnimationEnabled: json['inputAnimationEnabled'] as bool? ?? false,
+      typedCharacterAnimationEnabled:
+          json['typedCharacterAnimationEnabled'] as bool? ?? false,
+      cursorAnimationEnhanced:
+          json['cursorAnimationEnhanced'] as bool? ?? false,
       defaultAIProvider: json['defaultAIProvider'] as String? ?? 'deepseek',
       defaultAIModel: json['defaultAIModel'] as String? ?? 'deepseek-chat',
       deepSeekBaseUrl:
