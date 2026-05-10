@@ -69,15 +69,28 @@ class _ProjectHomeScreenState extends State<ProjectHomeScreen> {
   }
 
   void _openProject(ProjectManifest project, {String? chapterId}) {
+    // Determine the appropriate chapterId to use
+    // If a chapterId is explicitly passed, use it.
+    // If not, use the saved lastOpenedChapterId ONLY IF we are opening the lastOpenedProjectId.
+    // Otherwise, we shouldn't attempt to open a chapter from a different project.
+    String finalChapterId = '';
+
+    if (chapterId != null && chapterId.isNotEmpty) {
+      finalChapterId = chapterId;
+    } else if (project.id ==
+        widget.settingsController.localSettings.lastOpenedProjectId) {
+      finalChapterId =
+          widget.settingsController.localSettings.lastOpenedChapterId;
+    }
+
     // Update LocalSettings with lastOpenedProjectId
     final newLocalSettings = widget.settingsController.localSettings.copyWith(
       lastOpenedProjectId: project.id,
-      lastOpenedChapterId:
-          chapterId ??
-          widget.settingsController.localSettings.lastOpenedChapterId,
+      lastOpenedChapterId: finalChapterId,
     );
     widget.settingsController.updateLocalSettings(newLocalSettings);
-    widget.settingsController.save();
+    // Project opening usually triggers saves; we only save local state here to avoid rewriting sync settings
+    widget.settingsController.saveLocal();
 
     Navigator.pushReplacement(
       context,

@@ -59,25 +59,67 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     super.dispose();
   }
 
+  void _debounceSaveLocalSettings() {
+    final localSettings = widget.settingsController.localSettings;
+    final newSettings = localSettings.copyWith(
+      lastCursorOffset: _textController.selection.baseOffset,
+      lastSelectionBaseOffset: _textController.selection.baseOffset,
+      lastSelectionExtentOffset: _textController.selection.extentOffset,
+      lastScrollOffset: _scrollController.hasClients
+          ? _scrollController.offset
+          : 0.0,
+      lastEditorStateUpdatedAt: DateTime.now(),
+    );
+    widget.settingsController.updateLocalSettings(newSettings);
+    // Use the explicit saveLocal method which strictly only saves local settings
+    widget.settingsController.saveLocal();
+  }
+
   void _onEditorStateChanged() {
     if (_isRestoringState || _controller.selectedChapter == null) return;
 
     _stateDebounceTimer?.cancel();
     _stateDebounceTimer = Timer(const Duration(milliseconds: 500), () {
       if (!mounted) return;
-      final localSettings = widget.settingsController.localSettings;
-      final newSettings = localSettings.copyWith(
-        lastCursorOffset: _textController.selection.baseOffset,
-        lastSelectionBaseOffset: _textController.selection.baseOffset,
-        lastSelectionExtentOffset: _textController.selection.extentOffset,
-        lastScrollOffset: _scrollController.hasClients
-            ? _scrollController.offset
-            : 0.0,
-        lastEditorStateUpdatedAt: DateTime.now(),
-      );
-      widget.settingsController.updateLocalSettings(newSettings);
-      widget.settingsController.save();
+      _debounceSaveLocalSettings();
     });
+  }
+
+  void _restoreEditorState() {
+    final localSettings = widget.settingsController.localSettings;
+    if (localSettings.lastOpenedChapterId == _currentChapterId) {
+      final contentLen = _controller.currentContent.length;
+
+      // Clamp selection
+      var base = localSettings.lastSelectionBaseOffset;
+      var extent = localSettings.lastSelectionExtentOffset;
+
+      if (base >= 0 && extent >= 0) {
+        if (base > contentLen) base = contentLen;
+        if (extent > contentLen) extent = contentLen;
+
+        _textController.selection = TextSelection(
+          baseOffset: base,
+          extentOffset: extent,
+        );
+      } else if (localSettings.lastCursorOffset >= 0) {
+        var offset = localSettings.lastCursorOffset;
+        if (offset > contentLen) offset = contentLen;
+        _textController.selection = TextSelection.collapsed(offset: offset);
+      }
+
+      // Restore scroll
+      if (localSettings.lastScrollOffset > 0 && _scrollController.hasClients) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollController.hasClients) {
+            final maxScroll = _scrollController.position.maxScrollExtent;
+            var targetScroll = localSettings.lastScrollOffset;
+            if (targetScroll > maxScroll) targetScroll = maxScroll;
+            _scrollController.jumpTo(targetScroll);
+          }
+        });
+      }
+    }
   }
 
   void _onControllerUpdate() {
@@ -92,43 +134,7 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           _textController.text = _controller.currentContent;
 
           // Restore state if available for this chapter
-          final localSettings = widget.settingsController.localSettings;
-          if (localSettings.lastOpenedChapterId == _currentChapterId) {
-            final contentLen = _controller.currentContent.length;
-
-            // Clamp selection
-            var base = localSettings.lastSelectionBaseOffset;
-            var extent = localSettings.lastSelectionExtentOffset;
-
-            if (base >= 0 && extent >= 0) {
-              if (base > contentLen) base = contentLen;
-              if (extent > contentLen) extent = contentLen;
-
-              _textController.selection = TextSelection(
-                baseOffset: base,
-                extentOffset: extent,
-              );
-            } else if (localSettings.lastCursorOffset >= 0) {
-              var offset = localSettings.lastCursorOffset;
-              if (offset > contentLen) offset = contentLen;
-              _textController.selection = TextSelection.collapsed(
-                offset: offset,
-              );
-            }
-
-            // Restore scroll
-            if (localSettings.lastScrollOffset > 0 &&
-                _scrollController.hasClients) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (_scrollController.hasClients) {
-                  final maxScroll = _scrollController.position.maxScrollExtent;
-                  var targetScroll = localSettings.lastScrollOffset;
-                  if (targetScroll > maxScroll) targetScroll = maxScroll;
-                  _scrollController.jumpTo(targetScroll);
-                }
-              });
-            }
-          }
+          _restoreEditorState();
 
           _isRestoringState = false;
         }
@@ -146,16 +152,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       }
 
       // Only force setState if it's not a generic text keystroke notify
-      // Since WorkspaceController notifies listeners on save and selectChapter, those will trigger rebuilds.
-      // Wait, we need to rebuild the left/right panels if saving state changes.
-      // But we shouldn't rebuild if the user is just typing. Actually, WorkspaceController doesn't know about user typing right now,
-      // it only knows about it when we call save.
       if (shouldRebuild || _controller.isSaving || _controller.isLoading) {
         setState(() {});
       } else {
-        // Even if we just want to update without forcing textController,
-        // we should call setState to update the sidebars, but Flutter might rebuild EditorPanel.
-        // Since EditorPanel is a StatefulWidget now, it maintains its state better.
         setState(() {});
       }
     }
@@ -237,6 +236,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _selectChapter(Chapter chapter) async {
     if (!await _promptUnsavedChanges()) return;
+
+    // Flush remaining debounce save before switching out
+    if (_stateDebounceTimer?.isActive ?? false) {
+      _stateDebounceTimer?.cancel();
+      _debounceSaveLocalSettings();
+    }
+
     try {
       await _controller.selectChapter(chapter);
 
@@ -250,13 +256,17 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         lastScrollOffset: 0.0,
       );
       widget.settingsController.updateLocalSettings(newLocalSettings);
-      widget.settingsController.save();
+      widget.settingsController.saveLocal();
     } catch (e) {
       _showError('读取章节失败: $e');
     }
   }
 
   void _backToHome() {
+    if (_stateDebounceTimer?.isActive ?? false) {
+      _stateDebounceTimer?.cancel();
+      _debounceSaveLocalSettings();
+    }
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(

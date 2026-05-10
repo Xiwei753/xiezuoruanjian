@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'dart:math';
 
 class EditorInputAnimationOverlay extends StatefulWidget {
   final Widget child;
@@ -60,8 +59,8 @@ class _EditorInputAnimationOverlayState
 
     final newValue = widget.controller.value;
 
-    // Ignore composing
-    if (newValue.composing.isValid) {
+    // Strict skip for composing states
+    if (newValue.composing.isValid && !newValue.composing.isCollapsed) {
       _lastValue = newValue;
       return;
     }
@@ -70,17 +69,15 @@ class _EditorInputAnimationOverlayState
     final selectionChanged = _lastValue.selection != newValue.selection;
 
     if (textChanged && widget.typedCharacterAnimationEnabled) {
-      // Very basic diff to find inserted character
       final oldLen = _lastValue.text.length;
       final newLen = newValue.text.length;
 
-      if (newLen > oldLen && (newLen - oldLen) <= 3) {
-        // Find inserted char (approximate logic for prototype)
-        // If the selection is collapsed, the insertion likely happened just before it.
+      // Only animate single character insertions, skip deletions and bulk paste
+      if (newLen > oldLen && (newLen - oldLen) == 1) {
         if (newValue.selection.isCollapsed &&
             newValue.selection.baseOffset > 0) {
           final insertedChar = newValue.text.substring(
-            max(0, newValue.selection.baseOffset - (newLen - oldLen)),
+            newValue.selection.baseOffset - 1,
             newValue.selection.baseOffset,
           );
 
@@ -99,7 +96,7 @@ class _EditorInputAnimationOverlayState
   }
 
   RenderEditable? _findRenderEditable(RenderObject? root) {
-    if (root == null) return null;
+    if (root == null || !root.attached) return null;
     if (root is RenderEditable) return root;
 
     RenderEditable? result;
@@ -115,12 +112,14 @@ class _EditorInputAnimationOverlayState
 
     try {
       final RenderObject? renderObject = context.findRenderObject();
-      if (renderObject == null || renderObject is! RenderBox) {
+      if (renderObject == null ||
+          renderObject is! RenderBox ||
+          !renderObject.attached) {
         return fallbackOffset;
       }
 
       final RenderEditable? renderEditable = _findRenderEditable(renderObject);
-      if (renderEditable == null) {
+      if (renderEditable == null || !renderEditable.attached) {
         return fallbackOffset;
       }
 
@@ -129,12 +128,15 @@ class _EditorInputAnimationOverlayState
         return fallbackOffset;
       }
 
+      final textLen = widget.controller.text.length;
+      final clampedOffset = selection.baseOffset.clamp(0, textLen);
+
       // Calculate relative to RenderEditable
       final caretRect = renderEditable.getLocalRectForCaret(
-        TextPosition(offset: selection.baseOffset),
+        TextPosition(offset: clampedOffset),
       );
 
-      // Convert from RenderEditable coordinates to Screen coordinates
+      // Convert from RenderEditable coordinates to Screen coordinates safely
       final globalOffset = renderEditable.localToGlobal(caretRect.bottomLeft);
 
       // Convert Screen coordinates to Overlay (our Stack) coordinates

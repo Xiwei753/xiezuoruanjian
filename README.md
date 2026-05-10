@@ -77,3 +77,12 @@
 2. 运行 `flutter pub get` 获取依赖。
 3. 运行 `flutter test` 验证核心领域逻辑。
 4. 运行 `flutter run` （目前显示的是默认的 Flutter 计数器脚手架）。
+
+### 更新日志
+- 完成了一次稳定性审计和小修复。
+- 对 `WorkspaceScreen` 进行了整理，抽取了 `_restoreEditorState` 和 `_debounceSaveLocalSettings` 函数。
+- 增强了输入动画（`EditorInputAnimationOverlay`）的安全边界，例如：composing 状态时跳过动画，粘贴大段文本时不逐字动画，防止越界。
+- 增强了光标定位的健壮性。
+- 修复了设置保存防抖，分离了 `saveLocal` 和 `save` 方法。
+- 修复了从作品页进入写作页的导航稳定性。
+- 更新了 `.gitignore` 以防止临时文件或缓存进入代码仓库。
