@@ -9,7 +9,9 @@ import '../widgets/editor_panel.dart';
 import '../widgets/chapter_info_panel.dart';
 
 class WorkspaceScreen extends StatefulWidget {
-  const WorkspaceScreen({super.key});
+  final SettingsController settingsController;
+
+  const WorkspaceScreen({super.key, required this.settingsController});
 
   @override
   State<WorkspaceScreen> createState() => _WorkspaceScreenState();
@@ -17,12 +19,10 @@ class WorkspaceScreen extends StatefulWidget {
 
 class _WorkspaceScreenState extends State<WorkspaceScreen> {
   final WorkspaceController _controller = WorkspaceController();
-  late final SettingsController _settingsController;
   final TextEditingController _textController = TextEditingController();
 
   @override
   void initState() {
-    _settingsController = SettingsController();
     super.initState();
     _controller.addListener(_onControllerUpdate);
     _controller.initWorkspace();
@@ -32,7 +32,6 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   void dispose() {
     _controller.removeListener(_onControllerUpdate);
     _controller.dispose();
-    _settingsController.dispose();
     _textController.dispose();
     super.dispose();
   }
@@ -47,8 +46,11 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       // Sync workspace path to settings controller when loaded
       if (!_controller.isLoading &&
           _controller.workspacePath.isNotEmpty &&
-          _settingsController.workspacePath != _controller.workspacePath) {
-        _settingsController.initWithWorkspacePath(_controller.workspacePath);
+          widget.settingsController.workspacePath !=
+              _controller.workspacePath) {
+        widget.settingsController.initWithWorkspacePath(
+          _controller.workspacePath,
+        );
       }
 
       setState(() {});
@@ -195,7 +197,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
     await showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => SettingsDialog(controller: _settingsController),
+      builder: (context) =>
+          SettingsDialog(controller: widget.settingsController),
     );
   }
 
