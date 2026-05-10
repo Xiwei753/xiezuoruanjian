@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'dart:math';
 
 class EditorInputAnimationOverlay extends StatefulWidget {
@@ -97,6 +98,55 @@ class _EditorInputAnimationOverlayState
     _lastValue = newValue;
   }
 
+  RenderEditable? _findRenderEditable(RenderObject? root) {
+    if (root == null) return null;
+    if (root is RenderEditable) return root;
+
+    RenderEditable? result;
+    root.visitChildren((child) {
+      result ??= _findRenderEditable(child);
+    });
+    return result;
+  }
+
+  Offset _calculateCaretOffset() {
+    // Fallback default coordinates
+    const fallbackOffset = Offset(50.0, 50.0);
+
+    try {
+      final RenderObject? renderObject = context.findRenderObject();
+      if (renderObject == null || renderObject is! RenderBox) {
+        return fallbackOffset;
+      }
+
+      final RenderEditable? renderEditable = _findRenderEditable(renderObject);
+      if (renderEditable == null) {
+        return fallbackOffset;
+      }
+
+      final selection = widget.controller.selection;
+      if (!selection.isValid) {
+        return fallbackOffset;
+      }
+
+      // Calculate relative to RenderEditable
+      final caretRect = renderEditable.getLocalRectForCaret(
+        TextPosition(offset: selection.baseOffset),
+      );
+
+      // Convert from RenderEditable coordinates to Screen coordinates
+      final globalOffset = renderEditable.localToGlobal(caretRect.bottomLeft);
+
+      // Convert Screen coordinates to Overlay (our Stack) coordinates
+      final localOffset = renderObject.globalToLocal(globalOffset);
+
+      return localOffset;
+    } catch (e) {
+      // If layout fails or something is unattached, safely fallback.
+      return fallbackOffset;
+    }
+  }
+
   void _spawnParticle(String text, {required bool isCursor}) {
     if (_particles.length >= 8) {
       // Safety limit
@@ -104,19 +154,16 @@ class _EditorInputAnimationOverlayState
     }
 
     final id = _particleIdCounter++;
+    final offset = _calculateCaretOffset();
+
     setState(() {
       _particles.add(
         _AnimationParticle(
           id: id,
           text: text,
           isCursor: isCursor,
-          // Using approximate static offset for prototype.
-          // In a full implementation, we would use TextPainter or RenderEditable to get exact layout bounds.
-          // Doing that inside an overlay without direct access to the inner RenderEditable is complex for MVP.
-          // For MVP, we will render the particle at a dummy or fixed location relative to the TextField just to prove the overlay works.
-          // A slightly better approach in a real app is attaching a GlobalKey to the TextField and measuring, but we must not wrap TextField intimately.
-          offsetX: 50.0, // Hardcoded approximate location for prototype testing
-          offsetY: 50.0,
+          offsetX: offset.dx,
+          offsetY: offset.dy,
         ),
       );
     });
