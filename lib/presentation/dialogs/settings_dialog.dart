@@ -312,6 +312,41 @@ class _SettingsDialogState extends State<SettingsDialog> {
             );
           },
         ),
+        const SizedBox(height: 32),
+        const Text(
+          '输入动效 (Beta)',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          title: const Text('启用整体输入动效'),
+          value: _draftSyncableSettings.inputAnimationEnabled,
+          onChanged: (val) {
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(inputAnimationEnabled: val),
+            );
+          },
+        ),
+        SwitchListTile(
+          title: const Text('打字弹跃动效 (吐字/删除)'),
+          value: _draftSyncableSettings.typedCharacterAnimationEnabled,
+          onChanged: (val) {
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(
+                typedCharacterAnimationEnabled: val,
+              ),
+            );
+          },
+        ),
+        SwitchListTile(
+          title: const Text('增强光标平滑移动'),
+          value: _draftSyncableSettings.cursorAnimationEnhanced,
+          onChanged: (val) {
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(cursorAnimationEnhanced: val),
+            );
+          },
+        ),
       ],
     );
   }
