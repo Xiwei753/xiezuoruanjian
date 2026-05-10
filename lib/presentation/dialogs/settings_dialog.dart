@@ -207,6 +207,45 @@ class _SettingsDialogState extends State<SettingsDialog> {
     return ListView(
       children: [
         const Text(
+          '输入动效',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          title: const Text('启用输入动效'),
+          subtitle: const Text('包含打字与光标反馈效果'),
+          value: _draftSyncableSettings.inputAnimationEnabled,
+          onChanged: (val) {
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(inputAnimationEnabled: val),
+            );
+          },
+        ),
+        if (_draftSyncableSettings.inputAnimationEnabled) ...[
+          SwitchListTile(
+            title: const Text('字符吐出动画'),
+            value: _draftSyncableSettings.typedCharacterAnimationEnabled,
+            onChanged: (val) {
+              _updateDraftSyncable(
+                _draftSyncableSettings.copyWith(
+                  typedCharacterAnimationEnabled: val,
+                ),
+              );
+            },
+          ),
+          SwitchListTile(
+            title: const Text('光标移动反馈'),
+            value: _draftSyncableSettings.cursorAnimationEnhanced,
+            onChanged: (val) {
+              _updateDraftSyncable(
+                _draftSyncableSettings.copyWith(cursorAnimationEnhanced: val),
+              );
+            },
+          ),
+        ],
+        const Divider(),
+        const SizedBox(height: 16),
+        const Text(
           '编辑器显示',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),

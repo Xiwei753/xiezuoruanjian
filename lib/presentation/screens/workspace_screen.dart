@@ -389,6 +389,18 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
               hasChapter: _controller.selectedChapter != null,
               textController: _textController,
               scrollController: _scrollController,
+              inputAnimationEnabled: widget
+                  .settingsController
+                  .syncableSettings
+                  .inputAnimationEnabled,
+              typedCharacterAnimationEnabled: widget
+                  .settingsController
+                  .syncableSettings
+                  .typedCharacterAnimationEnabled,
+              cursorAnimationEnhanced: widget
+                  .settingsController
+                  .syncableSettings
+                  .cursorAnimationEnhanced,
               onChanged: (val) {
                 // To keep state logic simple for prompt trigger
               },
