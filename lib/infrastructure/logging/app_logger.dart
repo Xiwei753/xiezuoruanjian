@@ -75,7 +75,20 @@ class AppLogger {
     _log(LogLevel.debug, message, metadata: metadata);
   }
 
-  static void info(String message, [Map<String, dynamic>? metadata]) {
+  static void info(
+    String message, {
+    String? key,
+    int limitMs = 0,
+    Map<String, dynamic>? metadata,
+  }) {
+    if (key != null && limitMs > 0) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final lastTime = _lastLogTimestamps[key] ?? 0;
+      if (now - lastTime <= limitMs) {
+        return;
+      }
+      _lastLogTimestamps[key] = now;
+    }
     _log(LogLevel.info, message, metadata: metadata);
   }
 

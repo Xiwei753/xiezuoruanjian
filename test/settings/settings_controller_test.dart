@@ -163,5 +163,36 @@ void main() {
       expect(mockService.savedWorkspacePath, isNot('/test_local_only'));
       expect(mockService.syncable.autoSaveIntervalSeconds, isNot(999));
     });
+
+    test(
+      'updateLocalSettingsSilently and saveLocalSilently do not trigger listeners',
+      () async {
+        await controller.init();
+
+        bool listenerFired = false;
+        controller.addListener(() {
+          listenerFired = true;
+        });
+
+        controller.updateLocalSettingsSilently(
+          controller.localSettings.copyWith(lastCursorOffset: 42),
+        );
+
+        await controller.saveLocalSilently();
+
+        expect(
+          listenerFired,
+          isFalse,
+          reason: 'Silent methods should not fire notifyListeners',
+        );
+        expect(controller.localSettings.lastCursorOffset, 42);
+        expect(mockService.local.lastCursorOffset, 42);
+        expect(
+          controller.isDirty,
+          isTrue,
+          reason: 'It should still mark as dirty',
+        );
+      },
+    );
   });
 }

@@ -161,6 +161,7 @@ class SyncableSettings {
   final bool inputAnimationEnabled;
   final bool typedCharacterAnimationEnabled;
   final bool cursorAnimationEnhanced;
+  final bool imeSafeModeEnabled;
 
   // AI
   final String defaultAIProvider;
@@ -200,6 +201,7 @@ class SyncableSettings {
     this.inputAnimationEnabled = false,
     this.typedCharacterAnimationEnabled = false,
     this.cursorAnimationEnhanced = false,
+    this.imeSafeModeEnabled = false,
     this.defaultAIProvider = 'deepseek',
     this.defaultAIModel = 'deepseek-chat',
     this.deepSeekBaseUrl = 'https://api.deepseek.com',
@@ -234,6 +236,7 @@ class SyncableSettings {
     bool? inputAnimationEnabled,
     bool? typedCharacterAnimationEnabled,
     bool? cursorAnimationEnhanced,
+    bool? imeSafeModeEnabled,
     String? defaultAIProvider,
     String? defaultAIModel,
     String? deepSeekBaseUrl,
@@ -273,6 +276,7 @@ class SyncableSettings {
           typedCharacterAnimationEnabled ?? this.typedCharacterAnimationEnabled,
       cursorAnimationEnhanced:
           cursorAnimationEnhanced ?? this.cursorAnimationEnhanced,
+      imeSafeModeEnabled: imeSafeModeEnabled ?? this.imeSafeModeEnabled,
       defaultAIProvider: defaultAIProvider ?? this.defaultAIProvider,
       defaultAIModel: defaultAIModel ?? this.defaultAIModel,
       deepSeekBaseUrl: deepSeekBaseUrl ?? this.deepSeekBaseUrl,
@@ -313,6 +317,7 @@ class SyncableSettings {
       'inputAnimationEnabled': inputAnimationEnabled,
       'typedCharacterAnimationEnabled': typedCharacterAnimationEnabled,
       'cursorAnimationEnhanced': cursorAnimationEnhanced,
+      'imeSafeModeEnabled': imeSafeModeEnabled,
       'defaultAIProvider': defaultAIProvider,
       'defaultAIModel': defaultAIModel,
       'deepSeekBaseUrl': deepSeekBaseUrl,
@@ -353,6 +358,7 @@ class SyncableSettings {
           json['typedCharacterAnimationEnabled'] as bool? ?? false,
       cursorAnimationEnhanced:
           json['cursorAnimationEnhanced'] as bool? ?? false,
+      imeSafeModeEnabled: json['imeSafeModeEnabled'] as bool? ?? false,
       defaultAIProvider: json['defaultAIProvider'] as String? ?? 'deepseek',
       defaultAIModel: json['defaultAIModel'] as String? ?? 'deepseek-chat',
       deepSeekBaseUrl:
