@@ -182,11 +182,27 @@ class WorkspaceController extends ChangeNotifier {
     try {
       await AppLogger.measure('SaveChapter', () async {
         await _chapterRepository.saveChapter(selectedChapter!, contentToSave);
+        // Note: SQLite cache rebuild is kept here to ensure database consistency.
+        // However, we avoid unconditionally calling `loadChapters()` here because
+        // it causes the entire chapter list UI to rebuild and lose scroll position.
+        // Instead, we let the list stay as is. Only the content, dirty state, and
+        // timestamps are updated locally. If a user creates/deletes a chapter,
+        // `loadChapters()` is still called appropriately elsewhere.
         await _dbHelper.rebuildCacheFromWorkspace(projectId);
       });
-      await loadChapters();
 
-      selectedChapter = chapters.firstWhere((c) => c.id == selectedChapter!.id);
+      // Avoid full loadChapters() to prevent chapter list jumping/flashing.
+      // We manually update the local chapter object's updatedAt to reflect the save.
+      final now = DateTime.now();
+
+      final updatedChapter = selectedChapter!.copyWith(updatedAt: now);
+
+      final index = chapters.indexWhere((c) => c.id == updatedChapter.id);
+      if (index != -1) {
+        chapters[index] = updatedChapter;
+      }
+
+      selectedChapter = updatedChapter;
       currentContent = contentToSave;
 
       isDirty = false;
