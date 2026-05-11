@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../application/controllers/settings_controller.dart';
 import '../../domain/models/settings.dart';
+import '../../infrastructure/platform/linux_runtime_environment.dart';
 
 class SettingsDialog extends StatefulWidget {
   final SettingsController controller;
@@ -590,6 +591,12 @@ class _SettingsDialogState extends State<SettingsDialog> {
   }
 
   Widget _buildLogSettings() {
+    final env = LinuxRuntimeEnvironment();
+    final bool showLinuxImeWarning =
+        env.isLinux &&
+        env.isWayland &&
+        (env.gtkImModule == 'fcitx' || env.qtImModule == 'fcitx');
+
     return ListView(
       children: [
         const Text(
@@ -597,6 +604,38 @@ class _SettingsDialogState extends State<SettingsDialog> {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 16),
+        if (env.isLinux) ...[
+          const Text(
+            'Linux 环境诊断信息',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          SelectableText(
+            env.summaryText,
+            style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+          ),
+          if (showLinuxImeWarning) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              color: Colors.amber.withOpacity(0.2),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '警告：检测到 Wayland 下强制设置 GTK_IM_MODULE/QT_IM_MODULE。fcitx5 官方推荐 KDE Wayland 使用 Wayland 输入法前端，这些变量可能导致候选框闪烁。建议 unset GTK_IM_MODULE、QT_IM_MODULE、SDL_IM_MODULE，只保留 XMODIFIERS=@im=fcitx。',
+                      style: TextStyle(color: Colors.deepOrange, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const Divider(),
+          const SizedBox(height: 16),
+        ],
         SwitchListTile(
           title: const Text('启用日志'),
           value: _draftLocalSettings.loggingEnabled,

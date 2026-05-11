@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'application/controllers/settings_controller.dart';
+import 'infrastructure/logging/app_logger.dart';
+import 'infrastructure/platform/linux_runtime_environment.dart';
 import 'presentation/screens/workspace_screen.dart';
 import 'presentation/screens/project_home_screen.dart';
 
@@ -12,6 +14,23 @@ void main() async {
   if (Platform.isWindows || Platform.isLinux) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
+  }
+
+  if (Platform.isLinux) {
+    final env = LinuxRuntimeEnvironment();
+    AppLogger.info(
+      'Linux Environment Initialized',
+      key: 'linux_env',
+      metadata: {
+        'XDG_SESSION_TYPE': env.xdgSessionType,
+        'GTK_IM_MODULE': env.gtkImModule,
+        'QT_IM_MODULE': env.qtImModule,
+        'SDL_IM_MODULE': env.sdlImModule,
+        'XMODIFIERS': env.xmodifiers,
+        'GDK_BACKEND': env.gdkBackend,
+        'XDG_CURRENT_DESKTOP': env.xdgCurrentDesktop,
+      },
+    );
   }
 
   final settingsController = SettingsController();

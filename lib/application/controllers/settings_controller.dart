@@ -82,6 +82,11 @@ class SettingsController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void updateLocalSettingsSilently(LocalSettings newSettings) {
+    _localSettings = newSettings;
+    _isDirty = true;
+  }
+
   void updateSyncableSettings(SyncableSettings newSettings) {
     _syncableSettings = newSettings;
     _isDirty = true;
@@ -94,6 +99,14 @@ class SettingsController extends ChangeNotifier {
     } catch (e) {
       _errorMessage = 'Failed to save local settings: $e';
       notifyListeners();
+    }
+  }
+
+  Future<void> saveLocalSilently() async {
+    try {
+      await _settingsService.saveLocalSettings(_localSettings);
+    } catch (e) {
+      // Intentionally ignoring error to keep it silent as requested
     }
   }
 

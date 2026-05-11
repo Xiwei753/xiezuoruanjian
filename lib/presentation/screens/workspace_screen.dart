@@ -7,6 +7,7 @@ import '../dialogs/chapter_title_dialog.dart';
 import '../dialogs/settings_dialog.dart';
 import '../widgets/chapter_list_panel.dart';
 import '../widgets/editor_panel.dart';
+import '../../infrastructure/logging/app_logger.dart';
 import '../widgets/chapter_info_panel.dart';
 import 'project_home_screen.dart';
 
@@ -32,6 +33,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Timer? _stateDebounceTimer;
   bool _isRestoringState = false;
+
+  bool _wasComposing = false;
+  bool _lastIsSaving = false;
+  bool _lastIsLoading = true;
+  int _lastChaptersLength = 0;
+  String? _lastChapterTitle;
+  int _rebuildCount = 0;
 
   @override
   void initState() {
@@ -70,13 +78,52 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           : 0.0,
       lastEditorStateUpdatedAt: DateTime.now(),
     );
-    widget.settingsController.updateLocalSettings(newSettings);
-    // Use the explicit saveLocal method which strictly only saves local settings
-    widget.settingsController.saveLocal();
+
+    if (widget.settingsController.syncableSettings.imeSafeModeEnabled) {
+      AppLogger.info(
+        'WorkspaceScreen: silent local state save',
+        key: 'silent_save',
+        limitMs: 5000,
+      );
+      widget.settingsController.updateLocalSettingsSilently(newSettings);
+      widget.settingsController.saveLocalSilently();
+    } else {
+      widget.settingsController.updateLocalSettings(newSettings);
+      // Use the explicit saveLocal method which strictly only saves local settings
+      widget.settingsController.saveLocal();
+    }
   }
 
   void _onEditorStateChanged() {
     if (_isRestoringState || _controller.selectedChapter == null) return;
+
+    final isComposing =
+        _textController.value.composing.isValid &&
+        !_textController.value.composing.isCollapsed;
+
+    if (isComposing && !_wasComposing) {
+      AppLogger.info(
+        'WorkspaceScreen: composing start',
+        key: 'composing_state',
+        limitMs: 1000,
+      );
+    } else if (!isComposing && _wasComposing) {
+      AppLogger.info(
+        'WorkspaceScreen: composing end',
+        key: 'composing_state',
+        limitMs: 1000,
+      );
+    }
+    _wasComposing = isComposing;
+
+    if (isComposing) {
+      AppLogger.info(
+        'WorkspaceScreen: skipped local settings save due to composing',
+        key: 'composing_skip',
+        limitMs: 1000,
+      );
+      return;
+    }
 
     _stateDebounceTimer?.cancel();
     _stateDebounceTimer = Timer(const Duration(milliseconds: 500), () {
@@ -141,6 +188,27 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         shouldRebuild = true;
       }
 
+      if (_lastIsSaving != _controller.isSaving) {
+        _lastIsSaving = _controller.isSaving;
+        shouldRebuild = true;
+      }
+
+      if (_lastIsLoading != _controller.isLoading) {
+        _lastIsLoading = _controller.isLoading;
+        shouldRebuild = true;
+      }
+
+      if (_lastChaptersLength != _controller.chapters.length) {
+        _lastChaptersLength = _controller.chapters.length;
+        shouldRebuild = true;
+      }
+
+      if (_controller.selectedChapter != null &&
+          _lastChapterTitle != _controller.selectedChapter!.title) {
+        _lastChapterTitle = _controller.selectedChapter!.title;
+        shouldRebuild = true;
+      }
+
       // Sync workspace path to settings controller when loaded
       if (!_controller.isLoading &&
           _controller.workspacePath.isNotEmpty &&
@@ -152,9 +220,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       }
 
       // Only force setState if it's not a generic text keystroke notify
-      if (shouldRebuild || _controller.isSaving || _controller.isLoading) {
-        setState(() {});
-      } else {
+      if (shouldRebuild) {
+        _rebuildCount++;
+        AppLogger.info(
+          'WorkspaceScreen: rebuild count $_rebuildCount',
+          key: 'workspace_rebuild',
+          limitMs: 5000,
+        );
         setState(() {});
       }
     }
