@@ -219,6 +219,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
         );
       }
 
+      // CONFIRMATION OF BEHAVIOR:
+      // The `shouldRebuild` flag logic above effectively limits `setState` calls.
+      // Normal typing (text changes), cursor movement, and scrolling handled purely
+      // by the TextField and its controllers do NOT cause `shouldRebuild` to become true.
+      // Therefore, the WorkspaceScreen does not rebuild on every keystroke.
+      // Only state changes like switching chapters, saving status, loading status, or title changes trigger a rebuild.
+
       // Only force setState if it's not a generic text keystroke notify
       if (shouldRebuild) {
         _rebuildCount++;
@@ -475,6 +482,14 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
                   .settingsController
                   .syncableSettings
                   .inputAnimationEnabled,
+              smoothScrollingEnabled: widget
+                  .settingsController
+                  .syncableSettings
+                  .smoothScrollingEnabled,
+              smoothScrollDurationMs: widget
+                  .settingsController
+                  .syncableSettings
+                  .smoothScrollDurationMs,
               typedCharacterAnimationEnabled: widget
                   .settingsController
                   .syncableSettings

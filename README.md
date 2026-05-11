@@ -95,6 +95,18 @@
 3. 运行 `flutter test` 验证核心领域逻辑。
 4. 运行 `flutter run` （目前显示的是默认的 Flutter 计数器脚手架）。
 
+**性能提示 (Linux Desktop)：**
+- Debug 模式下 Flutter 桌面端会有明显的滚动和输入卡顿。
+- 测试真实流畅度和输入动画时，请优先使用 release 模式：
+  ```bash
+  ./tool/run_linux_release.sh
+  ```
+- 如果需要构建独立的可执行文件，请运行：
+  ```bash
+  ./tool/build_linux_release.sh
+  ```
+  输出可执行文件位置：`build/linux/x64/release/bundle/writer_app`
+
 ### 更新日志
 - 完成了一次稳定性审计和小修复。
 - 对 `WorkspaceScreen` 进行了整理，抽取了 `_restoreEditorState` 和 `_debounceSaveLocalSettings` 函数。

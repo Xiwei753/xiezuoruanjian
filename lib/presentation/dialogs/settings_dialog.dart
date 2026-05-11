@@ -385,8 +385,52 @@ class _SettingsDialogState extends State<SettingsDialog> {
         ),
         const SizedBox(height: 32),
         const Text(
+          '平滑滚动',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 16),
+        SwitchListTile(
+          title: const Text('平滑滚动'),
+          value: _draftSyncableSettings.smoothScrollingEnabled,
+          onChanged: (val) {
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(smoothScrollingEnabled: val),
+            );
+          },
+        ),
+        ListTile(
+          title: const Text('平滑滚动时长 ms'),
+          trailing: SizedBox(
+            width: 100,
+            child: TextFormField(
+              initialValue: _draftSyncableSettings.smoothScrollDurationMs
+                  .toString(),
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              onChanged: (val) {
+                final intVal = int.tryParse(val);
+                if (intVal != null) {
+                  _updateDraftSyncable(
+                    _draftSyncableSettings.copyWith(
+                      smoothScrollDurationMs: intVal,
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 32),
+        const Text(
           '输入动效 (Beta)',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16.0),
+          child: Text(
+            '实验功能。若输入法异常，请关闭或开启 IME Safe Mode。',
+            style: TextStyle(color: Colors.grey),
+          ),
         ),
         const SizedBox(height: 16),
         SwitchListTile(
@@ -618,7 +662,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(8),
-              color: Colors.amber.withOpacity(0.2),
+              color: Colors.amber.withValues(alpha: 0.2),
               child: const Row(
                 children: [
                   Icon(Icons.warning, color: Colors.orange),
