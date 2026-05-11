@@ -9,6 +9,7 @@ import '../widgets/chapter_list_panel.dart';
 import '../widgets/editor_panel.dart';
 import '../../infrastructure/logging/app_logger.dart';
 import '../widgets/chapter_info_panel.dart';
+import '../widgets/save_status_indicator.dart';
 import 'project_home_screen.dart';
 
 class WorkspaceScreen extends StatefulWidget {
@@ -32,6 +33,8 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   String? _currentChapterId;
 
   Timer? _stateDebounceTimer;
+  Timer? _autoSaveTimer;
+  bool _disposed = false;
   bool _isRestoringState = false;
 
   bool _wasComposing = false;
@@ -59,7 +62,9 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   @override
   void dispose() {
+    _disposed = true;
     _stateDebounceTimer?.cancel();
+    _autoSaveTimer?.cancel();
     _controller.removeListener(_onControllerUpdate);
     _controller.dispose();
     _textController.dispose();
@@ -96,6 +101,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   void _onEditorStateChanged() {
     if (_isRestoringState || _controller.selectedChapter == null) return;
+
+    // Check if actual content changed (not just cursor/scroll)
+    if (_controller.selectedChapter != null &&
+        _textController.text != _controller.currentContent) {
+      _controller.markDirty();
+      _scheduleAutoSave();
+    }
 
     final isComposing =
         _textController.value.composing.isValid &&
@@ -278,10 +290,27 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
   }
 
   Future<bool> _promptUnsavedChanges() async {
-    if (_controller.selectedChapter == null ||
-        _controller.currentContent == _textController.text) {
+    if (_controller.selectedChapter == null || !_controller.isDirty) {
       return true;
     }
+
+    // Attempt an immediate auto-save if enabled
+    if (widget.settingsController.syncableSettings.autoSaveEnabled) {
+      final composing = _textController.value.composing;
+      if (!composing.isValid || composing.isCollapsed) {
+        try {
+          await _controller.saveCurrentChapter(
+            _textController.text,
+            isAutoSave: true,
+          );
+          return true;
+        } catch (e) {
+          // fallback to prompt
+        }
+      }
+    }
+
+    if (!mounted) return false;
 
     final result = await showDialog<bool>(
       context: context,
@@ -357,9 +386,78 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
 
   Future<void> _saveCurrentChapter() async {
     try {
-      await _controller.saveCurrentChapter(_textController.text);
+      await _controller.saveCurrentChapter(
+        _textController.text,
+        isAutoSave: false,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('保存成功！')));
+      }
     } catch (e) {
-      _showError('保存失败: $e');
+      if (mounted) {
+        _showError('保存失败: $e');
+      }
+    }
+  }
+
+  void _scheduleAutoSave() {
+    _autoSaveTimer?.cancel();
+
+    if (!widget.settingsController.syncableSettings.autoSaveEnabled) {
+      return;
+    }
+
+    int intervalSeconds =
+        widget.settingsController.syncableSettings.autoSaveIntervalSeconds;
+    if (intervalSeconds < 3) intervalSeconds = 3; // Clamp to min 3 seconds
+
+    _autoSaveTimer = Timer(
+      Duration(seconds: intervalSeconds),
+      _performAutoSave,
+    );
+    AppLogger.info(
+      'Auto save scheduled',
+      key: 'auto_save_scheduled',
+      limitMs: 1000,
+    );
+  }
+
+  Future<void> _performAutoSave() async {
+    if (_disposed ||
+        _controller.selectedChapter == null ||
+        !_controller.isDirty) {
+      return;
+    }
+
+    if (!widget.settingsController.syncableSettings.autoSaveEnabled) {
+      return;
+    }
+
+    final composing = _textController.value.composing;
+    if (composing.isValid && !composing.isCollapsed) {
+      AppLogger.info(
+        'Auto save skipped due to composing',
+        key: 'auto_save_skipped',
+        limitMs: 1000,
+      );
+      _scheduleAutoSave(); // reschedule
+      return;
+    }
+
+    try {
+      await _controller.saveCurrentChapter(
+        _textController.text,
+        isAutoSave: true,
+      );
+    } catch (e) {
+      // Controller already logs errors
+      if (mounted) {
+        _showError(
+          '自动保存失败: $e',
+        ); // Or we can use SnackBar here if you want it once
+      }
     }
   }
 
@@ -438,7 +536,13 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
           onPressed: _backToHome,
           tooltip: '返回作品列表',
         ),
-        title: const Text('Writer App (Local First MVP)'),
+        title: Row(
+          children: [
+            const Text('Writer App (Local First MVP)'),
+            const SizedBox(width: 16),
+            SaveStatusIndicator(controller: _controller),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),

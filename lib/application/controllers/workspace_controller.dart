@@ -13,10 +13,14 @@ import '../../infrastructure/repositories/chapter_repository_impl.dart';
 import '../../infrastructure/storage/atomic_writer.dart';
 import '../../infrastructure/storage/trash_service_impl.dart';
 import '../../infrastructure/backup/backup_service_impl.dart';
+import '../../infrastructure/logging/app_logger.dart';
 
 class WorkspaceController extends ChangeNotifier {
   bool isLoading = true;
   bool isSaving = false;
+  bool isDirty = false;
+  DateTime? lastSavedAt;
+  String? lastSaveError;
 
   String workspacePath = '';
   String projectId = '';
@@ -144,23 +148,65 @@ class WorkspaceController extends ChangeNotifier {
     final content = await _chapterRepository.readChapterContent(chapter);
     selectedChapter = chapter;
     currentContent = content;
+    isDirty = false;
+    lastSaveError = null;
     notifyListeners();
   }
 
-  Future<void> saveCurrentChapter(String contentToSave) async {
+  void markDirty() {
+    if (!isDirty) {
+      isDirty = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> saveCurrentChapter(
+    String contentToSave, {
+    bool isAutoSave = false,
+  }) async {
     if (selectedChapter == null) return;
+
+    if (isAutoSave) {
+      AppLogger.info(
+        'Auto save started',
+        key: 'auto_save_started',
+        limitMs: 1000,
+      );
+    } else {
+      AppLogger.info('Manual save started', key: 'manual_save_started');
+    }
 
     isSaving = true;
     notifyListeners();
 
     try {
-      await _chapterRepository.saveChapter(selectedChapter!, contentToSave);
-
-      await _dbHelper.rebuildCacheFromWorkspace(projectId);
+      await AppLogger.measure('SaveChapter', () async {
+        await _chapterRepository.saveChapter(selectedChapter!, contentToSave);
+        await _dbHelper.rebuildCacheFromWorkspace(projectId);
+      });
       await loadChapters();
 
       selectedChapter = chapters.firstWhere((c) => c.id == selectedChapter!.id);
       currentContent = contentToSave;
+
+      isDirty = false;
+      lastSavedAt = DateTime.now();
+      lastSaveError = null;
+
+      if (isAutoSave) {
+        AppLogger.info('Auto save success', key: 'auto_save_success');
+      } else {
+        AppLogger.info('Manual save success', key: 'manual_save_success');
+      }
+    } catch (e) {
+      lastSaveError = e.toString();
+      AppLogger.error(
+        isAutoSave ? 'Auto save failed' : 'Manual save failed',
+        e,
+        StackTrace.current,
+        {'key': isAutoSave ? 'auto_save_failed' : 'manual_save_failed'},
+      );
+      // isDirty remains true if it failed
     } finally {
       isSaving = false;
       notifyListeners();
