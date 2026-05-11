@@ -13,6 +13,7 @@ class AppLogger {
   static bool _initialized = false;
   static bool _loggingEnabled = true;
   static bool _debugLoggingEnabled = false;
+  static bool _isExportingDiagnostics = false;
   static bool _performanceLoggingEnabled = true;
   static int _slowOperationThresholdMs = 100;
   static String? _logDirPath;
@@ -155,6 +156,14 @@ class AppLogger {
     }
   }
 
+  static void pauseLogging() {
+    _isExportingDiagnostics = true;
+  }
+
+  static void resumeLogging() {
+    _isExportingDiagnostics = false;
+  }
+
   static void _log(
     LogLevel level,
     String message, {
@@ -162,7 +171,7 @@ class AppLogger {
     StackTrace? stackTrace,
     Map<String, dynamic>? metadata,
   }) {
-    if (!_loggingEnabled) return;
+    if (!_loggingEnabled || _isExportingDiagnostics) return;
     if (!_initialized || _logFile == null) return;
 
     final logEntry = {
