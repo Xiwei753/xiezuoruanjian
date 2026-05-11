@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'package:path_provider/path_provider.dart';
+
 import '../../domain/models/settings.dart';
 import '../../domain/services_interfaces/settings_service.dart';
 import '../../infrastructure/settings/settings_service_impl.dart';
@@ -35,16 +37,17 @@ class SettingsController extends ChangeNotifier {
 
     try {
       _localSettings = await _settingsService.loadLocalSettings();
-      // If workspace path is empty in local settings, we might need a default or let the app provide it.
-      // But the requirement says WorkspaceController sets it.
-      // For now, if it's empty, we just load SyncableSettings with an empty path which will fail or save locally,
-      // but in real app, WorkspaceController sets workspacePath in LocalSettings eventually.
-      // Wait, we need the workspacePath to load syncable settings.
-      if (_localSettings.workspacePath.isNotEmpty) {
-        _syncableSettings = await _settingsService.loadSyncableSettings(
-          _localSettings.workspacePath,
-        );
+
+      if (_localSettings.workspacePath.isEmpty) {
+        final docsDir = await getApplicationDocumentsDirectory();
+        final defaultPath = '${docsDir.path}/writer_app_workspace';
+        _localSettings = _localSettings.copyWith(workspacePath: defaultPath);
+        await _settingsService.saveLocalSettings(_localSettings);
       }
+
+      _syncableSettings = await _settingsService.loadSyncableSettings(
+        _localSettings.workspacePath,
+      );
     } catch (e) {
       _errorMessage = 'Failed to load settings: $e';
     } finally {

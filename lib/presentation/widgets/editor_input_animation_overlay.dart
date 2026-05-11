@@ -87,6 +87,8 @@ class _EditorInputAnimationOverlayState
     final textChanged = _lastCommittedValue.text != newValue.text;
     final selectionChanged = _lastValue.selection != newValue.selection;
 
+    if (!textChanged && !selectionChanged) return;
+
     if (textChanged && widget.typedCharacterAnimationEnabled) {
       final oldLen = _lastCommittedValue.text.length;
       final newLen = newValue.text.length;

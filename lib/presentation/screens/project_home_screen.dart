@@ -31,6 +31,7 @@ class _ProjectHomeScreenState extends State<ProjectHomeScreen> {
   }
 
   Future<void> _createNewProject() async {
+    if (widget.settingsController.workspacePath.isEmpty) return;
     final titleController = TextEditingController();
     final result = await showDialog<String>(
       context: context,
