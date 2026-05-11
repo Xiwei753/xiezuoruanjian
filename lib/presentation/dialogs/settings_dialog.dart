@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../../application/controllers/settings_controller.dart';
 import '../../domain/models/settings.dart';
 import '../../infrastructure/platform/linux_runtime_environment.dart';
+import '../../infrastructure/logging/app_logger.dart';
+import '../../infrastructure/diagnostics/diagnostic_bundle_service.dart';
 
 class SettingsDialog extends StatefulWidget {
   final SettingsController controller;
@@ -608,6 +610,44 @@ class _SettingsDialogState extends State<SettingsDialog> {
             labelText: 'Serializer 版本 (只读)',
             border: OutlineInputBorder(),
           ),
+        ),
+        const Divider(),
+        const SizedBox(height: 16),
+        const Text('诊断与支持', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        SelectableText('应用日志目录：${AppLogger.logDirPath ?? "未初始化"}'),
+        const SizedBox(height: 16),
+        ElevatedButton.icon(
+          onPressed: () async {
+            try {
+              AppLogger.pauseLogging();
+              final path = await DiagnosticBundleService.exportDiagnostics(
+                widget.controller,
+              );
+              if (mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('诊断包已导出至：$path')));
+              }
+            } catch (e, st) {
+              AppLogger.resumeLogging();
+              AppLogger.error('Failed to export diagnostics', e, st);
+              if (mounted) {
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('导出失败：$e')));
+              }
+            } finally {
+              AppLogger.resumeLogging();
+            }
+          },
+          icon: const Icon(Icons.bug_report),
+          label: const Text('导出安全诊断包'),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          '导出诊断包将收集应用状态和最近日志以供排查问题，且已自动隐藏所有敏感信息。',
+          style: TextStyle(fontSize: 12, color: Colors.grey),
         ),
       ],
     );
