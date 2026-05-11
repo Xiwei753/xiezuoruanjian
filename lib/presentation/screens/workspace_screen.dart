@@ -529,100 +529,161 @@ class _WorkspaceScreenState extends State<WorkspaceScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _backToHome,
-          tooltip: '返回作品列表',
-        ),
-        title: Row(
-          children: [
-            const Text('Writer App (Local First MVP)'),
-            const SizedBox(width: 16),
-            SaveStatusIndicator(controller: _controller),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _showSettingsDialog,
-            tooltip: '设置',
-          ),
-          IconButton(
-            icon: const Icon(Icons.backup),
-            onPressed: _backupProject,
-            tooltip: '备份当前项目',
-          ),
-          IconButton(
-            icon: const Icon(Icons.save),
-            onPressed: _controller.isSaving ? null : _saveCurrentChapter,
-            tooltip: '保存当前章节',
-          ),
-          if (_controller.selectedChapter != null)
-            IconButton(
-              icon: const Icon(Icons.delete, color: Colors.redAccent),
-              onPressed: _deleteCurrentChapter,
-              tooltip: '删除当前章节',
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Scaffold(
+          appBar: AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: _backToHome,
+              tooltip: '返回作品列表',
             ),
-        ],
-      ),
-      body: Row(
-        children: [
-          ChapterListPanel(
-            chapters: _controller.chapters,
-            selectedChapter: _controller.selectedChapter,
-            onAddChapter: _showNewChapterDialog,
-            onSelectChapter: _selectChapter,
-          ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            flex: 3,
-            child: EditorPanel(
-              hasChapter: _controller.selectedChapter != null,
-              textController: _textController,
-              scrollController: _scrollController,
-              inputAnimationEnabled: widget
-                  .settingsController
-                  .syncableSettings
-                  .inputAnimationEnabled,
-              smoothScrollingEnabled: widget
-                  .settingsController
-                  .syncableSettings
-                  .smoothScrollingEnabled,
-              smoothScrollDurationMs: widget
-                  .settingsController
-                  .syncableSettings
-                  .smoothScrollDurationMs,
-              typedCharacterAnimationEnabled: widget
-                  .settingsController
-                  .syncableSettings
-                  .typedCharacterAnimationEnabled,
-              cursorAnimationEnhanced: widget
-                  .settingsController
-                  .syncableSettings
-                  .cursorAnimationEnhanced,
-              editorFontSize:
-                  widget.settingsController.syncableSettings.editorFontSize,
-              editorLineHeight:
-                  widget.settingsController.syncableSettings.editorLineHeight,
-              editorContentWidth:
-                  widget.settingsController.syncableSettings.editorContentWidth,
-              activeChapterId: _controller.selectedChapter?.id,
-              onChanged: (val) {
-                // To keep state logic simple for prompt trigger
-              },
+            title: Row(
+              children: [
+                const Text('Writer App (Local First MVP)'),
+                const SizedBox(width: 16),
+                SaveStatusIndicator(controller: _controller),
+              ],
             ),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: _showSettingsDialog,
+                tooltip: '设置',
+              ),
+              IconButton(
+                icon: const Icon(Icons.backup),
+                onPressed: _backupProject,
+                tooltip: '备份当前项目',
+              ),
+              IconButton(
+                icon: const Icon(Icons.save),
+                onPressed: _controller.isSaving ? null : _saveCurrentChapter,
+                tooltip: '保存当前章节',
+              ),
+              if (_controller.selectedChapter != null)
+                IconButton(
+                  icon: const Icon(Icons.delete, color: Colors.redAccent),
+                  onPressed: _deleteCurrentChapter,
+                  tooltip: '删除当前章节',
+                ),
+            ],
           ),
-          const VerticalDivider(width: 1),
-          ChapterInfoPanel(
-            workspacePath: _controller.workspacePath,
-            chapter: _controller.selectedChapter,
-            isSaving: _controller.isSaving,
-            onEditTitle: _showEditTitleDialog,
-          ),
-        ],
-      ),
+
+          drawer: constraints.maxWidth < 700
+              ? Drawer(
+                  child: SafeArea(
+                    child: ChapterListPanel(
+                      chapters: _controller.chapters,
+                      selectedChapter: _controller.selectedChapter,
+                      onAddChapter: _showNewChapterDialog,
+                      onSelectChapter: _selectChapter,
+                    ),
+                  ),
+                )
+              : null,
+          body: constraints.maxWidth < 700
+              ? EditorPanel(
+                  hasChapter: _controller.selectedChapter != null,
+                  textController: _textController,
+                  scrollController: _scrollController,
+                  inputAnimationEnabled: widget
+                      .settingsController
+                      .syncableSettings
+                      .inputAnimationEnabled,
+                  smoothScrollingEnabled: widget
+                      .settingsController
+                      .syncableSettings
+                      .smoothScrollingEnabled,
+                  smoothScrollDurationMs: widget
+                      .settingsController
+                      .syncableSettings
+                      .smoothScrollDurationMs,
+                  typedCharacterAnimationEnabled: widget
+                      .settingsController
+                      .syncableSettings
+                      .typedCharacterAnimationEnabled,
+                  cursorAnimationEnhanced: widget
+                      .settingsController
+                      .syncableSettings
+                      .cursorAnimationEnhanced,
+                  editorFontSize:
+                      widget.settingsController.syncableSettings.editorFontSize,
+                  editorLineHeight: widget
+                      .settingsController
+                      .syncableSettings
+                      .editorLineHeight,
+                  editorContentWidth: widget
+                      .settingsController
+                      .syncableSettings
+                      .editorContentWidth,
+                  activeChapterId: _controller.selectedChapter?.id,
+                  onChanged: (val) {},
+                )
+              : Row(
+                  children: [
+                    ChapterListPanel(
+                      chapters: _controller.chapters,
+                      selectedChapter: _controller.selectedChapter,
+                      onAddChapter: _showNewChapterDialog,
+                      onSelectChapter: _selectChapter,
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                      flex: 3,
+                      child: EditorPanel(
+                        hasChapter: _controller.selectedChapter != null,
+                        textController: _textController,
+                        scrollController: _scrollController,
+                        inputAnimationEnabled: widget
+                            .settingsController
+                            .syncableSettings
+                            .inputAnimationEnabled,
+                        smoothScrollingEnabled: widget
+                            .settingsController
+                            .syncableSettings
+                            .smoothScrollingEnabled,
+                        smoothScrollDurationMs: widget
+                            .settingsController
+                            .syncableSettings
+                            .smoothScrollDurationMs,
+                        typedCharacterAnimationEnabled: widget
+                            .settingsController
+                            .syncableSettings
+                            .typedCharacterAnimationEnabled,
+                        cursorAnimationEnhanced: widget
+                            .settingsController
+                            .syncableSettings
+                            .cursorAnimationEnhanced,
+                        editorFontSize: widget
+                            .settingsController
+                            .syncableSettings
+                            .editorFontSize,
+                        editorLineHeight: widget
+                            .settingsController
+                            .syncableSettings
+                            .editorLineHeight,
+                        editorContentWidth: widget
+                            .settingsController
+                            .syncableSettings
+                            .editorContentWidth,
+                        activeChapterId: _controller.selectedChapter?.id,
+                        onChanged: (val) {
+                          // To keep state logic simple for prompt trigger
+                        },
+                      ),
+                    ),
+                    const VerticalDivider(width: 1),
+                    ChapterInfoPanel(
+                      workspacePath: _controller.workspacePath,
+                      chapter: _controller.selectedChapter,
+                      isSaving: _controller.isSaving,
+                      onEditTitle: _showEditTitleDialog,
+                    ),
+                  ],
+                ),
+        );
+      },
     );
   }
 }

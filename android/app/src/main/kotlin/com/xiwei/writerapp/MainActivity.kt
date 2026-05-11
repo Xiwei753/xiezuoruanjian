@@ -1,4 +1,4 @@
-package com.example.writer_app
+package com.xiwei.writerapp
 
 import io.flutter.embedding.android.FlutterActivity
 
