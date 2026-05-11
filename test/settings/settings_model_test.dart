@@ -24,6 +24,8 @@ void main() {
       expect(settings.inputAnimationEnabled, false);
       expect(settings.typedCharacterAnimationEnabled, false);
       expect(settings.cursorAnimationEnhanced, false);
+      expect(settings.smoothScrollingEnabled, true);
+      expect(settings.smoothScrollDurationMs, 120);
     });
 
     test('can save and read JSON', () {

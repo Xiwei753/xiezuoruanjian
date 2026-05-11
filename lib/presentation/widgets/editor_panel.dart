@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'editor_input_animation_overlay.dart';
+import 'smooth_scroll_wrapper.dart';
 
 class EditorPanel extends StatefulWidget {
   final bool hasChapter;
@@ -11,6 +12,9 @@ class EditorPanel extends StatefulWidget {
   final bool inputAnimationEnabled;
   final bool typedCharacterAnimationEnabled;
   final bool cursorAnimationEnhanced;
+
+  final bool smoothScrollingEnabled;
+  final int smoothScrollDurationMs;
 
   final double editorFontSize;
   final double editorLineHeight;
@@ -27,6 +31,8 @@ class EditorPanel extends StatefulWidget {
     this.inputAnimationEnabled = false,
     this.typedCharacterAnimationEnabled = false,
     this.cursorAnimationEnhanced = false,
+    this.smoothScrollingEnabled = true,
+    this.smoothScrollDurationMs = 120,
     this.editorFontSize = 16.0,
     this.editorLineHeight = 1.6,
     this.editorContentWidth = 800.0,
@@ -69,16 +75,21 @@ class _EditorPanelState extends State<EditorPanel> {
         constraints: BoxConstraints(maxWidth: widget.editorContentWidth),
         child: Padding(
           padding: const EdgeInsets.all(16.0),
-          child: EditorInputAnimationOverlay(
-            controller: widget.textController,
-            inputAnimationEnabled: widget.inputAnimationEnabled,
-            typedCharacterAnimationEnabled:
-                widget.typedCharacterAnimationEnabled,
-            cursorAnimationEnhanced: widget.cursorAnimationEnhanced,
-            editorFontSize:
-                widget.editorFontSize, // Pass font size for particles
-            activeChapterId: widget.activeChapterId,
-            child: textField,
+          child: SmoothScrollWrapper(
+            controller: widget.scrollController,
+            smoothScrollingEnabled: widget.smoothScrollingEnabled,
+            smoothScrollDurationMs: widget.smoothScrollDurationMs,
+            child: EditorInputAnimationOverlay(
+              controller: widget.textController,
+              inputAnimationEnabled: widget.inputAnimationEnabled,
+              typedCharacterAnimationEnabled:
+                  widget.typedCharacterAnimationEnabled,
+              cursorAnimationEnhanced: widget.cursorAnimationEnhanced,
+              editorFontSize:
+                  widget.editorFontSize, // Pass font size for particles
+              activeChapterId: widget.activeChapterId,
+              child: textField,
+            ),
           ),
         ),
       ),

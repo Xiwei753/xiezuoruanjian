@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import '../../infrastructure/logging/app_logger.dart';
 
 class EditorInputAnimationOverlay extends StatefulWidget {
   final Widget child;
@@ -188,8 +189,22 @@ class _EditorInputAnimationOverlayState
       );
     });
 
+    if (isCursor) {
+      AppLogger.info(
+        'Input animation spawned',
+        key: 'cursor_pulse_spawn',
+        limitMs: 1000,
+      );
+    } else {
+      AppLogger.info(
+        'Input animation spawned',
+        key: 'input_anim_spawn',
+        limitMs: 1000,
+      );
+    }
+
     // Auto remove after animation
-    Future.delayed(const Duration(milliseconds: 150), () {
+    Future.delayed(const Duration(milliseconds: 220), () {
       if (mounted) {
         setState(() {
           _particles.removeWhere((p) => p.id == id);
@@ -231,34 +246,36 @@ class _EditorInputAnimationOverlayState
       child: TweenAnimationBuilder<double>(
         key: ValueKey(particle.id),
         tween: Tween(begin: 0.0, end: 1.0),
-        duration: const Duration(milliseconds: 150),
+        duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,
         builder: (context, value, child) {
           if (particle.isCursor) {
             // Cursor pulse
+            final opacity = (0.45 * (1.0 - value)).clamp(0.0, 1.0);
             return Opacity(
-              opacity: 0.5 * (1.0 - value),
+              opacity: opacity,
               child: Container(
                 width: 2,
-                height: widget.editorFontSize * 1.2,
-                color: textColor.withAlpha(100),
+                height:
+                    widget.editorFontSize *
+                    1.6, // editorFontSize * editorLineHeight approx
+                color: textColor.withAlpha(150),
               ),
             );
           } else {
-            // Typed character scale up and fade out
+            // Typed character scale up and fade out (in place)
+            // Fade out is slower at the beginning
+            final opacity = (1.0 - (value * value)).clamp(0.0, 1.0);
             return Opacity(
-              opacity: 1.0 - value,
+              opacity: opacity,
               child: Transform.scale(
-                scale: 0.96 + (0.04 * value),
-                child: Transform.translate(
-                  offset: Offset(0, -2 * value), // Very slight upward movement
-                  child: Text(
-                    particle.text,
-                    style: TextStyle(
-                      fontSize: widget.editorFontSize,
-                      color: textColor,
-                      fontWeight: FontWeight.normal,
-                    ),
+                scale: 0.98 + (0.02 * value), // Very slight scale up
+                child: Text(
+                  particle.text,
+                  style: TextStyle(
+                    fontSize: widget.editorFontSize,
+                    color: textColor,
+                    fontWeight: FontWeight.normal,
                   ),
                 ),
               ),
