@@ -33,6 +33,7 @@ class _EditorInputAnimationOverlayState
   TextEditingValue _lastCommittedValue = TextEditingValue.empty;
   final List<_AnimationParticle> _particles = [];
   int _particleIdCounter = 0;
+  Offset? _lastCaretOffset;
 
   @override
   void initState() {
@@ -90,16 +91,28 @@ class _EditorInputAnimationOverlayState
       final oldLen = _lastCommittedValue.text.length;
       final newLen = newValue.text.length;
 
-      // Allow animating a few characters for Chinese commit
-      if (newLen > oldLen && (newLen - oldLen) <= 3) {
+      if (newLen > oldLen) {
+        final insertedLen = newLen - oldLen;
         if (newValue.selection.isCollapsed &&
-            newValue.selection.baseOffset >= (newLen - oldLen)) {
-          final insertedChar = newValue.text.substring(
-            newValue.selection.baseOffset - (newLen - oldLen),
-            newValue.selection.baseOffset,
-          );
-
-          _spawnParticle(insertedChar, isCursor: false);
+            newValue.selection.baseOffset >= insertedLen) {
+          if (insertedLen == 1) {
+            // Single character insertion: show the character
+            final insertedChar = newValue.text.substring(
+              newValue.selection.baseOffset - 1,
+              newValue.selection.baseOffset,
+            );
+            _spawnParticle(insertedChar, isCursor: false);
+          } else if (insertedLen <= 3) {
+            // 2-3 characters insertion: show only the last character to avoid weird string animations
+            final lastInsertedChar = newValue.text.substring(
+              newValue.selection.baseOffset - 1,
+              newValue.selection.baseOffset,
+            );
+            _spawnParticle(lastInsertedChar, isCursor: false);
+          } else {
+            // Bulk insertion (> 3 characters): just show a slight cursor pulse, do not log or show text
+            _spawnParticle('', isCursor: true);
+          }
         }
       }
     } else if (selectionChanged &&
@@ -107,7 +120,24 @@ class _EditorInputAnimationOverlayState
         widget.cursorAnimationEnhanced &&
         newValue.selection.isCollapsed) {
       // Just cursor moved
-      _spawnParticle('', isCursor: true);
+      final newOffset = _calculateCaretOffsetForCursor();
+      if (_lastCaretOffset != null) {
+        // Spawn trail
+        _spawnCursorTrail(_lastCaretOffset!, newOffset);
+      } else {
+        // Just pulse
+        _spawnParticle('', isCursor: true);
+      }
+      _lastCaretOffset = newOffset;
+    }
+
+    if (textChanged || (selectionChanged && newValue.selection.isCollapsed)) {
+      // Keep track of the real offset when cursor moves or text changes
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _lastCaretOffset = _getRawCaretRectOffset(true);
+        }
+      });
     }
 
     _lastValue = newValue;
@@ -125,26 +155,23 @@ class _EditorInputAnimationOverlayState
     return result;
   }
 
-  Offset _calculateCaretOffset() {
-    // Fallback default coordinates
-    const fallbackOffset = Offset(50.0, 50.0);
-
+  Offset? _getRawCaretRectOffset(bool isCursor) {
     try {
       final RenderObject? renderObject = context.findRenderObject();
       if (renderObject == null ||
           renderObject is! RenderBox ||
           !renderObject.attached) {
-        return fallbackOffset;
+        return null;
       }
 
       final RenderEditable? renderEditable = _findRenderEditable(renderObject);
       if (renderEditable == null || !renderEditable.attached) {
-        return fallbackOffset;
+        return null;
       }
 
       final selection = widget.controller.selection;
       if (!selection.isValid) {
-        return fallbackOffset;
+        return null;
       }
 
       final textLen = widget.controller.text.length;
@@ -155,8 +182,19 @@ class _EditorInputAnimationOverlayState
         TextPosition(offset: clampedOffset),
       );
 
+      Offset targetOffset;
+      if (isCursor) {
+        targetOffset = caretRect.topLeft;
+      } else {
+        // Character typed
+        targetOffset = Offset(
+          caretRect.left,
+          caretRect.top - widget.editorFontSize * 0.05,
+        );
+      }
+
       // Convert from RenderEditable coordinates to Screen coordinates safely
-      final globalOffset = renderEditable.localToGlobal(caretRect.bottomLeft);
+      final globalOffset = renderEditable.localToGlobal(targetOffset);
 
       // Convert Screen coordinates to Overlay (our Stack) coordinates
       final localOffset = renderObject.globalToLocal(globalOffset);
@@ -164,8 +202,58 @@ class _EditorInputAnimationOverlayState
       return localOffset;
     } catch (e) {
       // If layout fails or something is unattached, safely fallback.
-      return fallbackOffset;
+      AppLogger.info(
+        'Input animation caret offset fallback',
+        key: 'caret_offset_fallback',
+        limitMs: 1000,
+      );
+      return null;
     }
+  }
+
+  Offset _calculateCaretOffsetForCursor() {
+    return _getRawCaretRectOffset(true) ?? const Offset(50.0, 50.0);
+  }
+
+  Offset _calculateCaretOffsetForTypedText() {
+    return _getRawCaretRectOffset(false) ?? const Offset(50.0, 50.0);
+  }
+
+  void _spawnCursorTrail(Offset startOffset, Offset endOffset) {
+    if (_particles.length >= 8) {
+      _particles.removeAt(0);
+    }
+
+    final id = _particleIdCounter++;
+
+    setState(() {
+      _particles.add(
+        _AnimationParticle(
+          id: id,
+          text: '',
+          isCursor: true, // We reuse isCursor logic to style it
+          offsetX: endOffset.dx,
+          offsetY: endOffset.dy,
+          startOffsetX: startOffset.dx,
+          startOffsetY: startOffset.dy,
+          isTrail: true,
+        ),
+      );
+    });
+
+    AppLogger.info(
+      'Cursor trail spawned',
+      key: 'cursor_trail_spawn',
+      limitMs: 1000,
+    );
+
+    Future.delayed(const Duration(milliseconds: 240), () {
+      if (mounted) {
+        setState(() {
+          _particles.removeWhere((p) => p.id == id);
+        });
+      }
+    });
   }
 
   void _spawnParticle(String text, {required bool isCursor}) {
@@ -175,7 +263,9 @@ class _EditorInputAnimationOverlayState
     }
 
     final id = _particleIdCounter++;
-    final offset = _calculateCaretOffset();
+    final offset = isCursor
+        ? _calculateCaretOffsetForCursor()
+        : _calculateCaretOffsetForTypedText();
 
     setState(() {
       _particles.add(
@@ -240,6 +330,41 @@ class _EditorInputAnimationOverlayState
   }
 
   Widget _buildParticleWidget(_AnimationParticle particle, Color textColor) {
+    // If it's a trail, we want to animate position, not just stay at particle.offsetX/Y
+    if (particle.isTrail &&
+        particle.startOffsetX != null &&
+        particle.startOffsetY != null) {
+      return TweenAnimationBuilder<double>(
+        key: ValueKey(particle.id),
+        tween: Tween(begin: 0.0, end: 1.0),
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic, // smoother deceleration
+        builder: (context, value, child) {
+          final currentX =
+              particle.startOffsetX! +
+              (particle.offsetX - particle.startOffsetX!) * value;
+          final currentY =
+              particle.startOffsetY! +
+              (particle.offsetY - particle.startOffsetY!) * value;
+
+          final opacity = (0.4 * (1.0 - value)).clamp(0.0, 1.0);
+
+          return Positioned(
+            left: currentX,
+            top: currentY,
+            child: Opacity(
+              opacity: opacity,
+              child: Container(
+                width: 2,
+                height: widget.editorFontSize * 1.6,
+                color: textColor.withAlpha(150),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
     return Positioned(
       left: particle.offsetX,
       top: particle.offsetY,
@@ -293,6 +418,9 @@ class _AnimationParticle {
   final bool isCursor;
   final double offsetX;
   final double offsetY;
+  final double? startOffsetX;
+  final double? startOffsetY;
+  final bool isTrail;
 
   _AnimationParticle({
     required this.id,
@@ -300,5 +428,8 @@ class _AnimationParticle {
     required this.isCursor,
     required this.offsetX,
     required this.offsetY,
+    this.startOffsetX,
+    this.startOffsetY,
+    this.isTrail = false,
   });
 }

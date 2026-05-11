@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import '../../infrastructure/logging/app_logger.dart';
 
-class SmoothScrollWrapper extends StatelessWidget {
+class SmoothScrollWrapper extends StatefulWidget {
   final Widget child;
   final ScrollController controller;
   final bool smoothScrollingEnabled;
@@ -13,27 +13,39 @@ class SmoothScrollWrapper extends StatelessWidget {
     required this.child,
     required this.controller,
     this.smoothScrollingEnabled = true,
-    this.smoothScrollDurationMs = 120,
+    this.smoothScrollDurationMs = 240,
   });
 
   @override
+  State<SmoothScrollWrapper> createState() => _SmoothScrollWrapperState();
+}
+
+class _SmoothScrollWrapperState extends State<SmoothScrollWrapper> {
+  double? _targetOffset;
+
+  void _handlePointerSignal(PointerSignalEvent event) {
+    if (event is PointerScrollEvent) {
+      GestureBinding.instance.pointerSignalResolver.register(event, (
+        PointerSignalEvent e,
+      ) {
+        if (e is PointerScrollEvent) {
+          _handleScroll(e.scrollDelta.dy);
+        }
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (!smoothScrollingEnabled) {
-      return child;
+    if (!widget.smoothScrollingEnabled) {
+      return widget.child;
     }
 
-    return Listener(
-      onPointerSignal: (pointerSignal) {
-        if (pointerSignal is PointerScrollEvent) {
-          _handleScroll(pointerSignal.scrollDelta.dy);
-        }
-      },
-      child: child,
-    );
+    return Listener(onPointerSignal: _handlePointerSignal, child: widget.child);
   }
 
   void _handleScroll(double scrollDelta) {
-    if (!controller.hasClients) {
+    if (!widget.controller.hasClients) {
       AppLogger.info(
         'Smooth scroll fallback: no clients attached',
         key: 'smooth_scroll_fallback',
@@ -43,22 +55,35 @@ class SmoothScrollWrapper extends StatelessWidget {
     }
 
     try {
-      final currentOffset = controller.offset;
-      final targetOffset = currentOffset + scrollDelta;
+      final currentOffset = widget.controller.offset;
+
+      // If we already have a target, add to it, otherwise add to current
+      _targetOffset = (_targetOffset ?? currentOffset) + scrollDelta;
 
       // Clamp target offset
-      final maxScrollExtent = controller.position.maxScrollExtent;
-      final minScrollExtent = controller.position.minScrollExtent;
-      final clampedTargetOffset = targetOffset.clamp(
+      final maxScrollExtent = widget.controller.position.maxScrollExtent;
+      final minScrollExtent = widget.controller.position.minScrollExtent;
+      final clampedTargetOffset = _targetOffset!.clamp(
         minScrollExtent,
         maxScrollExtent,
       );
 
-      controller.animateTo(
-        clampedTargetOffset,
-        duration: Duration(milliseconds: smoothScrollDurationMs),
-        curve: Curves.easeOut,
-      );
+      _targetOffset = clampedTargetOffset;
+
+      widget.controller
+          .animateTo(
+            clampedTargetOffset,
+            duration: Duration(milliseconds: widget.smoothScrollDurationMs),
+            curve: Curves.easeOut,
+          )
+          .then((_) {
+            // Only clear if we've reached our destination (not interrupted)
+            if (mounted &&
+                widget.controller.hasClients &&
+                widget.controller.offset == _targetOffset) {
+              _targetOffset = null;
+            }
+          });
     } catch (e) {
       AppLogger.info(
         'Smooth scroll fallback: animateTo failed',
@@ -67,8 +92,9 @@ class SmoothScrollWrapper extends StatelessWidget {
       );
       // Fallback to jumpTo if animateTo fails (e.g. during composition/layout)
       try {
-        controller.jumpTo(controller.offset + scrollDelta);
+        widget.controller.jumpTo(widget.controller.offset + scrollDelta);
       } catch (_) {}
+      _targetOffset = null;
     }
   }
 }

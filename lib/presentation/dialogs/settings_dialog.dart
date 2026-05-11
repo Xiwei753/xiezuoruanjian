@@ -412,9 +412,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
               onChanged: (val) {
                 final intVal = int.tryParse(val);
                 if (intVal != null) {
+                  // restrict range from 80 to 500 ms
+                  final clampedVal = intVal.clamp(80, 500);
                   _updateDraftSyncable(
                     _draftSyncableSettings.copyWith(
-                      smoothScrollDurationMs: intVal,
+                      smoothScrollDurationMs: clampedVal,
                     ),
                   );
                 }

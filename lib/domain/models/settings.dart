@@ -205,7 +205,7 @@ class SyncableSettings {
     this.cursorAnimationEnhanced = false,
     this.imeSafeModeEnabled = false,
     this.smoothScrollingEnabled = true,
-    this.smoothScrollDurationMs = 120,
+    this.smoothScrollDurationMs = 240,
     this.defaultAIProvider = 'deepseek',
     this.defaultAIModel = 'deepseek-chat',
     this.deepSeekBaseUrl = 'https://api.deepseek.com',
@@ -372,7 +372,7 @@ class SyncableSettings {
           json['cursorAnimationEnhanced'] as bool? ?? false,
       imeSafeModeEnabled: json['imeSafeModeEnabled'] as bool? ?? false,
       smoothScrollingEnabled: json['smoothScrollingEnabled'] as bool? ?? true,
-      smoothScrollDurationMs: json['smoothScrollDurationMs'] as int? ?? 120,
+      smoothScrollDurationMs: json['smoothScrollDurationMs'] as int? ?? 240,
       defaultAIProvider: json['defaultAIProvider'] as String? ?? 'deepseek',
       defaultAIModel: json['defaultAIModel'] as String? ?? 'deepseek-chat',
       deepSeekBaseUrl:
