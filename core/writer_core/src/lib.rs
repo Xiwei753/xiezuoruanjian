@@ -11,9 +11,16 @@ pub mod volume;
 pub mod workspace;
 
 pub use error::{Error, Result};
+
+#[cfg(test)]
 pub mod chapter_tests;
-pub mod project_tests;
-pub mod settings_tests;
-pub mod volume_tests;
-pub mod workspace_tests;
+#[cfg(test)]
 pub mod fixture_tests;
+#[cfg(test)]
+pub mod project_tests;
+#[cfg(test)]
+pub mod settings_tests;
+#[cfg(test)]
+pub mod volume_tests;
+#[cfg(test)]
+pub mod workspace_tests;

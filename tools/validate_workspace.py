@@ -2,23 +2,39 @@ import os
 import sys
 import json
 
-def validate_workspace(path):
-    manifest_path = os.path.join(path, "workspace_manifest.json")
-    if not os.path.exists(manifest_path):
-        print(f"Error: Missing {manifest_path}")
+def check_json_fields(filepath, required_fields):
+    if not os.path.exists(filepath):
+        print(f"Error: Missing {filepath}")
         return False
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            missing = [field for field in required_fields if field not in data]
+            if missing:
+                print(f"Error: {filepath} missing fields: {missing}")
+                return False
+    except Exception as e:
+        print(f"Error reading/parsing {filepath}: {e}")
+        return False
+    return True
+
+def validate_workspace(path):
+    success = True
+
+    manifest_path = os.path.join(path, "workspace_manifest.json")
+    if not check_json_fields(manifest_path, ["version"]):
+        success = False
 
     projects_dir = os.path.join(path, "projects")
     if not os.path.exists(projects_dir):
         print(f"Error: Missing {projects_dir}")
         return False
 
-    success = True
     for proj_id in os.listdir(projects_dir):
         proj_dir = os.path.join(projects_dir, proj_id)
         if os.path.isdir(proj_dir):
-            if not os.path.exists(os.path.join(proj_dir, "project.json")):
-                print(f"Error: Missing project.json in {proj_dir}")
+            proj_json_path = os.path.join(proj_dir, "project.json")
+            if not check_json_fields(proj_json_path, ["id", "title"]):
                 success = False
 
             volumes_dir = os.path.join(proj_dir, "volumes")
@@ -26,8 +42,8 @@ def validate_workspace(path):
                 for vol_id in os.listdir(volumes_dir):
                     vol_dir = os.path.join(volumes_dir, vol_id)
                     if os.path.isdir(vol_dir):
-                        if not os.path.exists(os.path.join(vol_dir, "volume.json")):
-                            print(f"Error: Missing volume.json in {vol_dir}")
+                        vol_json_path = os.path.join(vol_dir, "volume.json")
+                        if not check_json_fields(vol_json_path, ["id", "title"]):
                             success = False
 
                         chapters_dir = os.path.join(vol_dir, "chapters")
@@ -35,9 +51,10 @@ def validate_workspace(path):
                             for chap_id in os.listdir(chapters_dir):
                                 chap_dir = os.path.join(chapters_dir, chap_id)
                                 if os.path.isdir(chap_dir):
-                                    if not os.path.exists(os.path.join(chap_dir, "chapter.meta.json")):
-                                        print(f"Error: Missing chapter.meta.json in {chap_dir}")
+                                    chap_meta_path = os.path.join(chap_dir, "chapter.meta.json")
+                                    if not check_json_fields(chap_meta_path, ["id", "title"]):
                                         success = False
+
                                     if not os.path.exists(os.path.join(chap_dir, "chapter.md")):
                                         print(f"Error: Missing chapter.md in {chap_dir}")
                                         success = False

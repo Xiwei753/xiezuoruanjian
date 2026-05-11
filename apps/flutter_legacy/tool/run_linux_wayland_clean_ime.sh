@@ -1,4 +1,7 @@
 #!/bin/bash
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$DIR/.."
+
 echo "Environment before:"
 echo "XDG_SESSION_TYPE=$XDG_SESSION_TYPE"
 echo "GTK_IM_MODULE=$GTK_IM_MODULE"
