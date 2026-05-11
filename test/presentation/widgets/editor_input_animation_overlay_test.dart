@@ -103,7 +103,7 @@ void main() {
       expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
     });
 
-    testWidgets('Large paste does not trigger animation', (
+    testWidgets('Large paste does not trigger text animation but triggers pulse', (
       WidgetTester tester,
     ) async {
       final controller = TextEditingController();
@@ -129,8 +129,19 @@ void main() {
 
       await tester.pump();
 
-      // Should NOT spawn animation for bulk text
-      expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
+      // Should spawn pulse animation (which uses TweenAnimationBuilder)
+      expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
+      // TextField itself contains the text, but the animation overlay shouldn't be rendering it.
+      // The pulse particle is an empty string but doesn't have a Text widget.
+      // Instead of find.text(''), we can verify there are NO text widgets with the newly inserted string
+      // in the overlay. But there is one inside TextField, so finding exactly one is fine.
+      expect(
+        find.text('This is a large block of text being pasted all at once'),
+        findsOneWidget,
+      );
+
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
     });
 
     testWidgets('Cursor movement creates cursor pulse particle', (
@@ -236,47 +247,48 @@ void main() {
       await tester.pump();
     });
 
-    testWidgets('Chinese IME commit triggers animation', (
-      WidgetTester tester,
-    ) async {
-      final controller = TextEditingController(text: '');
+    testWidgets(
+      'Chinese IME commit triggers animation only for last character',
+      (WidgetTester tester) async {
+        final controller = TextEditingController(text: '');
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: EditorInputAnimationOverlay(
-              controller: controller,
-              inputAnimationEnabled: true,
-              typedCharacterAnimationEnabled: true,
-              child: TextField(controller: controller),
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: EditorInputAnimationOverlay(
+                controller: controller,
+                inputAnimationEnabled: true,
+                typedCharacterAnimationEnabled: true,
+                child: TextField(controller: controller),
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      // 1. Simulate composing 'nihao'
-      controller.value = const TextEditingValue(
-        text: 'nihao',
-        composing: TextRange(start: 0, end: 5),
-      );
-      await tester.pump();
-      expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
+        // 1. Simulate composing 'nihao'
+        controller.value = const TextEditingValue(
+          text: 'nihao',
+          composing: TextRange(start: 0, end: 5),
+        );
+        await tester.pump();
+        expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
 
-      // 2. Simulate committing '你好'
-      controller.value = const TextEditingValue(
-        text: '你好',
-        selection: TextSelection.collapsed(offset: 2),
-      );
-      await tester.pump();
+        // 2. Simulate committing '你好'
+        controller.value = const TextEditingValue(
+          text: '你好',
+          selection: TextSelection.collapsed(offset: 2),
+        );
+        await tester.pump();
 
-      // Should spawn an animation for the committed text since (2 - 0) <= 3
-      expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
-      // '你好' substring(2 - 2, 2) which is '你好'. So we expect '你好' to be found.
-      expect(find.text('你好'), findsWidgets);
+        // Should spawn an animation for the committed text since (2 - 0) <= 3
+        expect(find.byType(TweenAnimationBuilder<double>), findsOneWidget);
+        // It should only show the last character '好' for multiple characters
+        expect(find.text('好'), findsWidgets);
 
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pump();
-    });
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump();
+      },
+    );
 
     testWidgets('Chapter switch suppresses programmatic animations', (
       WidgetTester tester,

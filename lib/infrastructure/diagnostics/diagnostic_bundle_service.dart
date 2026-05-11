@@ -152,10 +152,7 @@ class DiagnosticBundleService {
   ) async {
     final file = File('${diagDir.path}/git_info.txt');
     try {
-      final result = await Process.run('git', [
-        'status',
-        '--short',
-      ]);
+      final result = await Process.run('git', ['status', '--short']);
       if (result.exitCode == 0) {
         await file.writeAsString('Git Status (Short):\n${result.stdout}\n');
       } else {
