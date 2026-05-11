@@ -46,7 +46,11 @@ if ! git pull --ff-only origin main; then
     exit 1
 fi
 
-echo "Running flutter pub get..."
+echo "Running DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$DIR/.."
+flutter pub get..."
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$DIR/.."
 flutter pub get
 
 echo "Running flutter analyze..."

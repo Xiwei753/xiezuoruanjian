@@ -1,7 +1,11 @@
 #!/bin/bash
 set -e
 
-echo "Running flutter pub get..."
+echo "Running DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$DIR/.."
+flutter pub get..."
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$DIR/.."
 flutter pub get
 
 echo "Checking dart formatting..."

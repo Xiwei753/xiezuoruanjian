@@ -1,79 +1,83 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-*.tmp
-*.lockfile
-.DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+# Node
+node_modules/
 
-# IntelliJ related
+# Python
+__pycache__/
+*.pyc
+
+# Rust
+target/
+**/*.rs.bk
+
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Android
+*.apk
+*.aab
+local.properties
+.gradle/
+captures/
+
+# iOS
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.moved-aside
+DerivedData/
+*.hmap
+*.ipa
+*.ida
+
+# Linux/C++ build
+apps/linux_native/build/
+compile_commands.json
+
+# IDEs
+.idea/
+.vscode/
 *.iml
 *.ipr
 *.iws
-.idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-.vscode/
+# OS
+.DS_Store
+Thumbs.db
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-build/
-coverage/
+# Data Security & Privacy Rules (Strict)
+.env
+.env.*
+secrets.json
+api_keys.json
+local_settings.json
+settings.local.json
 
-# Linux/Windows/macOS related
-linux/flutter/ephemeral/
-windows/flutter/ephemeral/
-macos/Flutter/ephemeral/
-
-# Android related
-android/.gradle/
-android/app/build/
-
-# Writer App Specific / Data Safety
+# Workspace & User Data
 writer_app_workspace/
 workspace/
 data/
 backups/
 trash/
 sqlite_cache/
+logs/
+tmp/
 
-# Databases
+# Databases and Caches
 *.db
 *.sqlite
 *.sqlite3
 
-# Secrets and Configs
-.env
-.env.*
-secrets.json
-api_keys.json
-local_settings.json
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Temporary files and logs
-logs/
-tmp/
-
-# Settings
-settings.local.json
+# Runtime artifacts
+*.log
+*.tmp
