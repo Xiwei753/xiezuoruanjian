@@ -886,61 +886,67 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      child: Container(
-        width: 800,
-        height: 600,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
-        child: Row(
-          children: [
-            // Sidebar
-            Container(
-              width: 200,
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 700) {
+          // Mobile Layout
+          return Dialog.fullscreen(
+            child: Scaffold(
+              appBar: AppBar(title: const Text('设置')),
+              body: Column(
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text(
-                      '设置',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  Expanded(
+                  SizedBox(
+                    height: 50,
                     child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
                       itemCount: _categories.length,
                       itemBuilder: (context, index) {
-                        return ListTile(
-                          title: Text(_categories[index]),
-                          selected: _selectedIndex == index,
+                        final isSelected = _selectedIndex == index;
+                        return InkWell(
                           onTap: () {
                             setState(() {
                               _selectedIndex = index;
                             });
                           },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16.0,
+                            ),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: isSelected
+                                      ? Theme.of(context).colorScheme.primary
+                                      : Colors.transparent,
+                                  width: 2,
+                                ),
+                              ),
+                            ),
+                            child: Text(
+                              _categories[index],
+                              style: TextStyle(
+                                color: isSelected
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(
+                                        context,
+                                      ).textTheme.bodyMedium?.color,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ),
                         );
                       },
                     ),
                   ),
-                ],
-              ),
-            ),
-            // Content area
-            Expanded(
-              child: Column(
-                children: [
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.all(24.0),
+                      padding: const EdgeInsets.all(16.0),
                       child: _buildContent(),
                     ),
                   ),
-                  // Bottom bar for saving
                   Container(
                     padding: const EdgeInsets.all(16.0),
                     decoration: BoxDecoration(
@@ -987,9 +993,118 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 ],
               ),
             ),
-          ],
-        ),
-      ),
+          );
+        }
+
+        // Desktop Layout
+        return Dialog(
+          child: Container(
+            width: 800,
+            height: 600,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+            child: Row(
+              children: [
+                // Sidebar
+                Container(
+                  width: 200,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.all(16.0),
+                        child: Text(
+                          '设置',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: _categories.length,
+                          itemBuilder: (context, index) {
+                            return ListTile(
+                              title: Text(_categories[index]),
+                              selected: _selectedIndex == index,
+                              onTap: () {
+                                setState(() {
+                                  _selectedIndex = index;
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Content area
+                Expanded(
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24.0),
+                          child: _buildContent(),
+                        ),
+                      ),
+                      // Bottom bar for saving
+                      Container(
+                        padding: const EdgeInsets.all(16.0),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            top: BorderSide(
+                              color: Theme.of(context).dividerColor,
+                            ),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            if (_isDirty)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 16.0),
+                                child: Text(
+                                  '有未保存的更改',
+                                  style: TextStyle(
+                                    color: Colors.orange,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('关闭'),
+                            ),
+                            const SizedBox(width: 16),
+                            ElevatedButton(
+                              onPressed: _isDirty && !_isSaving
+                                  ? _saveSettings
+                                  : null,
+                              child: _isSaving
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Text('保存'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

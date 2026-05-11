@@ -17,13 +17,13 @@ class WorkspaceService {
     }
 
     // Create standard folders
-    await Directory(p.join(rootPath, 'projects')).create();
-    await Directory(p.join(rootPath, 'backups')).create();
-    await Directory(p.join(rootPath, 'trash')).create();
-    await Directory(p.join(rootPath, 'app-meta')).create();
+    await Directory(p.join(rootPath, 'projects')).create(recursive: true);
+    await Directory(p.join(rootPath, 'backups')).create(recursive: true);
+    await Directory(p.join(rootPath, 'trash')).create(recursive: true);
+    await Directory(p.join(rootPath, 'app-meta')).create(recursive: true);
 
     // Create sqlite folder (gitignore this usually)
-    await Directory(p.join(rootPath, 'sqlite_cache')).create();
+    await Directory(p.join(rootPath, 'sqlite_cache')).create(recursive: true);
 
     // Create manifest
     final manifest = WorkspaceManifest(
@@ -44,8 +44,10 @@ class WorkspaceService {
     final projectDir = Directory(p.join(rootPath, 'projects', projectId));
     await projectDir.create(recursive: true);
 
-    await Directory(p.join(projectDir.path, 'volumes')).create();
-    await Directory(p.join(projectDir.path, 'characters')).create();
+    await Directory(p.join(projectDir.path, 'volumes')).create(recursive: true);
+    await Directory(
+      p.join(projectDir.path, 'characters'),
+    ).create(recursive: true);
 
     final manifest = ProjectManifest(
       id: projectId,
@@ -95,7 +97,7 @@ class WorkspaceService {
       p.join(rootPath, 'projects', projectId, 'volumes', volumeId),
     );
     await volumeDir.create(recursive: true);
-    await Directory(p.join(volumeDir.path, 'chapters')).create();
+    await Directory(p.join(volumeDir.path, 'chapters')).create(recursive: true);
 
     final meta = VolumeMeta(
       id: volumeId,
