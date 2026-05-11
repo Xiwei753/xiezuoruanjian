@@ -151,79 +151,87 @@ class _ProjectHomeScreenState extends State<ProjectHomeScreen> {
               lastOpenedId.isNotEmpty &&
               _projectController.projects.any((p) => p.id == lastOpenedId);
 
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (hasLastOpened)
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      final project = _projectController.projects.firstWhere(
-                        (p) => p.id == lastOpenedId,
-                      );
-                      _openProject(
-                        project,
-                        chapterId: widget
-                            .settingsController
-                            .localSettings
-                            .lastOpenedChapterId,
-                      );
-                    },
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('继续上次写作'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16.0),
-                    ),
-                  ),
-                ),
-              Expanded(
-                child: GridView.builder(
-                  padding: const EdgeInsets.all(16.0),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    childAspectRatio: 3 / 4,
-                    crossAxisSpacing: 16,
-                    mainAxisSpacing: 16,
-                  ),
-                  itemCount: _projectController.projects.length,
-                  itemBuilder: (context, index) {
-                    final project = _projectController.projects[index];
-                    return Card(
-                      clipBehavior: Clip.antiAlias,
-                      child: InkWell(
-                        onTap: () => _openProject(project),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(
-                                Icons.book,
-                                size: 48,
-                                color: Colors.blueGrey,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                project.title,
-                                style: Theme.of(context).textTheme.titleLarge,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const Spacer(),
-                              Text(
-                                '创建于: ${project.createdAt.toLocal().toString().split('.')[0]}',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final isMobile = constraints.maxWidth < 700;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (hasLastOpened)
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          final project = _projectController.projects
+                              .firstWhere((p) => p.id == lastOpenedId);
+                          _openProject(
+                            project,
+                            chapterId: widget
+                                .settingsController
+                                .localSettings
+                                .lastOpenedChapterId,
+                          );
+                        },
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('继续上次写作'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16.0),
                         ),
                       ),
-                    );
-                  },
-                ),
-              ),
-            ],
+                    ),
+                  Expanded(
+                    child: GridView.builder(
+                      padding: const EdgeInsets.all(16.0),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: isMobile ? 1 : 3,
+                        childAspectRatio: 3 / 4,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                      ),
+                      itemCount: _projectController.projects.length,
+                      itemBuilder: (context, index) {
+                        final project = _projectController.projects[index];
+                        return Card(
+                          clipBehavior: Clip.antiAlias,
+                          child: InkWell(
+                            onTap: () => _openProject(project),
+                            child: Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(
+                                    Icons.book,
+                                    size: 48,
+                                    color: Colors.blueGrey,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    project.title,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleLarge,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const Spacer(),
+                                  Text(
+                                    '创建于: ${project.createdAt.toLocal().toString().split('.')[0]}',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
           );
         },
       ),
