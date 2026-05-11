@@ -33,19 +33,27 @@ jobs:
         run: flutter --version
 
       - name: Install dependencies
-        run: flutter pub get
+        run: |
+          cd apps/flutter_legacy
+          flutter pub get
 
       - name: Analyze code
-        run: flutter analyze
+        run: |
+          cd apps/flutter_legacy
+          flutter analyze
 
       - name: Run tests
-        run: flutter test
+        run: |
+          cd apps/flutter_legacy
+          flutter test
 
       - name: Build Android Debug APK
-        run: flutter build apk --debug
+        run: |
+          cd apps/flutter_legacy
+          flutter build apk --debug
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: writer-app-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: apps/flutter_legacy/build/app/outputs/flutter-apk/app-debug.apk

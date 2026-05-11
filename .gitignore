@@ -54,3 +54,23 @@ compile_commands.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Data Safety & Workspace
+writer_app_workspace/
+workspace/
+data/
+backups/
+trash/
+sqlite_cache/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+tmp/
+
+# Secrets & Local Config
+.env*
+secrets.json
+api_keys.json
+local_settings.json
+settings.local.json

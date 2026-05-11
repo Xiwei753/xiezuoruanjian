@@ -1,0 +1,73 @@
+Resolving dependencies...
+Downloading packages...
+  matcher 0.12.18 (0.12.20 available)
+  meta 1.17.0 (1.18.2 available)
+  native_toolchain_c 0.17.6 (0.18.0 available)
+  test_api 0.7.9 (0.7.12 available)
+  vector_math 2.2.0 (2.3.0 available)
+Got dependencies!
+5 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+00:00 +0: loading /app/apps/flutter_legacy/test/infrastructure/diagnostics/diagnostic_bundle_service_test.dart
+00:00 +0: /app/apps/flutter_legacy/test/infrastructure/diagnostics/diagnostic_bundle_service_test.dart: DiagnosticBundleService Tests exports diagnostics successfully and sanitizes settings
+00:00 +1: /app/apps/flutter_legacy/test/infrastructure/diagnostics/diagnostic_bundle_service_test.dart: DiagnosticBundleService Tests exports logs and sanitizes sensitive data in tail
+00:00 +2: /app/apps/flutter_legacy/test/infrastructure/diagnostics/diagnostic_bundle_service_test.dart: DiagnosticBundleService Tests handles missing log gracefully
+00:00 +3: /app/apps/flutter_legacy/test/infrastructure/logging/app_logger_test.dart: AppLogger Tests sanitizeMetadata hides apiKey, token, password, secret and limits length
+00:00 +4: /app/apps/flutter_legacy/test/infrastructure/logging/app_logger_test.dart: AppLogger handles JSON output format properly without crashing
+00:01 +5: /app/apps/flutter_legacy/test/settings/settings_service_test.dart: SettingsService automatically creates default configuration when settings.sync.json does not exist
+00:01 +6: /app/apps/flutter_legacy/test/settings/settings_service_test.dart: SettingsService does not crash the App when JSON is corrupted (SyncableSettings)
+00:01 +7: /app/apps/flutter_legacy/test/settings/settings_service_test.dart: SettingsService does not crash the App when JSON is corrupted (LocalSettings)
+00:01 +8: /app/apps/flutter_legacy/test/settings/settings_service_test.dart: SettingsService saving settings must go through AtomicWriter
+00:01 +9: /app/apps/flutter_legacy/test/settings/settings_controller_test.dart: SettingsController can save after modifying autoSaveIntervalSeconds
+00:01 +10: /app/apps/flutter_legacy/test/settings/settings_controller_test.dart: SettingsController can save deepSeekApiKey to SyncableSettings after modifying
+00:01 +11: /app/apps/flutter_legacy/test/settings/settings_controller_test.dart: SettingsController can save githubToken to SyncableSettings after modifying
+00:01 +12: /app/apps/flutter_legacy/test/settings/settings_controller_test.dart: SettingsController LocalSettings does not enter settings.sync.json
+00:01 +13: /app/apps/flutter_legacy/test/settings/settings_controller_test.dart: SettingsController saveLocal() strictly avoids updating syncable settings
+00:01 +14: /app/apps/flutter_legacy/test/settings/settings_controller_test.dart: SettingsController updateLocalSettingsSilently and saveLocalSilently do not trigger listeners
+00:02 +15: /app/apps/flutter_legacy/test/settings/settings_model_test.dart: SyncableSettings Models default values are correct
+00:02 +16: /app/apps/flutter_legacy/test/settings/settings_model_test.dart: SyncableSettings Models can save and read JSON
+00:02 +17: /app/apps/flutter_legacy/test/settings/settings_model_test.dart: SyncableSettings Models can contain deepSeekApiKey and githubToken
+00:02 +18: /app/apps/flutter_legacy/test/settings/settings_model_test.dart: LocalSettings Models default values are correct
+00:02 +19: /app/apps/flutter_legacy/test/settings/settings_model_test.dart: LocalSettings Models can save and read JSON
+00:02 +20: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:04 +21: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:04 +22: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:07 +23: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:07 +24: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:08 +25: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:08 +26: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:08 +27: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:08 +28: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:08 +29: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:08 +30: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:08 +31: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:10 +32: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:10 +33: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:10 +34: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:10 +35: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:12 +36: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:12 +37: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:13 +38: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:13 +39: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +40: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +41: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +42: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +43: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +44: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +45: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +46: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:14 +47: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:15 +48: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:15 +49: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:15 +50: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:15 +51: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:15 +52: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:15 +53: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:17 +54: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:17 +55: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:17 +56: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:18 +57: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:18 +58: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:18 +59: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:18 +60: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
+00:18 +61: /app/apps/flutter_legacy/test/presentation/dialogs/settings_dialog_test.dart: SettingsDialog Draft Behavior Tests modifying settings without saving does not affect controller and discards changes
