@@ -1,0 +1,23 @@
+name: Core Test & Validate
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake g++ python3
+    - name: Run check_all.sh
+      run: ./tools/check_all.sh
