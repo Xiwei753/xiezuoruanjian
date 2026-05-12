@@ -1,3 +1,4 @@
+
 package com.xiwei.writerapp.data
 
 import android.content.Context
@@ -6,6 +7,7 @@ import com.xiwei.writerapp.model.LocalSettings
 import java.io.File
 
 // TODO: Temporary Bridge. Settings parsing must be moved to core/writer_core/src/facade.rs
+@Deprecated("Temporary Bridge. Settings parsing must be moved to core/writer_core/src/facade.rs")
 class TemporarySettingsBridge(context: Context) {
     private val gson = Gson()
     private val workspaceDir = WorkspaceManager.getWorkspaceDir(context)

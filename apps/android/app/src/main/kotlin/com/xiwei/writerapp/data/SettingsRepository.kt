@@ -11,13 +11,23 @@ import com.xiwei.writerapp.model.LocalSettings
  * the settings format.
  */
 class SettingsRepository(context: Context) {
-    private val bridge = TemporarySettingsBridge(context)
+    private val bridge = NativeCoreBridge(context)
+    private val fallbackBridge = TemporarySettingsBridge(context)
 
     fun getLocalSettings(): LocalSettings {
-        return bridge.getLocalSettings()
+        // Here we just use native first. It falls back to default LocalSettings on failure anyway.
+        val nativeSettings = bridge.getLocalSettings()
+        if (nativeSettings != null) {
+            return nativeSettings
+        }
+        return fallbackBridge.getLocalSettings()
     }
 
     fun saveLocalSettings(settings: LocalSettings): Boolean {
-        return bridge.saveLocalSettings(settings)
+        if (bridge.isLoaded) {
+            val success = bridge.saveLocalSettings(settings)
+            if (success) return true
+        }
+        return fallbackBridge.saveLocalSettings(settings)
     }
 }
