@@ -57,7 +57,14 @@ void main() {
         await tester.pump(const Duration(milliseconds: 500));
 
         // Find the '启用自动保存' switch
-        final switchFinder = find.byType(Switch).first;
+        final switchListTileFinder = find.widgetWithText(
+          SwitchListTile,
+          '莫奈取色 (Material You)',
+        );
+        final switchFinder = find.descendant(
+          of: switchListTileFinder,
+          matching: find.byType(Switch),
+        );
         expect(tester.widget<Switch>(switchFinder).value, true);
 
         // Toggle it to false
@@ -68,7 +75,7 @@ void main() {
         expect(tester.widget<Switch>(switchFinder).value, false);
 
         // The controller should NOT have been updated yet
-        expect(controller.syncableSettings.autoSaveEnabled, true);
+        expect(controller.syncableSettings.monetColorEnabled, true);
       },
     );
 
@@ -89,7 +96,14 @@ void main() {
       await tester.pump();
 
       // Find the switch
-      final switchFinder = find.byType(Switch).first;
+      final switchListTileFinder = find.widgetWithText(
+        SwitchListTile,
+        '莫奈取色 (Material You)',
+      );
+      final switchFinder = find.descendant(
+        of: switchListTileFinder,
+        matching: find.byType(Switch),
+      );
 
       // Toggle it to false
       await tester.tap(switchFinder);
@@ -104,7 +118,7 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
 
       // The controller should now be updated
-      expect(controller.syncableSettings.autoSaveEnabled, false);
+      expect(controller.syncableSettings.monetColorEnabled, false);
     });
   });
 }
