@@ -1,5 +1,5 @@
-use crate::trash;
 use crate::error::Error;
+use crate::trash;
 use std::path::Path;
 
 #[test]
