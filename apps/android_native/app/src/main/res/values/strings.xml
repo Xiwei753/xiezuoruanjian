@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">写作</string>
+    <string name="title_projects">作品</string>
+    <string name="action_new_project">新建作品</string>
+    <string name="action_new_chapter">新建章节</string>
+    <string name="action_settings">设置</string>
+    <string name="action_save">保存</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_create">创建</string>
+
+    <string name="empty_projects">暂无作品，点击“新建作品”开始</string>
+    <string name="empty_chapters">暂无章节，点击“新建章节”开始</string>
+
+    <string name="hint_project_title">作品名称</string>
+    <string name="hint_chapter_title">章节名称</string>
+    <string name="hint_editor_content">在这里开始写作...</string>
+
+    <string name="status_saved">已保存</string>
+    <string name="status_unsaved">未保存</string>
+    <string name="status_saving">保存中...</string>
+    <string name="status_save_failed">保存失败</string>
+
+    <string name="dialog_new_project_title">新建作品</string>
+    <string name="dialog_new_chapter_title">新建章节</string>
+
+    <string name="dialog_save_failed_title">保存失败</string>
+    <string name="dialog_save_failed_message">章节保存失败。是否不保存并退出？</string>
+    <string name="action_exit">退出</string>
+    <string name="action_retry">重试</string>
+
+    <string name="pref_category_editor">编辑器设置</string>
+    <string name="pref_font_size">字体大小</string>
+    <string name="pref_line_spacing">行距</string>
+
+    <string name="pref_category_save">保存设置</string>
+    <string name="pref_auto_save">自动保存</string>
+    <string name="pref_auto_save_delay">自动保存延迟 (毫秒)</string>
+
+    <string name="pref_category_theme">显示设置</string>
+    <string name="pref_theme_mode">主题模式</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色模式</string>
+    <string name="theme_dark">深色模式</string>
+
+    <string name="pref_category_about">关于</string>
+    <string name="pref_workspace_path">工作区路径</string>
+    <string name="pref_version_info">版本信息</string>
+    <string name="pref_version_desc">Android Native 原型</string>
+
+</resources>

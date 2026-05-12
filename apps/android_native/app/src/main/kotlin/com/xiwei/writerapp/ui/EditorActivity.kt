@@ -1,23 +1,25 @@
-package com.xiwei.writerapp
+package com.xiwei.writerapp.ui
 
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
-import android.widget.Button
 import android.widget.EditText
-import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.appbar.MaterialToolbar
+import com.xiwei.writerapp.R
+import com.xiwei.writerapp.data.SettingsRepository
+import com.xiwei.writerapp.data.WorkspaceRepository
 
 class EditorActivity : AppCompatActivity() {
+    private lateinit var toolbar: MaterialToolbar
     private lateinit var editorEditText: EditText
-    private lateinit var btnSave: Button
-    private lateinit var tvSaveStatus: TextView
+
     private lateinit var workspaceRepository: WorkspaceRepository
+    private lateinit var settingsRepository: SettingsRepository
 
     private var projectId: String? = null
     private var volumeId: String? = null
@@ -25,20 +27,38 @@ class EditorActivity : AppCompatActivity() {
 
     private var isDirty = false
     private val handler = Handler(Looper.getMainLooper())
+    private var autoSaveEnabled = true
+    private var autoSaveDelayMs = 1500L
+
     private val autoSaveRunnable = Runnable { saveContent() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_editor)
 
+        toolbar = findViewById(R.id.toolbar)
+        setSupportActionBar(toolbar)
+        toolbar.setNavigationOnClickListener {
+            onBackPressedDispatcher.onBackPressed()
+        }
+
         editorEditText = findViewById(R.id.editorEditText)
-        btnSave = findViewById(R.id.btnSave)
-        tvSaveStatus = findViewById(R.id.tvSaveStatus)
         workspaceRepository = WorkspaceRepository(this)
+        settingsRepository = SettingsRepository(this)
+
+        // Load Settings
+        val settings = settingsRepository.getLocalSettings()
+        editorEditText.textSize = settings.editorFontSize
+        editorEditText.setLineSpacing(0f, settings.editorLineSpacingMultiplier)
+        autoSaveEnabled = settings.autoSaveEnabled
+        autoSaveDelayMs = settings.autoSaveDelayMs
 
         projectId = intent.getStringExtra("PROJECT_ID")
         volumeId = intent.getStringExtra("VOLUME_ID")
         chapterId = intent.getStringExtra("CHAPTER_ID")
+        val chapterTitle = intent.getStringExtra("CHAPTER_TITLE")
+
+        supportActionBar?.title = chapterTitle ?: "Editor"
 
         if (projectId != null && volumeId != null && chapterId != null) {
             val content = workspaceRepository.getChapterContent(projectId!!, volumeId!!, chapterId!!)
@@ -46,11 +66,6 @@ class EditorActivity : AppCompatActivity() {
         } else {
             editorEditText.setText("Error: Missing chapter identifiers.")
             editorEditText.isEnabled = false
-            btnSave.isEnabled = false
-        }
-
-        btnSave.setOnClickListener {
-            saveContent()
         }
 
         editorEditText.addTextChangedListener(object : TextWatcher {
@@ -59,9 +74,11 @@ class EditorActivity : AppCompatActivity() {
                 if (projectId == null || volumeId == null || chapterId == null) return
                 if (editorEditText.hasFocus()) {
                     isDirty = true
-                    tvSaveStatus.text = "Unsaved"
-                    handler.removeCallbacks(autoSaveRunnable)
-                    handler.postDelayed(autoSaveRunnable, 1500)
+                    toolbar.subtitle = getString(R.string.status_unsaved)
+                    if (autoSaveEnabled) {
+                        handler.removeCallbacks(autoSaveRunnable)
+                        handler.postDelayed(autoSaveRunnable, autoSaveDelayMs)
+                    }
                 }
             }
             override fun afterTextChanged(s: Editable?) {}
@@ -75,10 +92,10 @@ class EditorActivity : AppCompatActivity() {
                         finish()
                     } else {
                         AlertDialog.Builder(this@EditorActivity)
-                            .setTitle("Save Failed")
-                            .setMessage("Failed to save the chapter. Do you want to exit without saving?")
-                            .setPositiveButton("Exit") { _, _ -> finish() }
-                            .setNegativeButton("Retry") { _, _ -> saveContent() }
+                            .setTitle(R.string.dialog_save_failed_title)
+                            .setMessage(R.string.dialog_save_failed_message)
+                            .setPositiveButton(R.string.action_exit) { _, _ -> finish() }
+                            .setNegativeButton(R.string.action_retry) { _, _ -> saveContent() }
                             .show()
                     }
                 } else {
@@ -107,15 +124,15 @@ class EditorActivity : AppCompatActivity() {
         val vid = volumeId
         val cid = chapterId
         if (pid != null && vid != null && cid != null) {
-            tvSaveStatus.text = "Saving..."
+            toolbar.subtitle = getString(R.string.status_saving)
             val content = editorEditText.text.toString()
             val success = workspaceRepository.saveChapterContent(pid, vid, cid, content)
             if (success) {
                 isDirty = false
-                tvSaveStatus.text = "Saved"
+                toolbar.subtitle = getString(R.string.status_saved)
                 return true
             } else {
-                tvSaveStatus.text = "Save Failed"
+                toolbar.subtitle = getString(R.string.status_save_failed)
                 return false
             }
         }
