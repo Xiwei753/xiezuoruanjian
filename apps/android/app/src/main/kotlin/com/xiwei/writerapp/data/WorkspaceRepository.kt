@@ -20,41 +20,70 @@ class WorkspaceRepository(context: Context) {
     }
 
     fun getProjects(): List<Project> {
-        val projects = bridge.getProjects()
-        return if (projects.isNotEmpty()) projects else fallbackBridge.getProjects()
+        return when (val result = bridge.getProjects()) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> {
+                // If it's a native error, we return empty or try fallback depending on strictness
+                // Let's use fallback only when explicitly not loaded or major error
+                fallbackBridge.getProjects()
+            }
+            NativeResult.NotLoaded -> fallbackBridge.getProjects()
+        }
     }
 
     fun getVolumes(projectId: String): List<Volume> {
-        val volumes = bridge.getVolumes(projectId)
-        return if (volumes.isNotEmpty()) volumes else fallbackBridge.getVolumes(projectId)
+        return when (val result = bridge.getVolumes(projectId)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.getVolumes(projectId)
+            NativeResult.NotLoaded -> fallbackBridge.getVolumes(projectId)
+        }
     }
 
     fun getChapters(projectId: String, volumeId: String): List<ChapterMeta> {
-        val chapters = bridge.getChapters(projectId, volumeId)
-        return if (chapters.isNotEmpty()) chapters else fallbackBridge.getChapters(projectId, volumeId)
+        return when (val result = bridge.getChapters(projectId, volumeId)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.getChapters(projectId, volumeId)
+            NativeResult.NotLoaded -> fallbackBridge.getChapters(projectId, volumeId)
+        }
     }
 
     fun getChapterContent(projectId: String, volumeId: String, chapterId: String): String {
-        // Try native first. If native fails (e.g. no library), fallback is used in bridge, but let's just delegate.
-        // For read, native bridge returns "" on failure. If "" is returned, fallback might also return "".
-        // A better approach would be checking if JNI is loaded, but for now we try native, if empty try fallback.
-        val nativeContent = bridge.getChapterContent(projectId, volumeId, chapterId)
-        return if (nativeContent.isNotEmpty()) nativeContent else fallbackBridge.getChapterContent(projectId, volumeId, chapterId)
+        return when (val result = bridge.getChapterContent(projectId, volumeId, chapterId)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.getChapterContent(projectId, volumeId, chapterId)
+            NativeResult.NotLoaded -> fallbackBridge.getChapterContent(projectId, volumeId, chapterId)
+        }
     }
 
     fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): Boolean {
-        return bridge.saveChapterContent(projectId, volumeId, chapterId, content) || fallbackBridge.saveChapterContent(projectId, volumeId, chapterId, content)
+        return when (val result = bridge.saveChapterContent(projectId, volumeId, chapterId, content)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.saveChapterContent(projectId, volumeId, chapterId, content)
+            NativeResult.NotLoaded -> fallbackBridge.saveChapterContent(projectId, volumeId, chapterId, content)
+        }
     }
 
     fun createProject(title: String): Project {
-        return bridge.createProject(title) ?: fallbackBridge.createProject(title)
+        return when (val result = bridge.createProject(title)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.createProject(title)
+            NativeResult.NotLoaded -> fallbackBridge.createProject(title)
+        }
     }
 
     fun createVolume(projectId: String, title: String): Volume {
-        return bridge.createVolume(projectId, title) ?: fallbackBridge.createVolume(projectId, title)
+        return when (val result = bridge.createVolume(projectId, title)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.createVolume(projectId, title)
+            NativeResult.NotLoaded -> fallbackBridge.createVolume(projectId, title)
+        }
     }
 
     fun createChapter(projectId: String, volumeId: String, title: String): ChapterMeta {
-        return bridge.createChapter(projectId, volumeId, title) ?: fallbackBridge.createChapter(projectId, volumeId, title)
+        return when (val result = bridge.createChapter(projectId, volumeId, title)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.createChapter(projectId, volumeId, title)
+            NativeResult.NotLoaded -> fallbackBridge.createChapter(projectId, volumeId, title)
+        }
     }
 }

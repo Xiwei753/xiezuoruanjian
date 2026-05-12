@@ -1,10 +1,9 @@
-use jni::JNIEnv;
 use jni::objects::{JClass, JString};
-use jni::sys::{jboolean, jstring, jbyteArray};
-use std::path::PathBuf;
-use writer_core::facade::WriterCore;
+use jni::sys::{jboolean, jstring};
+use jni::JNIEnv;
 use serde::Serialize;
 use serde_json::json;
+use writer_core::facade::WriterCore;
 
 // Helper to convert JString to Rust String
 fn jstring_to_string(env: &mut JNIEnv, jstr: &JString) -> Result<String, String> {
@@ -17,25 +16,26 @@ fn jstring_to_string(env: &mut JNIEnv, jstr: &JString) -> Result<String, String>
 }
 
 // Helper to return JSON or error JSON
-fn result_to_jstring<T: Serialize>(env: &mut JNIEnv, result: Result<T, writer_core::Error>) -> jstring {
+fn result_to_jstring<T: Serialize>(
+    env: &mut JNIEnv,
+    result: Result<T, writer_core::Error>,
+) -> jstring {
     let json_str = match result {
-        Ok(data) => {
-            json!({
-                "success": true,
-                "data": data
-            }).to_string()
-        },
-        Err(e) => {
-            json!({
-                "success": false,
-                "error": e.to_string()
-            }).to_string()
-        }
+        Ok(data) => json!({
+            "success": true,
+            "data": data
+        })
+        .to_string(),
+        Err(e) => json!({
+            "success": false,
+            "error": e.to_string()
+        })
+        .to_string(),
     };
 
     match env.new_string(json_str) {
         Ok(s) => s.into_raw(),
-        Err(_) => std::ptr::null_mut()
+        Err(_) => std::ptr::null_mut(),
     }
 }
 
@@ -72,7 +72,13 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_validateWo
 
     let core = WriterCore::new(&workspace_path);
     match core.validate_workspace() {
-        Ok(valid) => if valid { 1 } else { 0 },
+        Ok(valid) => {
+            if valid {
+                1
+            } else {
+                0
+            }
+        }
         Err(_) => 0,
     }
 }
@@ -215,7 +221,10 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createChap
     };
 
     let core = WriterCore::new(&workspace_path);
-    result_to_jstring(&mut env, core.create_chapter(&project_id, &volume_id, &title))
+    result_to_jstring(
+        &mut env,
+        core.create_chapter(&project_id, &volume_id, &title),
+    )
 }
 
 // Read Chapter Content
@@ -246,7 +255,10 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_readChapte
     };
 
     let core = WriterCore::new(&workspace_path);
-    result_to_jstring(&mut env, core.read_chapter(&project_id, &volume_id, &chapter_id))
+    result_to_jstring(
+        &mut env,
+        core.read_chapter(&project_id, &volume_id, &chapter_id),
+    )
 }
 
 // Write Chapter Content
