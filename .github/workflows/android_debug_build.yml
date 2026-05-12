@@ -23,13 +23,29 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android, aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+
       - name: Make gradlew executable
         run: chmod +x apps/android/gradlew
 
+      - name: Make build script executable
+        run: chmod +x tools/build_android.sh
+
       - name: Build Android Native Debug APK
         run: |
-          cd apps/android
-          ./gradlew assembleDebug
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+          ./tools/build_android.sh
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

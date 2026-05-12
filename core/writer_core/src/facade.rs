@@ -188,17 +188,25 @@ mod tests {
 
         let mut local_settings = core.load_local_settings().unwrap();
         local_settings.window_width = 1000.0;
+        local_settings.theme_mode = Some("dark".to_string());
+        local_settings.auto_save_enabled = true;
+        local_settings.editor_font_size = 14.0;
         core.save_local_settings(&local_settings).unwrap();
 
         let loaded_local = core.load_local_settings().unwrap();
         assert_eq!(loaded_local.window_width, 1000.0);
+        assert_eq!(loaded_local.theme_mode.unwrap(), "dark");
+        assert!(loaded_local.auto_save_enabled);
+        assert_eq!(loaded_local.editor_font_size, 14.0);
 
         let mut syncable_settings = core.load_syncable_settings().unwrap();
         syncable_settings.font_size = 18.0;
+        syncable_settings.theme_mode = "system".to_string();
         core.save_syncable_settings(&syncable_settings).unwrap();
 
         let loaded_syncable = core.load_syncable_settings().unwrap();
         assert_eq!(loaded_syncable.font_size, 18.0);
+        assert_eq!(loaded_syncable.theme_mode, "system");
     }
 
     #[test]

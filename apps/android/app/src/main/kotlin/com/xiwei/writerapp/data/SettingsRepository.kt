@@ -17,7 +17,7 @@ class SettingsRepository(context: Context) {
     fun getLocalSettings(): LocalSettings {
         return when (val result = bridge.getLocalSettings()) {
             is NativeResult.Success -> result.data ?: LocalSettings()
-            is NativeResult.Error -> fallbackBridge.getLocalSettings()
+            is NativeResult.Error -> throw RuntimeException("Failed to load local settings: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.getLocalSettings()
         }
     }
@@ -25,7 +25,7 @@ class SettingsRepository(context: Context) {
     fun saveLocalSettings(settings: LocalSettings): Boolean {
         return when (val result = bridge.saveLocalSettings(settings)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> fallbackBridge.saveLocalSettings(settings)
+            is NativeResult.Error -> throw RuntimeException("Failed to save local settings: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.saveLocalSettings(settings)
         }
     }
