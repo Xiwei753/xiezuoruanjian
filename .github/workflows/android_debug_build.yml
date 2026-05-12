@@ -44,7 +44,7 @@ jobs:
 
       - name: Build Android Native Debug APK
         run: |
-          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+          export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
           ./tools/build_android.sh
 
       - name: Upload Artifact
