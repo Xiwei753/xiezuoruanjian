@@ -112,7 +112,7 @@ class WorkspaceRepository(private val context: Context) {
         }
     }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String) {
+    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): Boolean {
         val chapterDir = File(workspaceDir, "projects/$projectId/volumes/$volumeId/chapters/$chapterId")
         if (!chapterDir.exists()) {
             chapterDir.mkdirs()
@@ -122,7 +122,8 @@ class WorkspaceRepository(private val context: Context) {
 
         try {
             tmpFile.writeText(content)
-            tmpFile.renameTo(mdFile)
+            val success = tmpFile.renameTo(mdFile)
+            if (!success) return false
 
             // Update word count in meta
             val metaFile = File(chapterDir, "chapter.meta.json")
@@ -134,11 +135,14 @@ class WorkspaceRepository(private val context: Context) {
                 )
                 val metaTmpFile = File(chapterDir, "chapter.meta.json.tmp")
                 metaTmpFile.writeText(gson.toJson(updatedMeta))
-                metaTmpFile.renameTo(metaFile)
+                val metaSuccess = metaTmpFile.renameTo(metaFile)
+                if (!metaSuccess) return false
             }
+            return true
 
         } catch (e: Exception) {
             e.printStackTrace()
+            return false
         }
     }
 

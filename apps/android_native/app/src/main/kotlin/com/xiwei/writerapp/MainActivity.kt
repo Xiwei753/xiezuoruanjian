@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 class MainActivity : AppCompatActivity() {
     private lateinit var projectListView: ListView
     private lateinit var btnNewProject: Button
+    private lateinit var tvEmptyProjects: android.widget.TextView
     private lateinit var workspaceRepository: WorkspaceRepository
     private var projects = listOf<Project>()
 
@@ -21,6 +22,9 @@ class MainActivity : AppCompatActivity() {
 
         projectListView = findViewById(R.id.projectListView)
         btnNewProject = findViewById(R.id.btnNewProject)
+        tvEmptyProjects = findViewById(R.id.tvEmptyProjects)
+        projectListView.emptyView = tvEmptyProjects
+
         workspaceRepository = WorkspaceRepository(this)
 
         loadProjects()

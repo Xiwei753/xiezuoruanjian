@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 class ChapterListActivity : AppCompatActivity() {
     private lateinit var chapterListView: ListView
     private lateinit var btnNewChapter: Button
+    private lateinit var tvEmptyChapters: android.widget.TextView
     private lateinit var workspaceRepository: WorkspaceRepository
     private var projectId: String? = null
     private var listItems = mutableListOf<ChapterListItem>()
@@ -25,6 +26,9 @@ class ChapterListActivity : AppCompatActivity() {
 
         chapterListView = findViewById(R.id.chapterListView)
         btnNewChapter = findViewById(R.id.btnNewChapter)
+        tvEmptyChapters = findViewById(R.id.tvEmptyChapters)
+        chapterListView.emptyView = tvEmptyChapters
+
         workspaceRepository = WorkspaceRepository(this)
 
         projectId = intent.getStringExtra("PROJECT_ID")
