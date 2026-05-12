@@ -41,7 +41,7 @@ DerivedData/
 *.ida
 
 # Linux/C++ build
-apps/linux_native/build/
+apps/linux/build/
 compile_commands.json
 
 # IDEs
@@ -58,7 +58,8 @@ Thumbs.db
 # Data Safety & Workspace
 writer_app_workspace/
 workspace/
-data/
+# data/   # DO NOT IGNORE apps/android/app/src/main/kotlin/com/xiwei/writerapp/data
+/data/
 backups/
 trash/
 sqlite_cache/

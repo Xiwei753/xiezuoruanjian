@@ -1,12 +1,12 @@
 # Client Feature Matrix
 
-| Feature | Flutter Legacy | Android Native | Linux Native |
-| :--- | :--- | :--- | :--- |
-| UI Framework | Flutter | Kotlin / Views | Qt / C++ |
-| Editor Component | Custom Flutter | Native EditText | QPlainTextEdit |
-| Rust Core | No (Dart logic) | Yes (Bindings) | Yes (Bindings) |
-| Workspace Validation| Yes (Dart) | Yes (via Core) | Yes (via Core) |
-| Sync Implementation | Prototype | TBD | TBD |
-| Status | Legacy / Prototype | Skeleton (Not Usable) | Skeleton (Not Usable) |
+| Feature | Android Native | Linux Native |
+| :--- | :--- | :--- |
+| UI Framework | Kotlin / Views | Qt / C++ |
+| Editor Component | Native EditText | QPlainTextEdit |
+| Rust Core | Yes (Facade/Bindings) | Yes (Bindings) |
+| Workspace Validation| Yes (via Core) | Yes (via Core) |
+| Sync Implementation | TBD (via Core) | TBD (via Core) |
+| Status | MVP / In Progress | Skeleton |
 
-*Note: Android Native and Linux Native are currently just structural skeletons and are not usable clients.*
+*Note: The Flutter Legacy prototype has been removed entirely. Android Native is the active client MVP. Linux Native is currently a structural skeleton.*
