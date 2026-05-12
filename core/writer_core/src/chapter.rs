@@ -15,7 +15,7 @@ pub struct Chapter {
     pub hash: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChapterContent {
     pub meta: Chapter,
     pub content: String,
