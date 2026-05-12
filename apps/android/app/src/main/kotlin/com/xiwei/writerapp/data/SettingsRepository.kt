@@ -15,19 +15,18 @@ class SettingsRepository(context: Context) {
     private val fallbackBridge = TemporarySettingsBridge(context)
 
     fun getLocalSettings(): LocalSettings {
-        // Here we just use native first. It falls back to default LocalSettings on failure anyway.
-        val nativeSettings = bridge.getLocalSettings()
-        if (nativeSettings != null) {
-            return nativeSettings
+        return when (val result = bridge.getLocalSettings()) {
+            is NativeResult.Success -> result.data ?: LocalSettings()
+            is NativeResult.Error -> fallbackBridge.getLocalSettings()
+            NativeResult.NotLoaded -> fallbackBridge.getLocalSettings()
         }
-        return fallbackBridge.getLocalSettings()
     }
 
     fun saveLocalSettings(settings: LocalSettings): Boolean {
-        if (bridge.isLoaded) {
-            val success = bridge.saveLocalSettings(settings)
-            if (success) return true
+        return when (val result = bridge.saveLocalSettings(settings)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> fallbackBridge.saveLocalSettings(settings)
+            NativeResult.NotLoaded -> fallbackBridge.saveLocalSettings(settings)
         }
-        return fallbackBridge.saveLocalSettings(settings)
     }
 }

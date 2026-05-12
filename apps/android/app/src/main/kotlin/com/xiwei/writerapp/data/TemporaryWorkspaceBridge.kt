@@ -1,4 +1,3 @@
-
 package com.xiwei.writerapp.data
 
 import com.xiwei.writerapp.model.*
@@ -10,9 +9,13 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-// TODO: Temporary Bridge. This class MUST be replaced with JNI calls to core/writer_core/src/facade.rs.
-// Android is strictly forbidden from parsing or managing the workspace format directly.
-@Deprecated("Temporary Bridge. This class MUST be replaced with JNI calls to core/writer_core/src/facade.rs.")
+/**
+ * Temporary Bridge.
+ * This class MUST be replaced with JNI calls to core/writer_core/src/facade.rs.
+ * Android is strictly forbidden from parsing or managing the workspace format directly.
+ * It is currently only retained as a fallback mechanism if the JNI library fails to load.
+ */
+@Deprecated("Temporary Bridge. Only used as a fallback if Native JNI fails. Do not use for new features.")
 class TemporaryWorkspaceBridge(private val context: Context) {
     private val gson = Gson()
     private val workspaceDir = WorkspaceManager.getWorkspaceDir(context)

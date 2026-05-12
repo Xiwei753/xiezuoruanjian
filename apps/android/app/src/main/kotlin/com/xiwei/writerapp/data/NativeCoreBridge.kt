@@ -6,6 +6,13 @@ import com.xiwei.writerapp.model.*
 import java.io.File
 import android.content.Context
 
+// Represents the result of a Native JNI call.
+sealed class NativeResult<out T> {
+    data class Success<out T>(val data: T) : NativeResult<T>()
+    data class Error(val message: String) : NativeResult<Nothing>()
+    object NotLoaded : NativeResult<Nothing>()
+}
+
 class NativeCoreBridge(context: Context) {
     private val workspaceDir = WorkspaceManager.getWorkspaceDir(context).absolutePath
     private val gson = Gson()
@@ -79,165 +86,207 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun getProjects(): List<Project> {
-        if (!isLoaded) return emptyList()
+    fun getProjects(): NativeResult<List<Project>> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = listProjects(workspaceDir)
-            if (resultJson.isEmpty()) return emptyList()
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<List<Project>>>() {}.type
             val response: RustResponse<List<Project>> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data ?: emptyList() else emptyList()
+            return if (response.success) {
+                NativeResult.Success(response.data ?: emptyList())
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return emptyList()
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return emptyList()
+            return NativeResult.NotLoaded
         }
     }
 
-    fun createProject(title: String): Project? {
-        if (!isLoaded) return null
+    fun createProject(title: String): NativeResult<Project> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = createProject(workspaceDir, title)
-            if (resultJson.isEmpty()) return null
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<Project>>() {}.type
             val response: RustResponse<Project> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data else null
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return null
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return null
+            return NativeResult.NotLoaded
         }
     }
 
-    fun getVolumes(projectId: String): List<Volume> {
-        if (!isLoaded) return emptyList()
+    fun getVolumes(projectId: String): NativeResult<List<Volume>> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = listVolumes(workspaceDir, projectId)
-            if (resultJson.isEmpty()) return emptyList()
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<List<Volume>>>() {}.type
             val response: RustResponse<List<Volume>> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data ?: emptyList() else emptyList()
+            return if (response.success) {
+                NativeResult.Success(response.data ?: emptyList())
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return emptyList()
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return emptyList()
+            return NativeResult.NotLoaded
         }
     }
 
-    fun createVolume(projectId: String, title: String): Volume? {
-        if (!isLoaded) return null
+    fun createVolume(projectId: String, title: String): NativeResult<Volume> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = createVolume(workspaceDir, projectId, title)
-            if (resultJson.isEmpty()) return null
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<Volume>>() {}.type
             val response: RustResponse<Volume> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data else null
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return null
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return null
+            return NativeResult.NotLoaded
         }
     }
 
-    fun getChapters(projectId: String, volumeId: String): List<ChapterMeta> {
-        if (!isLoaded) return emptyList()
+    fun getChapters(projectId: String, volumeId: String): NativeResult<List<ChapterMeta>> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = listChapters(workspaceDir, projectId, volumeId)
-            if (resultJson.isEmpty()) return emptyList()
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<List<ChapterMeta>>>() {}.type
             val response: RustResponse<List<ChapterMeta>> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data ?: emptyList() else emptyList()
+            return if (response.success) {
+                NativeResult.Success(response.data ?: emptyList())
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return emptyList()
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return emptyList()
+            return NativeResult.NotLoaded
         }
     }
 
-    fun createChapter(projectId: String, volumeId: String, title: String): ChapterMeta? {
-        if (!isLoaded) return null
+    fun createChapter(projectId: String, volumeId: String, title: String): NativeResult<ChapterMeta> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = createChapter(workspaceDir, projectId, volumeId, title)
-            if (resultJson.isEmpty()) return null
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<ChapterMeta>>() {}.type
             val response: RustResponse<ChapterMeta> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data else null
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return null
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return null
+            return NativeResult.NotLoaded
         }
     }
 
-    fun getChapterContent(projectId: String, volumeId: String, chapterId: String): String {
-        if (!isLoaded) return ""
+    fun getChapterContent(projectId: String, volumeId: String, chapterId: String): NativeResult<String> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = readChapter(workspaceDir, projectId, volumeId, chapterId)
-            if (resultJson.isEmpty()) return ""
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<RustChapterContent>>() {}.type
             val response: RustResponse<RustChapterContent> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data?.content ?: "" else ""
+            return if (response.success) {
+                NativeResult.Success(response.data?.content ?: "")
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return ""
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return ""
+            return NativeResult.NotLoaded
         }
     }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): Boolean {
-        if (!isLoaded) return false
+    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
-            writeChapter(workspaceDir, projectId, volumeId, chapterId, content)
+            val success = writeChapter(workspaceDir, projectId, volumeId, chapterId, content)
+            if (success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error("Native writeChapter returned false")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            false
+            NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            false
+            NativeResult.NotLoaded
         }
     }
 
-    fun getLocalSettings(): LocalSettings? {
-        if (!isLoaded) return null
+    fun getLocalSettings(): NativeResult<LocalSettings?> {
+        if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = loadLocalSettings(workspaceDir)
-            if (resultJson.isEmpty()) return null
+            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
             val type = object : TypeToken<RustResponse<LocalSettings>>() {}.type
             val response: RustResponse<LocalSettings> = gson.fromJson(resultJson, type)
-            return if (response.success) response.data else null
+            return if (response.success) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            return null
+            return NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            return null
+            return NativeResult.NotLoaded
         }
     }
 
-    fun saveLocalSettings(settings: LocalSettings): Boolean {
-        if (!isLoaded) return false
+    fun saveLocalSettings(settings: LocalSettings): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
-            saveLocalSettings(workspaceDir, gson.toJson(settings))
+            val success = saveLocalSettings(workspaceDir, gson.toJson(settings))
+            if (success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error("Native saveLocalSettings returned false")
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            false
+            NativeResult.Error(e.message ?: "Exception occurred")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            false
+            NativeResult.NotLoaded
         }
     }
 }
