@@ -14,6 +14,8 @@ pub enum Error {
     VolumeNotFound,
     #[error("Chapter not found")]
     ChapterNotFound,
+    #[error("Not implemented")]
+    NotImplemented,
     #[error("Other error: {0}")]
     Other(String),
 }

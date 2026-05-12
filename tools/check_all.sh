@@ -15,6 +15,6 @@ cargo test
 cd ../..
 
 echo "=== Checking Linux Native Skeleton ==="
-./tools/build_linux_native.sh
+./tools/build_linux.sh
 
 echo "=== Done ==="
