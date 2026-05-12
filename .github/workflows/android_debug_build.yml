@@ -1,4 +1,4 @@
-name: Android Debug Build
+name: Android Native Debug Build
 
 on:
   push:
@@ -23,37 +23,16 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
+      - name: Make gradlew executable
+        run: chmod +x apps/android_native/gradlew
 
-      - name: Flutter version
-        run: flutter --version
-
-      - name: Install dependencies
+      - name: Build Android Native Debug APK
         run: |
-          cd apps/flutter_legacy
-          flutter pub get
-
-      - name: Analyze code
-        run: |
-          cd apps/flutter_legacy
-          flutter analyze
-
-      - name: Run tests
-        run: |
-          cd apps/flutter_legacy
-          flutter test
-
-      - name: Build Android Debug APK
-        run: |
-          cd apps/flutter_legacy
-          flutter build apk --debug
+          cd apps/android_native
+          ./gradlew assembleDebug
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: writer-app-debug-apk
-          path: apps/flutter_legacy/build/app/outputs/flutter-apk/app-debug.apk
+          name: android-native-debug-apk
+          path: apps/android_native/app/build/outputs/apk/debug/app-debug.apk
