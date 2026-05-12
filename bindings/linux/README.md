@@ -1,5 +1,9 @@
 # Linux Bindings (FFI)
 
-This directory is reserved for the C headers and FFI definitions that expose `writer_core`'s Facade to the `apps/linux` Qt client.
+This directory contains the C-compatible FFI bindings to connect `apps/linux` with `core/writer_core`.
 
-*TODO: Generate C headers using `cbindgen` for `facade.rs`.*
+## Architecture Note
+The Linux client will strictly use these FFI bindings to interact with `core/writer_core/src/facade.rs`.
+The UI layer is forbidden from accessing the workspace format directly.
+
+**Important**: The FFI layer must strictly expose the high-level `facade.rs` API. It must NOT leak the workspace file structure, file paths, or serialization details to the Linux C++ layer. The Linux app only provides the workspace root path and business IDs.

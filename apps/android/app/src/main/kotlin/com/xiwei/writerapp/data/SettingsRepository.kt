@@ -1,47 +1,23 @@
 package com.xiwei.writerapp.data
 
 import android.content.Context
-import com.google.gson.Gson
 import com.xiwei.writerapp.model.LocalSettings
-import java.io.File
 
-// TODO: Temporary Bridge. Settings parsing must be moved to core/writer_core/src/facade.rs
+/**
+ * A thin repository layer for the UI to interact with settings.
+ *
+ * It delegates all settings logic to the underlying bridge/facade.
+ * Under no circumstances should this class construct file paths or understand
+ * the settings format.
+ */
 class SettingsRepository(context: Context) {
-    private val gson = Gson()
-    private val workspaceDir = WorkspaceManager.getWorkspaceDir(context)
-    private val settingsDir = File(workspaceDir, "app-meta/settings")
-    private val settingsFile = File(settingsDir, "settings.local.json")
-
-    init {
-        if (!settingsDir.exists()) {
-            settingsDir.mkdirs()
-        }
-    }
+    private val bridge = TemporarySettingsBridge(context)
 
     fun getLocalSettings(): LocalSettings {
-        if (!settingsFile.exists()) {
-            return LocalSettings()
-        }
-        return try {
-            val content = settingsFile.readText()
-            gson.fromJson(content, LocalSettings::class.java) ?: LocalSettings()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            LocalSettings()
-        }
+        return bridge.getLocalSettings()
     }
 
     fun saveLocalSettings(settings: LocalSettings): Boolean {
-        return try {
-            if (!settingsDir.exists()) {
-                settingsDir.mkdirs()
-            }
-            val tmpFile = File(settingsDir, "settings.local.json.tmp")
-            tmpFile.writeText(gson.toJson(settings))
-            tmpFile.renameTo(settingsFile)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
+        return bridge.saveLocalSettings(settings)
     }
 }
