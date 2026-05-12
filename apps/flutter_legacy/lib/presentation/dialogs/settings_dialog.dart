@@ -129,7 +129,43 @@ class _SettingsDialogState extends State<SettingsDialog> {
     return ListView(
       children: [
         const Text(
+          '主题与外观',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<String>(
+          initialValue: _draftSyncableSettings.themeMode,
+          decoration: const InputDecoration(
+            labelText: '主题模式',
+            border: OutlineInputBorder(),
+          ),
+          items: const [
+            DropdownMenuItem(value: 'system', child: Text('跟随系统')),
+            DropdownMenuItem(value: 'light', child: Text('浅色')),
+            DropdownMenuItem(value: 'dark', child: Text('深色')),
+          ],
+          onChanged: (val) {
+            if (val != null) {
+              _updateDraftSyncable(
+                _draftSyncableSettings.copyWith(themeMode: val),
+              );
+            }
+          },
+        ),
+        SwitchListTile(
+          title: const Text('莫奈取色 (Material You)'),
+          subtitle: const Text('从系统壁纸提取主题色'),
+          value: _draftSyncableSettings.monetColorEnabled,
+          onChanged: (val) {
+            _updateDraftSyncable(
+              _draftSyncableSettings.copyWith(monetColorEnabled: val),
+            );
+          },
+        ),
+        const SizedBox(height: 32),
+        const Text(
           '基本设置',
+
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 16),

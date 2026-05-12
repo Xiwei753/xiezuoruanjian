@@ -156,6 +156,7 @@ class SyncableSettings {
   final double editorParagraphSpacing;
   final double editorContentWidth;
   final String themeMode;
+  final bool monetColorEnabled;
   final bool typewriterModeEnabled;
   final bool focusModeEnabled;
   final bool inputAnimationEnabled;
@@ -198,6 +199,7 @@ class SyncableSettings {
     this.editorParagraphSpacing = 16.0,
     this.editorContentWidth = 800.0,
     this.themeMode = 'system',
+    this.monetColorEnabled = true,
     this.typewriterModeEnabled = false,
     this.focusModeEnabled = false,
     this.inputAnimationEnabled = false,
@@ -235,6 +237,7 @@ class SyncableSettings {
     double? editorParagraphSpacing,
     double? editorContentWidth,
     String? themeMode,
+    bool? monetColorEnabled,
     bool? typewriterModeEnabled,
     bool? focusModeEnabled,
     bool? inputAnimationEnabled,
@@ -273,6 +276,7 @@ class SyncableSettings {
           editorParagraphSpacing ?? this.editorParagraphSpacing,
       editorContentWidth: editorContentWidth ?? this.editorContentWidth,
       themeMode: themeMode ?? this.themeMode,
+      monetColorEnabled: monetColorEnabled ?? this.monetColorEnabled,
       typewriterModeEnabled:
           typewriterModeEnabled ?? this.typewriterModeEnabled,
       focusModeEnabled: focusModeEnabled ?? this.focusModeEnabled,
@@ -322,6 +326,7 @@ class SyncableSettings {
       'editorParagraphSpacing': editorParagraphSpacing,
       'editorContentWidth': editorContentWidth,
       'themeMode': themeMode,
+      'monetColorEnabled': monetColorEnabled,
       'typewriterModeEnabled': typewriterModeEnabled,
       'focusModeEnabled': focusModeEnabled,
       'inputAnimationEnabled': inputAnimationEnabled,
@@ -363,6 +368,7 @@ class SyncableSettings {
       editorContentWidth:
           (json['editorContentWidth'] as num?)?.toDouble() ?? 800.0,
       themeMode: json['themeMode'] as String? ?? 'system',
+      monetColorEnabled: json['monetColorEnabled'] as bool? ?? true,
       typewriterModeEnabled: json['typewriterModeEnabled'] as bool? ?? false,
       focusModeEnabled: json['focusModeEnabled'] as bool? ?? false,
       inputAnimationEnabled: json['inputAnimationEnabled'] as bool? ?? false,
