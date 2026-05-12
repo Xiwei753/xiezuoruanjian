@@ -6,7 +6,9 @@ import 'package:writer_app/presentation/dialogs/settings_dialog.dart';
 import 'package:writer_app/domain/services_interfaces/settings_service.dart';
 
 class MockSettingsService implements ISettingsService {
-  LocalSettings local = const LocalSettings();
+  LocalSettings local = const LocalSettings(
+    workspacePath: '/tmp/writer_app_test_workspace',
+  );
   SyncableSettings syncable = const SyncableSettings();
 
   @override
