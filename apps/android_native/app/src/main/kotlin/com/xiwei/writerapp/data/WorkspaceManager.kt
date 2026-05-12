@@ -1,4 +1,9 @@
-package com.xiwei.writerapp
+package com.xiwei.writerapp.data
+
+import com.xiwei.writerapp.model.*
+import com.xiwei.writerapp.data.*
+import com.xiwei.writerapp.ui.*
+
 
 import android.content.Context
 import java.io.File

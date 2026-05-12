@@ -1,4 +1,9 @@
-package com.xiwei.writerapp
+package com.xiwei.writerapp.model
+
+import com.xiwei.writerapp.model.*
+import com.xiwei.writerapp.data.*
+import com.xiwei.writerapp.ui.*
+
 
 import com.google.gson.annotations.SerializedName
 
@@ -7,8 +12,12 @@ data class WorkspaceManifest(
 )
 
 data class LocalSettings(
-    val themeMode: String? = null,
-    val locale: String? = null
+    val themeMode: String? = "system",
+    val locale: String? = null,
+    val editorFontSize: Float = 16f,
+    val editorLineSpacingMultiplier: Float = 1.5f,
+    val autoSaveEnabled: Boolean = true,
+    val autoSaveDelayMs: Long = 1500L
 )
 
 data class Project(
