@@ -16,7 +16,7 @@ mod tests {
         assert_eq!(local.theme_mode.as_deref(), Some("system"));
         assert_eq!(local.editor_font_size, 16.0);
         assert_eq!(local.editor_line_spacing_multiplier, 1.5);
-        assert_eq!(local.auto_save_enabled, true);
+        assert!(local.auto_save_enabled);
         assert_eq!(local.auto_save_delay_ms, 1500);
 
         local.window_width = 800.0;
