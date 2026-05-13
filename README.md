@@ -42,6 +42,8 @@ cargo test
 ./tools/build_android.sh
 ```
 
+**支持目标说明**：官方只支持 `arm64-v8a` 构建。不支持 `x86_64` Android 设备或模拟器。如需支持 `x86_64`，开源用户可自行修改 `tools/build_android.sh` 和 `apps/android/app/build.gradle.kts` 添加对应 ABI。
+
 ## 文档
 
 - `docs/architecture.md`: 整体架构

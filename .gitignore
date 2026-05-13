@@ -75,3 +75,4 @@ secrets.json
 api_keys.json
 local_settings.json
 settings.local.json
+apps/android/app/src/main/jniLibs/
