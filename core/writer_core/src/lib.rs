@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod chapter;
+pub mod editor;
 pub mod error;
 pub mod index;
 pub mod project;
