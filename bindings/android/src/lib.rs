@@ -271,33 +271,30 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_writeChapt
     volume_id_j: JString,
     chapter_id_j: JString,
     content_j: JString,
-) -> jboolean {
+) -> jstring {
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return std::ptr::null_mut(),
     };
     let project_id = match jstring_to_string(&mut env, &project_id_j) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return std::ptr::null_mut(),
     };
     let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return std::ptr::null_mut(),
     };
     let chapter_id = match jstring_to_string(&mut env, &chapter_id_j) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return std::ptr::null_mut(),
     };
     let content = match jstring_to_string(&mut env, &content_j) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return std::ptr::null_mut(),
     };
 
     let core = WriterCore::new(&workspace_path);
-    match core.write_chapter(&project_id, &volume_id, &chapter_id, &content) {
-        Ok(_) => 1,
-        Err(_) => 0,
-    }
+    result_to_jstring(&mut env, core.write_chapter(&project_id, &volume_id, &chapter_id, &content))
 }
 
 // Load Local Settings
@@ -323,24 +320,21 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveLocalS
     _class: JClass,
     workspace_path_j: JString,
     settings_json_j: JString,
-) -> jboolean {
+) -> jstring {
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return std::ptr::null_mut(),
     };
     let settings_json = match jstring_to_string(&mut env, &settings_json_j) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return std::ptr::null_mut(),
     };
 
     let settings = match serde_json::from_str(&settings_json) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
     };
 
     let core = WriterCore::new(&workspace_path);
-    match core.save_local_settings(&settings) {
-        Ok(_) => 1,
-        Err(_) => 0,
-    }
+    result_to_jstring(&mut env, core.save_local_settings(&settings))
 }
