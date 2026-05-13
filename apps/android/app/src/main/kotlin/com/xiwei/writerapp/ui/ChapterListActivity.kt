@@ -71,19 +71,22 @@ class ChapterListActivity : AppCompatActivity() {
     private fun loadChapters() {
         val pid = projectId ?: return
         listItems.clear()
-        val volumes = workspaceRepository.getVolumes(pid)
 
-        for (volume in volumes) {
-            val chapters = workspaceRepository.getChapters(pid, volume.id)
-            for (chapter in chapters) {
-                listItems.add(
-                    ChapterListItem(
-                        volumeId = volume.id,
-                        volumeTitle = volume.title,
-                        chapterId = chapter.id,
-                        chapterTitle = chapter.title
+        ErrorUtil.safeRun(this) {
+            val volumes = workspaceRepository.getVolumes(pid)
+
+            for (volume in volumes) {
+                val chapters = workspaceRepository.getChapters(pid, volume.id)
+                for (chapter in chapters) {
+                    listItems.add(
+                        ChapterListItem(
+                            volumeId = volume.id,
+                            volumeTitle = volume.title,
+                            chapterId = chapter.id,
+                            chapterTitle = chapter.title
+                        )
                     )
-                )
+                }
             }
         }
 
@@ -99,7 +102,11 @@ class ChapterListActivity : AppCompatActivity() {
 
     private fun showNewChapterDialog() {
         val pid = projectId ?: return
-        val volumes = workspaceRepository.getVolumes(pid)
+
+        val volumes = ErrorUtil.safeRun(this, emptyList()) {
+            workspaceRepository.getVolumes(pid)
+        }
+
         if (volumes.isEmpty()) {
             // Need at least one volume
             return
@@ -116,8 +123,10 @@ class ChapterListActivity : AppCompatActivity() {
             .setPositiveButton(R.string.action_create) { _, _ ->
                 val title = editText.text.toString().trim()
                 if (title.isNotEmpty()) {
-                    workspaceRepository.createChapter(pid, defaultVolumeId, title)
-                    loadChapters()
+                    ErrorUtil.safeRun(this) {
+                        workspaceRepository.createChapter(pid, defaultVolumeId, title)
+                        loadChapters()
+                    }
                 }
             }
             .setNegativeButton(R.string.action_cancel, null)
