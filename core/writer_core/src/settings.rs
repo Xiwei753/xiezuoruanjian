@@ -3,25 +3,53 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
     #[serde(default)]
     pub theme_mode: Option<String>,
     #[serde(default)]
     pub locale: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_editor_font_size")]
     pub editor_font_size: f32,
-    #[serde(default)]
+    #[serde(default = "default_editor_line_spacing_multiplier")]
     pub editor_line_spacing_multiplier: f32,
-    #[serde(default)]
+    #[serde(default = "default_auto_save_enabled")]
     pub auto_save_enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_auto_save_delay_ms")]
     pub auto_save_delay_ms: u64,
     #[serde(default)]
     pub window_width: f64,
     #[serde(default)]
     pub window_height: f64,
+}
+
+fn default_editor_font_size() -> f32 {
+    16.0
+}
+fn default_editor_line_spacing_multiplier() -> f32 {
+    1.5
+}
+fn default_auto_save_enabled() -> bool {
+    true
+}
+fn default_auto_save_delay_ms() -> u64 {
+    1500
+}
+
+impl Default for LocalSettings {
+    fn default() -> Self {
+        Self {
+            theme_mode: Some("system".to_string()),
+            locale: None,
+            editor_font_size: default_editor_font_size(),
+            editor_line_spacing_multiplier: default_editor_line_spacing_multiplier(),
+            auto_save_enabled: default_auto_save_enabled(),
+            auto_save_delay_ms: default_auto_save_delay_ms(),
+            window_width: 800.0,
+            window_height: 600.0,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

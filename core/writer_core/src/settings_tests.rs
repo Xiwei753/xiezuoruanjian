@@ -13,6 +13,12 @@ mod tests {
         create_workspace(workspace_path).unwrap();
 
         let mut local = load_local_settings(workspace_path).unwrap();
+        assert_eq!(local.theme_mode.as_deref(), Some("system"));
+        assert_eq!(local.editor_font_size, 16.0);
+        assert_eq!(local.editor_line_spacing_multiplier, 1.5);
+        assert_eq!(local.auto_save_enabled, true);
+        assert_eq!(local.auto_save_delay_ms, 1500);
+
         local.window_width = 800.0;
         local.theme_mode = Some("light".to_string());
         local.auto_save_delay_ms = 3000;

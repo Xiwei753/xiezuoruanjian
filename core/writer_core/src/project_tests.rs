@@ -19,5 +19,9 @@ mod tests {
         let projects = list_projects(workspace_path).unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].title, "Test Project");
+
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].title, "第一卷");
     }
 }

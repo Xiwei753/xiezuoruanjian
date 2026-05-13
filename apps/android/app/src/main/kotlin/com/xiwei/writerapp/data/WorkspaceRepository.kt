@@ -22,7 +22,7 @@ class WorkspaceRepository(context: Context) {
     fun getProjects(): List<Project> {
         return when (val result = bridge.getProjects()) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to get projects: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("获取作品列表失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.getProjects()
         }
     }
@@ -30,7 +30,7 @@ class WorkspaceRepository(context: Context) {
     fun getVolumes(projectId: String): List<Volume> {
         return when (val result = bridge.getVolumes(projectId)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to get volumes: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("获取卷列表失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.getVolumes(projectId)
         }
     }
@@ -38,7 +38,7 @@ class WorkspaceRepository(context: Context) {
     fun getChapters(projectId: String, volumeId: String): List<ChapterMeta> {
         return when (val result = bridge.getChapters(projectId, volumeId)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to get chapters: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("获取章节列表失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.getChapters(projectId, volumeId)
         }
     }
@@ -46,7 +46,7 @@ class WorkspaceRepository(context: Context) {
     fun getChapterContent(projectId: String, volumeId: String, chapterId: String): String {
         return when (val result = bridge.getChapterContent(projectId, volumeId, chapterId)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to get chapter content: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("获取章节内容失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.getChapterContent(projectId, volumeId, chapterId)
         }
     }
@@ -54,7 +54,7 @@ class WorkspaceRepository(context: Context) {
     fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): Boolean {
         return when (val result = bridge.saveChapterContent(projectId, volumeId, chapterId, content)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to save chapter content: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("保存章节内容失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.saveChapterContent(projectId, volumeId, chapterId, content)
         }
     }
@@ -62,7 +62,7 @@ class WorkspaceRepository(context: Context) {
     fun createProject(title: String): Project {
         return when (val result = bridge.createProject(title)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to create project: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("创建作品失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.createProject(title)
         }
     }
@@ -70,7 +70,7 @@ class WorkspaceRepository(context: Context) {
     fun createVolume(projectId: String, title: String): Volume {
         return when (val result = bridge.createVolume(projectId, title)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to create volume: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("创建卷失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.createVolume(projectId, title)
         }
     }
@@ -78,7 +78,7 @@ class WorkspaceRepository(context: Context) {
     fun createChapter(projectId: String, volumeId: String, title: String): ChapterMeta {
         return when (val result = bridge.createChapter(projectId, volumeId, title)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RuntimeException("Failed to create chapter: ${result.message}")
+            is NativeResult.Error -> throw RepositoryException("创建章节失败: ${result.message}")
             NativeResult.NotLoaded -> fallbackBridge.createChapter(projectId, volumeId, title)
         }
     }

@@ -33,8 +33,17 @@ echo "Building Android Native Application..."
 
 if [ $? -eq 0 ]; then
     echo "Android Native Build Successful."
-    echo "APK located at: apps/android/app/build/outputs/apk/debug/app-debug.apk"
+    APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+    echo "APK located at: apps/android/$APK_PATH"
+
+    echo "Verifying JNI .so files in the APK..."
+    if unzip -l "$APK_PATH" | grep -q "lib/arm64-v8a/libwriter_core_jni.so"; then
+        echo "Check passed: libwriter_core_jni.so found in arm64-v8a"
+    else
+        echo "Error: libwriter_core_jni.so NOT found in arm64-v8a inside the APK!"
+        exit 1
+    fi
 else
     echo "Android Native Build Failed."
-    sh -c 'exit 1'
+    exit 1
 fi
