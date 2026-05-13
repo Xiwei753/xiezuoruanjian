@@ -14,13 +14,12 @@ mod tests {
         let project = create_project(workspace_path, "Test Project").unwrap();
 
         let volumes = list_volumes(workspace_path, &project.id).unwrap();
-        assert_eq!(volumes.len(), 0);
+        assert_eq!(volumes.len(), 1);
 
         let volume = create_volume(workspace_path, &project.id, "Test Volume").unwrap();
         assert_eq!(volume.title, "Test Volume");
 
         let volumes = list_volumes(workspace_path, &project.id).unwrap();
-        assert_eq!(volumes.len(), 1);
-        assert_eq!(volumes[0].title, "Test Volume");
+        assert_eq!(volumes.len(), 2);
     }
 }

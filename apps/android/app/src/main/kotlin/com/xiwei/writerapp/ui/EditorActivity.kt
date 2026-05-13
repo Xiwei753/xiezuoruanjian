@@ -58,13 +58,13 @@ class EditorActivity : AppCompatActivity() {
         chapterId = intent.getStringExtra("CHAPTER_ID")
         val chapterTitle = intent.getStringExtra("CHAPTER_TITLE")
 
-        supportActionBar?.title = chapterTitle ?: "Editor"
+        supportActionBar?.title = chapterTitle ?: getString(R.string.title_editor)
 
         if (projectId != null && volumeId != null && chapterId != null) {
             val content = workspaceRepository.getChapterContent(projectId!!, volumeId!!, chapterId!!)
             editorEditText.setText(content)
         } else {
-            editorEditText.setText("Error: Missing chapter identifiers.")
+            editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
             editorEditText.isEnabled = false
         }
 
