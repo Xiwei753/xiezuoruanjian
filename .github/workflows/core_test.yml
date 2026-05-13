@@ -15,9 +15,23 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
+        targets: aarch64-linux-android
+    - name: Setup Java 17
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r25c
+    - name: Install cargo-ndk
+      run: cargo install cargo-ndk
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake g++ python3
     - name: Run check_all.sh
-      run: ./tools/check_all.sh
+      run: |
+        export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
+        ./tools/check_all.sh
