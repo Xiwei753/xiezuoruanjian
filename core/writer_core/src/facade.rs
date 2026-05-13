@@ -135,6 +135,65 @@ impl WriterCore {
     pub fn sync_workspace(&self) -> Result<()> {
         sync::sync_workspace()
     }
+
+    // --- Settings Registry ---
+    pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {
+        crate::settings_registry::SettingsRegistry::default_registry()
+    }
+
+    // --- AI Service ---
+    pub fn build_ai_context(
+        &self,
+        reference: crate::ai_service::AiContextReference,
+    ) -> crate::error::Result<String> {
+        let ai = crate::ai_service::AiService::new();
+        ai.build_ai_context(reference)
+    }
+
+    pub fn get_ai_request_payload(
+        &self,
+        conversation: &crate::ai_service::AiConversation,
+        tools: Option<Vec<crate::ai_service::AiToolDefinition>>,
+    ) -> crate::error::Result<serde_json::Value> {
+        let ai = crate::ai_service::AiService::new();
+        ai.get_ai_request_payload(conversation, tools)
+    }
+
+    // --- Graph Service ---
+    pub fn load_graph(
+        &self,
+        project_id: Option<&str>,
+    ) -> crate::error::Result<crate::graph_service::GraphDocument> {
+        let graph = crate::graph_service::GraphService::new(&self.workspace_path);
+        graph.load_graph(project_id)
+    }
+
+    pub fn save_graph(
+        &self,
+        project_id: Option<&str>,
+        doc: &crate::graph_service::GraphDocument,
+    ) -> crate::error::Result<()> {
+        let graph = crate::graph_service::GraphService::new(&self.workspace_path);
+        graph.save_graph(project_id, doc)
+    }
+
+    // --- Proofreading Service ---
+    pub fn proofread_text(
+        &self,
+        text: &str,
+    ) -> crate::error::Result<Vec<crate::proofreading_service::ProofreadingSuggestion>> {
+        let pr = crate::proofreading_service::ProofreadingService::new();
+        pr.proofread(text)
+    }
+
+    // --- Sync Service ---
+    pub fn build_sync_plan(
+        &self,
+        mock_changed_files: Vec<&str>,
+    ) -> crate::error::Result<crate::sync_service::SyncPlan> {
+        let sync = crate::sync_service::SyncService::new();
+        sync.build_sync_plan(mock_changed_files)
+    }
 }
 
 #[cfg(test)]
