@@ -3,17 +3,8 @@ package com.xiwei.writerapp.data
 import android.content.Context
 import com.xiwei.writerapp.model.*
 
-/**
- * A thin repository layer for the UI to interact with.
- *
- * It delegates all workspace logic to the underlying bridge/facade.
- * Under no circumstances should this class construct file paths or understand
- * the workspace format.
- */
 class WorkspaceRepository(context: Context) {
-    // Migration: We now use NativeCoreBridge instead of TemporaryWorkspaceBridge
     private val bridge = NativeCoreBridge(context)
-    private val fallbackBridge = TemporaryWorkspaceBridge(context)
 
     init {
         bridge.createWorkspaceIfNeeded()
@@ -23,7 +14,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.getProjects()) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("获取作品列表失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.getProjects()
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -31,7 +22,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.getVolumes(projectId)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("获取卷列表失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.getVolumes(projectId)
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -39,7 +30,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.getChapters(projectId, volumeId)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("获取章节列表失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.getChapters(projectId, volumeId)
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -47,7 +38,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.getChapterContent(projectId, volumeId, chapterId)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("获取章节内容失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.getChapterContent(projectId, volumeId, chapterId)
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -55,7 +46,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.saveChapterContent(projectId, volumeId, chapterId, content)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("保存章节内容失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.saveChapterContent(projectId, volumeId, chapterId, content)
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -63,7 +54,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.createProject(title)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("创建作品失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.createProject(title)
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -71,7 +62,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.createVolume(projectId, title)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("创建卷失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.createVolume(projectId, title)
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -79,7 +70,7 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.createChapter(projectId, volumeId, title)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("创建章节失败: ${result.message}")
-            NativeResult.NotLoaded -> fallbackBridge.createChapter(projectId, volumeId, title)
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 }
