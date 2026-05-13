@@ -61,8 +61,15 @@ class EditorActivity : AppCompatActivity() {
         supportActionBar?.title = chapterTitle ?: getString(R.string.title_editor)
 
         if (projectId != null && volumeId != null && chapterId != null) {
-            val content = workspaceRepository.getChapterContent(projectId!!, volumeId!!, chapterId!!)
-            editorEditText.setText(content)
+            val content = ErrorUtil.safeRun(this, null as String?) {
+                workspaceRepository.getChapterContent(projectId!!, volumeId!!, chapterId!!)
+            }
+            if (content != null) {
+                editorEditText.setText(content)
+            } else {
+                editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
+                editorEditText.isEnabled = false
+            }
         } else {
             editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
             editorEditText.isEnabled = false
@@ -126,7 +133,9 @@ class EditorActivity : AppCompatActivity() {
         if (pid != null && vid != null && cid != null) {
             toolbar.subtitle = getString(R.string.status_saving)
             val content = editorEditText.text.toString()
-            val success = workspaceRepository.saveChapterContent(pid, vid, cid, content)
+            val success = ErrorUtil.safeRun(this, false) {
+                workspaceRepository.saveChapterContent(pid, vid, cid, content)
+            }
             if (success) {
                 isDirty = false
                 toolbar.subtitle = getString(R.string.status_saved)

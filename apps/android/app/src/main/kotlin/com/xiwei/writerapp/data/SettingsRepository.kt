@@ -17,7 +17,11 @@ class SettingsRepository(context: Context) {
     fun getLocalSettings(): LocalSettings {
         return when (val result = bridge.getLocalSettings()) {
             is NativeResult.Success -> result.data ?: LocalSettings()
-            is NativeResult.Error -> throw RepositoryException("加载本地设置失败: ${result.message}")
+            is NativeResult.Error -> {
+                // Log error but provide safe fallback for startup
+                System.err.println("加载本地设置失败: ${result.message}")
+                LocalSettings()
+            }
             NativeResult.NotLoaded -> fallbackBridge.getLocalSettings()
         }
     }
@@ -25,7 +29,10 @@ class SettingsRepository(context: Context) {
     fun saveLocalSettings(settings: LocalSettings): Boolean {
         return when (val result = bridge.saveLocalSettings(settings)) {
             is NativeResult.Success -> result.data
-            is NativeResult.Error -> throw RepositoryException("保存本地设置失败: ${result.message}")
+            is NativeResult.Error -> {
+                System.err.println("保存本地设置失败: ${result.message}")
+                false
+            }
             NativeResult.NotLoaded -> fallbackBridge.saveLocalSettings(settings)
         }
     }

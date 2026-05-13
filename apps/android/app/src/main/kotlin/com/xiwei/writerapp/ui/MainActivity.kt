@@ -71,7 +71,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadProjects() {
-        projects = workspaceRepository.getProjects()
+        projects = ErrorUtil.safeRun(this, emptyList()) {
+            workspaceRepository.getProjects()
+        }
 
         if (projects.isEmpty()) {
             projectRecyclerView.visibility = View.GONE
@@ -94,8 +96,10 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.action_create) { _, _ ->
                 val title = editText.text.toString().trim()
                 if (title.isNotEmpty()) {
-                    workspaceRepository.createProject(title)
-                    loadProjects()
+                    ErrorUtil.safeRun(this) {
+                        workspaceRepository.createProject(title)
+                        loadProjects()
+                    }
                 }
             }
             .setNegativeButton(R.string.action_cancel, null)
