@@ -30,8 +30,16 @@ class SettingsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
 
-        settingsRepository = SettingsRepository(this)
-        currentSettings = settingsRepository.getLocalSettings()
+        ErrorUtil.safeRun(this) {
+            settingsRepository = SettingsRepository(this)
+        }
+        currentSettings = ErrorUtil.safeRun(this, LocalSettings()) {
+            if (::settingsRepository.isInitialized) {
+                settingsRepository.getLocalSettings()
+            } else {
+                LocalSettings()
+            }
+        }
 
         val toolbar: MaterialToolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -90,7 +98,11 @@ class SettingsActivity : AppCompatActivity() {
             themeMode = themeStr
         )
 
-        settingsRepository.saveLocalSettings(newSettings)
+        ErrorUtil.safeRun(this) {
+            if (::settingsRepository.isInitialized) {
+                settingsRepository.saveLocalSettings(newSettings)
+            }
+        }
 
         // Apply theme immediately if it changed
         if (currentSettings.themeMode != themeStr) {

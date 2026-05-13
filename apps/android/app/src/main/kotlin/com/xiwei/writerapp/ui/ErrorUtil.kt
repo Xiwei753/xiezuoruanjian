@@ -12,6 +12,10 @@ object ErrorUtil {
             e.printStackTrace()
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
             fallback
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            Toast.makeText(context, "应用内部错误，请查看日志", Toast.LENGTH_LONG).show()
+            fallback
         }
     }
 
@@ -21,6 +25,9 @@ object ErrorUtil {
         } catch (e: RepositoryException) {
             e.printStackTrace()
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            Toast.makeText(context, "应用内部错误，请查看日志", Toast.LENGTH_LONG).show()
         }
     }
 }
