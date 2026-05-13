@@ -294,7 +294,10 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_writeChapt
     };
 
     let core = WriterCore::new(&workspace_path);
-    result_to_jstring(&mut env, core.write_chapter(&project_id, &volume_id, &chapter_id, &content))
+    result_to_jstring(
+        &mut env,
+        core.write_chapter(&project_id, &volume_id, &chapter_id, &content),
+    )
 }
 
 // Load Local Settings
