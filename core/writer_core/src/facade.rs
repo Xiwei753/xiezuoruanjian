@@ -160,8 +160,10 @@ mod tests {
         // Create volume
         let volume = core.create_volume(&project.id, "Vol 1").unwrap();
         let volumes = core.list_volumes(&project.id).unwrap();
+        // Since we don't know which order they will be returned in (it reads from directory),
+        // we sort them by title or id or just check if the new volume is present.
         assert_eq!(volumes.len(), 2);
-        assert_eq!(volumes[1].id, volume.id);
+        assert!(volumes.iter().any(|v| v.id == volume.id));
 
         // Create chapter
         let chapter = core
