@@ -30,8 +30,14 @@ class SettingsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
 
-        settingsRepository = SettingsRepository(this)
-        currentSettings = settingsRepository.getLocalSettings()
+        try {
+            settingsRepository = SettingsRepository(this)
+            currentSettings = settingsRepository.getLocalSettings()
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            currentSettings = LocalSettings()
+            android.widget.Toast.makeText(this, "设置加载失败，使用默认值", android.widget.Toast.LENGTH_LONG).show()
+        }
 
         val toolbar: MaterialToolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -90,7 +96,14 @@ class SettingsActivity : AppCompatActivity() {
             themeMode = themeStr
         )
 
-        settingsRepository.saveLocalSettings(newSettings)
+        try {
+            if (this::settingsRepository.isInitialized) {
+                settingsRepository.saveLocalSettings(newSettings)
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            android.widget.Toast.makeText(this, "设置保存失败", android.widget.Toast.LENGTH_LONG).show()
+        }
 
         // Apply theme immediately if it changed
         if (currentSettings.themeMode != themeStr) {

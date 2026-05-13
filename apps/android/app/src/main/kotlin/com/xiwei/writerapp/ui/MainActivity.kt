@@ -33,12 +33,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        settingsRepository = SettingsRepository(this)
-        val settings = settingsRepository.getLocalSettings()
-        when (settings.themeMode) {
-            "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
-            "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
-            else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        try {
+            settingsRepository = SettingsRepository(this)
+            val settings = settingsRepository.getLocalSettings()
+            when (settings.themeMode) {
+                "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
         }
 
         setContentView(R.layout.activity_main)
@@ -48,16 +52,30 @@ class MainActivity : AppCompatActivity() {
         emptyStateLayout = findViewById(R.id.emptyStateLayout)
         btnSettings = findViewById(R.id.btnSettings)
 
-        workspaceRepository = WorkspaceRepository(this)
+        try {
+            workspaceRepository = WorkspaceRepository(this)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            // Even if WorkspaceRepository fails, we continue to prevent crash, loadProjects will handle the error
+        }
 
         adapter = ProjectAdapter()
         projectRecyclerView.layoutManager = LinearLayoutManager(this)
         projectRecyclerView.adapter = adapter
 
-        loadProjects()
+        if (this::workspaceRepository.isInitialized) {
+            loadProjects()
+        } else {
+            projectRecyclerView.visibility = View.GONE
+            emptyStateLayout.visibility = View.VISIBLE
+        }
 
         fabNewProject.setOnClickListener {
-            showNewProjectDialog()
+            if (this::workspaceRepository.isInitialized) {
+                showNewProjectDialog()
+            } else {
+                android.widget.Toast.makeText(this, "作品加载失败，无法创建新作品", android.widget.Toast.LENGTH_LONG).show()
+            }
         }
 
         btnSettings.setOnClickListener {
