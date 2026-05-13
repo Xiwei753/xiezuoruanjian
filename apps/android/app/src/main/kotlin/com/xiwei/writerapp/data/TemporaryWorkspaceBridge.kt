@@ -162,7 +162,7 @@ class TemporaryWorkspaceBridge(private val context: Context) {
         val jsonFile = File(projectDir, "project.json")
         jsonFile.writeText(gson.toJson(project))
 
-        createVolume(projectId, "Volume 1")
+        createVolume(projectId, "第一卷")
 
         return project
     }

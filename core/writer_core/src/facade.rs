@@ -160,8 +160,8 @@ mod tests {
         // Create volume
         let volume = core.create_volume(&project.id, "Vol 1").unwrap();
         let volumes = core.list_volumes(&project.id).unwrap();
-        assert_eq!(volumes.len(), 1);
-        assert_eq!(volumes[0].id, volume.id);
+        assert_eq!(volumes.len(), 2);
+        assert_eq!(volumes[1].id, volume.id);
 
         // Create chapter
         let chapter = core

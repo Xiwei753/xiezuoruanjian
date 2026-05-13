@@ -55,5 +55,8 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
     let content = serde_json::to_string_pretty(&project)?;
     crate::storage::atomic_write_string(&meta_path, &content)?;
 
+    // Create a default volume to maintain consistency with product requirements
+    let _ = crate::volume::create_volume(workspace_path, &id, "第一卷")?;
+
     Ok(project)
 }
