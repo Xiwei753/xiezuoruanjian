@@ -14,10 +14,10 @@ if ! command -v cargo-ndk &> /dev/null; then
     exit 1
 fi
 
-echo "Using cargo-ndk to compile for x86_64 and arm64-v8a..."
+echo "Using cargo-ndk to compile for arm64-v8a..."
 cd "$WORKSPACE_ROOT/bindings/android"
 
-cargo ndk -t arm64-v8a -t x86_64 -o "$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs" build --release
+cargo ndk -t arm64-v8a -o "$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs" build --release
 
 if [ $? -eq 0 ]; then
     echo "Rust JNI library successfully built and copied to jniLibs."

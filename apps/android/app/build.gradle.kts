@@ -17,8 +17,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            // Include arm64-v8a as well.
-            abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
+            // The official Android target is arm64-v8a.
+            // x86_64 Android / emulators are not officially supported.
+            abiFilters.addAll(listOf("arm64-v8a"))
         }
     }
 
