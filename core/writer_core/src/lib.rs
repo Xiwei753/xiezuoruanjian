@@ -1,4 +1,9 @@
-pub mod ai_bridge;
+pub mod ai_service;
+pub mod graph_service;
+pub mod proofreading_service;
+pub mod settings_registry;
+pub mod sync_service;
+
 pub mod backup;
 pub mod chapter;
 pub mod editor;

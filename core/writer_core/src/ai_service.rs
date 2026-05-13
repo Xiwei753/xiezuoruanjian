@@ -73,3 +73,29 @@ impl ContextManager {
         });
     }
 }
+
+pub struct AiService;
+
+impl AiService {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn generate_text(&self, _prompt: &str) -> crate::Result<String> {
+        Err(crate::Error::NotImplemented)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ai_service_not_implemented() {
+        let service = AiService::new();
+        assert!(matches!(
+            service.generate_text("test"),
+            Err(crate::Error::NotImplemented)
+        ));
+    }
+}

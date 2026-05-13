@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "core/writer_core",
+    "bindings/android"
+]
+resolver = "2"
