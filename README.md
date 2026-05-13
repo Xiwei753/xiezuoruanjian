@@ -39,8 +39,7 @@ cargo test
 ### Android 客户端
 
 ```bash
-cd apps/android
-./gradlew assembleDebug
+./tools/build_android.sh
 ```
 
 ## 文档

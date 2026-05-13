@@ -4,7 +4,20 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
+    #[serde(default)]
+    pub theme_mode: Option<String>,
+    #[serde(default)]
+    pub locale: Option<String>,
+    #[serde(default)]
+    pub editor_font_size: f32,
+    #[serde(default)]
+    pub editor_line_spacing_multiplier: f32,
+    #[serde(default)]
+    pub auto_save_enabled: bool,
+    #[serde(default)]
+    pub auto_save_delay_ms: u64,
     #[serde(default)]
     pub window_width: f64,
     #[serde(default)]
@@ -12,6 +25,7 @@ pub struct LocalSettings {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncableSettings {
     #[serde(default)]
     pub font_size: f64,

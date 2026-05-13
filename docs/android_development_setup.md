@@ -14,20 +14,17 @@ flutter devices
 ```
 
 ## Running the App
-To run the app on an Android device in debug mode:
-```bash
-./tool/run_android_debug.sh
-```
+To run the app on an Android device in debug mode, you can use Android Studio, or build the APK and deploy it manually. Ensure the Rust core is built by using our provided build script first.
 
 ## Building APKs
-To build a debug APK:
+To build a debug APK with the Rust core included:
 ```bash
-./tool/build_android_apk_debug.sh
+./tools/build_android.sh
 ```
 
-To build a release APK (Note: Currently uses debug signature, for local testing only. Do not commit a real keystore or sign for production yet):
+If you only want to run Gradle without rebuilding the Rust core, you can use:
 ```bash
-./tool/build_android_apk_release.sh
+./tools/build_android_gradle_only.sh
 ```
 
 ## Downloading the APK

@@ -14,16 +14,22 @@ mod tests {
 
         let mut local = load_local_settings(workspace_path).unwrap();
         local.window_width = 800.0;
+        local.theme_mode = Some("light".to_string());
+        local.auto_save_delay_ms = 3000;
         save_local_settings(workspace_path, &local).unwrap();
 
         let loaded_local = load_local_settings(workspace_path).unwrap();
         assert_eq!(loaded_local.window_width, 800.0);
+        assert_eq!(loaded_local.theme_mode.unwrap(), "light");
+        assert_eq!(loaded_local.auto_save_delay_ms, 3000);
 
         let mut syncable = load_syncable_settings(workspace_path).unwrap();
         syncable.font_size = 20.0;
+        syncable.theme_mode = "system".to_string();
         save_syncable_settings(workspace_path, &syncable).unwrap();
 
         let loaded_syncable = load_syncable_settings(workspace_path).unwrap();
         assert_eq!(loaded_syncable.font_size, 20.0);
+        assert_eq!(loaded_syncable.theme_mode, "system");
     }
 }
