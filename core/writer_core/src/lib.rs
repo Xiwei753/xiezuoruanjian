@@ -1,3 +1,4 @@
+pub mod ai_bridge;
 pub mod backup;
 pub mod chapter;
 pub mod editor;
