@@ -27,6 +27,9 @@ class NativeCoreBridge(context: Context) {
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
             isLoaded = false
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            isLoaded = false
         }
     }
 
@@ -35,20 +38,20 @@ class NativeCoreBridge(context: Context) {
     private external fun validateWorkspace(workspacePath: String): Boolean
 
     // Returns JSON string like {"success": true, "data": [...]} or {"success": false, "error": "..."}
-    private external fun listProjects(workspacePath: String): String
-    private external fun createProject(workspacePath: String, title: String): String
+    private external fun listProjects(workspacePath: String): String?
+    private external fun createProject(workspacePath: String, title: String): String?
 
-    private external fun listVolumes(workspacePath: String, projectId: String): String
-    private external fun createVolume(workspacePath: String, projectId: String, title: String): String
+    private external fun listVolumes(workspacePath: String, projectId: String): String?
+    private external fun createVolume(workspacePath: String, projectId: String, title: String): String?
 
-    private external fun listChapters(workspacePath: String, projectId: String, volumeId: String): String
-    private external fun createChapter(workspacePath: String, projectId: String, volumeId: String, title: String): String
+    private external fun listChapters(workspacePath: String, projectId: String, volumeId: String): String?
+    private external fun createChapter(workspacePath: String, projectId: String, volumeId: String, title: String): String?
 
-    private external fun readChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String
-    private external fun writeChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String, content: String): String
+    private external fun readChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
+    private external fun writeChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String, content: String): String?
 
-    private external fun loadLocalSettings(workspacePath: String): String
-    private external fun saveLocalSettings(workspacePath: String, settingsJson: String): String
+    private external fun loadLocalSettings(workspacePath: String): String?
+    private external fun saveLocalSettings(workspacePath: String, settingsJson: String): String?
 
     // Helper classes for parsing Rust JSON responses
     private data class RustResponse<T>(
@@ -66,9 +69,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return
         try {
             createWorkspace(workspaceDir)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } catch (e: UnsatisfiedLinkError) {
+        } catch (e: Throwable) {
             e.printStackTrace()
         }
     }
@@ -77,10 +78,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return false
         return try {
             validateWorkspace(workspaceDir)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        } catch (e: UnsatisfiedLinkError) {
+        } catch (e: Throwable) {
             e.printStackTrace()
             false
         }
@@ -90,7 +88,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = listProjects(workspaceDir)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<List<Project>>>() {}.type
             val response: RustResponse<List<Project>> = gson.fromJson(resultJson, type)
             return if (response.success) {
@@ -98,12 +96,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -111,7 +109,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = createProject(workspaceDir, title)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<Project>>() {}.type
             val response: RustResponse<Project> = gson.fromJson(resultJson, type)
             return if (response.success && response.data != null) {
@@ -119,12 +117,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -132,7 +130,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = listVolumes(workspaceDir, projectId)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<List<Volume>>>() {}.type
             val response: RustResponse<List<Volume>> = gson.fromJson(resultJson, type)
             return if (response.success) {
@@ -140,12 +138,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -153,7 +151,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = createVolume(workspaceDir, projectId, title)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<Volume>>() {}.type
             val response: RustResponse<Volume> = gson.fromJson(resultJson, type)
             return if (response.success && response.data != null) {
@@ -161,12 +159,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -174,7 +172,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = listChapters(workspaceDir, projectId, volumeId)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<List<ChapterMeta>>>() {}.type
             val response: RustResponse<List<ChapterMeta>> = gson.fromJson(resultJson, type)
             return if (response.success) {
@@ -182,12 +180,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -195,7 +193,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = createChapter(workspaceDir, projectId, volumeId, title)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<ChapterMeta>>() {}.type
             val response: RustResponse<ChapterMeta> = gson.fromJson(resultJson, type)
             return if (response.success && response.data != null) {
@@ -203,12 +201,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -216,7 +214,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = readChapter(workspaceDir, projectId, volumeId, chapterId)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<RustChapterContent>>() {}.type
             val response: RustResponse<RustChapterContent> = gson.fromJson(resultJson, type)
             return if (response.success) {
@@ -224,12 +222,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -237,7 +235,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = writeChapter(workspaceDir, projectId, volumeId, chapterId, content)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<Any>>() {}.type
             val response: RustResponse<Any> = gson.fromJson(resultJson, type)
             return if (response.success) {
@@ -245,12 +243,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -258,7 +256,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = loadLocalSettings(workspaceDir)
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<LocalSettings>>() {}.type
             val response: RustResponse<LocalSettings> = gson.fromJson(resultJson, type)
             return if (response.success) {
@@ -266,12 +264,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 
@@ -279,7 +277,7 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = saveLocalSettings(workspaceDir, gson.toJson(settings))
-            if (resultJson.isEmpty()) return NativeResult.Error("Empty response from native bridge")
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<Any>>() {}.type
             val response: RustResponse<Any> = gson.fromJson(resultJson, type)
             return if (response.success) {
@@ -287,12 +285,12 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
             return NativeResult.Error(e.message ?: "Exception occurred")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-            return NativeResult.NotLoaded
         }
     }
 }

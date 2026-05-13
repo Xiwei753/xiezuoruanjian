@@ -17,6 +17,7 @@ import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.WorkspaceRepository
 import com.xiwei.writerapp.model.Project
+import com.xiwei.writerapp.model.LocalSettings
 import androidx.appcompat.app.AppCompatDelegate
 
 class MainActivity : AppCompatActivity() {
@@ -33,12 +34,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        settingsRepository = SettingsRepository(this)
-        val settings = settingsRepository.getLocalSettings()
-        when (settings.themeMode) {
-            "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
-            "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
-            else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        ErrorUtil.safeRun(this) {
+            settingsRepository = SettingsRepository(this)
+            val settings = ErrorUtil.safeRun(this, LocalSettings()) {
+                settingsRepository.getLocalSettings()
+            }
+            when (settings.themeMode) {
+                "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+            }
         }
 
         setContentView(R.layout.activity_main)
@@ -48,7 +53,9 @@ class MainActivity : AppCompatActivity() {
         emptyStateLayout = findViewById(R.id.emptyStateLayout)
         btnSettings = findViewById(R.id.btnSettings)
 
-        workspaceRepository = WorkspaceRepository(this)
+        ErrorUtil.safeRun(this) {
+            workspaceRepository = WorkspaceRepository(this)
+        }
 
         adapter = ProjectAdapter()
         projectRecyclerView.layoutManager = LinearLayoutManager(this)
@@ -72,7 +79,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadProjects() {
         projects = ErrorUtil.safeRun(this, emptyList()) {
-            workspaceRepository.getProjects()
+            if (::workspaceRepository.isInitialized) {
+                workspaceRepository.getProjects()
+            } else {
+                emptyList()
+            }
         }
 
         if (projects.isEmpty()) {
