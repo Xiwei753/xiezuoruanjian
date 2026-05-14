@@ -108,9 +108,11 @@ class ChapterListActivity : AppCompatActivity() {
         }
 
         if (volumes.isEmpty()) {
-            // Need at least one volume
+            // Should not happen as a default volume is created when project is created.
             return
         }
+
+        // Use the first available volume as the default container
         val defaultVolumeId = volumes.first().id
 
         val editText = EditText(this)

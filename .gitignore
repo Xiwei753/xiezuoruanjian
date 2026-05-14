@@ -76,3 +76,5 @@ api_keys.json
 local_settings.json
 settings.local.json
 apps/android/app/src/main/jniLibs/
+android-ndk-r25c/
+android-ndk-r25c-linux.zip
