@@ -1,0 +1,80 @@
+--- core/writer_core/src/sync_service.rs
++++ core/writer_core/src/sync_service.rs
+@@ -7,6 +7,18 @@
+     HttpsToken,
+     SshDeployKey,
+ }
++
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
++#[serde(rename_all = "snake_case")]
++pub enum FirstSyncMode {
++    #[default]
++    NotAttempted,
++    CloneIntoEmptyWorkspace,
++    InitExistingWorkspace,
++    AlreadyGitRepo,
++    BlockedNonEmptyRemote,
++    UnrelatedHistories,
++}
+
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct SyncConfig {
+@@ -88,6 +100,8 @@
+     pub conflicts: Vec<SyncConflict>,
+     pub commit_hash: Option<String>,
+     pub error: Option<String>,
++    pub first_sync_mode: FirstSyncMode,
++    pub user_message: Option<String>,
+ }
+
+ #[derive(Debug, Clone)]
+@@ -696,6 +710,8 @@
+             conflicts: Vec::new(),
+             commit_hash: None,
+             error: None,
++            first_sync_mode: FirstSyncMode::NotAttempted,
++            user_message: None,
+         };
+
+         if !config.enabled {
+@@ -735,9 +751,16 @@
+
+         let has_repo = backend.has_repo(workspace_path);
+         if !has_repo {
+-            let is_empty_or_git_only = backend
+-                .is_worktree_empty_or_git_only(workspace_path)
+-                .unwrap_or(false);
++            let is_empty_or_git_only = match backend.is_worktree_empty_or_git_only(workspace_path) {
++                Ok(val) => val,
++                Err(e) => {
++                    result.status = SyncStatus::Error(e.to_string());
++                    result.error = Some(e.to_string());
++                    result.user_message = Some("检查本地工作区失败。".to_string());
++                    return Ok(result);
++                }
++            };
++
+             if is_empty_or_git_only {
+                 // Clone
++                result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
++                result.user_message = Some("已克隆远端仓库到空工作区。".to_string());
+                 if let Err(e) =
+                     backend.clone_repo(&config.remote_url, workspace_path, auth.as_ref())
+                 {
+@@ -756,6 +779,8 @@
+                 }
+             } else {
+                 // Init in existing workspace
++                result.first_sync_mode = FirstSyncMode::InitExistingWorkspace;
++                result.user_message = Some("本地已有作品，已初始化为 Git 仓库并准备同步。".to_string());
+                 if let Err(e) = backend.init_repo(workspace_path) {
+                     result.status = SyncStatus::Error(e.to_string());
+                     result.error = Some(e.to_string());
+@@ -768,6 +793,7 @@
+                 }
+             }
+         } else {
++            result.first_sync_mode = FirstSyncMode::AlreadyGitRepo;
+             // Open and ensure remote
+             if let Err(e) = backend.open_repo(workspace_path) {
+                 result.status = SyncStatus::Error(e.to_string());
