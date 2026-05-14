@@ -53,4 +53,26 @@
     <string name="default_volume_title">第一卷</string>
     <string name="default_chapter_title">新章节</string>
 
+
+    <!-- Sync Settings -->
+    <string name="pref_category_sync">同步设置</string>
+    <string name="pref_enable_sync">启用同步</string>
+    <string name="pref_github_repo">GitHub 仓库地址 (HTTPS)</string>
+    <string name="pref_branch">分支 (默认 main)</string>
+    <string name="pref_https_token">HTTPS Token (PAT)</string>
+    <string name="pref_auto_sync">自动同步</string>
+    <string name="pref_sync_interval">同步间隔 (秒)</string>
+    <string name="token_configured">Token 已配置</string>
+    <string name="token_not_configured">Token 未配置</string>
+    <string name="btn_dry_run">检查同步计划</string>
+    <string name="btn_perform_sync">立即同步</string>
+
+    <!-- Sync Prompts & Errors -->
+    <string name="sync_success">同步成功。</string>
+    <string name="sync_error_no_token">缺少 GitHub Token。</string>
+    <string name="sync_error_unrelated">远端仓库不是空仓库，不能自动合并。建议使用空 GitHub 私人仓库。</string>
+    <string name="sync_error_conflict">存在冲突文件，需要手动处理。</string>
+    <string name="sync_error_save_failed">同步状态保存失败，请检查存储权限。</string>
+    <string name="sync_dry_run_result">将上传: %1$d，将下载: %2$d，将忽略: %3$d</string>
+
 </resources>
