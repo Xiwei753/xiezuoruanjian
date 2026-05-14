@@ -92,7 +92,59 @@ pub struct SyncResult {
     pub user_message: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+impl SyncResult {
+    pub fn success() -> Self {
+        Self {
+            status: SyncStatus::Success,
+            uploaded_files: Vec::new(),
+            downloaded_files: Vec::new(),
+            ignored_files: Vec::new(),
+            conflicts: Vec::new(),
+            commit_hash: None,
+            error: None,
+            first_sync_mode: FirstSyncMode::NotAttempted,
+            user_message: None,
+        }
+    }
+
+    pub fn error(
+        status: SyncStatus,
+        first_sync_mode: FirstSyncMode,
+        user_message: Option<String>,
+        error: String,
+    ) -> Self {
+        Self {
+            status,
+            uploaded_files: Vec::new(),
+            downloaded_files: Vec::new(),
+            ignored_files: Vec::new(),
+            conflicts: Vec::new(),
+            commit_hash: None,
+            error: Some(error),
+            first_sync_mode,
+            user_message,
+        }
+    }
+
+    pub fn conflict(
+        conflicts: Vec<SyncConflict>,
+        error: String,
+        user_message: Option<String>,
+    ) -> Self {
+        Self {
+            status: SyncStatus::Conflict,
+            uploaded_files: Vec::new(),
+            downloaded_files: Vec::new(),
+            ignored_files: Vec::new(),
+            conflicts,
+            commit_hash: None,
+            error: Some(error),
+            first_sync_mode: FirstSyncMode::NotAttempted,
+            user_message,
+        }
+    }
+}
+
 pub enum GitAuth {
     HttpsToken { username: String, token: String },
     SshDeployKey,
@@ -690,17 +742,8 @@ impl SyncService {
         secrets: &SyncSecrets,
         backend: &dyn GitBackend,
     ) -> crate::Result<SyncResult> {
-        let mut result = SyncResult {
-            status: SyncStatus::Idle,
-            uploaded_files: Vec::new(),
-            downloaded_files: Vec::new(),
-            ignored_files: Vec::new(),
-            conflicts: Vec::new(),
-            commit_hash: None,
-            error: None,
-            first_sync_mode: FirstSyncMode::NotAttempted,
-            user_message: None,
-        };
+        let mut result = SyncResult::success();
+        result.status = SyncStatus::Idle;
 
         if !config.enabled {
             result.status = SyncStatus::Success;
@@ -708,9 +751,12 @@ impl SyncService {
         }
 
         if config.remote_url.is_empty() {
-            result.status = SyncStatus::Error("Remote URL is empty".to_string());
-            result.error = Some("Remote URL is empty".to_string());
-            return Ok(result);
+            return Ok(SyncResult::error(
+                SyncStatus::Error("Remote URL is empty".to_string()),
+                FirstSyncMode::NotAttempted,
+                None,
+                "Remote URL is empty".to_string(),
+            ));
         }
 
         let auth = match &config.transport {
@@ -721,15 +767,21 @@ impl SyncService {
                         token: token.clone(),
                     })
                 } else {
-                    result.status = SyncStatus::Error("No token provided".to_string());
-                    result.error = Some("No token provided".to_string());
-                    return Ok(result);
+                    return Ok(SyncResult::error(
+                        SyncStatus::Error("No token provided".to_string()),
+                        FirstSyncMode::NotAttempted,
+                        None,
+                        "No token provided".to_string(),
+                    ));
                 }
             }
             SyncTransport::SshDeployKey => {
-                result.status = SyncStatus::Error("SshDeployKey is not implemented".to_string());
-                result.error = Some("SshDeployKey is not implemented".to_string());
-                return Ok(result);
+                return Ok(SyncResult::error(
+                    SyncStatus::Error("SshDeployKey is not implemented".to_string()),
+                    FirstSyncMode::NotAttempted,
+                    None,
+                    "SshDeployKey is not implemented".to_string(),
+                ));
             }
         };
 
@@ -738,10 +790,12 @@ impl SyncService {
             let is_empty_or_git_only = match backend.is_worktree_empty_or_git_only(workspace_path) {
                 Ok(val) => val,
                 Err(e) => {
-                    result.status = SyncStatus::Error(e.to_string());
-                    result.error = Some(e.to_string());
-                    result.user_message = Some("检查本地工作区失败。".to_string());
-                    return Ok(result);
+                    return Ok(SyncResult::error(
+                        SyncStatus::Error(e.to_string()),
+                        FirstSyncMode::NotAttempted,
+                        Some("检查本地工作区失败。".to_string()),
+                        e.to_string(),
+                    ));
                 }
             };
 
@@ -752,9 +806,12 @@ impl SyncService {
                 if let Err(e) =
                     backend.clone_repo(&config.remote_url, workspace_path, auth.as_ref())
                 {
-                    result.status = SyncStatus::Error(e.to_string());
-                    result.error = Some(e.to_string());
-                    return Ok(result);
+                    return Ok(SyncResult::error(
+                        SyncStatus::Error(e.to_string()),
+                        FirstSyncMode::CloneIntoEmptyWorkspace,
+                        Some("已克隆远端仓库到空工作区。".to_string()),
+                        e.to_string(),
+                    ));
                 }
             } else {
                 // Init in existing workspace
@@ -811,6 +868,25 @@ impl SyncService {
 
         // Pull
         if let Err(e) = backend.pull(workspace_path, &config.branch, auth.as_ref()) {
+            let e_str = e.to_string().to_lowercase();
+            if e_str.contains("unrelated")
+                || e_str.contains("merge")
+                || e_str.contains("no common ancestor")
+            {
+                let status = SyncStatus::Error(format!("Pull failed: {}", e));
+                let user_msg = if result.first_sync_mode == FirstSyncMode::InitExistingWorkspace {
+                    "远端仓库不是空仓库，且和本地作品历史不一致。推荐使用空 GitHub 私人仓库。"
+                } else {
+                    "远端仓库不是空仓库，且和本地作品历史不一致。请使用空 GitHub 私人仓库，或手动处理后再同步。"
+                };
+
+                return Ok(SyncResult::error(
+                    status,
+                    FirstSyncMode::UnrelatedHistories,
+                    Some(user_msg.to_string()),
+                    format!("Pull failed: {}", e),
+                ));
+            }
             if e.to_string().contains("SyncConflict_Detected") {
                 result.status = SyncStatus::Conflict;
                 result.error = Some("Sync Conflict: automatic merge failed".to_string());
@@ -909,8 +985,14 @@ impl SyncService {
                                     sync_conflict.clone(),
                                     local_content.as_deref(),
                                 ) {
-                                    result.error =
-                                        Some(format!("Failed to record sync conflict: {}", e));
+                                    let err_msg = format!("Failed to record sync conflict: {}", e);
+                                    result.error = match result.error {
+                                        Some(ref mut err) => {
+                                            err.push_str(&format!(" | {}", err_msg));
+                                            Some(err.clone())
+                                        }
+                                        None => Some(err_msg),
+                                    };
                                 }
                                 result.conflicts.push(sync_conflict);
                             }
@@ -920,35 +1002,36 @@ impl SyncService {
 
                 // We must abort the merge and cleanup state
                 if let Err(e) = repo.cleanup_state() {
-                    result.error = Some(format!("Cleanup state failed: {}", e));
+                    let err_msg = format!("Cleanup state failed: {}", e);
+                    result.error = match result.error {
+                        Some(ref mut err) => {
+                            err.push_str(&format!(" | {}", err_msg));
+                            Some(err.clone())
+                        }
+                        None => Some(err_msg),
+                    };
                 }
 
                 return Ok(result);
             }
 
-            let e_str = e.to_string().to_lowercase();
-            if e_str.contains("unrelated") || e_str.contains("merge") {
-                result.first_sync_mode = FirstSyncMode::UnrelatedHistories;
-                result.status = SyncStatus::Error(format!("Pull failed: {}", e));
-                result.error = Some(format!("Pull failed: {}", e));
-                result.user_message = Some(
-                    "远端仓库不是空仓库，不能自动合并，请使用空 GitHub 私人仓库或手动处理。"
-                        .to_string(),
-                );
-                return Ok(result);
-            }
-
-            result.status = SyncStatus::Error(format!("Pull failed: {}", e));
-            result.error = Some(format!("Pull failed: {}", e));
-            return Ok(result);
+            return Ok(SyncResult::error(
+                SyncStatus::Error(format!("Pull failed: {}", e)),
+                result.first_sync_mode,
+                None,
+                format!("Pull failed: {}", e),
+            ));
         }
         // Get Plan
         let plan = match Self::build_sync_plan_from_workspace(workspace_path) {
             Ok(p) => p,
             Err(e) => {
-                result.status = SyncStatus::Error(e.to_string());
-                result.error = Some(e.to_string());
-                return Ok(result);
+                return Ok(SyncResult::error(
+                    SyncStatus::Error(e.to_string()),
+                    result.first_sync_mode,
+                    None,
+                    e.to_string(),
+                ));
             }
         };
 
@@ -958,9 +1041,12 @@ impl SyncService {
         let paths_to_stage: Vec<&str> = plan.files_to_upload.iter().map(|s| s.as_str()).collect();
         if !paths_to_stage.is_empty() {
             if let Err(e) = backend.stage_paths(workspace_path, &paths_to_stage) {
-                result.status = SyncStatus::Error(format!("Stage failed: {}", e));
-                result.error = Some(format!("Stage failed: {}", e));
-                return Ok(result);
+                return Ok(SyncResult::error(
+                    SyncStatus::Error(format!("Stage failed: {}", e)),
+                    result.first_sync_mode,
+                    None,
+                    format!("Stage failed: {}", e),
+                ));
             }
         }
 
@@ -981,17 +1067,23 @@ impl SyncService {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    result.status = SyncStatus::Error(format!("Commit failed: {}", e));
-                    result.error = Some(format!("Commit failed: {}", e));
-                    return Ok(result);
+                    return Ok(SyncResult::error(
+                        SyncStatus::Error(format!("Commit failed: {}", e)),
+                        result.first_sync_mode,
+                        None,
+                        format!("Commit failed: {}", e),
+                    ));
                 }
             }
 
             // Push
             if let Err(e) = backend.push(workspace_path, &config.branch, auth.as_ref()) {
-                result.status = SyncStatus::Error(format!("Push failed: {}", e));
-                result.error = Some(format!("Push failed: {}", e));
-                return Ok(result);
+                return Ok(SyncResult::error(
+                    SyncStatus::Error(format!("Push failed: {}", e)),
+                    result.first_sync_mode,
+                    None,
+                    format!("Push failed: {}", e),
+                ));
             }
         }
 
@@ -1013,6 +1105,9 @@ impl SyncService {
         if let Err(e) = Self::save_sync_state(workspace_path, &state) {
             result.status = SyncStatus::Error(format!("Failed to save sync state: {}", e));
             result.error = Some(format!("Failed to save sync state: {}", e));
+            result.user_message = Some(
+                "同步操作完成，但同步状态保存失败，请不要连续同步，先检查存储权限。".to_string(),
+            );
             return Ok(result);
         }
 
@@ -1688,6 +1783,364 @@ mod tests {
         assert_eq!(
             result.status,
             SyncStatus::Error("Remote URL is empty".to_string())
+        );
+    }
+
+    #[test]
+    fn test_perform_sync_non_empty_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockInitNonEmptyBackend;
+        impl GitBackend for MockInitNonEmptyBackend {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "pull failed: unable to merge unrelated histories",
+                )))
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res =
+            SyncService::perform_sync(dir.path(), &config, &secrets, &MockInitNonEmptyBackend)
+                .unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::UnrelatedHistories);
+        assert!(res
+            .user_message
+            .unwrap()
+            .contains("推荐使用空 GitHub 私人仓库"));
+    }
+
+    #[test]
+    fn test_save_sync_state_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("app-meta/sync");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("sync_state.json"), "{}").unwrap();
+
+        let config = SyncConfig {
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackendOk;
+        impl GitBackend for MockBackendOk {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                true
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        std::fs::remove_file(state_dir.join("sync_state.json")).unwrap();
+        std::fs::create_dir(state_dir.join("sync_state.json")).unwrap();
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackendOk).unwrap();
+        assert!(matches!(res.status, SyncStatus::Error(_)));
+        assert!(res.user_message.unwrap().contains("同步状态保存失败"));
+    }
+
+    #[test]
+    fn test_first_sync_mode_clone_into_empty_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackend;
+        impl GitBackend for MockBackend {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::CloneIntoEmptyWorkspace);
+    }
+
+    #[test]
+    fn test_first_sync_mode_init_existing_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackend;
+        impl GitBackend for MockBackend {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
+    }
+
+    #[test]
+    fn test_first_sync_mode_already_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackend;
+        impl GitBackend for MockBackend {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                true
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::AlreadyGitRepo);
+    }
+
+    #[test]
+    fn test_sync_plan_no_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let settings_dir = dir.path().join("app-meta/sync");
+        std::fs::create_dir_all(&settings_dir).unwrap();
+
+        // Write the local secrets
+        std::fs::write(
+            settings_dir.join("sync_secrets.local.json"),
+            "secret_token_123",
+        )
+        .unwrap();
+        std::fs::write(
+            settings_dir.join("sync_secrets.local.json.tmp"),
+            "secret_token_456",
+        )
+        .unwrap();
+
+        // Also write some valid file to sync
+        std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
+
+        let plan = SyncService::build_sync_plan_from_workspace(dir.path()).unwrap();
+
+        // Ensure plan does not include the blacklisted items
+        for file in plan.files_to_upload {
+            assert!(
+                !file.contains("sync_secrets.local.json"),
+                "Should not upload secrets"
+            );
+        }
+
+        let ignored: Vec<String> = plan.ignored_files.into_iter().collect();
+        assert!(
+            ignored
+                .iter()
+                .any(|s| s.contains("sync_secrets.local.json")),
+            "Secrets should be explicitly ignored"
         );
     }
 }
