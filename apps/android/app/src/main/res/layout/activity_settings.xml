@@ -138,7 +138,8 @@
             <com.google.android.material.textfield.TextInputLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp">
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                android:layout_marginBottom="12dp">
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/etGithubRepo"
                     android:layout_width="match_parent"
@@ -149,7 +150,8 @@
             <com.google.android.material.textfield.TextInputLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp">
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                android:layout_marginBottom="12dp">
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/etBranch"
                     android:layout_width="match_parent"
@@ -160,7 +162,8 @@
             <com.google.android.material.textfield.TextInputLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp">
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                android:layout_marginBottom="12dp">
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/etHttpsToken"
                     android:layout_width="match_parent"

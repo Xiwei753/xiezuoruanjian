@@ -106,10 +106,35 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoSave.isChecked = currentSettings.autoSaveEnabled
         sbAutoSaveDelay.progress = (currentSettings.autoSaveDelayMs / 1000).toInt()
 
+        spinnerTheme.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                val themeStr = when (position) {
+                    1 -> "light"
+                    2 -> "dark"
+                    else -> "system"
+                }
+                if (currentSettings.themeMode != themeStr) {
+                    currentSettings = currentSettings.copy(themeMode = themeStr)
+                    ErrorUtil.safeRun(this@SettingsActivity) {
+                        if (::settingsRepository.isInitialized) {
+                            settingsRepository.saveLocalSettings(currentSettings)
+                        }
+                    }
+                    when (themeStr) {
+                        "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                        "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                        else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+                    }
+                }
+            }
+
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+
         when (currentSettings.themeMode) {
-            "light" -> spinnerTheme.setSelection(1)
-            "dark" -> spinnerTheme.setSelection(2)
-            else -> spinnerTheme.setSelection(0)
+            "light" -> spinnerTheme.setSelection(1, false)
+            "dark" -> spinnerTheme.setSelection(2, false)
+            else -> spinnerTheme.setSelection(0, false)
         }
 
         tvWorkspacePath.text = WorkspaceManager.getWorkspaceDir(this).absolutePath
@@ -185,7 +210,7 @@ class SettingsActivity : AppCompatActivity() {
                     Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
                 }
                 NativeResult.NotLoaded -> {
-                    Toast.makeText(this, "Native Core Not Loaded", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -208,17 +233,17 @@ class SettingsActivity : AppCompatActivity() {
                         if (syncResult.userMessage != null) {
                             AlertDialog.Builder(this)
                                 .setMessage(syncResult.userMessage)
-                                .setPositiveButton("OK", null)
+                                .setPositiveButton(getString(R.string.action_ok), null)
                                 .show()
                         } else if (syncResult.firstSyncMode == FirstSyncMode.UnrelatedHistories || syncResult.firstSyncMode == FirstSyncMode.BlockedNonEmptyRemote) {
                             AlertDialog.Builder(this)
                                 .setMessage(getString(R.string.sync_error_unrelated))
-                                .setPositiveButton("OK", null)
+                                .setPositiveButton(getString(R.string.action_ok), null)
                                 .show()
                         } else if (syncResult.error != null) {
                             AlertDialog.Builder(this)
                                 .setMessage(syncResult.error)
-                                .setPositiveButton("OK", null)
+                                .setPositiveButton(getString(R.string.action_ok), null)
                                 .show()
                         } else if (syncResult.conflicts.isNotEmpty()) {
                             Toast.makeText(this, getString(R.string.sync_error_conflict), Toast.LENGTH_LONG).show()
@@ -231,7 +256,7 @@ class SettingsActivity : AppCompatActivity() {
                     Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
                 }
                 NativeResult.NotLoaded -> {
-                    Toast.makeText(this, "Native Core Not Loaded", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                 }
             }
         }

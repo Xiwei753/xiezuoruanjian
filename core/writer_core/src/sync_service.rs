@@ -755,13 +755,21 @@ impl SyncService {
                 SyncStatus::Error("Remote URL is empty".to_string()),
                 FirstSyncMode::NotAttempted,
                 None,
-                "Remote URL is empty".to_string(),
+                "远程仓库地址为空。".to_string(),
             ));
         }
 
         let auth = match &config.transport {
             SyncTransport::HttpsToken => {
                 if let Some(token) = &secrets.token {
+                    if token.is_empty() {
+                        return Ok(SyncResult::error(
+                            SyncStatus::Error("No token provided".to_string()),
+                            FirstSyncMode::NotAttempted,
+                            None,
+                            "缺少 GitHub Token。".to_string(),
+                        ));
+                    }
                     Some(GitAuth::HttpsToken {
                         username: "sync_user".to_string(), // In GitHub, token is the password, username can be anything, but usually we use token as password or username
                         token: token.clone(),
@@ -771,7 +779,7 @@ impl SyncService {
                         SyncStatus::Error("No token provided".to_string()),
                         FirstSyncMode::NotAttempted,
                         None,
-                        "No token provided".to_string(),
+                        "缺少 GitHub Token。".to_string(),
                     ));
                 }
             }
@@ -780,7 +788,7 @@ impl SyncService {
                     SyncStatus::Error("SshDeployKey is not implemented".to_string()),
                     FirstSyncMode::NotAttempted,
                     None,
-                    "SshDeployKey is not implemented".to_string(),
+                    "当前不支持 SSH 同步方式。".to_string(),
                 ));
             }
         };

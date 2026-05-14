@@ -93,6 +93,7 @@ class EditorActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                handler.removeCallbacks(autoSaveRunnable)
                 if (isDirty) {
                     val success = saveContent()
                     if (success) {
@@ -114,6 +115,7 @@ class EditorActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        handler.removeCallbacks(autoSaveRunnable)
         if (isDirty) {
             saveContent()
         }
@@ -121,6 +123,7 @@ class EditorActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        handler.removeCallbacks(autoSaveRunnable)
         if (isDirty) {
             saveContent()
         }
