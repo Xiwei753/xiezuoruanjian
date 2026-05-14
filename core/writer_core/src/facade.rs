@@ -223,6 +223,83 @@ impl WriterCore {
     pub fn get_sync_ignored_paths(&self) -> crate::error::Result<Vec<String>> {
         crate::sync_service::SyncService::get_sync_ignored_paths(&self.workspace_path)
     }
+
+    pub fn perform_sync_dry_run(
+        &self,
+        config: &crate::sync_service::SyncConfig,
+    ) -> crate::error::Result<crate::sync_service::SyncPlan> {
+        crate::sync_service::SyncService::perform_sync_dry_run(&self.workspace_path, config)
+    }
+
+    pub fn perform_sync(
+        &self,
+        config: &crate::sync_service::SyncConfig,
+    ) -> crate::error::Result<crate::sync_service::SyncResult> {
+        let backend = crate::sync_service::Git2Backend;
+        crate::sync_service::SyncService::perform_sync(&self.workspace_path, config, &backend)
+    }
+
+    pub fn load_sync_config(&self) -> crate::error::Result<crate::sync_service::SyncConfig> {
+        let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
+        if !config_path.exists() {
+            return Ok(crate::sync_service::SyncConfig {
+                enabled: false,
+                remote_url: String::new(),
+                transport: crate::sync_service::SyncTransport::HttpsToken,
+                token: None,
+                auto_sync: false,
+                sync_interval_seconds: 300,
+            });
+        }
+        let content = std::fs::read_to_string(&config_path)?;
+        let config: crate::sync_service::SyncConfig =
+            serde_json::from_str(&content).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?;
+        Ok(config)
+    }
+
+    pub fn save_sync_config(
+        &self,
+        config: &crate::sync_service::SyncConfig,
+    ) -> crate::error::Result<()> {
+        let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(config).map_err(|e| {
+            crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
+        let tmp_path = config_path.with_extension("tmp");
+        std::fs::write(&tmp_path, content)?;
+        std::fs::rename(tmp_path, config_path)?;
+        Ok(())
+    }
+
+    pub fn validate_sync_config(
+        &self,
+        config: &crate::sync_service::SyncConfig,
+    ) -> crate::error::Result<bool> {
+        if config.enabled && config.remote_url.is_empty() {
+            return Ok(false);
+        }
+        if config.enabled
+            && matches!(
+                config.transport,
+                crate::sync_service::SyncTransport::HttpsToken
+            )
+            && config.token.is_none()
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -308,5 +385,46 @@ mod tests {
         assert!(core.move_chapter_to_trash("c1").is_err());
         assert!(core.update_index().is_err());
         assert!(core.sync_workspace().is_err());
+    }
+
+    #[test]
+    fn test_facade_sync_config_flow() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        // Load non-existent should give default
+        let config = core.load_sync_config().unwrap();
+        assert!(!config.enabled);
+
+        // Save new config
+        let mut new_config = config.clone();
+        new_config.enabled = true;
+        new_config.remote_url = "https://example.com/repo.git".to_string();
+        new_config.token = Some("my_super_secret_token".to_string());
+        core.save_sync_config(&new_config).unwrap();
+
+        let loaded = core.load_sync_config().unwrap();
+        assert!(loaded.enabled);
+        assert_eq!(loaded.remote_url, "https://example.com/repo.git");
+        assert_eq!(loaded.token.as_ref().unwrap(), "my_super_secret_token");
+
+        assert!(core.validate_sync_config(&loaded).unwrap());
+
+        let mut bad_config = loaded.clone();
+        bad_config.remote_url = "".to_string();
+        assert!(!core.validate_sync_config(&bad_config).unwrap());
+    }
+
+    #[test]
+    fn test_facade_perform_sync_dry_run() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let config = core.load_sync_config().unwrap();
+        let plan = core.perform_sync_dry_run(&config).unwrap();
+        // Since config is disabled by default, plan should be empty
+        assert!(plan.files_to_upload.is_empty());
     }
 }
