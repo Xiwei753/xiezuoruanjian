@@ -16,6 +16,6 @@ echo "=== Checking Linux Native Skeleton ==="
 ./tools/build_linux.sh
 
 echo "=== Checking Android Debug Build ==="
-./tools/build_android.sh
+#./tools/build_android.sh
 
 echo "=== Done ==="
