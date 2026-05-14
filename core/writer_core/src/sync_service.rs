@@ -13,9 +13,20 @@ pub struct SyncConfig {
     pub enabled: bool,
     pub remote_url: String,
     pub transport: SyncTransport,
-    pub token: Option<String>,
+    #[serde(default = "default_branch")]
+    pub branch: String,
     pub auto_sync: bool,
     pub sync_interval_seconds: u32,
+}
+
+fn default_branch() -> String {
+    "main".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncSecrets {
+    pub token: Option<String>,
+    pub ssh_private_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -81,10 +92,20 @@ pub trait GitBackend {
         auth: Option<&GitAuth>,
     ) -> crate::Result<()>;
     fn open_repo(&self, local_repo_path: &Path) -> crate::Result<()>;
-    fn pull(&self, local_repo_path: &Path, auth: Option<&GitAuth>) -> crate::Result<()>;
+    fn pull(
+        &self,
+        local_repo_path: &Path,
+        branch: &str,
+        auth: Option<&GitAuth>,
+    ) -> crate::Result<()>;
     fn stage_paths(&self, local_repo_path: &Path, paths: &[&str]) -> crate::Result<()>;
     fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>>;
-    fn push(&self, local_repo_path: &Path, auth: Option<&GitAuth>) -> crate::Result<()>;
+    fn push(
+        &self,
+        local_repo_path: &Path,
+        branch: &str,
+        auth: Option<&GitAuth>,
+    ) -> crate::Result<()>;
     fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>>;
     fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>>; // Returns changed files
 }
@@ -144,7 +165,12 @@ impl GitBackend for Git2Backend {
         Ok(())
     }
 
-    fn pull(&self, local_repo_path: &Path, auth: Option<&GitAuth>) -> crate::Result<()> {
+    fn pull(
+        &self,
+        local_repo_path: &Path,
+        branch: &str,
+        auth: Option<&GitAuth>,
+    ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
             crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -162,7 +188,7 @@ impl GitBackend for Git2Backend {
         fetch_options.remote_callbacks(Self::build_callbacks(auth));
 
         remote
-            .fetch(&["master"], Some(&mut fetch_options), None)
+            .fetch(&[branch], Some(&mut fetch_options), None)
             .map_err(|e: git2::Error| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -187,6 +213,32 @@ impl GitBackend for Git2Backend {
                     ))
                 })?;
 
+        let mut statuses = git2::StatusOptions::new();
+        statuses.include_untracked(true);
+        let has_uncommitted_changes = repo
+            .statuses(Some(&mut statuses))
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?
+            .iter()
+            .any(|s| {
+                if let Some(path) = s.path() {
+                    SyncService::is_whitelisted_path(path)
+                } else {
+                    false
+                }
+            });
+
+        if has_uncommitted_changes {
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Uncommitted changes exist. Commit before pulling.",
+            )));
+        }
+
         let analysis = repo
             .merge_analysis(&[&fetch_commit])
             .map_err(|e: git2::Error| {
@@ -198,7 +250,7 @@ impl GitBackend for Git2Backend {
         if analysis.0.is_up_to_date() {
             // Do nothing
         } else if analysis.0.is_fast_forward() {
-            let refname = format!("refs/heads/master");
+            let refname = format!("refs/heads/{}", branch);
             let mut reference = repo.find_reference(&refname).map_err(|e: git2::Error| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -219,6 +271,7 @@ impl GitBackend for Git2Backend {
                     e.to_string(),
                 ))
             })?;
+            // Safe to checkout since we checked for uncommitted changes
             repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
                 .map_err(|e: git2::Error| {
                     crate::Error::Io(std::io::Error::new(
@@ -226,7 +279,7 @@ impl GitBackend for Git2Backend {
                         e.to_string(),
                     ))
                 })?;
-        } else {
+        } else if analysis.0.is_normal() {
             let mut merge_opts = git2::MergeOptions::new();
             repo.merge(&[&fetch_commit], Some(&mut merge_opts), None)
                 .map_err(|e: git2::Error| {
@@ -243,10 +296,10 @@ impl GitBackend for Git2Backend {
                 ))
             })?;
             if index.has_conflicts() {
-                // Return an error for conflicts
+                // Return an error for conflicts with a special prefix that can be parsed
                 return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    "SyncConflict".to_string(),
+                    "SyncConflict_Detected".to_string(),
                 )));
             } else {
                 let oid = index.write_tree().map_err(|e: git2::Error| {
@@ -269,13 +322,29 @@ impl GitBackend for Git2Backend {
                         e.to_string(),
                     ))
                 })?;
-                let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-                let fetch_commit_obj = repo.find_commit(fetch_commit.id()).unwrap();
+                let head_ref = repo.head().map_err(|e| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?;
+                let head_commit = head_ref.peel_to_commit().map_err(|e| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?;
+                let fetch_commit_obj = repo.find_commit(fetch_commit.id()).map_err(|e| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?;
                 repo.commit(
                     Some("HEAD"),
                     &signature,
                     &signature,
-                    "Merge remote-tracking branch 'origin/master'",
+                    "Merge remote-tracking branch",
                     &tree,
                     &[&head_commit, &fetch_commit_obj],
                 )
@@ -285,8 +354,18 @@ impl GitBackend for Git2Backend {
                         e.to_string(),
                     ))
                 })?;
-                repo.cleanup_state().unwrap();
+                repo.cleanup_state().map_err(|e| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?;
             }
+        } else {
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Unable to pull: remote branch is unrelated or unable to merge",
+            )));
         }
 
         Ok(())
@@ -306,6 +385,9 @@ impl GitBackend for Git2Backend {
             ))
         })?;
         for p in paths {
+            if SyncService::is_blacklisted_path(p) {
+                continue;
+            }
             index.add_path(Path::new(p)).map_err(|e: git2::Error| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -358,8 +440,18 @@ impl GitBackend for Git2Backend {
 
         let head_commit = match repo.head() {
             Ok(head) => {
-                let target = head.target().unwrap();
-                Some(repo.find_commit(target).unwrap())
+                let target = head.target().ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "HEAD target not found",
+                    ))
+                })?;
+                Some(repo.find_commit(target).map_err(|e| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
+                })?)
             }
             Err(_) => None,
         };
@@ -394,7 +486,12 @@ impl GitBackend for Git2Backend {
         Ok(Some(commit_id.to_string()))
     }
 
-    fn push(&self, local_repo_path: &Path, auth: Option<&GitAuth>) -> crate::Result<()> {
+    fn push(
+        &self,
+        local_repo_path: &Path,
+        branch: &str,
+        auth: Option<&GitAuth>,
+    ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
             crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -411,11 +508,9 @@ impl GitBackend for Git2Backend {
         let mut push_options = git2::PushOptions::new();
         push_options.remote_callbacks(Self::build_callbacks(auth));
 
+        let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
         remote
-            .push(
-                &["refs/heads/master:refs/heads/master"],
-                Some(&mut push_options),
-            )
+            .push(&[&refspec], Some(&mut push_options))
             .map_err(|e: git2::Error| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -536,6 +631,7 @@ impl SyncService {
     pub fn perform_sync(
         workspace_path: &Path,
         config: &SyncConfig,
+        secrets: &SyncSecrets,
         backend: &dyn GitBackend,
     ) -> crate::Result<SyncResult> {
         let mut result = SyncResult {
@@ -561,7 +657,7 @@ impl SyncService {
 
         let auth = match &config.transport {
             SyncTransport::HttpsToken => {
-                if let Some(token) = &config.token {
+                if let Some(token) = &secrets.token {
                     Some(GitAuth::HttpsToken {
                         username: "sync_user".to_string(), // In GitHub, token is the password, username can be anything, but usually we use token as password or username
                         token: token.clone(),
@@ -597,27 +693,96 @@ impl SyncService {
         }
 
         // Pull
-        if let Err(e) = backend.pull(workspace_path, auth.as_ref()) {
-            if e.to_string().contains("SyncConflict") {
+        if let Err(e) = backend.pull(workspace_path, &config.branch, auth.as_ref()) {
+            if e.to_string().contains("SyncConflict_Detected") {
                 result.status = SyncStatus::Conflict;
                 result.error = Some("Sync Conflict: automatic merge failed".to_string());
 
-                // Let's create a dummy conflict to satisfy the test and record it.
-                // In a real app we would iterate through index conflicts and record them.
-                let conflict = SyncConflict {
-                    local_path: "unknown".to_string(),
-                    remote_path: "unknown".to_string(),
-                    local_hash: "".to_string(),
-                    remote_hash: "".to_string(),
-                    base_hash: "".to_string(),
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64,
-                    description: "Git pull resulted in merge conflicts.".to_string(),
+                // Iterate through git index conflicts and record them
+                let repo = match git2::Repository::open(workspace_path) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        result.error = Some(e.to_string());
+                        return Ok(result);
+                    }
                 };
-                let _ = Self::record_sync_conflict(workspace_path, conflict.clone(), None);
-                result.conflicts.push(conflict);
+
+                let index = match repo.index() {
+                    Ok(i) => i,
+                    Err(e) => {
+                        result.error = Some(e.to_string());
+                        return Ok(result);
+                    }
+                };
+
+                if index.has_conflicts() {
+                    let conflicts = match index.conflicts() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            result.error = Some(e.to_string());
+                            return Ok(result);
+                        }
+                    };
+
+                    for conflict in conflicts {
+                        if let Ok(c) = conflict {
+                            let local_path = c
+                                .our
+                                .as_ref()
+                                .map(|o| String::from_utf8_lossy(&o.path).to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            let remote_path = c
+                                .their
+                                .as_ref()
+                                .map(|o| String::from_utf8_lossy(&o.path).to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+
+                            let sync_conflict = SyncConflict {
+                                local_path,
+                                remote_path,
+                                local_hash: c
+                                    .our
+                                    .as_ref()
+                                    .map(|o| o.id.to_string())
+                                    .unwrap_or_default(),
+                                remote_hash: c
+                                    .their
+                                    .as_ref()
+                                    .map(|o| o.id.to_string())
+                                    .unwrap_or_default(),
+                                base_hash: c
+                                    .ancestor
+                                    .as_ref()
+                                    .map(|o| o.id.to_string())
+                                    .unwrap_or_default(),
+                                created_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs() as i64,
+                                description: "Git pull resulted in merge conflicts.".to_string(),
+                            };
+
+                            let mut local_content = None;
+                            if let Some(our) = c.our {
+                                if let Ok(blob) = repo.find_blob(our.id) {
+                                    if let Ok(content_str) = std::str::from_utf8(blob.content()) {
+                                        local_content = Some(content_str.to_string());
+                                    }
+                                }
+                            }
+
+                            let _ = Self::record_sync_conflict(
+                                workspace_path,
+                                sync_conflict.clone(),
+                                local_content.as_deref(),
+                            );
+                            result.conflicts.push(sync_conflict);
+                        }
+                    }
+                }
+
+                // We must abort the merge and cleanup state
+                let _ = repo.cleanup_state();
 
                 return Ok(result);
             }
@@ -672,7 +837,7 @@ impl SyncService {
             }
 
             // Push
-            if let Err(e) = backend.push(workspace_path, auth.as_ref()) {
+            if let Err(e) = backend.push(workspace_path, &config.branch, auth.as_ref()) {
                 result.status = SyncStatus::Error(format!("Push failed: {}", e));
                 result.error = Some(format!("Push failed: {}", e));
                 return Ok(result);
@@ -686,7 +851,7 @@ impl SyncService {
         state.last_sync_time = Some(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs() as i64,
         );
         if let Some(hash) = &result.commit_hash {
@@ -710,6 +875,7 @@ impl SyncService {
     pub fn is_blacklisted_path(rel_path: &str) -> bool {
         let ignored_patterns = [
             "app-meta/settings/settings.local.json",
+            "app-meta/sync/sync_secrets.local.json",
             "sqlite_cache",
             "tmp",
             "backups",
@@ -979,6 +1145,30 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_secrets_blacklisted() {
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/sync_secrets.local.json"
+        ));
+    }
+
+    #[test]
+    fn test_sync_config_no_token() {
+        let config = SyncConfig {
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+        };
+        let content = serde_json::to_string(&config).unwrap();
+        // token might be there if some other struct is serialized, but we want to ensure
+        // the word "token" isn't a key. Actually since token was removed from SyncConfig, it should literally not be there.
+        // Wait, why did it fail? Oh, HttpsToken transport is present! It serializes to "https_token".
+        // Let's assert it doesn't contain `"token":`
+        assert!(!content.contains("\"token\":"));
+    }
+    #[test]
     fn test_blacklist_ignores_tmp_and_lock_files() {
         assert!(SyncService::is_blacklisted_path(
             "projects/v1/chapters/c1.tmp"
@@ -1029,9 +1219,35 @@ mod tests {
 
         SyncService::save_sync_state(dir.path(), &state).unwrap();
         let state_path = dir.path().join("app-meta/sync/sync_state.json");
-        let content = std::fs::read_to_string(state_path).unwrap();
+        let state_content = std::fs::read_to_string(state_path).unwrap();
 
-        assert!(content.contains("https://example.com/repo.git"));
+        assert!(state_content.contains("https://example.com/repo.git"));
+        assert!(!state_content.contains("\"token\":"));
+    }
+
+    #[test]
+    fn test_stage_blacklisted_files() {
+        let dir = tempdir().unwrap();
+
+        // Initialize git repo manually or use SyncService
+        let repo = git2::Repository::init(dir.path()).unwrap();
+
+        let file_path = dir.path().join("app-meta/sync/sync_secrets.local.json");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, "secret_content").unwrap();
+
+        let backend = Git2Backend;
+        let paths = vec!["app-meta/sync/sync_secrets.local.json"];
+        backend.stage_paths(dir.path(), &paths).unwrap();
+
+        // Ensure it's not staged
+        let index = repo.index().unwrap();
+        assert!(index
+            .get_path(
+                std::path::Path::new("app-meta/sync/sync_secrets.local.json"),
+                0
+            )
+            .is_none());
     }
 
     #[test]
@@ -1041,7 +1257,7 @@ mod tests {
             enabled: false,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
-            token: Some("secret_token".to_string()),
+            branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
         };
@@ -1058,7 +1274,7 @@ mod tests {
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
-            token: Some("secret_token".to_string()),
+            branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
         };
@@ -1085,14 +1301,19 @@ mod tests {
             enabled: true,
             remote_url: "".to_string(),
             transport: SyncTransport::HttpsToken,
-            token: Some("secret_token".to_string()),
+            branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
         };
 
+        let secrets = SyncSecrets {
+            token: Some("secret_token".to_string()),
+            ssh_private_key: None,
+        };
+
         // For this test we can use Git2Backend as it won't be called due to early return
         let backend = Git2Backend;
-        let result = SyncService::perform_sync(dir.path(), &config, &backend).unwrap();
+        let result = SyncService::perform_sync(dir.path(), &config, &secrets, &backend).unwrap();
         assert_eq!(
             result.status,
             SyncStatus::Error("Remote URL is empty".to_string())

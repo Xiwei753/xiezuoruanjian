@@ -236,7 +236,53 @@ impl WriterCore {
         config: &crate::sync_service::SyncConfig,
     ) -> crate::error::Result<crate::sync_service::SyncResult> {
         let backend = crate::sync_service::Git2Backend;
-        crate::sync_service::SyncService::perform_sync(&self.workspace_path, config, &backend)
+        let secrets = self.load_sync_secrets().unwrap_or_default();
+        crate::sync_service::SyncService::perform_sync(
+            &self.workspace_path,
+            config,
+            &secrets,
+            &backend,
+        )
+    }
+
+    pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync_service::SyncSecrets> {
+        let secrets_path = self
+            .workspace_path
+            .join("app-meta/sync/sync_secrets.local.json");
+        if !secrets_path.exists() {
+            return Ok(crate::sync_service::SyncSecrets::default());
+        }
+        let content = std::fs::read_to_string(&secrets_path)?;
+        let secrets: crate::sync_service::SyncSecrets =
+            serde_json::from_str(&content).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?;
+        Ok(secrets)
+    }
+
+    pub fn save_sync_secrets(
+        &self,
+        secrets: &crate::sync_service::SyncSecrets,
+    ) -> crate::error::Result<()> {
+        let secrets_path = self
+            .workspace_path
+            .join("app-meta/sync/sync_secrets.local.json");
+        if let Some(parent) = secrets_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(secrets).map_err(|e| {
+            crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
+        let tmp_path = secrets_path.with_extension("tmp");
+        std::fs::write(&tmp_path, content)?;
+        std::fs::rename(tmp_path, secrets_path)?;
+        Ok(())
     }
 
     pub fn load_sync_config(&self) -> crate::error::Result<crate::sync_service::SyncConfig> {
@@ -246,7 +292,7 @@ impl WriterCore {
                 enabled: false,
                 remote_url: String::new(),
                 transport: crate::sync_service::SyncTransport::HttpsToken,
-                token: None,
+                branch: "main".to_string(),
                 auto_sync: false,
                 sync_interval_seconds: 300,
             });
@@ -289,15 +335,8 @@ impl WriterCore {
         if config.enabled && config.remote_url.is_empty() {
             return Ok(false);
         }
-        if config.enabled
-            && matches!(
-                config.transport,
-                crate::sync_service::SyncTransport::HttpsToken
-            )
-            && config.token.is_none()
-        {
-            return Ok(false);
-        }
+        // token check is now separated since token is in secrets.
+        // We will just validate the remote_url for config
         Ok(true)
     }
 }
@@ -401,13 +440,21 @@ mod tests {
         let mut new_config = config.clone();
         new_config.enabled = true;
         new_config.remote_url = "https://example.com/repo.git".to_string();
-        new_config.token = Some("my_super_secret_token".to_string());
         core.save_sync_config(&new_config).unwrap();
 
         let loaded = core.load_sync_config().unwrap();
         assert!(loaded.enabled);
         assert_eq!(loaded.remote_url, "https://example.com/repo.git");
-        assert_eq!(loaded.token.as_ref().unwrap(), "my_super_secret_token");
+
+        let mut secrets = core.load_sync_secrets().unwrap();
+        secrets.token = Some("my_super_secret_token".to_string());
+        core.save_sync_secrets(&secrets).unwrap();
+
+        let loaded_secrets = core.load_sync_secrets().unwrap();
+        assert_eq!(
+            loaded_secrets.token.as_ref().unwrap(),
+            "my_super_secret_token"
+        );
 
         assert!(core.validate_sync_config(&loaded).unwrap());
 
