@@ -187,12 +187,41 @@ impl WriterCore {
     }
 
     // --- Sync Service ---
-    pub fn build_sync_plan(
+    pub fn scan_sync_files(&self) -> crate::error::Result<Vec<crate::sync_service::SyncFileEntry>> {
+        crate::sync_service::SyncService::scan_workspace_for_sync(&self.workspace_path)
+    }
+
+    pub fn build_sync_plan_from_workspace(
         &self,
-        mock_changed_files: Vec<&str>,
     ) -> crate::error::Result<crate::sync_service::SyncPlan> {
-        let sync = crate::sync_service::SyncService::new();
-        sync.build_sync_plan(mock_changed_files)
+        crate::sync_service::SyncService::build_sync_plan_from_workspace(&self.workspace_path)
+    }
+
+    pub fn load_sync_state(&self) -> crate::error::Result<crate::sync_service::SyncState> {
+        crate::sync_service::SyncService::load_sync_state(&self.workspace_path)
+    }
+
+    pub fn save_sync_state(
+        &self,
+        state: &crate::sync_service::SyncState,
+    ) -> crate::error::Result<()> {
+        crate::sync_service::SyncService::save_sync_state(&self.workspace_path, state)
+    }
+
+    pub fn record_sync_conflict(
+        &self,
+        conflict: crate::sync_service::SyncConflict,
+        local_content: Option<&str>,
+    ) -> crate::error::Result<()> {
+        crate::sync_service::SyncService::record_sync_conflict(
+            &self.workspace_path,
+            conflict,
+            local_content,
+        )
+    }
+
+    pub fn get_sync_ignored_paths(&self) -> crate::error::Result<Vec<String>> {
+        crate::sync_service::SyncService::get_sync_ignored_paths(&self.workspace_path)
     }
 }
 
