@@ -19,6 +19,10 @@ pub struct LocalSettings {
     pub auto_save_enabled: bool,
     #[serde(default = "default_auto_save_delay_ms")]
     pub auto_save_delay_ms: u64,
+    #[serde(default = "default_auto_indent_enabled")]
+    pub auto_indent_enabled: bool,
+    #[serde(default = "default_auto_indent_width")]
+    pub auto_indent_width: f32,
     #[serde(default)]
     pub window_width: f64,
     #[serde(default)]
@@ -38,6 +42,13 @@ fn default_auto_save_delay_ms() -> u64 {
     1500
 }
 
+fn default_auto_indent_enabled() -> bool {
+    true
+}
+fn default_auto_indent_width() -> f32 {
+    2.0
+}
+
 impl Default for LocalSettings {
     fn default() -> Self {
         Self {
@@ -47,6 +58,8 @@ impl Default for LocalSettings {
             editor_line_spacing_multiplier: default_editor_line_spacing_multiplier(),
             auto_save_enabled: default_auto_save_enabled(),
             auto_save_delay_ms: default_auto_save_delay_ms(),
+            auto_indent_enabled: default_auto_indent_enabled(),
+            auto_indent_width: default_auto_indent_width(),
             window_width: 800.0,
             window_height: 600.0,
         }

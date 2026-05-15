@@ -38,32 +38,98 @@
                 android:textStyle="bold"
                 android:layout_marginBottom="8dp"/>
 
-            <TextView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/pref_font_size"
-                android:textSize="16sp"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_font_size"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:id="@+id/tvFontSizeValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorPrimary"/>
+            </LinearLayout>
 
-            <SeekBar
+            <com.google.android.material.slider.Slider
                 android:id="@+id/sbFontSize"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="32"
-                android:min="12"
+                android:valueFrom="12.0"
+                android:valueTo="32.0"
+                android:stepSize="1.0"
                 android:layout_marginBottom="16dp"/>
 
-            <TextView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/pref_line_spacing"
-                android:textSize="16sp"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_line_spacing"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:id="@+id/tvLineSpacingValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorPrimary"/>
+            </LinearLayout>
 
-            <SeekBar
+            <com.google.android.material.slider.Slider
                 android:id="@+id/sbLineSpacing"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="25"
-                android:min="10"
+                android:valueFrom="1.0"
+                android:valueTo="3.0"
+                android:stepSize="0.1"
+                android:layout_marginBottom="24dp"/>
+
+
+            <!-- Auto Indent -->
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/switchAutoIndent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/pref_auto_indent"
+                android:textSize="16sp"
+                android:layout_marginBottom="16dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_auto_indent_width"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:id="@+id/tvAutoIndentWidthValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorPrimary"/>
+            </LinearLayout>
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sbAutoIndentWidth"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0.0"
+                android:valueTo="4.0"
+                android:stepSize="0.5"
                 android:layout_marginBottom="24dp"/>
 
             <!-- Save Settings -->
@@ -84,19 +150,32 @@
                 android:textSize="16sp"
                 android:layout_marginBottom="16dp"/>
 
-            <TextView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/pref_auto_save_delay"
-                android:textSize="16sp"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_auto_save_delay"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:id="@+id/tvAutoSaveDelayValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorPrimary"/>
+            </LinearLayout>
 
-            <SeekBar
+            <com.google.android.material.slider.Slider
                 android:id="@+id/sbAutoSaveDelay"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="10"
-                android:min="1"
-                android:progress="1"
+                android:valueFrom="1.0"
+                android:valueTo="10.0"
+                android:stepSize="1.0"
                 android:layout_marginBottom="24dp"/>
 
             <!-- Theme Settings -->
@@ -189,19 +268,32 @@
                 android:textSize="16sp"
                 android:layout_marginBottom="8dp"/>
 
-            <TextView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/pref_sync_interval"
-                android:textSize="16sp"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_sync_interval"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:id="@+id/tvSyncIntervalValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorPrimary"/>
+            </LinearLayout>
 
-            <SeekBar
+            <com.google.android.material.slider.Slider
                 android:id="@+id/sbSyncInterval"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:max="3600"
-                android:min="60"
-                android:progress="300"
+                android:valueFrom="60.0"
+                android:valueTo="3600.0"
+                android:stepSize="60.0"
                 android:layout_marginBottom="16dp"/>
 
             <LinearLayout

@@ -1,8 +1,9 @@
 package com.xiwei.writerapp.ui
 
 import android.os.Bundle
+import com.google.android.material.slider.Slider
 import android.widget.ArrayAdapter
-import android.widget.SeekBar
+
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -28,10 +29,10 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var currentSettings: LocalSettings
 
-    private lateinit var sbFontSize: SeekBar
-    private lateinit var sbLineSpacing: SeekBar
+    private lateinit var sbFontSize: Slider
+    private lateinit var sbLineSpacing: Slider
     private lateinit var switchAutoSave: MaterialSwitch
-    private lateinit var sbAutoSaveDelay: SeekBar
+    private lateinit var sbAutoSaveDelay: Slider
     private lateinit var spinnerTheme: Spinner
     private lateinit var tvWorkspacePath: TextView
 
@@ -42,7 +43,17 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var etHttpsToken: TextInputEditText
     private lateinit var tvTokenStatus: TextView
     private lateinit var switchAutoSync: MaterialSwitch
-    private lateinit var sbSyncInterval: SeekBar
+    private lateinit var sbSyncInterval: Slider
+
+    private lateinit var tvFontSizeValue: TextView
+    private lateinit var tvLineSpacingValue: TextView
+    private lateinit var tvAutoSaveDelayValue: TextView
+    private lateinit var tvSyncIntervalValue: TextView
+
+    private lateinit var switchAutoIndent: MaterialSwitch
+    private lateinit var sbAutoIndentWidth: Slider
+    private lateinit var tvAutoIndentWidthValue: TextView
+
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnPerformSync: MaterialButton
 
@@ -78,6 +89,46 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoSave = findViewById(R.id.switchAutoSave)
         sbAutoSaveDelay = findViewById(R.id.sbAutoSaveDelay)
         spinnerTheme = findViewById(R.id.spinnerTheme)
+
+        tvFontSizeValue = findViewById(R.id.tvFontSizeValue)
+        tvLineSpacingValue = findViewById(R.id.tvLineSpacingValue)
+        tvAutoSaveDelayValue = findViewById(R.id.tvAutoSaveDelayValue)
+        tvSyncIntervalValue = findViewById(R.id.tvSyncIntervalValue)
+
+        switchAutoIndent = findViewById(R.id.switchAutoIndent)
+        sbAutoIndentWidth = findViewById(R.id.sbAutoIndentWidth)
+        tvAutoIndentWidthValue = findViewById(R.id.tvAutoIndentWidthValue)
+
+        // Live value update listeners
+        sbFontSize.addOnChangeListener { _, value, _ ->
+            tvFontSizeValue.text = "${value.toInt()}sp"
+        }
+        sbLineSpacing.addOnChangeListener { _, value, _ ->
+            tvLineSpacingValue.text = "${String.format("%.1f", value)}x"
+        }
+        sbAutoSaveDelay.addOnChangeListener { _, value, _ ->
+            tvAutoSaveDelayValue.text = "${value.toInt()}秒"
+        }
+        sbSyncInterval.addOnChangeListener { _, value, _ ->
+            tvSyncIntervalValue.text = "${value.toInt()}秒"
+        }
+        sbAutoIndentWidth.addOnChangeListener { _, value, _ ->
+            tvAutoIndentWidthValue.text = "${value}字符"
+        }
+
+        // Save on drag stop
+        val saveSettingsListener = object : Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(slider: Slider) {}
+            override fun onStopTrackingTouch(slider: Slider) {
+                saveAndFinish(false)
+            }
+        }
+        sbFontSize.addOnSliderTouchListener(saveSettingsListener)
+        sbLineSpacing.addOnSliderTouchListener(saveSettingsListener)
+        sbAutoSaveDelay.addOnSliderTouchListener(saveSettingsListener)
+        sbSyncInterval.addOnSliderTouchListener(saveSettingsListener)
+        sbAutoIndentWidth.addOnSliderTouchListener(saveSettingsListener)
+
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
 
         switchEnableSync = findViewById(R.id.switchEnableSync)
@@ -101,10 +152,23 @@ class SettingsActivity : AppCompatActivity() {
         spinnerTheme.adapter = adapter
 
         // Bind existing settings
-        sbFontSize.progress = currentSettings.editorFontSize.toInt()
-        sbLineSpacing.progress = (currentSettings.editorLineSpacingMultiplier * 10).toInt()
+        sbFontSize.value = currentSettings.editorFontSize
+        sbLineSpacing.value = currentSettings.editorLineSpacingMultiplier
         switchAutoSave.isChecked = currentSettings.autoSaveEnabled
-        sbAutoSaveDelay.progress = (currentSettings.autoSaveDelayMs / 1000).toInt()
+        sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
+
+        switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
+        sbAutoIndentWidth.value = currentSettings.autoIndentWidth
+
+        // Initial texts
+        tvFontSizeValue.text = "${currentSettings.editorFontSize.toInt()}sp"
+        tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
+        tvAutoSaveDelayValue.text = "${(currentSettings.autoSaveDelayMs / 1000).toInt()}秒"
+        tvAutoIndentWidthValue.text = "${currentSettings.autoIndentWidth}字符"
+
+        switchAutoSave.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
+        switchAutoIndent.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
+
 
         spinnerTheme.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
@@ -153,7 +217,8 @@ class SettingsActivity : AppCompatActivity() {
         etGithubRepo.setText(currentSyncConfig.remoteUrl)
         etBranch.setText(currentSyncConfig.branch)
         switchAutoSync.isChecked = currentSyncConfig.autoSync
-        sbSyncInterval.progress = currentSyncConfig.syncIntervalSeconds
+        sbSyncInterval.value = currentSyncConfig.syncIntervalSeconds.toFloat()
+        tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds}秒"
 
         if (!currentSyncSecrets.token.isNullOrEmpty()) {
             tvTokenStatus.text = getString(R.string.token_configured)
@@ -173,7 +238,7 @@ class SettingsActivity : AppCompatActivity() {
             remoteUrl = etGithubRepo.text?.toString() ?: "",
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
-            syncIntervalSeconds = sbSyncInterval.progress
+            syncIntervalSeconds = sbSyncInterval.value.toInt()
         )
     }
 
@@ -276,11 +341,11 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
-        saveAndFinish()
+        saveAndFinish(true)
         super.onBackPressed()
     }
 
-    private fun saveAndFinish() {
+    private fun saveAndFinish(finishActivity: Boolean = true) {
         val themeStr = when (spinnerTheme.selectedItemPosition) {
             1 -> "light"
             2 -> "dark"
@@ -288,10 +353,12 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         val newSettings = currentSettings.copy(
-            editorFontSize = sbFontSize.progress.toFloat(),
-            editorLineSpacingMultiplier = sbLineSpacing.progress / 10f,
+            editorFontSize = sbFontSize.value,
+            editorLineSpacingMultiplier = sbLineSpacing.value,
             autoSaveEnabled = switchAutoSave.isChecked,
-            autoSaveDelayMs = sbAutoSaveDelay.progress * 1000L,
+            autoSaveDelayMs = sbAutoSaveDelay.value.toLong() * 1000L,
+            autoIndentEnabled = switchAutoIndent.isChecked,
+            autoIndentWidth = sbAutoIndentWidth.value,
             themeMode = themeStr
         )
 
@@ -308,7 +375,7 @@ class SettingsActivity : AppCompatActivity() {
             remoteUrl = etGithubRepo.text?.toString() ?: "",
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
-            syncIntervalSeconds = sbSyncInterval.progress
+            syncIntervalSeconds = sbSyncInterval.value.toInt()
         )
 
         val tokenInput = etHttpsToken.text?.toString() ?: ""
@@ -332,6 +399,6 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
-        finish()
+        if (finishActivity) { finish() }
     }
 }

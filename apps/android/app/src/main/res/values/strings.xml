@@ -32,6 +32,8 @@
     <string name="pref_category_editor">编辑器设置</string>
     <string name="pref_font_size">字体大小</string>
     <string name="pref_line_spacing">行距</string>
+    <string name="pref_auto_indent">自动首行缩进</string>
+    <string name="pref_auto_indent_width">首行缩进宽度 (字符)</string>
 
     <string name="pref_category_save">保存设置</string>
     <string name="pref_auto_save">自动保存</string>
