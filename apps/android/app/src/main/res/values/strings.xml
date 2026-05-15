@@ -35,8 +35,6 @@
     <string name="pref_auto_indent">自动首行缩进</string>
     <string name="pref_auto_indent_width">首行缩进宽度 (字符)</string>
 
-    <string name="pref_editor_fullscreen_portrait">编辑器竖屏全屏模式</string>
-
     <string name="pref_category_save">保存设置</string>
     <string name="pref_auto_save">自动保存</string>
     <string name="pref_auto_save_delay">自动保存延迟 (毫秒)</string>
