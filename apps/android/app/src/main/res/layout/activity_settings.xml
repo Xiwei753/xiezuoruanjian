@@ -28,7 +28,19 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- Editor Settings -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                style="?attr/materialCardViewElevatedStyle"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="16dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+                    <!-- Editor Settings -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -131,8 +143,21 @@
                 android:valueTo="4.0"
                 android:stepSize="0.5"
                 android:layout_marginBottom="24dp"/>
-
-            <!-- Save Settings -->
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+<com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                style="?attr/materialCardViewElevatedStyle"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="16dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+                    <!-- Save Settings -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -177,8 +202,21 @@
                 android:valueTo="10.0"
                 android:stepSize="1.0"
                 android:layout_marginBottom="24dp"/>
-
-            <!-- Theme Settings -->
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+<com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                style="?attr/materialCardViewElevatedStyle"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="16dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+                    <!-- Theme Settings -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -193,9 +231,21 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="24dp"/>
-
-
-            <!-- Sync Settings -->
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+<com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                style="?attr/materialCardViewElevatedStyle"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="16dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+                    <!-- Sync Settings -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -317,8 +367,21 @@
                     android:layout_height="wrap_content"
                     android:text="@string/btn_perform_sync" />
             </LinearLayout>
-
-            <!-- About Settings -->
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+<com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                style="?attr/materialCardViewElevatedStyle"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="16dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+                    <!-- About Settings -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -327,15 +390,6 @@
                 android:textSize="14sp"
                 android:textStyle="bold"
                 android:layout_marginBottom="8dp"/>
-
-            <!-- Editor Fullscreen Portrait -->
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/switchEditorFullscreenPortrait"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/pref_editor_fullscreen_portrait"
-                android:textSize="16sp"
-                android:layout_marginBottom="16dp"/>
 
             <TextView
                 android:layout_width="match_parent"
@@ -364,8 +418,9 @@
                 android:textSize="14sp"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:layout_marginBottom="16dp"/>
-
-        </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+</LinearLayout>
     </androidx.core.widget.NestedScrollView>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

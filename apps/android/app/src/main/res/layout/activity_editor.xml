@@ -19,17 +19,37 @@
 
     </com.google.android.material.appbar.AppBarLayout>
 
-    <com.xiwei.writerapp.ui.WriterEditText
-        android:id="@+id/editorEditText"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:padding="24dp"
-        android:gravity="top|start"
-        android:inputType="textMultiLine|textNoSuggestions"
-        android:background="@null"
-        android:hint="@string/hint_editor_content"
-        android:textColor="?attr/colorOnBackground"
-        android:textColorHint="?attr/colorOnSurfaceVariant"
-        app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+        android:background="?attr/colorSurfaceVariant"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="0dp"
+            style="?attr/materialCardViewElevatedStyle"
+            app:cardElevation="4dp"
+            app:cardCornerRadius="16dp">
+
+            <com.xiwei.writerapp.ui.WriterEditText
+                android:id="@+id/editorEditText"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:paddingHorizontal="20dp"
+                android:paddingTop="24dp"
+                android:paddingBottom="24dp"
+                android:gravity="top|start"
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:background="?attr/colorSurface"
+                android:hint="@string/hint_editor_content"
+                android:textColor="?attr/colorOnSurface"
+                android:textColorHint="?attr/colorOnSurfaceVariant" />
+
+        </com.google.android.material.card.MaterialCardView>
+    </FrameLayout>
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
