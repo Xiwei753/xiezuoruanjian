@@ -55,6 +55,7 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     // Custom Cursor
+    private var cursorRuntimeReady = false
     private var smoothCursorEnabled = false
     private var cursorAnimator: ValueAnimator? = null
     private var currentCursorX = -1f
@@ -150,6 +151,7 @@ class WriterEditText @JvmOverloads constructor(
                 }
             }
         })
+        cursorRuntimeReady = true
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
@@ -196,14 +198,23 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     fun setSmoothCursorEnabled(enabled: Boolean) {
+        val wasEnabled = smoothCursorEnabled
         smoothCursorEnabled = enabled
         isCursorVisible = !enabled
         if (enabled && isFocused) {
             startCursorBlink()
-            updateCursorTarget(false)
+            if (layout == null) {
+                post { updateCursorTarget(false) }
+            } else {
+                updateCursorTarget(false)
+            }
         } else {
             stopCursorBlink()
-            invalidateCursorRect()
+            if (wasEnabled) {
+                if (cursorRuntimeReady && !lastInvalidateRect.isEmpty) {
+                    invalidate(lastInvalidateRect)
+                }
+            }
         }
     }
 
@@ -221,31 +232,33 @@ class WriterEditText @JvmOverloads constructor(
     private val lastInvalidateRect = android.graphics.Rect()
 
     private fun invalidateCursorRect() {
-        if (currentCursorX >= 0) {
-            val left = (currentCursorX + paddingLeft - 8f).toInt()
-            val top = (currentCursorTop + paddingTop - 8f).toInt()
-            val right = (currentCursorX + paddingLeft + 16f).toInt()
-            val bottom = (currentCursorBottom + paddingTop + 8f).toInt()
+        if (!cursorRuntimeReady || !smoothCursorEnabled || currentCursorX < 0 || width <= 0 || height <= 0) return
 
-            if (!lastInvalidateRect.isEmpty) {
-                invalidate(lastInvalidateRect)
-            }
-            lastInvalidateRect.set(left, top, right, bottom)
+        val left = (currentCursorX + paddingLeft - 8f).toInt()
+        val top = (currentCursorTop + paddingTop - 8f).toInt()
+        val right = (currentCursorX + paddingLeft + 16f).toInt()
+        val bottom = (currentCursorBottom + paddingTop + 8f).toInt()
+
+        if (!lastInvalidateRect.isEmpty) {
             invalidate(lastInvalidateRect)
         }
+        lastInvalidateRect.set(left, top, right, bottom)
+        invalidate(lastInvalidateRect)
     }
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
+        if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && selStart == selEnd) {
             updateCursorTarget(true)
             startCursorBlink()
-        } else {
+        } else if (smoothCursorEnabled) {
             invalidateCursorRect()
         }
     }
 
     private fun updateCursorTarget(animate: Boolean) {
+        if (!cursorRuntimeReady) return
         val layout = layout ?: return
         val pos = selectionStart
         if (pos < 0) return
@@ -291,6 +304,7 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
+        if (!cursorRuntimeReady) return
         if (smoothCursorEnabled) {
             if (focused) startCursorBlink() else stopCursorBlink()
             invalidateCursorRect()
@@ -299,6 +313,7 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && isFocused && selectionStart == selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
             cursorPaint.color = currentTextColor
             val drawX = currentCursorX + paddingLeft

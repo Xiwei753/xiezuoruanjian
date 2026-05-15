@@ -177,7 +177,12 @@ class ChapterListActivity : AppCompatActivity() {
                         putExtra("CHAPTER_ID", selectedItem.chapterId)
                         putExtra("CHAPTER_TITLE", selectedItem.chapterTitle)
                     }
-                    startActivity(intent)
+                    try {
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        android.widget.Toast.makeText(this@ChapterListActivity, "无法打开编辑器: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         }
