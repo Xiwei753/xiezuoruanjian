@@ -17,7 +17,9 @@ data class LocalSettings(
     val editorFontSize: Float = 16f,
     val editorLineSpacingMultiplier: Float = 1.5f,
     val autoSaveEnabled: Boolean = true,
-    val autoSaveDelayMs: Long = 1500L
+    val autoSaveDelayMs: Long = 1500L,
+    val autoIndentEnabled: Boolean = true,
+    val autoIndentWidth: Float = 2.0f
 )
 
 data class Project(

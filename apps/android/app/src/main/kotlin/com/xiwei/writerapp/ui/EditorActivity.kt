@@ -16,7 +16,7 @@ import com.xiwei.writerapp.data.WorkspaceRepository
 
 class EditorActivity : AppCompatActivity() {
     private lateinit var toolbar: MaterialToolbar
-    private lateinit var editorEditText: EditText
+    private lateinit var editorEditText: WriterEditText
 
     private lateinit var workspaceRepository: WorkspaceRepository
     private lateinit var settingsRepository: SettingsRepository
@@ -50,6 +50,7 @@ class EditorActivity : AppCompatActivity() {
         val settings = settingsRepository.getLocalSettings()
         editorEditText.textSize = settings.editorFontSize
         editorEditText.setLineSpacing(0f, settings.editorLineSpacingMultiplier)
+        editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
         autoSaveEnabled = settings.autoSaveEnabled
         autoSaveDelayMs = settings.autoSaveDelayMs
 
