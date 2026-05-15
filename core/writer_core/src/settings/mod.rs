@@ -27,6 +27,10 @@ pub struct LocalSettings {
     pub window_width: f64,
     #[serde(default)]
     pub window_height: f64,
+    #[serde(default = "default_editor_typing_animation_enabled")]
+    pub editor_typing_animation_enabled: bool,
+    #[serde(default = "default_editor_smooth_cursor_enabled")]
+    pub editor_smooth_cursor_enabled: bool,
 }
 
 fn default_editor_font_size() -> f32 {
@@ -48,6 +52,12 @@ fn default_auto_indent_enabled() -> bool {
 fn default_auto_indent_width() -> f32 {
     2.0
 }
+fn default_editor_typing_animation_enabled() -> bool {
+    true
+}
+fn default_editor_smooth_cursor_enabled() -> bool {
+    true
+}
 
 impl Default for LocalSettings {
     fn default() -> Self {
@@ -62,6 +72,8 @@ impl Default for LocalSettings {
             auto_indent_width: default_auto_indent_width(),
             window_width: 800.0,
             window_height: 600.0,
+            editor_typing_animation_enabled: default_editor_typing_animation_enabled(),
+            editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
         }
     }
 }

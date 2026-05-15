@@ -55,6 +55,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var sbAutoIndentWidth: Slider
     private lateinit var tvAutoIndentWidthValue: TextView
 
+    private lateinit var switchTypingAnimation: MaterialSwitch
+    private lateinit var switchSmoothCursor: MaterialSwitch
+
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnPerformSync: MaterialButton
 
@@ -99,6 +102,8 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoIndent = findViewById(R.id.switchAutoIndent)
         sbAutoIndentWidth = findViewById(R.id.sbAutoIndentWidth)
         tvAutoIndentWidthValue = findViewById(R.id.tvAutoIndentWidthValue)
+        switchTypingAnimation = findViewById(R.id.switchTypingAnimation)
+        switchSmoothCursor = findViewById(R.id.switchSmoothCursor)
 
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
 

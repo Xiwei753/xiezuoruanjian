@@ -72,6 +72,8 @@ class EditorActivity : AppCompatActivity() {
         editorEditText.textSize = settings.editorFontSize
         editorEditText.setLineSpacing(0f, settings.editorLineSpacingMultiplier)
         editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
+        editorEditText.setTypingAnimationEnabled(settings.editorTypingAnimationEnabled)
+        editorEditText.setSmoothCursorEnabled(settings.editorSmoothCursorEnabled)
         autoSaveEnabled = settings.autoSaveEnabled
         autoSaveDelayMs = settings.autoSaveDelayMs
 
@@ -170,6 +172,8 @@ class EditorActivity : AppCompatActivity() {
         editorEditText.textSize = settings.editorFontSize
         editorEditText.setLineSpacing(0f, settings.editorLineSpacingMultiplier)
         editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
+        editorEditText.setTypingAnimationEnabled(settings.editorTypingAnimationEnabled)
+        editorEditText.setSmoothCursorEnabled(settings.editorSmoothCursorEnabled)
         autoSaveEnabled = settings.autoSaveEnabled
         autoSaveDelayMs = settings.autoSaveDelayMs
     }

@@ -20,7 +20,9 @@ data class LocalSettings(
     val autoIndentEnabled: Boolean = true,
     val autoIndentWidth: Float = 2.0f,
     val windowWidth: Double = 800.0,
-    val windowHeight: Double = 600.0
+    val windowHeight: Double = 600.0,
+    val editorTypingAnimationEnabled: Boolean = true,
+    val editorSmoothCursorEnabled: Boolean = true
 )
 
 data class Project(
