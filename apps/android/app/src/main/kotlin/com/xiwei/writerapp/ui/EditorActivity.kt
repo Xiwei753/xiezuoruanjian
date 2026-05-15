@@ -12,7 +12,14 @@ import com.google.android.material.appbar.MaterialToolbar
 import android.content.Intent
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
+import android.widget.Button
+import android.widget.EditText
+import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
+import android.text.Spannable
+import android.text.style.BackgroundColorSpan
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.WorkspaceRepository
@@ -45,8 +52,22 @@ class EditorActivity : AppCompatActivity() {
     private var initialWordCount = 0
     private var sessionStartTime = System.currentTimeMillis()
     private var lastWordCount = 0
+    private var currentChapterNote: String? = null
 
     private val statsUpdateRunnable = Runnable { updateStatsUI() }
+
+    // Search and Replace
+    private lateinit var searchLayout: LinearLayout
+    private lateinit var etSearch: EditText
+    private lateinit var etReplace: EditText
+    private lateinit var btnSearchNext: ImageButton
+    private lateinit var btnSearchClose: ImageButton
+    private lateinit var btnReplace: Button
+    private lateinit var btnReplaceAll: Button
+
+    private var searchResults = mutableListOf<Pair<Int, Int>>()
+    private var currentSearchIndex = -1
+    private val highlightSpans = mutableListOf<BackgroundColorSpan>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +88,16 @@ class EditorActivity : AppCompatActivity() {
         workspaceRepository = WorkspaceRepository(this)
         settingsRepository = SettingsRepository(this)
 
+        searchLayout = findViewById(R.id.searchLayout)
+        etSearch = findViewById(R.id.etSearch)
+        etReplace = findViewById(R.id.etReplace)
+        btnSearchNext = findViewById(R.id.btnSearchNext)
+        btnSearchClose = findViewById(R.id.btnSearchClose)
+        btnReplace = findViewById(R.id.btnReplace)
+        btnReplaceAll = findViewById(R.id.btnReplaceAll)
+
+        setupSearchAndReplace()
+
         // Load Settings
         val settings = settingsRepository.getLocalSettings()
         editorEditText.textSize = settings.editorFontSize
@@ -85,15 +116,24 @@ class EditorActivity : AppCompatActivity() {
         supportActionBar?.title = chapterTitle ?: getString(R.string.title_editor)
 
         if (projectId != null && volumeId != null && chapterId != null) {
-            val content = ErrorUtil.safeRun(this, null as String?) {
-                workspaceRepository.getChapterContent(projectId!!, volumeId!!, chapterId!!)
+            val result = ErrorUtil.safeRun(this, null) {
+                workspaceRepository.getChapterContentWithMeta(projectId!!, volumeId!!, chapterId!!)
             }
-            if (content != null) {
+            if (result != null) {
+                val content = result.first
+                val meta = result.second
+                currentChapterNote = meta.note
+
                 editorEditText.setText(content)
                 initialWordCount = calculateWordCount(content)
                 lastWordCount = initialWordCount
                 sessionStartTime = System.currentTimeMillis()
                 updateStatsUI()
+
+                // Record recent edit
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.recordRecentEdit(projectId!!, volumeId!!, chapterId!!)
+                }
             } else {
                 editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
                 editorEditText.isEnabled = false
@@ -157,6 +197,14 @@ class EditorActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
+            R.id.action_note -> {
+                showChapterNoteDialog()
+                true
+            }
+            R.id.action_search -> {
+                toggleSearchBar()
+                true
+            }
             R.id.action_settings -> {
                 val intent = Intent(this, SettingsActivity::class.java)
                 startActivity(intent)
@@ -164,6 +212,35 @@ class EditorActivity : AppCompatActivity() {
             }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun showChapterNoteDialog() {
+        val pid = projectId
+        val vid = volumeId
+        val cid = chapterId
+        if (pid == null || vid == null || cid == null) return
+
+        val editText = EditText(this)
+        editText.hint = getString(R.string.hint_chapter_note)
+        editText.setPadding(48, 48, 48, 48)
+        editText.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        editText.minLines = 3
+        editText.maxLines = 10
+        editText.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        editText.setText(currentChapterNote)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.dialog_chapter_note_title)
+            .setView(editText)
+            .setPositiveButton(R.string.action_save) { _, _ ->
+                val newNote = editText.text.toString().trim()
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.updateChapterNote(pid, vid, cid, newNote)
+                    currentChapterNote = newNote
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
     }
 
     override fun onResume() {
@@ -213,6 +290,125 @@ class EditorActivity : AppCompatActivity() {
         tvWordCount.text = getString(R.string.stats_word_count, lastWordCount)
         tvSessionAdded.text = getString(R.string.stats_session_added, sessionAdded)
         tvSpeed.text = getString(R.string.stats_speed, speed)
+    }
+
+    private fun setupSearchAndReplace() {
+        btnSearchClose.setOnClickListener {
+            searchLayout.visibility = View.GONE
+            clearHighlights()
+        }
+
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                performSearch()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        btnSearchNext.setOnClickListener {
+            if (searchResults.isNotEmpty()) {
+                currentSearchIndex = (currentSearchIndex + 1) % searchResults.size
+                focusSearchResult()
+            }
+        }
+
+        btnReplace.setOnClickListener {
+            if (searchResults.isNotEmpty() && currentSearchIndex in searchResults.indices) {
+                val replaceStr = etReplace.text.toString()
+                val currentMatch = searchResults[currentSearchIndex]
+                val editable = editorEditText.text
+                if (editable != null) {
+                    editable.replace(currentMatch.first, currentMatch.second, replaceStr)
+                    // The text watcher on editorEditText will trigger performSearch(),
+                    // which resets indices. So we just let that handle the update.
+                }
+            }
+        }
+
+        btnReplaceAll.setOnClickListener {
+            val searchStr = etSearch.text.toString()
+            val replaceStr = etReplace.text.toString()
+            if (searchStr.isNotEmpty()) {
+                val editable = editorEditText.text
+                if (editable != null) {
+                    val content = editable.toString()
+                    val newContent = content.replace(searchStr, replaceStr)
+                    editorEditText.setText(newContent)
+                    performSearch() // to clear/update results
+                }
+            }
+        }
+    }
+
+    private fun toggleSearchBar() {
+        if (searchLayout.visibility == View.VISIBLE) {
+            searchLayout.visibility = View.GONE
+            clearHighlights()
+        } else {
+            searchLayout.visibility = View.VISIBLE
+            etSearch.requestFocus()
+            performSearch()
+        }
+    }
+
+    private fun performSearch() {
+        clearHighlights()
+        searchResults.clear()
+        currentSearchIndex = -1
+
+        if (searchLayout.visibility == View.GONE) return
+
+        val searchStr = etSearch.text.toString()
+        if (searchStr.isEmpty()) return
+
+        val content = editorEditText.text?.toString() ?: return
+        var startIndex = content.indexOf(searchStr)
+        val highlightColor = getColor(com.google.android.material.R.color.material_dynamic_primary70)
+
+        while (startIndex >= 0) {
+            val endIndex = startIndex + searchStr.length
+            searchResults.add(Pair(startIndex, endIndex))
+
+            val span = BackgroundColorSpan(highlightColor)
+            editorEditText.text?.setSpan(span, startIndex, endIndex, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            highlightSpans.add(span)
+
+            startIndex = content.indexOf(searchStr, endIndex)
+        }
+
+        if (searchResults.isNotEmpty()) {
+            currentSearchIndex = 0
+            focusSearchResult()
+        }
+    }
+
+    private fun focusSearchResult() {
+        if (currentSearchIndex in searchResults.indices) {
+            val match = searchResults[currentSearchIndex]
+            editorEditText.setSelection(match.second)
+
+            // Highlight current match differently
+            clearHighlights()
+            val highlightColor = getColor(com.google.android.material.R.color.material_dynamic_primary70)
+            val activeColor = getColor(com.google.android.material.R.color.material_dynamic_primary50)
+
+            for (i in searchResults.indices) {
+                val res = searchResults[i]
+                val color = if (i == currentSearchIndex) activeColor else highlightColor
+                val span = BackgroundColorSpan(color)
+                editorEditText.text?.setSpan(span, res.first, res.second, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                highlightSpans.add(span)
+            }
+        }
+    }
+
+    private fun clearHighlights() {
+        val editable = editorEditText.text ?: return
+        for (span in highlightSpans) {
+            editable.removeSpan(span)
+        }
+        highlightSpans.clear()
     }
 
     private fun saveContent(): Boolean {

@@ -17,19 +17,24 @@ import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.WorkspaceRepository
 import com.xiwei.writerapp.model.Project
+import com.xiwei.writerapp.model.RecentEdit
 import com.xiwei.writerapp.model.LocalSettings
 import androidx.appcompat.app.AppCompatDelegate
 
 class MainActivity : AppCompatActivity() {
     private lateinit var projectRecyclerView: RecyclerView
+    private lateinit var recentEditsRecyclerView: RecyclerView
     private lateinit var fabNewProject: ExtendedFloatingActionButton
     private lateinit var emptyStateLayout: View
+    private lateinit var recentEditsLayout: View
     private lateinit var btnSettings: ImageView
 
     private lateinit var workspaceRepository: WorkspaceRepository
     private lateinit var settingsRepository: SettingsRepository
     private var projects = listOf<Project>()
+    private var recentEdits = listOf<RecentEdit>()
     private lateinit var adapter: ProjectAdapter
+    private lateinit var recentAdapter: RecentEditAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,8 +54,10 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         projectRecyclerView = findViewById(R.id.projectRecyclerView)
+        recentEditsRecyclerView = findViewById(R.id.recentEditsRecyclerView)
         fabNewProject = findViewById(R.id.fabNewProject)
         emptyStateLayout = findViewById(R.id.emptyStateLayout)
+        recentEditsLayout = findViewById(R.id.recentEditsLayout)
         btnSettings = findViewById(R.id.btnSettings)
 
         ErrorUtil.safeRun(this) {
@@ -61,7 +68,12 @@ class MainActivity : AppCompatActivity() {
         projectRecyclerView.layoutManager = LinearLayoutManager(this)
         projectRecyclerView.adapter = adapter
 
+        recentAdapter = RecentEditAdapter()
+        recentEditsRecyclerView.layoutManager = LinearLayoutManager(this)
+        recentEditsRecyclerView.adapter = recentAdapter
+
         loadProjects()
+        loadRecentEdits()
 
         fabNewProject.setOnClickListener {
             showNewProjectDialog()
@@ -75,6 +87,24 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         loadProjects()
+        loadRecentEdits()
+    }
+
+    private fun loadRecentEdits() {
+        recentEdits = ErrorUtil.safeRun(this, emptyList()) {
+            if (::workspaceRepository.isInitialized) {
+                workspaceRepository.getRecentEdits().take(3) // Only show top 3 on main screen
+            } else {
+                emptyList()
+            }
+        }
+
+        if (recentEdits.isEmpty()) {
+            recentEditsLayout.visibility = View.GONE
+        } else {
+            recentEditsLayout.visibility = View.VISIBLE
+            recentAdapter.notifyDataSetChanged()
+        }
     }
 
     private fun loadProjects() {
@@ -148,5 +178,42 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun getItemCount() = projects.size
+    }
+
+    private inner class RecentEditAdapter : RecyclerView.Adapter<RecentEditAdapter.RecentViewHolder>() {
+
+        inner class RecentViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+            val tvRecentTitle: TextView = itemView.findViewById(R.id.tvRecentTitle)
+            val tvRecentSubtitle: TextView = itemView.findViewById(R.id.tvRecentSubtitle)
+
+            init {
+                itemView.setOnClickListener {
+                    val edit = recentEdits[adapterPosition]
+                    val intent = Intent(this@MainActivity, EditorActivity::class.java).apply {
+                        putExtra("PROJECT_ID", edit.projectId)
+                        putExtra("VOLUME_ID", edit.volumeId)
+                        putExtra("CHAPTER_ID", edit.chapterId)
+                        // Note: chapterTitle is missing here, we'll gracefully fallback in EditorActivity
+                    }
+                    startActivity(intent)
+                }
+            }
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecentViewHolder {
+            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_recent_edit, parent, false)
+            return RecentViewHolder(view)
+        }
+
+        override fun onBindViewHolder(holder: RecentViewHolder, position: Int) {
+            val edit = recentEdits[position]
+            // We just show the IDs if we don't have the titles handy,
+            // but ideally we should fetch the titles. For MVP, we'll try to find the project title.
+            val project = projects.find { it.id == edit.projectId }
+            holder.tvRecentTitle.text = project?.title ?: "未知作品"
+            holder.tvRecentSubtitle.text = "继续编写..."
+        }
+
+        override fun getItemCount() = recentEdits.size
     }
 }

@@ -53,9 +53,13 @@ class NativeCoreBridge(context: Context) {
 
     private external fun readChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
     private external fun writeChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String, content: String): String?
+    private external fun updateChapterNote(workspacePath: String, projectId: String, volumeId: String, chapterId: String, note: String): String?
 
     private external fun loadLocalSettings(workspacePath: String): String?
     private external fun saveLocalSettings(workspacePath: String, settingsJson: String): String?
+
+    private external fun getRecentEdits(workspacePath: String): String?
+    private external fun recordRecentEdit(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
     private external fun loadSyncConfig(workspacePath: String): String?
     private external fun saveSyncConfig(workspacePath: String, configJson: String): String?
     private external fun loadSyncSecrets(workspacePath: String): String?
@@ -104,6 +108,69 @@ class NativeCoreBridge(context: Context) {
             val response: RustResponse<List<Project>> = gson.fromJson(resultJson, type)
             return if (response.success) {
                 NativeResult.Success(response.data ?: emptyList())
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getRecentEdits(): NativeResult<List<RecentEdit>> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = getRecentEdits(workspaceDir)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<List<RecentEdit>>>() {}.type
+            val response: RustResponse<List<RecentEdit>> = gson.fromJson(resultJson, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun recordRecentEdit(projectId: String, volumeId: String, chapterId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = recordRecentEdit(workspaceDir, projectId, volumeId, chapterId)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(resultJson, type)
+            return if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = updateChapterNote(workspaceDir, projectId, volumeId, chapterId, note)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(resultJson, type)
+            return if (response.success) {
+                NativeResult.Success(true)
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
@@ -242,15 +309,16 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun getChapterContent(projectId: String, volumeId: String, chapterId: String): NativeResult<String> {
+    // Update to return Pair to provide meta containing notes, or create a specific data class
+    fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): NativeResult<Pair<String, ChapterMeta>> {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = readChapter(workspaceDir, projectId, volumeId, chapterId)
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<RustChapterContent>>() {}.type
             val response: RustResponse<RustChapterContent> = gson.fromJson(resultJson, type)
-            return if (response.success) {
-                NativeResult.Success(response.data?.content ?: "")
+            return if (response.success && response.data != null) {
+                NativeResult.Success(Pair(response.data.content, response.data.meta))
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
@@ -260,6 +328,14 @@ class NativeCoreBridge(context: Context) {
                 return NativeResult.NotLoaded
             }
             return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getChapterContent(projectId: String, volumeId: String, chapterId: String): NativeResult<String> {
+        return when (val result = getChapterContentWithMeta(projectId, volumeId, chapterId)) {
+            is NativeResult.Success -> NativeResult.Success(result.data.first)
+            is NativeResult.Error -> result
+            NativeResult.NotLoaded -> NativeResult.NotLoaded
         }
     }
 

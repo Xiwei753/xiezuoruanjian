@@ -18,6 +18,34 @@ class WorkspaceRepository(context: Context) {
         }
     }
 
+    fun getRecentEdits(): List<RecentEdit> {
+        return when (val result = bridge.getRecentEdits()) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> emptyList() // fail silently for recent edits
+            NativeResult.NotLoaded -> emptyList()
+        }
+    }
+
+    fun recordRecentEdit(projectId: String, volumeId: String, chapterId: String) {
+        bridge.recordRecentEdit(projectId, volumeId, chapterId)
+    }
+
+    fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): Pair<String, ChapterMeta> {
+        return when (val result = bridge.getChapterContentWithMeta(projectId, volumeId, chapterId)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> throw RepositoryException("获取章节内容失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): Boolean {
+        return when (val result = bridge.updateChapterNote(projectId, volumeId, chapterId, note)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> throw RepositoryException("更新章节备注失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
     fun getVolumes(projectId: String): List<Volume> {
         return when (val result = bridge.getVolumes(projectId)) {
             is NativeResult.Success -> result.data
@@ -46,6 +74,14 @@ class WorkspaceRepository(context: Context) {
         return when (val result = bridge.saveChapterContent(projectId, volumeId, chapterId, content)) {
             is NativeResult.Success -> result.data
             is NativeResult.Error -> throw RepositoryException("保存章节内容失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun getProjectStats(projectId: String): ProjectStats {
+        return when (val result = bridge.getProjectStats(projectId)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> throw RepositoryException("获取作品统计失败: ${result.message}")
             NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }

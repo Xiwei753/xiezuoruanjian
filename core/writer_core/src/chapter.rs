@@ -13,6 +13,8 @@ pub struct Chapter {
     pub updated_at: String,
     pub word_count: u32,
     pub hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -68,6 +70,7 @@ pub fn create_chapter(
         updated_at: now,
         word_count: 0,
         hash: String::new(),
+        note: None,
     };
 
     let chapter_dir = workspace_path
@@ -149,6 +152,38 @@ pub fn save_chapter(
     let updated_meta_str = serde_json::to_string_pretty(&meta)?;
 
     crate::storage::atomic_write_string(&md_path, content)?;
+    crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+
+    Ok(())
+}
+
+pub fn update_chapter_note(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    note: &str,
+) -> Result<()> {
+    let chapter_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id);
+    let meta_path = chapter_dir.join("chapter.meta.json");
+
+    if !meta_path.exists() {
+        return Err(crate::error::Error::ChapterNotFound);
+    }
+
+    let meta_str = fs::read_to_string(&meta_path)?;
+    let mut meta: Chapter = serde_json::from_str(&meta_str)?;
+
+    meta.updated_at = Utc::now().to_rfc3339();
+    meta.note = Some(note.to_string());
+
+    let updated_meta_str = serde_json::to_string_pretty(&meta)?;
     crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
 
     Ok(())

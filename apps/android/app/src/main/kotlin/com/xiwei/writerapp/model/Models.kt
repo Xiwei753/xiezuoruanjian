@@ -51,7 +51,15 @@ data class ChapterMeta(
     @SerializedName("created_at") val createdAt: String,
     @SerializedName("updated_at") val updatedAt: String,
     @SerializedName("word_count") val wordCount: Int,
-    val hash: String
+    val hash: String,
+    val note: String? = null
+)
+
+data class RecentEdit(
+    @SerializedName("project_id") val projectId: String,
+    @SerializedName("volume_id") val volumeId: String,
+    @SerializedName("chapter_id") val chapterId: String,
+    val timestamp: String
 )
 
 // Sync Models
