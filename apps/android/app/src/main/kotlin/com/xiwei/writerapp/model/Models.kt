@@ -1,8 +1,10 @@
 package com.xiwei.writerapp.model
 
-
-
 import com.google.gson.annotations.SerializedName
+import com.google.gson.JsonDeserializationContext
+import com.google.gson.JsonDeserializer
+import com.google.gson.JsonElement
+import java.lang.reflect.Type
 
 data class WorkspaceManifest(
     val version: Int
@@ -47,18 +49,29 @@ data class ChapterMeta(
 // Sync Models
 
 enum class SyncTransport {
-    @SerializedName("HttpsToken") HttpsToken,
-    @SerializedName("SshKey") SshKey
+    @SerializedName("https_token") HttpsToken,
+    @SerializedName("ssh_deploy_key") SshKey
 }
 
 data class SyncConfig(
-    val enabled: Boolean = false,
-    @SerializedName("remote_url") val remoteUrl: String = "",
-    val transport: SyncTransport = SyncTransport.HttpsToken,
-    val branch: String = "main",
-    @SerializedName("auto_sync") val autoSync: Boolean = false,
-    @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int = 300
-)
+    val enabled: Boolean? = false,
+    @SerializedName("remote_url") val remoteUrl: String? = "",
+    val transport: SyncTransport? = SyncTransport.HttpsToken,
+    val branch: String? = "main",
+    @SerializedName("auto_sync") val autoSync: Boolean? = false,
+    @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300
+) {
+    fun normalize(): SyncConfig {
+        return copy(
+            enabled = enabled ?: false,
+            remoteUrl = remoteUrl ?: "",
+            transport = transport ?: SyncTransport.HttpsToken,
+            branch = if (branch.isNullOrEmpty()) "main" else branch,
+            autoSync = autoSync ?: false,
+            syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds
+        )
+    }
+}
 
 data class SyncSecrets(
     val token: String? = null,
@@ -73,12 +86,43 @@ enum class SyncStatus {
     @SerializedName("error") Error
 }
 
+class SyncStatusDeserializer : JsonDeserializer<SyncStatus> {
+    override fun deserialize(
+        json: JsonElement,
+        typeOfT: Type,
+        context: JsonDeserializationContext
+    ): SyncStatus {
+        if (json.isJsonPrimitive) {
+            val str = json.asString
+            return when (str) {
+                "idle" -> SyncStatus.Idle
+                "syncing" -> SyncStatus.Syncing
+                "success" -> SyncStatus.Success
+                "conflict" -> SyncStatus.Conflict
+                else -> SyncStatus.Error
+            }
+        }
+        if (json.isJsonObject) {
+            val obj = json.asJsonObject
+            if (obj.has("error")) {
+                return SyncStatus.Error
+            }
+            if (obj.has("Error")) {
+                return SyncStatus.Error
+            }
+        }
+        return SyncStatus.Error
+    }
+}
+
 enum class FirstSyncMode {
-    @SerializedName("CloneIntoEmptyWorkspace") CloneIntoEmptyWorkspace,
-    @SerializedName("InitExistingWorkspace") InitExistingWorkspace,
-    @SerializedName("UnrelatedHistories") UnrelatedHistories,
-    @SerializedName("BlockedNonEmptyRemote") BlockedNonEmptyRemote,
-    @SerializedName("None") None
+    @SerializedName("not_attempted") NotAttempted,
+    @SerializedName("clone_into_empty_workspace") CloneIntoEmptyWorkspace,
+    @SerializedName("init_existing_workspace") InitExistingWorkspace,
+    @SerializedName("already_git_repo") AlreadyGitRepo,
+    @SerializedName("blocked_non_empty_remote") BlockedNonEmptyRemote,
+    @SerializedName("unrelated_histories") UnrelatedHistories,
+    @SerializedName("none") None
 }
 
 data class SyncConflict(

@@ -31,12 +31,12 @@ class SettingsRepository(context: Context) {
 
     fun loadSyncConfig(): SyncConfig {
         return when (val result = bridge.loadSyncConfig()) {
-            is NativeResult.Success -> result.data ?: SyncConfig()
+            is NativeResult.Success -> result.data.normalize()
             is NativeResult.Error -> {
                 System.err.println("加载同步配置失败: ${result.message}")
-                SyncConfig()
+                SyncConfig().normalize()
             }
-            NativeResult.NotLoaded -> SyncConfig()
+            NativeResult.NotLoaded -> SyncConfig().normalize()
         }
     }
 
