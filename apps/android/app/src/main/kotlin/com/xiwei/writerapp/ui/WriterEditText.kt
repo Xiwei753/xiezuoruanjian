@@ -16,6 +16,7 @@ class WriterEditText @JvmOverloads constructor(
 
     private var autoIndentEnabled: Boolean = false
     private var autoIndentPx: Int = 0
+    private var currentIndentSpan: LeadingMarginSpan.Standard? = null
     private var isUpdatingSpan = false
 
     init {
@@ -24,12 +25,34 @@ class WriterEditText @JvmOverloads constructor(
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 if (isUpdatingSpan) return
-                applyIndentation()
+
+                val editable = s ?: return
+
+                if (currentIndentSpan == null && autoIndentEnabled && autoIndentPx > 0 && editable.isNotEmpty()) {
+                    // Create span if it was missing (e.g. text was empty initially)
+                    applyIndentation()
+                    return
+                }
+
+                val span = currentIndentSpan ?: return
+
+                // Fast path: just ensure the existing span covers the whole text.
+                // Re-applying an existing span is extremely cheap if it's already there.
+                val start = editable.getSpanStart(span)
+                val end = editable.getSpanEnd(span)
+                if (start != 0 || end != editable.length) {
+                    isUpdatingSpan = true
+                    editable.setSpan(span, 0, editable.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+                    isUpdatingSpan = false
+                }
             }
         })
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
+        val oldEnabled = this.autoIndentEnabled
+        val oldPx = this.autoIndentPx
+
         this.autoIndentEnabled = enabled
         if (enabled && widthChars > 0) {
             val emWidth = paint.measureText("中")
@@ -37,54 +60,35 @@ class WriterEditText @JvmOverloads constructor(
         } else {
             this.autoIndentPx = 0
         }
-        applyIndentation()
+
+        if (oldEnabled != this.autoIndentEnabled || oldPx != this.autoIndentPx) {
+            applyIndentation()
+        }
     }
 
     private fun applyIndentation() {
         val editable = text ?: return
-        if (editable.isEmpty()) return
 
-        if (!autoIndentEnabled || autoIndentPx <= 0) {
-            val existingSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
-            if (existingSpans.isNotEmpty()) {
-                isUpdatingSpan = true
-                for (span in existingSpans) {
-                    editable.removeSpan(span)
-                }
-                isUpdatingSpan = false
-            }
-            return
-        }
+        isUpdatingSpan = true
 
+        // Remove old span entirely
         val existingSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
-
-        // Check if there is exactly one span covering the whole text
-        var needsUpdate = true
-        if (existingSpans.size == 1) {
-            val span = existingSpans[0]
-            val start = editable.getSpanStart(span)
-            val end = editable.getSpanEnd(span)
-
-            // Note: Since we use INCLUSIVE_INCLUSIVE, the span might automatically grow.
-            // However, Android sometimes breaks INCLUSIVE_INCLUSIVE spans on extreme edits.
-            // If it covers 0 to length, we don't need to reapply.
-            if (start == 0 && end == editable.length) {
-                needsUpdate = false
-            }
+        for (span in existingSpans) {
+            editable.removeSpan(span)
         }
+        currentIndentSpan = null
 
-        if (needsUpdate) {
-            isUpdatingSpan = true
-            for (span in existingSpans) {
-                editable.removeSpan(span)
-            }
+        if (autoIndentEnabled && autoIndentPx > 0 && editable.isNotEmpty()) {
+            val newSpan = LeadingMarginSpan.Standard(autoIndentPx, 0)
+            currentIndentSpan = newSpan
             editable.setSpan(
-                LeadingMarginSpan.Standard(autoIndentPx, 0),
+                newSpan,
                 0,
                 editable.length,
                 Spanned.SPAN_INCLUSIVE_INCLUSIVE
             )
-            isUpdatingSpan = false
         }
+
+        isUpdatingSpan = false
     }
 }

@@ -19,24 +19,17 @@
 
     </com.google.android.material.appbar.AppBarLayout>
 
-    <androidx.core.widget.NestedScrollView
+    <com.xiwei.writerapp.ui.WriterEditText
+        android:id="@+id/editorEditText"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:fillViewport="true"
-        app:layout_behavior="@string/appbar_scrolling_view_behavior">
-
-        <com.xiwei.writerapp.ui.WriterEditText
-            android:id="@+id/editorEditText"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:padding="24dp"
-            android:gravity="top|start"
-            android:inputType="textMultiLine"
-            android:background="@null"
-            android:hint="@string/hint_editor_content"
-            android:textColor="?attr/colorOnBackground"
-            android:textColorHint="?attr/colorOnSurfaceVariant" />
-
-    </androidx.core.widget.NestedScrollView>
+        android:padding="24dp"
+        android:gravity="top|start"
+        android:inputType="textMultiLine|textNoSuggestions"
+        android:background="@null"
+        android:hint="@string/hint_editor_content"
+        android:textColor="?attr/colorOnBackground"
+        android:textColorHint="?attr/colorOnSurfaceVariant"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
