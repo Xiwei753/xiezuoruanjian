@@ -1,14 +1,17 @@
 package com.xiwei.writerapp.ui
 
 import android.os.Bundle
+import android.content.pm.ActivityInfo
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.TextWatcher
-import android.widget.EditText
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
@@ -55,6 +58,7 @@ class EditorActivity : AppCompatActivity() {
         editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
         autoSaveEnabled = settings.autoSaveEnabled
         autoSaveDelayMs = settings.autoSaveDelayMs
+        applyFullscreenPortraitSetting(settings.editorFullscreenPortraitEnabled)
 
         projectId = intent.getStringExtra("PROJECT_ID")
         volumeId = intent.getStringExtra("VOLUME_ID")
@@ -129,6 +133,20 @@ class EditorActivity : AppCompatActivity() {
         editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
         autoSaveEnabled = settings.autoSaveEnabled
         autoSaveDelayMs = settings.autoSaveDelayMs
+        applyFullscreenPortraitSetting(settings.editorFullscreenPortraitEnabled)
+    }
+
+    private fun applyFullscreenPortraitSetting(enabled: Boolean) {
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        if (enabled) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController.hide(WindowInsetsCompat.Type.statusBars())
+        } else {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            insetsController.show(WindowInsetsCompat.Type.statusBars())
+        }
     }
 
     override fun onPause() {
