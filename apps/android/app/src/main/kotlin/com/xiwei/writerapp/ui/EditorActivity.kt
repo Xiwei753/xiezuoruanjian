@@ -9,6 +9,10 @@ import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.appbar.MaterialToolbar
+import android.content.Intent
+import android.view.Menu
+import android.view.MenuItem
+import android.widget.TextView
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.WorkspaceRepository
@@ -33,6 +37,17 @@ class EditorActivity : AppCompatActivity() {
 
     private val autoSaveRunnable = Runnable { saveContent() }
 
+    private lateinit var tvWordCount: TextView
+    private lateinit var tvSessionAdded: TextView
+    private lateinit var tvSpeed: TextView
+    private lateinit var tvSaveStatus: TextView
+
+    private var initialWordCount = 0
+    private var sessionStartTime = System.currentTimeMillis()
+    private var lastWordCount = 0
+
+    private val statsUpdateRunnable = Runnable { updateStatsUI() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_editor)
@@ -44,6 +59,11 @@ class EditorActivity : AppCompatActivity() {
         }
 
         editorEditText = findViewById(R.id.editorEditText)
+        tvWordCount = findViewById(R.id.tvWordCount)
+        tvSessionAdded = findViewById(R.id.tvSessionAdded)
+        tvSpeed = findViewById(R.id.tvSpeed)
+        tvSaveStatus = findViewById(R.id.tvSaveStatus)
+
         workspaceRepository = WorkspaceRepository(this)
         settingsRepository = SettingsRepository(this)
 
@@ -68,6 +88,10 @@ class EditorActivity : AppCompatActivity() {
             }
             if (content != null) {
                 editorEditText.setText(content)
+                initialWordCount = calculateWordCount(content)
+                lastWordCount = initialWordCount
+                sessionStartTime = System.currentTimeMillis()
+                updateStatsUI()
             } else {
                 editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
                 editorEditText.isEnabled = false
@@ -78,6 +102,7 @@ class EditorActivity : AppCompatActivity() {
         }
 
         statusUnsaved = getString(R.string.status_unsaved)
+        toolbar.subtitle = "" // Clear toolbar subtitle
 
         editorEditText.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -85,13 +110,17 @@ class EditorActivity : AppCompatActivity() {
                 if (projectId == null || volumeId == null || chapterId == null) return
                 if (editorEditText.hasFocus()) {
                     isDirty = true
-                    if (toolbar.subtitle != statusUnsaved) {
-                        toolbar.subtitle = statusUnsaved
+                    if (tvSaveStatus.text != statusUnsaved) {
+                        tvSaveStatus.text = statusUnsaved
                     }
                     if (autoSaveEnabled) {
                         handler.removeCallbacks(autoSaveRunnable)
                         handler.postDelayed(autoSaveRunnable, autoSaveDelayMs)
                     }
+
+                    // Debounce stats update to avoid lagging UI
+                    handler.removeCallbacks(statsUpdateRunnable)
+                    handler.postDelayed(statsUpdateRunnable, 500)
                 }
             }
             override fun afterTextChanged(s: Editable?) {}
@@ -119,6 +148,21 @@ class EditorActivity : AppCompatActivity() {
         })
     }
 
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_editor, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_settings -> {
+                val intent = Intent(this, SettingsActivity::class.java)
+                startActivity(intent)
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
 
     override fun onResume() {
         super.onResume()
@@ -146,22 +190,43 @@ class EditorActivity : AppCompatActivity() {
         }
     }
 
+    private fun calculateWordCount(text: String): Int {
+        return text.count { !it.isWhitespace() }
+    }
+
+    private fun updateStatsUI() {
+        val content = editorEditText.text?.toString() ?: ""
+        lastWordCount = calculateWordCount(content)
+
+        val sessionAdded = lastWordCount - initialWordCount
+        val elapsedMinutes = (System.currentTimeMillis() - sessionStartTime) / 60000.0
+        val speed = if (elapsedMinutes > 0 && sessionAdded > 0) {
+            (sessionAdded / elapsedMinutes).toInt()
+        } else {
+            0
+        }
+
+        tvWordCount.text = getString(R.string.stats_word_count, lastWordCount)
+        tvSessionAdded.text = getString(R.string.stats_session_added, sessionAdded)
+        tvSpeed.text = getString(R.string.stats_speed, speed)
+    }
+
     private fun saveContent(): Boolean {
         val pid = projectId
         val vid = volumeId
         val cid = chapterId
         if (pid != null && vid != null && cid != null) {
-            toolbar.subtitle = getString(R.string.status_saving)
+            tvSaveStatus.text = getString(R.string.status_saving)
             val content = editorEditText.text.toString()
             val success = ErrorUtil.safeRun(this, false) {
                 workspaceRepository.saveChapterContent(pid, vid, cid, content)
             }
             if (success) {
                 isDirty = false
-                toolbar.subtitle = getString(R.string.status_saved)
+                tvSaveStatus.text = getString(R.string.status_saved)
                 return true
             } else {
-                toolbar.subtitle = getString(R.string.status_save_failed)
+                tvSaveStatus.text = getString(R.string.status_save_failed)
                 return false
             }
         }

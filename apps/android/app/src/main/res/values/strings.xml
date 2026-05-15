@@ -55,6 +55,10 @@
     <string name="default_volume_title">第一卷</string>
     <string name="default_chapter_title">新章节</string>
 
+    <string name="stats_word_count">字数: %1$d</string>
+    <string name="stats_session_added">新增: %1$d</string>
+    <string name="stats_speed">速度: %1$d 字/分</string>
+
 
     <!-- Sync Settings -->
     <string name="pref_category_sync">同步设置</string>

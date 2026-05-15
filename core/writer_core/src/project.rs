@@ -36,6 +36,34 @@ pub fn list_projects(workspace_path: &Path) -> Result<Vec<Project>> {
     Ok(projects)
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProjectStats {
+    pub total_word_count: u32,
+    pub volume_count: u32,
+    pub chapter_count: u32,
+}
+
+pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<ProjectStats> {
+    let mut stats = ProjectStats {
+        total_word_count: 0,
+        volume_count: 0,
+        chapter_count: 0,
+    };
+
+    let volumes = crate::volume::list_volumes(workspace_path, project_id)?;
+    stats.volume_count = volumes.len() as u32;
+
+    for volume in volumes {
+        let chapters = crate::chapter::list_chapters(workspace_path, project_id, &volume.id)?;
+        stats.chapter_count += chapters.len() as u32;
+        for chapter in chapters {
+            stats.total_word_count += chapter.word_count;
+        }
+    }
+
+    Ok(stats)
+}
+
 pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();

@@ -42,6 +42,7 @@ class NativeCoreBridge(context: Context) {
 
     // Returns JSON string like {"success": true, "data": [...]} or {"success": false, "error": "..."}
     private external fun listProjects(workspacePath: String): String?
+    private external fun getProjectStats(workspacePath: String, projectId: String): String?
     private external fun createProject(workspacePath: String, title: String): String?
 
     private external fun listVolumes(workspacePath: String, projectId: String): String?
@@ -103,6 +104,27 @@ class NativeCoreBridge(context: Context) {
             val response: RustResponse<List<Project>> = gson.fromJson(resultJson, type)
             return if (response.success) {
                 NativeResult.Success(response.data ?: emptyList())
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getProjectStats(projectId: String): NativeResult<ProjectStats> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = getProjectStats(workspaceDir, projectId)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<ProjectStats>>() {}.type
+            val response: RustResponse<ProjectStats> = gson.fromJson(resultJson, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
