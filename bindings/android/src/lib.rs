@@ -99,6 +99,27 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listProjec
     result_to_jstring(&mut env, core.list_projects())
 }
 
+// Get Project Stats
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getProjectStats(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.get_project_stats(&project_id))
+}
+
 // Create Project
 #[no_mangle]
 pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createProject(

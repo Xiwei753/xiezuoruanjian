@@ -70,6 +70,10 @@ impl WriterCore {
     }
 
     /// Read a specific project's manifest (This requires a volume lookup, simplifying to just reading a chapter).
+    pub fn get_project_stats(&self, project_id: &str) -> Result<crate::project::ProjectStats> {
+        crate::project::get_project_stats(&self.workspace_path, project_id)
+    }
+
     pub fn read_chapter(
         &self,
         project_id: &str,

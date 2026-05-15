@@ -30,6 +30,12 @@ data class Project(
     @SerializedName("updated_at") val updatedAt: String
 )
 
+data class ProjectStats(
+    @SerializedName("total_word_count") val totalWordCount: Int,
+    @SerializedName("volume_count") val volumeCount: Int,
+    @SerializedName("chapter_count") val chapterCount: Int
+)
+
 data class Volume(
     val id: String,
     val title: String,
