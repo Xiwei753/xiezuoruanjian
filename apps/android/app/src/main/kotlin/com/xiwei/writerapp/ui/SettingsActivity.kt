@@ -19,6 +19,7 @@ import androidx.appcompat.app.AlertDialog
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.xiwei.writerapp.model.SyncConfig
+import com.xiwei.writerapp.model.SyncTransport
 import com.xiwei.writerapp.model.SyncSecrets
 import com.xiwei.writerapp.data.NativeResult
 import com.xiwei.writerapp.model.FirstSyncMode
@@ -214,12 +215,12 @@ class SettingsActivity : AppCompatActivity() {
 
 
         // Bind Sync Settings
-        switchEnableSync.isChecked = currentSyncConfig.enabled
-        etGithubRepo.setText(currentSyncConfig.remoteUrl)
-        etBranch.setText(currentSyncConfig.branch)
-        switchAutoSync.isChecked = currentSyncConfig.autoSync
-        sbSyncInterval.value = currentSyncConfig.syncIntervalSeconds.toFloat()
-        tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds}秒"
+        switchEnableSync.isChecked = currentSyncConfig.enabled ?: false
+        etGithubRepo.setText(currentSyncConfig.remoteUrl ?: "")
+        etBranch.setText(currentSyncConfig.branch ?: "main")
+        switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
+        sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
+        tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds ?: 300}秒"
 
         if (!currentSyncSecrets.token.isNullOrEmpty()) {
             tvTokenStatus.text = getString(R.string.token_configured)
@@ -237,6 +238,7 @@ class SettingsActivity : AppCompatActivity() {
         return currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             remoteUrl = etGithubRepo.text?.toString() ?: "",
+            transport = currentSyncConfig.transport ?: SyncTransport.HttpsToken,
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt()
@@ -262,24 +264,28 @@ class SettingsActivity : AppCompatActivity() {
     private fun handleDryRun() {
         saveCurrentState()
 
-        ErrorUtil.safeRun(this) {
-            val result = settingsRepository.performSyncDryRun(currentSyncConfig)
-            when (result) {
-                is NativeResult.Success -> {
-                    val plan = result.data
-                    if (plan != null) {
-                        val msg = getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.ignoredFiles.size)
-                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        Thread {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during dry run")) {
+                settingsRepository.performSyncDryRun(currentSyncConfig)
+            }
+            runOnUiThread {
+                when (result) {
+                    is NativeResult.Success -> {
+                        val plan = result.data
+                        if (plan != null) {
+                            val msg = getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.ignoredFiles.size)
+                            Toast.makeText(this@SettingsActivity, msg, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    is NativeResult.Error -> {
+                        Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
+                    }
+                    NativeResult.NotLoaded -> {
+                        Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
-                is NativeResult.Error -> {
-                    Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
-                }
-                NativeResult.NotLoaded -> {
-                    Toast.makeText(this, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
-                }
             }
-        }
+        }.start()
     }
 
     private fun handlePerformSync() {
@@ -290,42 +296,46 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
 
-        ErrorUtil.safeRun(this) {
-            val result = settingsRepository.performSync(currentSyncConfig)
-            when (result) {
-                is NativeResult.Success -> {
-                    val syncResult = result.data
-                    if (syncResult != null) {
-                        if (syncResult.userMessage != null) {
-                            AlertDialog.Builder(this)
-                                .setMessage(syncResult.userMessage)
-                                .setPositiveButton(getString(R.string.action_ok), null)
-                                .show()
-                        } else if (syncResult.firstSyncMode == FirstSyncMode.UnrelatedHistories || syncResult.firstSyncMode == FirstSyncMode.BlockedNonEmptyRemote) {
-                            AlertDialog.Builder(this)
-                                .setMessage(getString(R.string.sync_error_unrelated))
-                                .setPositiveButton(getString(R.string.action_ok), null)
-                                .show()
-                        } else if (syncResult.error != null) {
-                            AlertDialog.Builder(this)
-                                .setMessage(syncResult.error)
-                                .setPositiveButton(getString(R.string.action_ok), null)
-                                .show()
-                        } else if (syncResult.conflicts.isNotEmpty()) {
-                            Toast.makeText(this, getString(R.string.sync_error_conflict), Toast.LENGTH_LONG).show()
-                        } else {
-                            Toast.makeText(this, getString(R.string.sync_success), Toast.LENGTH_SHORT).show()
+        Thread {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during sync")) {
+                settingsRepository.performSync(currentSyncConfig)
+            }
+            runOnUiThread {
+                when (result) {
+                    is NativeResult.Success -> {
+                        val syncResult = result.data
+                        if (syncResult != null) {
+                            if (syncResult.userMessage != null) {
+                                AlertDialog.Builder(this@SettingsActivity)
+                                    .setMessage(syncResult.userMessage)
+                                    .setPositiveButton(getString(R.string.action_ok), null)
+                                    .show()
+                            } else if (syncResult.firstSyncMode == FirstSyncMode.UnrelatedHistories || syncResult.firstSyncMode == FirstSyncMode.BlockedNonEmptyRemote) {
+                                AlertDialog.Builder(this@SettingsActivity)
+                                    .setMessage(getString(R.string.sync_error_unrelated))
+                                    .setPositiveButton(getString(R.string.action_ok), null)
+                                    .show()
+                            } else if (syncResult.error != null) {
+                                AlertDialog.Builder(this@SettingsActivity)
+                                    .setMessage(syncResult.error)
+                                    .setPositiveButton(getString(R.string.action_ok), null)
+                                    .show()
+                            } else if (syncResult.conflicts.isNotEmpty()) {
+                                Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_conflict), Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(this@SettingsActivity, getString(R.string.sync_success), Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }
-                }
-                is NativeResult.Error -> {
-                    Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
-                }
-                NativeResult.NotLoaded -> {
-                    Toast.makeText(this, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
+                    is NativeResult.Error -> {
+                        Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
+                    }
+                    NativeResult.NotLoaded -> {
+                        Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
-        }
+        }.start()
     }
 
     private fun loadSyncState() {
@@ -374,6 +384,7 @@ class SettingsActivity : AppCompatActivity() {
         val newSyncConfig = currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             remoteUrl = etGithubRepo.text?.toString() ?: "",
+            transport = currentSyncConfig.transport ?: SyncTransport.HttpsToken,
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt()

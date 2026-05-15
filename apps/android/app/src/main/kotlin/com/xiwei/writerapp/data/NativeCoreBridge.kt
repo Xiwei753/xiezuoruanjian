@@ -1,6 +1,7 @@
 package com.xiwei.writerapp.data
 
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import com.xiwei.writerapp.model.*
 import java.io.File
@@ -15,7 +16,9 @@ sealed class NativeResult<out T> {
 
 class NativeCoreBridge(context: Context) {
     private val workspaceDir = WorkspaceManager.getWorkspaceDir(context).absolutePath
-    private val gson = Gson()
+    private val gson = GsonBuilder()
+        .registerTypeAdapter(SyncStatus::class.java, SyncStatusDeserializer())
+        .create()
 
     var isLoaded = false
         private set
@@ -307,7 +310,11 @@ class NativeCoreBridge(context: Context) {
             val resultJson = loadSyncConfig(workspaceDir)
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<SyncConfig>>() {}.type
-            val response: RustResponse<SyncConfig> = gson.fromJson(resultJson, type)
+            val response: RustResponse<SyncConfig> = try {
+                gson.fromJson(resultJson, type)
+            } catch (e: Exception) {
+                return NativeResult.Error("Failed to parse SyncConfig JSON: ${e.message}")
+            }
             return if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {
@@ -391,7 +398,11 @@ class NativeCoreBridge(context: Context) {
             val resultJson = performSyncDryRun(workspaceDir, gson.toJson(config))
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<SyncPlan>>() {}.type
-            val response: RustResponse<SyncPlan> = gson.fromJson(resultJson, type)
+            val response: RustResponse<SyncPlan> = try {
+                gson.fromJson(resultJson, type)
+            } catch (e: Exception) {
+                return NativeResult.Error("Failed to parse SyncPlan JSON: ${e.message}")
+            }
             return if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {
@@ -412,7 +423,11 @@ class NativeCoreBridge(context: Context) {
             val resultJson = performSync(workspaceDir, gson.toJson(config))
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<SyncResult>>() {}.type
-            val response: RustResponse<SyncResult> = gson.fromJson(resultJson, type)
+            val response: RustResponse<SyncResult> = try {
+                gson.fromJson(resultJson, type)
+            } catch (e: Exception) {
+                return NativeResult.Error("Failed to parse SyncResult JSON: ${e.message}")
+            }
             return if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {
