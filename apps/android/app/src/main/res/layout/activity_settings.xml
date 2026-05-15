@@ -328,6 +328,15 @@
                 android:textStyle="bold"
                 android:layout_marginBottom="8dp"/>
 
+            <!-- Editor Fullscreen Portrait -->
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/switchEditorFullscreenPortrait"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/pref_editor_fullscreen_portrait"
+                android:textSize="16sp"
+                android:layout_marginBottom="16dp"/>
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

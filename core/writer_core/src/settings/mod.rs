@@ -23,10 +23,16 @@ pub struct LocalSettings {
     pub auto_indent_enabled: bool,
     #[serde(default = "default_auto_indent_width")]
     pub auto_indent_width: f32,
+    #[serde(default = "default_editor_fullscreen_portrait_enabled")]
+    pub editor_fullscreen_portrait_enabled: bool,
     #[serde(default)]
     pub window_width: f64,
     #[serde(default)]
     pub window_height: f64,
+}
+
+fn default_editor_fullscreen_portrait_enabled() -> bool {
+    false
 }
 
 fn default_editor_font_size() -> f32 {
@@ -60,6 +66,7 @@ impl Default for LocalSettings {
             auto_save_delay_ms: default_auto_save_delay_ms(),
             auto_indent_enabled: default_auto_indent_enabled(),
             auto_indent_width: default_auto_indent_width(),
+            editor_fullscreen_portrait_enabled: default_editor_fullscreen_portrait_enabled(),
             window_width: 800.0,
             window_height: 600.0,
         }

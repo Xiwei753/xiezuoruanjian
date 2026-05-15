@@ -17,6 +17,7 @@ data class LocalSettings(
     val autoSaveDelayMs: Long = 1500L,
     val autoIndentEnabled: Boolean = true,
     val autoIndentWidth: Float = 2.0f,
+    val editorFullscreenPortraitEnabled: Boolean = false,
     val windowWidth: Double = 800.0,
     val windowHeight: Double = 600.0
 )

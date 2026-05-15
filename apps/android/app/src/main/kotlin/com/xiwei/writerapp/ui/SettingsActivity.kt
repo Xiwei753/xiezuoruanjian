@@ -53,6 +53,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var switchAutoIndent: MaterialSwitch
     private lateinit var sbAutoIndentWidth: Slider
     private lateinit var tvAutoIndentWidthValue: TextView
+    private lateinit var switchEditorFullscreenPortrait: MaterialSwitch
 
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnPerformSync: MaterialButton
@@ -98,6 +99,7 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoIndent = findViewById(R.id.switchAutoIndent)
         sbAutoIndentWidth = findViewById(R.id.sbAutoIndentWidth)
         tvAutoIndentWidthValue = findViewById(R.id.tvAutoIndentWidthValue)
+        switchEditorFullscreenPortrait = findViewById(R.id.switchEditorFullscreenPortrait)
 
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
 
@@ -160,6 +162,7 @@ class SettingsActivity : AppCompatActivity() {
 
         switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
         sbAutoIndentWidth.value = currentSettings.autoIndentWidth
+        switchEditorFullscreenPortrait.isChecked = currentSettings.editorFullscreenPortraitEnabled
 
         // Initial texts
         tvFontSizeValue.text = "${currentSettings.editorFontSize.toInt()}sp"
@@ -169,6 +172,7 @@ class SettingsActivity : AppCompatActivity() {
 
         switchAutoSave.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
         switchAutoIndent.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
+        switchEditorFullscreenPortrait.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
 
 
         spinnerTheme.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -360,6 +364,7 @@ class SettingsActivity : AppCompatActivity() {
             autoSaveDelayMs = sbAutoSaveDelay.value.toLong() * 1000L,
             autoIndentEnabled = switchAutoIndent.isChecked,
             autoIndentWidth = sbAutoIndentWidth.value,
+            editorFullscreenPortraitEnabled = switchEditorFullscreenPortrait.isChecked,
             themeMode = themeStr
         )
 
