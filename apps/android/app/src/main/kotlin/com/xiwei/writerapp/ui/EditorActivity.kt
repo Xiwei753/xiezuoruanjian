@@ -30,6 +30,8 @@ class EditorActivity : AppCompatActivity() {
     private var autoSaveEnabled = true
     private var autoSaveDelayMs = 1500L
 
+    private lateinit var statusUnsaved: String
+
     private val autoSaveRunnable = Runnable { saveContent() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,13 +78,17 @@ class EditorActivity : AppCompatActivity() {
             editorEditText.isEnabled = false
         }
 
+        statusUnsaved = getString(R.string.status_unsaved)
+
         editorEditText.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (projectId == null || volumeId == null || chapterId == null) return
                 if (editorEditText.hasFocus()) {
                     isDirty = true
-                    toolbar.subtitle = getString(R.string.status_unsaved)
+                    if (toolbar.subtitle != statusUnsaved) {
+                        toolbar.subtitle = statusUnsaved
+                    }
                     if (autoSaveEnabled) {
                         handler.removeCallbacks(autoSaveRunnable)
                         handler.postDelayed(autoSaveRunnable, autoSaveDelayMs)
