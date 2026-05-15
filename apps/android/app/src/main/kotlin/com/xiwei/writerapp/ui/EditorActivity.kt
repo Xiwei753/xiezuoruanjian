@@ -114,6 +114,17 @@ class EditorActivity : AppCompatActivity() {
         })
     }
 
+
+    override fun onResume() {
+        super.onResume()
+        val settings = settingsRepository.getLocalSettings()
+        editorEditText.textSize = settings.editorFontSize
+        editorEditText.setLineSpacing(0f, settings.editorLineSpacingMultiplier)
+        editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
+        autoSaveEnabled = settings.autoSaveEnabled
+        autoSaveDelayMs = settings.autoSaveDelayMs
+    }
+
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(autoSaveRunnable)

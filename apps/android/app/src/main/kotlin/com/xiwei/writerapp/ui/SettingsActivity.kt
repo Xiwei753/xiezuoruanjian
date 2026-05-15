@@ -99,6 +99,19 @@ class SettingsActivity : AppCompatActivity() {
         sbAutoIndentWidth = findViewById(R.id.sbAutoIndentWidth)
         tvAutoIndentWidthValue = findViewById(R.id.tvAutoIndentWidthValue)
 
+        tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
+
+        switchEnableSync = findViewById(R.id.switchEnableSync)
+        etGithubRepo = findViewById(R.id.etGithubRepo)
+        etBranch = findViewById(R.id.etBranch)
+        etHttpsToken = findViewById(R.id.etHttpsToken)
+        tvTokenStatus = findViewById(R.id.tvTokenStatus)
+        switchAutoSync = findViewById(R.id.switchAutoSync)
+        sbSyncInterval = findViewById(R.id.sbSyncInterval)
+        btnDryRun = findViewById(R.id.btnDryRun)
+        btnPerformSync = findViewById(R.id.btnPerformSync)
+
+
         // Live value update listeners
         sbFontSize.addOnChangeListener { _, value, _ ->
             tvFontSizeValue.text = "${value.toInt()}sp"
@@ -128,18 +141,6 @@ class SettingsActivity : AppCompatActivity() {
         sbAutoSaveDelay.addOnSliderTouchListener(saveSettingsListener)
         sbSyncInterval.addOnSliderTouchListener(saveSettingsListener)
         sbAutoIndentWidth.addOnSliderTouchListener(saveSettingsListener)
-
-        tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
-
-        switchEnableSync = findViewById(R.id.switchEnableSync)
-        etGithubRepo = findViewById(R.id.etGithubRepo)
-        etBranch = findViewById(R.id.etBranch)
-        etHttpsToken = findViewById(R.id.etHttpsToken)
-        tvTokenStatus = findViewById(R.id.tvTokenStatus)
-        switchAutoSync = findViewById(R.id.switchAutoSync)
-        sbSyncInterval = findViewById(R.id.sbSyncInterval)
-        btnDryRun = findViewById(R.id.btnDryRun)
-        btnPerformSync = findViewById(R.id.btnPerformSync)
 
 
         // Setup Theme Spinner

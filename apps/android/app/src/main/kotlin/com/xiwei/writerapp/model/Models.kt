@@ -1,8 +1,5 @@
 package com.xiwei.writerapp.model
 
-import com.xiwei.writerapp.model.*
-import com.xiwei.writerapp.data.*
-import com.xiwei.writerapp.ui.*
 
 
 import com.google.gson.annotations.SerializedName
@@ -19,7 +16,9 @@ data class LocalSettings(
     val autoSaveEnabled: Boolean = true,
     val autoSaveDelayMs: Long = 1500L,
     val autoIndentEnabled: Boolean = true,
-    val autoIndentWidth: Float = 2.0f
+    val autoIndentWidth: Float = 2.0f,
+    val windowWidth: Double = 800.0,
+    val windowHeight: Double = 600.0
 )
 
 data class Project(
