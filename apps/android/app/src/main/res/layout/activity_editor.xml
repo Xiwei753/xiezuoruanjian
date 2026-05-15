@@ -8,7 +8,8 @@
 
     <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:background="?attr/colorSurface">
 
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
@@ -17,36 +18,105 @@
             app:navigationIcon="@drawable/ic_back"
             app:subtitle="@string/status_saved" />
 
+        <!-- Search Bar -->
+        <LinearLayout
+            android:id="@+id/searchLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="8dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <EditText
+                    android:id="@+id/etSearch"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/hint_search"
+                    android:inputType="text"
+                    android:maxLines="1"
+                    android:background="@android:color/transparent"
+                    android:paddingVertical="8dp" />
+                <ImageButton
+                    android:id="@+id/btnSearchNext"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:src="@drawable/ic_search"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:padding="8dp"
+                    android:contentDescription="@string/action_search_next"/>
+                <ImageButton
+                    android:id="@+id/btnSearchClose"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:src="@drawable/ic_close"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:padding="8dp"
+                    android:contentDescription="@string/action_cancel"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+                <EditText
+                    android:id="@+id/etReplace"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/hint_replace"
+                    android:inputType="text"
+                    android:maxLines="1"
+                    android:background="@android:color/transparent"
+                    android:paddingVertical="8dp" />
+                <Button
+                    android:id="@+id/btnReplace"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/action_replace"/>
+                <Button
+                    android:id="@+id/btnReplaceAll"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/action_replace_all"/>
+            </LinearLayout>
+        </LinearLayout>
     </com.google.android.material.appbar.AppBarLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:background="?attr/colorSurfaceVariant"
+        android:background="?attr/colorSurface"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginHorizontal="16dp"
-            android:layout_marginTop="16dp"
-            android:layout_marginBottom="16dp"
             style="?attr/materialCardViewElevatedStyle"
-            app:cardElevation="4dp"
-            app:cardCornerRadius="16dp">
+            app:cardElevation="0dp"
+            app:cardCornerRadius="0dp">
 
             <com.xiwei.writerapp.ui.WriterEditText
                 android:id="@+id/editorEditText"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:paddingHorizontal="20dp"
+                android:paddingHorizontal="24dp"
                 android:paddingTop="24dp"
-                android:paddingBottom="24dp"
+                android:paddingBottom="80dp"
                 android:gravity="top|start"
                 android:inputType="textMultiLine|textNoSuggestions"
-                android:background="?attr/colorSurface"
+                android:background="@null"
                 android:hint="@string/hint_editor_content"
                 android:textColor="?attr/colorOnSurface"
                 android:textColorHint="?attr/colorOnSurfaceVariant" />
@@ -54,14 +124,23 @@
         </com.google.android.material.card.MaterialCardView>
 
         <!-- Stats Bar -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginBottom="16dp"
+            android:layout_marginTop="-64dp"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="4dp"
+            app:cardBackgroundColor="?attr/colorSurfaceVariant">
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:paddingHorizontal="16dp"
-            android:paddingVertical="8dp"
-            android:gravity="center_vertical"
-            android:background="?attr/colorSurface">
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="12dp"
+            android:gravity="center_vertical">
 
             <TextView
                 android:id="@+id/tvWordCount"
@@ -103,6 +182,7 @@
                 android:textColor="?attr/colorOnSurfaceVariant" />
 
         </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
     </LinearLayout>
 

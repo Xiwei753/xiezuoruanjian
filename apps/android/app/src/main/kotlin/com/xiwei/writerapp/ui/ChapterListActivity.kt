@@ -15,11 +15,16 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.WorkspaceRepository
+import kotlinx.coroutines.*
 
 class ChapterListActivity : AppCompatActivity() {
     private lateinit var chapterRecyclerView: RecyclerView
     private lateinit var fabNewChapter: ExtendedFloatingActionButton
     private lateinit var emptyStateLayout: View
+    private lateinit var statsHeaderLayout: View
+    private lateinit var tvStatsTotalWords: TextView
+    private lateinit var tvStatsVolumes: TextView
+    private lateinit var tvStatsChapters: TextView
 
     private lateinit var workspaceRepository: WorkspaceRepository
     private var projectId: String? = null
@@ -39,6 +44,10 @@ class ChapterListActivity : AppCompatActivity() {
         chapterRecyclerView = findViewById(R.id.chapterRecyclerView)
         fabNewChapter = findViewById(R.id.fabNewChapter)
         emptyStateLayout = findViewById(R.id.emptyStateLayout)
+        statsHeaderLayout = findViewById(R.id.statsHeaderLayout)
+        tvStatsTotalWords = findViewById(R.id.tvStatsTotalWords)
+        tvStatsVolumes = findViewById(R.id.tvStatsVolumes)
+        tvStatsChapters = findViewById(R.id.tvStatsChapters)
 
         workspaceRepository = WorkspaceRepository(this)
 
@@ -66,6 +75,24 @@ class ChapterListActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         loadChapters()
+        loadProjectStats()
+    }
+
+    private fun loadProjectStats() {
+        val pid = projectId ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val stats = workspaceRepository.getProjectStats(pid)
+                withContext(Dispatchers.Main) {
+                    statsHeaderLayout.visibility = View.VISIBLE
+                    tvStatsTotalWords.text = "总字数: ${stats.totalWordCount}"
+                    tvStatsVolumes.text = "卷: ${stats.volumeCount}"
+                    tvStatsChapters.text = "章: ${stats.chapterCount}"
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun loadChapters() {

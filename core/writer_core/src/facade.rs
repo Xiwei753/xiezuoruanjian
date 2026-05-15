@@ -74,6 +74,24 @@ impl WriterCore {
         crate::project::get_project_stats(&self.workspace_path, project_id)
     }
 
+    pub fn get_recent_edits(&self) -> Result<Vec<crate::workspace::RecentEdit>> {
+        crate::workspace::get_recent_edits(&self.workspace_path)
+    }
+
+    pub fn record_recent_edit(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Result<()> {
+        crate::workspace::record_recent_edit(
+            &self.workspace_path,
+            project_id,
+            volume_id,
+            chapter_id,
+        )
+    }
+
     pub fn read_chapter(
         &self,
         project_id: &str,
@@ -97,6 +115,22 @@ impl WriterCore {
             volume_id,
             chapter_id,
             content,
+        )
+    }
+
+    pub fn update_chapter_note(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        note: &str,
+    ) -> Result<()> {
+        chapter::update_chapter_note(
+            &self.workspace_path,
+            project_id,
+            volume_id,
+            chapter_id,
+            note,
         )
     }
 
