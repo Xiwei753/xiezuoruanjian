@@ -167,6 +167,9 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
         sbAutoIndentWidth.value = currentSettings.autoIndentWidth
 
+        switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
+        switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
+
         // Initial texts
         tvFontSizeValue.text = "${currentSettings.editorFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
@@ -175,6 +178,8 @@ class SettingsActivity : AppCompatActivity() {
 
         switchAutoSave.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
         switchAutoIndent.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
+        switchTypingAnimation.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
+        switchSmoothCursor.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
 
 
         spinnerTheme.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -375,7 +380,9 @@ class SettingsActivity : AppCompatActivity() {
             autoSaveDelayMs = sbAutoSaveDelay.value.toLong() * 1000L,
             autoIndentEnabled = switchAutoIndent.isChecked,
             autoIndentWidth = sbAutoIndentWidth.value,
-            themeMode = themeStr
+            themeMode = themeStr,
+            editorTypingAnimationEnabled = switchTypingAnimation.isChecked,
+            editorSmoothCursorEnabled = switchSmoothCursor.isChecked
         )
 
         ErrorUtil.safeRun(this) {
