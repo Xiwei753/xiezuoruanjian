@@ -135,6 +135,20 @@
                     android:textColor="?attr/colorPrimary"/>
             </LinearLayout>
 
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchTypingAnimation"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_editor_typing_animation"
+                    android:layout_marginTop="8dp"/>
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchSmoothCursor"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_editor_smooth_cursor"
+                    android:layout_marginTop="8dp"/>
+
             <com.google.android.material.slider.Slider
                 android:id="@+id/sbAutoIndentWidth"
                 android:layout_width="match_parent"
