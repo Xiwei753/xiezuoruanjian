@@ -6,6 +6,74 @@ use writer_core::chapter::Chapter;
 use writer_core::facade::WriterCore;
 use writer_core::project::Project;
 use writer_core::volume::Volume;
+use fontdb::{Database, Query, Family};
+
+
+
+fn configure_fonts(ctx: &egui::Context) -> Option<String> {
+    let mut db = Database::new();
+    db.load_system_fonts();
+
+    let families = [
+        "Noto Sans CJK SC",
+        "Noto Sans CJK",
+        "Source Han Sans SC",
+        "Source Han Sans CN",
+        "WenQuanYi Micro Hei",
+        "WenQuanYi Zen Hei",
+        "Microsoft YaHei",
+        "SimHei",
+        "PingFang SC",
+        "sans-serif",
+    ];
+
+    let mut found_path = None;
+    let mut found_family = None;
+
+    for family in &families {
+        let query = Query {
+            families: &[Family::Name(family)],
+            ..Query::default()
+        };
+        if let Some(id) = db.query(&query) {
+            if let Some(info) = db.face(id) {
+                if let fontdb::Source::File(path) = &info.source {
+                    found_path = Some(path.clone());
+                    found_family = Some(family.to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    if let (Some(path), Some(family)) = (found_path, found_family) {
+        if let Ok(font_data) = std::fs::read(&path) {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                family.clone(),
+                egui::FontData::from_owned(font_data).into(),
+            );
+
+            // Put the found CJK font at the highest priority for both proportional and monospace
+            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                vec.insert(0, family.clone());
+            } else {
+                fonts.families.insert(egui::FontFamily::Proportional, vec![family.clone()]);
+            }
+
+            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                vec.insert(0, family.clone());
+            } else {
+                fonts.families.insert(egui::FontFamily::Monospace, vec![family.clone()]);
+            }
+
+            ctx.set_fonts(fonts);
+            return None;
+        }
+    }
+
+    Some("未找到中文字体，请安装 Noto Sans CJK 或思源黑体以正常显示中文。".to_string())
+}
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -15,13 +83,19 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "写作软件 Linux MVP",
         options,
-        Box::new(|_cc| Box::<WriterApp>::default()),
+        Box::new(|cc| {
+            let mut app = WriterApp::default();
+            app.state.font_warning = configure_fonts(&cc.egui_ctx);
+            Box::new(app)
+        }),
     )
 }
 
 struct AppState {
     workspace_path: Option<PathBuf>,
     core: Option<WriterCore>,
+
+    font_warning: Option<String>,
 
     // Loaded entities
     projects: Vec<Project>,
@@ -65,6 +139,7 @@ impl Default for AppState {
         Self {
             workspace_path: None,
             core: None,
+            font_warning: None,
             projects: Vec::new(),
             cached_volumes: HashMap::new(),
             cached_chapters: HashMap::new(),
@@ -256,6 +331,21 @@ impl eframe::App for WriterApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut close_warning = false;
+        if let Some(warning) = &self.state.font_warning {
+            egui::TopBottomPanel::top("warning_panel").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(warning).color(egui::Color32::RED));
+                    if ui.button("关闭").clicked() {
+                        close_warning = true;
+                    }
+                });
+            });
+        }
+        if close_warning {
+            self.state.font_warning = None;
+        }
+
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("打开/创建工作区").clicked() {
