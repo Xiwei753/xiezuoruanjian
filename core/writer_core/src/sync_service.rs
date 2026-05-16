@@ -206,11 +206,14 @@ pub trait GitBackend {
 pub struct Git2Backend;
 
 impl Git2Backend {
-    fn build_proxy_options<'a>(config: Option<&'a SyncConfig>) -> crate::Result<git2::ProxyOptions<'a>> {
+    fn build_proxy_options<'a>(
+        config: Option<&'a SyncConfig>,
+    ) -> crate::Result<git2::ProxyOptions<'a>> {
         let mut proxy_opts = git2::ProxyOptions::new();
         if let Some(cfg) = config {
             if cfg.proxy_enabled {
-                let proxy_url = format!("{}://{}:{}", cfg.proxy_type, cfg.proxy_host, cfg.proxy_port);
+                let proxy_url =
+                    format!("{}://{}:{}", cfg.proxy_type, cfg.proxy_host, cfg.proxy_port);
 
                 // libgit2 socks5 support might be missing depending on build features.
                 // It will error out during fetch/push if not supported, but we can catch it.
@@ -838,10 +841,13 @@ impl SyncService {
         let map_git_error = |e: crate::Error| -> crate::Error {
             if let crate::Error::Io(io_err) = &e {
                 let msg = io_err.to_string();
-                if msg.contains("unsupported proxy protocol") || msg.contains("failed to resolve address") || msg.contains("SOCKS5") {
+                if msg.contains("unsupported proxy protocol")
+                    || msg.contains("failed to resolve address")
+                    || msg.contains("SOCKS5")
+                {
                     return crate::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        format!("代理不可用/端口不通: {}", msg)
+                        format!("代理不可用/端口不通: {}", msg),
                     ));
                 }
             }
@@ -900,8 +906,14 @@ impl SyncService {
                 // Clone
                 result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
                 result.user_message = Some("已克隆远端仓库到空工作区。".to_string());
-                if let Err(e) =
-                    backend.clone_repo(&config.remote_url, workspace_path, auth.as_ref(), Some(config)).map_err(map_git_error)
+                if let Err(e) = backend
+                    .clone_repo(
+                        &config.remote_url,
+                        workspace_path,
+                        auth.as_ref(),
+                        Some(config),
+                    )
+                    .map_err(map_git_error)
                 {
                     return Ok(SyncResult::error(
                         SyncStatus::Error(e.to_string()),
@@ -964,7 +976,10 @@ impl SyncService {
         }
 
         // Pull
-        if let Err(e) = backend.pull(workspace_path, &config.branch, auth.as_ref(), Some(config)).map_err(map_git_error) {
+        if let Err(e) = backend
+            .pull(workspace_path, &config.branch, auth.as_ref(), Some(config))
+            .map_err(map_git_error)
+        {
             let e_str = e.to_string().to_lowercase();
             if e_str.contains("unrelated")
                 || e_str.contains("merge")
@@ -1180,7 +1195,10 @@ impl SyncService {
             }
 
             // Push
-            if let Err(e) = backend.push(workspace_path, &config.branch, auth.as_ref(), Some(config)).map_err(map_git_error) {
+            if let Err(e) = backend
+                .push(workspace_path, &config.branch, auth.as_ref(), Some(config))
+                .map_err(map_git_error)
+            {
                 return Ok(SyncResult::error(
                     SyncStatus::Error(format!("Push failed: {}", e)),
                     result.first_sync_mode,
@@ -1516,16 +1534,34 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "fatal: refusing to merge unrelated histories",
                 )))
             }
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -1614,13 +1650,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -1629,7 +1677,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -1941,13 +1995,25 @@ mod tests {
 
         struct MockInitNonEmptyBackend;
         impl GitBackend for MockInitNonEmptyBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "pull failed: unable to merge unrelated histories",
@@ -1959,7 +2025,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -2018,13 +2090,25 @@ mod tests {
 
         struct MockBackendOk;
         impl GitBackend for MockBackendOk {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -2033,7 +2117,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -2086,13 +2176,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -2101,7 +2203,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -2150,13 +2258,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -2165,7 +2285,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -2214,13 +2340,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -2229,7 +2367,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>, _: Option<&SyncConfig>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
