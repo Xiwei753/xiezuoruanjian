@@ -14,13 +14,13 @@ ApplicationWindow {
 
     AppBackend {
         id: backend
-        onWorkspaceOpened: reloadTree()
-        onProjectsReloaded: reloadTree()
+        onWorkspace_opened: reloadTree()
+        onProjects_reloaded: reloadTree()
     }
 
     function reloadTree() {
         treeModel.clear();
-        let items = backend.getTreeModel();
+        let items = backend.get_tree_model();
         for (let i = 0; i < items.length; i++) {
             let item = items[i];
             treeModel.append({
@@ -34,8 +34,8 @@ ApplicationWindow {
     }
 
     onClosing: function(close_event) {
-        if (backend.saveStatus === "未保存") {
-            backend.saveCurrentChapter(editorArea.text);
+        if (backend.save_status === "未保存") {
+            backend.save_current_chapter(editorArea.text);
         }
     }
 
@@ -49,7 +49,7 @@ ApplicationWindow {
             anchors.fill: parent
             ToolButton {
                 text: "打开/创建工作区"
-                onClicked: backend.openWorkspaceDialog()
+                onClicked: backend.open_workspace_dialog()
                 contentItem: Text {
                     text: parent.text
                     color: "white"
@@ -59,7 +59,7 @@ ApplicationWindow {
             }
             ToolButton {
                 text: "新建作品"
-                onClicked: backend.createNewProject()
+                onClicked: backend.create_new_project()
                 contentItem: Text {
                     text: parent.text
                     color: "white"
@@ -69,7 +69,7 @@ ApplicationWindow {
             }
             ToolButton {
                 text: "保存"
-                onClicked: backend.saveCurrentChapter(editorArea.text)
+                onClicked: backend.save_current_chapter(editorArea.text)
                 contentItem: Text {
                     text: parent.text
                     color: "white"
@@ -88,20 +88,20 @@ ApplicationWindow {
             anchors.margins: 5
             Label {
                 id: statusLabel
-                text: backend.saveStatus
+                text: backend.save_status
                 color: "white"
                 Layout.minimumWidth: 100
             }
             Label {
                 id: wordCountLabel
-                text: "字数: " + backend.wordCount
+                text: "字数: " + backend.word_count
                 color: "white"
                 Layout.minimumWidth: 100
             }
             Item { Layout.fillWidth: true }
             Label {
                 id: workspacePathLabel
-                text: backend.workspacePath
+                text: backend.workspace_path
                 color: "gray"
             }
         }
@@ -129,19 +129,19 @@ ApplicationWindow {
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
-                                if (backend.saveStatus === "未保存") {
-                                    backend.saveCurrentChapter(editorArea.text);
+                                if (backend.save_status === "未保存") {
+                                    backend.save_current_chapter(editorArea.text);
                                 }
                                 treeView.currentIndex = index;
                                 let node = treeModel.get(index);
                                 if (node.type === "project") {
-                                    backend.selectProject(node.id);
+                                    backend.select_project(node.id);
                                 } else if (node.type === "volume") {
-                                    backend.selectVolume(node.projectId, node.id);
+                                    backend.select_volume(node.projectId, node.id);
                                 } else if (node.type === "chapter") {
-                                    backend.selectChapter(node.projectId, node.volumeId, node.id);
-                                    editorArea.text = backend.getChapterContent(node.projectId, node.volumeId, node.id);
-                                    backend.saveStatus = "已保存";
+                                    backend.select_chapter(node.projectId, node.volumeId, node.id);
+                                    editorArea.text = backend.get_chapter_content(node.projectId, node.volumeId, node.id);
+                                    backend.save_status = "已保存";
                                 }
                             }
                         }
@@ -158,9 +158,9 @@ ApplicationWindow {
                                 visible: model.type !== "chapter"
                                 onClicked: {
                                     if (model.type === "project") {
-                                        backend.createNewVolume(model.id);
+                                        backend.create_new_volume(model.id);
                                     } else if (model.type === "volume") {
-                                        backend.createNewChapter(model.projectId, model.id);
+                                        backend.create_new_chapter(model.projectId, model.id);
                                     }
                                 }
                                 contentItem: Text { text: parent.text; color: "white" }
@@ -185,8 +185,8 @@ ApplicationWindow {
                     wrapMode: TextArea.Wrap
                     background: null
                     onTextChanged: {
-                        backend.wordCount = text.length;
-                        backend.saveStatus = "未保存";
+                        backend.word_count = text.length;
+                        backend.save_status = "未保存";
                     }
                 }
             }
