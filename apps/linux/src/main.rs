@@ -2,9 +2,9 @@ use rfd::FileDialog;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use writer_core::chapter::Chapter;
+use writer_core::facade::WriterCore;
 use writer_core::project::Project;
 use writer_core::volume::Volume;
-use writer_core::facade::WriterCore;
 
 fn configure_fonts(ctx: &egui::Context) -> Option<String> {
     let mut font_db = fontdb::Database::new();
@@ -217,19 +217,17 @@ impl WriterApp {
                     self.state.error_message = None;
                     self.reload_projects();
                 }
-                Ok(false) | Err(_) => {
-                    match core.create_workspace() {
-                        Ok(_) => {
-                            self.state.workspace_path = Some(path);
-                            self.state.core = Some(core);
-                            self.state.error_message = None;
-                            self.reload_projects();
-                        }
-                        Err(e) => {
-                            self.state.error_message = Some(format!("创建工作区失败: {}", e));
-                        }
+                Ok(false) | Err(_) => match core.create_workspace() {
+                    Ok(_) => {
+                        self.state.workspace_path = Some(path);
+                        self.state.core = Some(core);
+                        self.state.error_message = None;
+                        self.reload_projects();
                     }
-                }
+                    Err(e) => {
+                        self.state.error_message = Some(format!("创建工作区失败: {}", e));
+                    }
+                },
             }
         }
     }
@@ -254,10 +252,14 @@ impl WriterApp {
             if let Some(core) = &self.state.core {
                 match core.list_volumes(project_id) {
                     Ok(volumes) => {
-                        self.state.cached_volumes.insert(project_id.to_string(), volumes);
+                        self.state
+                            .cached_volumes
+                            .insert(project_id.to_string(), volumes);
                     }
                     Err(_) => {
-                        self.state.cached_volumes.insert(project_id.to_string(), Vec::new());
+                        self.state
+                            .cached_volumes
+                            .insert(project_id.to_string(), Vec::new());
                     }
                 }
             }
@@ -280,7 +282,13 @@ impl WriterApp {
         }
     }
 
-    fn load_chapter(&mut self, project_id: &str, volume_id: &str, chapter_id: &str, chapter_title: &str) {
+    fn load_chapter(
+        &mut self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        chapter_title: &str,
+    ) {
         self.save_chapter();
         self.state.last_edit_time = None;
 
@@ -401,15 +409,28 @@ impl WriterApp {
                         "volume" => "分卷及其包含的章节",
                         _ => "章节",
                     };
-                    ui.label(format!("确定要删除 {} [{}] 吗？此操作无法撤销！", type_name, title));
+                    ui.label(format!(
+                        "确定要删除 {} [{}] 吗？此操作无法撤销！",
+                        type_name, title
+                    ));
 
-                    if t_type == "chapter" && self.state.selected_chapter_id.as_deref() == Some(self.state.delete_target.as_ref().unwrap().2.as_str()) {
-                        ui.colored_label(egui::Color32::YELLOW, "注意: 这是当前正在编辑的章节，删除后将关闭编辑。");
+                    if t_type == "chapter"
+                        && self.state.selected_chapter_id.as_deref()
+                            == Some(self.state.delete_target.as_ref().unwrap().2.as_str())
+                    {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "注意: 这是当前正在编辑的章节，删除后将关闭编辑。",
+                        );
                     }
 
                     ui.horizontal(|ui| {
-                        if ui.button("确定删除").clicked() { confirm_delete = true; }
-                        if ui.button("取消").clicked() { cancel_delete = true; }
+                        if ui.button("确定删除").clicked() {
+                            confirm_delete = true;
+                        }
+                        if ui.button("取消").clicked() {
+                            cancel_delete = true;
+                        }
                     });
                 });
         }
@@ -418,7 +439,9 @@ impl WriterApp {
             let target = self.state.delete_target.clone().unwrap();
             let t_type = self.state.delete_target_type.clone().unwrap();
 
-            if t_type == "chapter" && self.state.selected_chapter_id.as_deref() == Some(target.2.as_str()) {
+            if t_type == "chapter"
+                && self.state.selected_chapter_id.as_deref() == Some(target.2.as_str())
+            {
                 self.save_chapter();
             }
 
@@ -426,22 +449,40 @@ impl WriterApp {
                 let mut deleted = false;
                 match t_type.as_str() {
                     "project" => {
-                        if let Err(e) = core.delete_project(&target.0) { self.state.error_message = Some(format!("删除作品失败: {}", e)); } else { deleted = true; }
+                        if let Err(e) = core.delete_project(&target.0) {
+                            self.state.error_message = Some(format!("删除作品失败: {}", e));
+                        } else {
+                            deleted = true;
+                        }
                     }
                     "volume" => {
-                        if let Err(e) = core.delete_volume(&target.0, &target.1) { self.state.error_message = Some(format!("删除分卷失败: {}", e)); } else { deleted = true; }
+                        if let Err(e) = core.delete_volume(&target.0, &target.1) {
+                            self.state.error_message = Some(format!("删除分卷失败: {}", e));
+                        } else {
+                            deleted = true;
+                        }
                     }
                     "chapter" => {
-                        if let Err(e) = core.delete_chapter(&target.0, &target.1, &target.2) { self.state.error_message = Some(format!("删除章节失败: {}", e)); } else { deleted = true; }
+                        if let Err(e) = core.delete_chapter(&target.0, &target.1, &target.2) {
+                            self.state.error_message = Some(format!("删除章节失败: {}", e));
+                        } else {
+                            deleted = true;
+                        }
                     }
                     _ => {}
                 }
 
                 if deleted {
                     let clear_editor = match t_type.as_str() {
-                        "project" => self.state.selected_project_id.as_deref() == Some(target.0.as_str()),
-                        "volume" => self.state.selected_volume_id.as_deref() == Some(target.1.as_str()),
-                        "chapter" => self.state.selected_chapter_id.as_deref() == Some(target.2.as_str()),
+                        "project" => {
+                            self.state.selected_project_id.as_deref() == Some(target.0.as_str())
+                        }
+                        "volume" => {
+                            self.state.selected_volume_id.as_deref() == Some(target.1.as_str())
+                        }
+                        "chapter" => {
+                            self.state.selected_chapter_id.as_deref() == Some(target.2.as_str())
+                        }
                         _ => false,
                     };
                     if clear_editor {
@@ -836,16 +877,26 @@ impl WriterApp {
     fn render_editor(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(title) = &self.state.selected_chapter_title {
-                let p_name = self.state.projects.iter()
+                let p_name = self
+                    .state
+                    .projects
+                    .iter()
                     .find(|p| Some(&p.id) == self.state.selected_project_id.as_ref())
                     .map(|p| p.title.clone())
                     .unwrap_or_default();
-                let v_name = if let (Some(p_id), Some(v_id)) = (&self.state.selected_project_id, &self.state.selected_volume_id) {
-                    self.state.cached_volumes.get(p_id)
+                let v_name = if let (Some(p_id), Some(v_id)) = (
+                    &self.state.selected_project_id,
+                    &self.state.selected_volume_id,
+                ) {
+                    self.state
+                        .cached_volumes
+                        .get(p_id)
                         .and_then(|vols| vols.iter().find(|v| v.id == *v_id))
                         .map(|v| v.title.clone())
                         .unwrap_or_default()
-                } else { String::new() };
+                } else {
+                    String::new()
+                };
 
                 ui.horizontal(|ui| {
                     ui.label(format!("{} / {} / {}", p_name, v_name, title));
@@ -895,7 +946,6 @@ impl WriterApp {
         });
     }
 }
-
 
 impl Drop for WriterApp {
     fn drop(&mut self) {
