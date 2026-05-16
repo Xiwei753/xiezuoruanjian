@@ -288,9 +288,15 @@ class SettingsActivity : AppCompatActivity() {
                         }
                     }
                     is NativeResult.Error -> {
+                        isSyncing = false
+                        btnPerformSync.text = "立即同步"
+                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
                     }
                     NativeResult.NotLoaded -> {
+                        isSyncing = false
+                        btnPerformSync.text = "立即同步"
+                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -298,10 +304,19 @@ class SettingsActivity : AppCompatActivity() {
         }.start()
     }
 
+    private var isSyncing = false
+
     private fun handlePerformSync() {
+        if (isSyncing) return
+        isSyncing = true
+        btnPerformSync.text = "同步中..."
+        btnPerformSync.isEnabled = false
         saveCurrentState()
 
         if (currentSyncSecrets.token.isNullOrEmpty()) {
+            isSyncing = false
+            btnPerformSync.text = "立即同步"
+            btnPerformSync.isEnabled = true
             Toast.makeText(this, getString(R.string.sync_error_no_token), Toast.LENGTH_SHORT).show()
             return
         }
@@ -313,6 +328,9 @@ class SettingsActivity : AppCompatActivity() {
             runOnUiThread {
                 when (result) {
                     is NativeResult.Success -> {
+                        isSyncing = false
+                        btnPerformSync.text = "立即同步"
+                        btnPerformSync.isEnabled = true
                         val syncResult = result.data
                         if (syncResult != null) {
                             if (syncResult.userMessage != null) {
@@ -338,9 +356,15 @@ class SettingsActivity : AppCompatActivity() {
                         }
                     }
                     is NativeResult.Error -> {
+                        isSyncing = false
+                        btnPerformSync.text = "立即同步"
+                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
                     }
                     NativeResult.NotLoaded -> {
+                        isSyncing = false
+                        btnPerformSync.text = "立即同步"
+                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
