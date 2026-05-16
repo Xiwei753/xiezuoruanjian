@@ -50,6 +50,9 @@
     <string name="pref_editor_typing_animation">输入动效 (文字从光标浮现)</string>
     <string name="pref_editor_smooth_cursor">光标平滑移动</string>
 
+    <string name="pref_editor_typing_animation_duration">打字动画时长 (毫秒)</string>
+    <string name="pref_editor_smooth_cursor_duration">光标平滑时长 (毫秒)</string>
+
     <string name="pref_category_save">保存设置</string>
     <string name="pref_auto_save">自动保存</string>
     <string name="pref_auto_save_delay">自动保存延迟 (毫秒)</string>
