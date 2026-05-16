@@ -421,9 +421,21 @@ class ChapterListActivity : AppCompatActivity() {
                 btnAddChapter.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {
-                        val item = listItems[pos] as ListItem.VolumeHeader
+                        val item = listItems[pos] as? ListItem.VolumeHeader ?: return@setOnClickListener
                         showNewChapterDialog(item.volumeId)
                     }
+                }
+
+                itemView.setOnLongClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val item = listItems[pos] as? ListItem.VolumeHeader
+                        if (item != null) {
+                            showVolumeMenu(itemView, item.volumeId, item.volumeTitle)
+                            return@setOnLongClickListener true
+                        }
+                    }
+                    false
                 }
             }
         }
@@ -436,7 +448,7 @@ class ChapterListActivity : AppCompatActivity() {
                 itemView.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {
-                        val selectedItem = listItems[pos] as ListItem.Chapter
+                        val selectedItem = listItems[pos] as? ListItem.Chapter ?: return@setOnClickListener
                         val intent = Intent(this@ChapterListActivity, EditorActivity::class.java).apply {
                             putExtra("PROJECT_ID", projectId)
                             putExtra("VOLUME_ID", selectedItem.volumeId)
@@ -450,6 +462,18 @@ class ChapterListActivity : AppCompatActivity() {
                             android.widget.Toast.makeText(this@ChapterListActivity, "无法打开编辑器: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                         }
                     }
+                }
+
+                itemView.setOnLongClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val item = listItems[pos] as? ListItem.Chapter
+                        if (item != null) {
+                            showChapterMenu(itemView, item.volumeId, item.chapterId, item.chapterTitle)
+                            return@setOnLongClickListener true
+                        }
+                    }
+                    false
                 }
             }
         }
