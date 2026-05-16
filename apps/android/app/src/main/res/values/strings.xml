@@ -3,6 +3,7 @@
     <string name="app_name">写作</string>
     <string name="title_projects">作品</string>
     <string name="action_new_project">新建作品</string>
+    <string name="action_new_volume">新建分卷</string>
     <string name="action_new_chapter">新建章节</string>
     <string name="action_settings">设置</string>
     <string name="action_save">保存</string>
@@ -19,9 +20,11 @@
     <string name="hint_chapter_note">在这里写下章节灵感或大纲...</string>
 
     <string name="empty_projects">暂无作品，点击“新建作品”开始</string>
+    <string name="empty_volumes">暂无分卷，点击“新建分卷”开始</string>
     <string name="empty_chapters">暂无章节，点击“新建章节”开始</string>
 
     <string name="hint_project_title">作品名称</string>
+    <string name="hint_volume_title">分卷名称</string>
     <string name="hint_chapter_title">章节名称</string>
     <string name="hint_editor_content">在这里开始写作...</string>
 
@@ -31,6 +34,7 @@
     <string name="status_save_failed">保存失败</string>
 
     <string name="dialog_new_project_title">新建作品</string>
+    <string name="dialog_new_volume_title">新建分卷</string>
     <string name="dialog_new_chapter_title">新建章节</string>
 
     <string name="dialog_save_failed_title">保存失败</string>

@@ -19,7 +19,7 @@ import kotlinx.coroutines.*
 
 class ChapterListActivity : AppCompatActivity() {
     private lateinit var chapterRecyclerView: RecyclerView
-    private lateinit var fabNewChapter: ExtendedFloatingActionButton
+    private lateinit var fabNewVolume: ExtendedFloatingActionButton
     private lateinit var emptyStateLayout: View
     private lateinit var statsHeaderLayout: View
     private lateinit var tvStatsTotalWords: TextView
@@ -28,10 +28,20 @@ class ChapterListActivity : AppCompatActivity() {
 
     private lateinit var workspaceRepository: WorkspaceRepository
     private var projectId: String? = null
-    private var listItems = mutableListOf<ChapterListItem>()
+    private var listItems = mutableListOf<ListItem>()
     private lateinit var adapter: ChapterAdapter
 
-    private data class ChapterListItem(val volumeId: String, val volumeTitle: String, val chapterId: String, val chapterTitle: String)
+    private sealed class ListItem {
+        data class VolumeHeader(val volumeId: String, val volumeTitle: String) : ListItem()
+        data class Chapter(val volumeId: String, val chapterId: String, val chapterTitle: String, val wordCount: Int) : ListItem()
+        data class EmptyVolumeHint(val volumeId: String) : ListItem()
+    }
+
+    companion object {
+        private const val type_VOLUME_HEADER = 0
+        private const val type_CHAPTER = 1
+        private const val type_EMPTY_HINT = 2
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,7 +52,7 @@ class ChapterListActivity : AppCompatActivity() {
         toolbar.setNavigationOnClickListener { finish() }
 
         chapterRecyclerView = findViewById(R.id.chapterRecyclerView)
-        fabNewChapter = findViewById(R.id.fabNewChapter)
+        fabNewVolume = findViewById(R.id.fabNewVolume)
         emptyStateLayout = findViewById(R.id.emptyStateLayout)
         statsHeaderLayout = findViewById(R.id.statsHeaderLayout)
         tvStatsTotalWords = findViewById(R.id.tvStatsTotalWords)
@@ -67,8 +77,8 @@ class ChapterListActivity : AppCompatActivity() {
 
         loadChapters()
 
-        fabNewChapter.setOnClickListener {
-            showNewChapterDialog()
+        fabNewVolume.setOnClickListener {
+            showNewVolumeDialog()
         }
     }
 
@@ -103,16 +113,21 @@ class ChapterListActivity : AppCompatActivity() {
             val volumes = workspaceRepository.getVolumes(pid)
 
             for (volume in volumes) {
+                listItems.add(ListItem.VolumeHeader(volume.id, volume.title))
                 val chapters = workspaceRepository.getChapters(pid, volume.id)
-                for (chapter in chapters) {
-                    listItems.add(
-                        ChapterListItem(
-                            volumeId = volume.id,
-                            volumeTitle = volume.title,
-                            chapterId = chapter.id,
-                            chapterTitle = chapter.title
+                if (chapters.isEmpty()) {
+                    listItems.add(ListItem.EmptyVolumeHint(volume.id))
+                } else {
+                    for (chapter in chapters) {
+                        listItems.add(
+                            ListItem.Chapter(
+                                volumeId = volume.id,
+                                chapterId = chapter.id,
+                                chapterTitle = chapter.title,
+                                wordCount = chapter.wordCount
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -127,20 +142,32 @@ class ChapterListActivity : AppCompatActivity() {
         }
     }
 
-    private fun showNewChapterDialog() {
+    private fun showNewVolumeDialog() {
         val pid = projectId ?: return
 
-        val volumes = ErrorUtil.safeRun(this, emptyList()) {
-            workspaceRepository.getVolumes(pid)
-        }
+        val editText = EditText(this)
+        editText.hint = getString(R.string.hint_volume_title)
+        editText.setPadding(48, 48, 48, 48)
 
-        if (volumes.isEmpty()) {
-            // Should not happen as a default volume is created when project is created.
-            return
-        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.dialog_new_volume_title)
+            .setView(editText)
+            .setPositiveButton(R.string.action_create) { _, _ ->
+                val title = editText.text.toString().trim()
+                if (title.isNotEmpty()) {
+                    ErrorUtil.safeRun(this) {
+                        workspaceRepository.createVolume(pid, title)
+                        loadChapters()
+                        loadProjectStats()
+                    }
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
 
-        // Use the first available volume as the default container
-        val defaultVolumeId = volumes.first().id
+    private fun showNewChapterDialog(volumeId: String) {
+        val pid = projectId ?: return
 
         val editText = EditText(this)
         editText.hint = getString(R.string.hint_chapter_title)
@@ -153,8 +180,9 @@ class ChapterListActivity : AppCompatActivity() {
                 val title = editText.text.toString().trim()
                 if (title.isNotEmpty()) {
                     ErrorUtil.safeRun(this) {
-                        workspaceRepository.createChapter(pid, defaultVolumeId, title)
+                        workspaceRepository.createChapter(pid, volumeId, title)
                         loadChapters()
+                        loadProjectStats()
                     }
                 }
             }
@@ -162,40 +190,90 @@ class ChapterListActivity : AppCompatActivity() {
             .show()
     }
 
-    private inner class ChapterAdapter : RecyclerView.Adapter<ChapterAdapter.ChapterViewHolder>() {
+    private inner class ChapterAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-        inner class ChapterViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-            val tvChapterTitle: TextView = itemView.findViewById(R.id.tvChapterTitle)
+        inner class VolumeHeaderViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
             val tvVolumeTitle: TextView = itemView.findViewById(R.id.tvVolumeTitle)
+            val btnAddChapter: View = itemView.findViewById(R.id.btnAddChapter)
 
             init {
-                itemView.setOnClickListener {
-                    val selectedItem = listItems[adapterPosition]
-                    val intent = Intent(this@ChapterListActivity, EditorActivity::class.java).apply {
-                        putExtra("PROJECT_ID", projectId)
-                        putExtra("VOLUME_ID", selectedItem.volumeId)
-                        putExtra("CHAPTER_ID", selectedItem.chapterId)
-                        putExtra("CHAPTER_TITLE", selectedItem.chapterTitle)
-                    }
-                    try {
-                        startActivity(intent)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        android.widget.Toast.makeText(this@ChapterListActivity, "无法打开编辑器: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                btnAddChapter.setOnClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val item = listItems[pos] as ListItem.VolumeHeader
+                        showNewChapterDialog(item.volumeId)
                     }
                 }
             }
         }
 
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ChapterViewHolder {
-            val view = LayoutInflater.from(parent.context).inflate(R.layout.item_chapter, parent, false)
-            return ChapterViewHolder(view)
+        inner class ChapterViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+            val tvChapterTitle: TextView = itemView.findViewById(R.id.tvChapterTitle)
+            val tvWordCount: TextView = itemView.findViewById(R.id.tvWordCount)
+
+            init {
+                itemView.setOnClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val selectedItem = listItems[pos] as ListItem.Chapter
+                        val intent = Intent(this@ChapterListActivity, EditorActivity::class.java).apply {
+                            putExtra("PROJECT_ID", projectId)
+                            putExtra("VOLUME_ID", selectedItem.volumeId)
+                            putExtra("CHAPTER_ID", selectedItem.chapterId)
+                            putExtra("CHAPTER_TITLE", selectedItem.chapterTitle)
+                        }
+                        try {
+                            startActivity(intent)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            android.widget.Toast.makeText(this@ChapterListActivity, "无法打开编辑器: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
         }
 
-        override fun onBindViewHolder(holder: ChapterViewHolder, position: Int) {
-            val item = listItems[position]
-            holder.tvChapterTitle.text = item.chapterTitle
-            holder.tvVolumeTitle.text = item.volumeTitle
+        inner class EmptyHintViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView)
+
+        override fun getItemViewType(position: Int): Int {
+            return when (listItems[position]) {
+                is ListItem.VolumeHeader -> type_VOLUME_HEADER
+                is ListItem.Chapter -> type_CHAPTER
+                is ListItem.EmptyVolumeHint -> type_EMPTY_HINT
+            }
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            return when (viewType) {
+                type_VOLUME_HEADER -> {
+                    val view = LayoutInflater.from(parent.context).inflate(R.layout.item_volume_header, parent, false)
+                    VolumeHeaderViewHolder(view)
+                }
+                type_CHAPTER -> {
+                    val view = LayoutInflater.from(parent.context).inflate(R.layout.item_chapter, parent, false)
+                    ChapterViewHolder(view)
+                }
+                else -> {
+                    val view = LayoutInflater.from(parent.context).inflate(R.layout.item_empty_hint, parent, false)
+                    EmptyHintViewHolder(view)
+                }
+            }
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            when (val item = listItems[position]) {
+                is ListItem.VolumeHeader -> {
+                    (holder as VolumeHeaderViewHolder).tvVolumeTitle.text = item.volumeTitle
+                }
+                is ListItem.Chapter -> {
+                    val chapterHolder = holder as ChapterViewHolder
+                    chapterHolder.tvChapterTitle.text = item.chapterTitle
+                    chapterHolder.tvWordCount.text = "字数: ${item.wordCount}"
+                }
+                is ListItem.EmptyVolumeHint -> {
+                    // Nothing to bind
+                }
+            }
         }
 
         override fun getItemCount() = listItems.size
