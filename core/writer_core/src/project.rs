@@ -11,6 +11,8 @@ pub struct Project {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub order: i32,
 }
 
 pub fn list_projects(workspace_path: &Path) -> Result<Vec<Project>> {
@@ -33,6 +35,7 @@ pub fn list_projects(workspace_path: &Path) -> Result<Vec<Project>> {
             }
         }
     }
+    projects.sort_by_key(|p| p.order);
     Ok(projects)
 }
 
@@ -72,6 +75,7 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
         title: title.to_string(),
         created_at: now.clone(),
         updated_at: now,
+        order: 0,
     };
 
     let project_dir = workspace_path.join("projects").join(&id);
@@ -87,4 +91,34 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
     let _ = crate::volume::create_volume(workspace_path, &id, "第一卷")?;
 
     Ok(project)
+}
+
+pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) -> Result<()> {
+    let project_dir = workspace_path.join("projects").join(project_id);
+    let meta_path = project_dir.join("project.json");
+
+    if !meta_path.exists() {
+        return Err(crate::error::Error::ProjectNotFound);
+    }
+
+    let meta_str = fs::read_to_string(&meta_path)?;
+    let mut meta: Project = serde_json::from_str(&meta_str)?;
+
+    meta.title = new_title.to_string();
+    meta.updated_at = Utc::now().to_rfc3339();
+
+    let updated_meta_str = serde_json::to_string_pretty(&meta)?;
+    crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+
+    Ok(())
+}
+
+pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
+    let project_dir = workspace_path.join("projects").join(project_id);
+    if project_dir.exists() {
+        fs::remove_dir_all(project_dir)?;
+    } else {
+        return Err(crate::error::Error::ProjectNotFound);
+    }
+    Ok(())
 }

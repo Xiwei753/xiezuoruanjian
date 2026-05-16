@@ -11,6 +11,8 @@ pub struct Chapter {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub order: i32,
     pub word_count: u32,
     pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +54,7 @@ pub fn list_chapters(
             }
         }
     }
+    chapters.sort_by_key(|c| c.order);
     Ok(chapters)
 }
 
@@ -68,6 +71,7 @@ pub fn create_chapter(
         title: title.to_string(),
         created_at: now.clone(),
         updated_at: now,
+        order: 0,
         word_count: 0,
         hash: String::new(),
         note: None,
@@ -186,5 +190,90 @@ pub fn update_chapter_note(
     let updated_meta_str = serde_json::to_string_pretty(&meta)?;
     crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
 
+    Ok(())
+}
+
+pub fn rename_chapter(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    new_title: &str,
+) -> Result<()> {
+    let chapter_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id);
+    let meta_path = chapter_dir.join("chapter.meta.json");
+
+    if !meta_path.exists() {
+        return Err(crate::error::Error::ChapterNotFound);
+    }
+
+    let meta_str = fs::read_to_string(&meta_path)?;
+    let mut meta: Chapter = serde_json::from_str(&meta_str)?;
+
+    meta.title = new_title.to_string();
+    meta.updated_at = Utc::now().to_rfc3339();
+
+    let updated_meta_str = serde_json::to_string_pretty(&meta)?;
+    crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+
+    Ok(())
+}
+
+pub fn delete_chapter(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<()> {
+    let chapter_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id);
+
+    if chapter_dir.exists() {
+        fs::remove_dir_all(chapter_dir)?;
+    } else {
+        return Err(crate::error::Error::ChapterNotFound);
+    }
+    Ok(())
+}
+
+pub fn reorder_chapters(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    ordered_ids: &[String],
+) -> Result<()> {
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let chapter_dir = workspace_path
+            .join("projects")
+            .join(project_id)
+            .join("volumes")
+            .join(volume_id)
+            .join("chapters")
+            .join(id);
+        let meta_path = chapter_dir.join("chapter.meta.json");
+
+        if meta_path.exists() {
+            if let Ok(meta_str) = fs::read_to_string(&meta_path) {
+                if let Ok(mut meta) = serde_json::from_str::<Chapter>(&meta_str) {
+                    meta.order = index as i32;
+                    meta.updated_at = Utc::now().to_rfc3339();
+                    if let Ok(updated_meta_str) = serde_json::to_string_pretty(&meta) {
+                        let _ = crate::storage::atomic_write_string(&meta_path, &updated_meta_str);
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }

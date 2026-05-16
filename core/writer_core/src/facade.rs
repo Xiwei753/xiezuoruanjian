@@ -377,6 +377,69 @@ impl WriterCore {
         // We will just validate the remote_url for config
         Ok(true)
     }
+
+    pub fn rename_project(&self, project_id: &str, new_title: &str) -> crate::error::Result<()> {
+        crate::project::rename_project(&self.workspace_path, project_id, new_title)
+    }
+
+    pub fn delete_project(&self, project_id: &str) -> crate::error::Result<()> {
+        crate::project::delete_project(&self.workspace_path, project_id)
+    }
+
+    pub fn rename_volume(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        new_title: &str,
+    ) -> crate::error::Result<()> {
+        crate::volume::rename_volume(&self.workspace_path, project_id, volume_id, new_title)
+    }
+
+    pub fn delete_volume(&self, project_id: &str, volume_id: &str) -> crate::error::Result<()> {
+        crate::volume::delete_volume(&self.workspace_path, project_id, volume_id)
+    }
+
+    pub fn reorder_volumes(
+        &self,
+        project_id: &str,
+        ordered_ids: &[String],
+    ) -> crate::error::Result<()> {
+        crate::volume::reorder_volumes(&self.workspace_path, project_id, ordered_ids)
+    }
+
+    pub fn rename_chapter(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        new_title: &str,
+    ) -> crate::error::Result<()> {
+        crate::chapter::rename_chapter(
+            &self.workspace_path,
+            project_id,
+            volume_id,
+            chapter_id,
+            new_title,
+        )
+    }
+
+    pub fn delete_chapter(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> crate::error::Result<()> {
+        crate::chapter::delete_chapter(&self.workspace_path, project_id, volume_id, chapter_id)
+    }
+
+    pub fn reorder_chapters(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        ordered_ids: &[String],
+    ) -> crate::error::Result<()> {
+        crate::chapter::reorder_chapters(&self.workspace_path, project_id, volume_id, ordered_ids)
+    }
 }
 
 #[cfg(test)]
