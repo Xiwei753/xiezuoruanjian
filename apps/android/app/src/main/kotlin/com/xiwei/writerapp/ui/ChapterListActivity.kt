@@ -418,6 +418,8 @@ class ChapterListActivity : AppCompatActivity() {
             val btnAddChapter: View = itemView.findViewById(R.id.btnAddChapter)
 
             init {
+                itemView.isHapticFeedbackEnabled = false
+                btnAddChapter.isHapticFeedbackEnabled = false
                 btnAddChapter.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {
@@ -445,6 +447,7 @@ class ChapterListActivity : AppCompatActivity() {
             val tvWordCount: TextView = itemView.findViewById(R.id.tvWordCount)
 
             init {
+                itemView.isHapticFeedbackEnabled = false
                 itemView.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {

@@ -253,6 +253,7 @@ class MainActivity : AppCompatActivity() {
             val tvProjectDate: TextView = itemView.findViewById(R.id.tvProjectDate)
 
             init {
+                itemView.isHapticFeedbackEnabled = false
                 itemView.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {
