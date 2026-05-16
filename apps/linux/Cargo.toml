@@ -1,0 +1,11 @@
+[package]
+name = "linux"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+writer_core = { path = "../../core/writer_core" }
+eframe = "0.27.2"
+egui = "0.27.2"
+rfd = "0.14.1"
+chrono = "0.4"
