@@ -725,6 +725,38 @@ pub struct SyncService {
     pub status: SyncStatus,
 }
 
+fn get_user_friendly_error(err: &str) -> String {
+    let e = err.to_lowercase();
+    if e.contains("failed to resolve address")
+        || e.contains("no address associated with hostname")
+        || e.contains("could not resolve host")
+        || e.contains("name resolution")
+    {
+        return "无法解析 GitHub。请检查手机网络、DNS、代理/VPN/Clash 是否允许本应用访问 GitHub，然后重试。".to_string();
+    }
+    if e.contains("authentication failed") || e.contains("invalid credentials") || e.contains("401")
+    {
+        return "身份验证失败。请检查您的 GitHub Token 是否正确，或者该 Token 是否具有访问该仓库的权限。".to_string();
+    }
+    if e.contains("repository not found") || e.contains("not found") || e.contains("404") {
+        return "找不到仓库。请检查您填写的 GitHub 仓库地址是否正确，或者您的 Token 是否有权限访问该私有仓库。".to_string();
+    }
+    if e.contains("ssl") || e.contains("certificate") {
+        return "SSL 证书或网络错误。请检查您的网络环境、代理/VPN 设置或系统时间是否正确。"
+            .to_string();
+    }
+    if e.contains("timeout")
+        || e.contains("connection refused")
+        || e.contains("network unreachable")
+    {
+        return "网络连接失败或超时。请检查您的网络连接或代理设置。".to_string();
+    }
+    if e.contains("conflict") {
+        return "同步代码冲突。请在另一端解决冲突后重试。".to_string();
+    }
+    format!("同步失败，请检查网络重试。({})", err)
+}
+
 impl SyncService {
     pub fn perform_sync_dry_run(
         workspace_path: &Path,
@@ -754,8 +786,8 @@ impl SyncService {
             return Ok(SyncResult::error(
                 SyncStatus::Error("Remote URL is empty".to_string()),
                 FirstSyncMode::NotAttempted,
-                None,
-                "远程仓库地址为空。".to_string(),
+                Some("远程仓库地址为空。".to_string()),
+                "Remote URL is empty".to_string(),
             ));
         }
 
@@ -766,8 +798,8 @@ impl SyncService {
                         return Ok(SyncResult::error(
                             SyncStatus::Error("No token provided".to_string()),
                             FirstSyncMode::NotAttempted,
-                            None,
-                            "缺少 GitHub Token。".to_string(),
+                            Some("缺少 GitHub Token。".to_string()),
+                            "No token provided".to_string(),
                         ));
                     }
                     Some(GitAuth::HttpsToken {
@@ -778,8 +810,8 @@ impl SyncService {
                     return Ok(SyncResult::error(
                         SyncStatus::Error("No token provided".to_string()),
                         FirstSyncMode::NotAttempted,
-                        None,
-                        "缺少 GitHub Token。".to_string(),
+                        Some("缺少 GitHub Token。".to_string()),
+                        "No token provided".to_string(),
                     ));
                 }
             }
@@ -787,8 +819,8 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     SyncStatus::Error("SshDeployKey is not implemented".to_string()),
                     FirstSyncMode::NotAttempted,
-                    None,
-                    "当前不支持 SSH 同步方式。".to_string(),
+                    Some("当前不支持 SSH 同步方式。".to_string()),
+                    "SshDeployKey is not implemented".to_string(),
                 ));
             }
         };
@@ -1026,7 +1058,9 @@ impl SyncService {
             return Ok(SyncResult::error(
                 SyncStatus::Error(format!("Pull failed: {}", e)),
                 result.first_sync_mode,
-                None,
+                Some(get_user_friendly_error(
+                    &(format!("Pull failed: {}", e)).to_string(),
+                )),
                 format!("Pull failed: {}", e),
             ));
         }
@@ -1037,7 +1071,7 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     SyncStatus::Error(e.to_string()),
                     result.first_sync_mode,
-                    None,
+                    Some(get_user_friendly_error(&(e.to_string()).to_string())),
                     e.to_string(),
                 ));
             }
@@ -1052,7 +1086,9 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     SyncStatus::Error(format!("Stage failed: {}", e)),
                     result.first_sync_mode,
-                    None,
+                    Some(get_user_friendly_error(
+                        &(format!("Stage failed: {}", e)).to_string(),
+                    )),
                     format!("Stage failed: {}", e),
                 ));
             }
@@ -1078,7 +1114,9 @@ impl SyncService {
                     return Ok(SyncResult::error(
                         SyncStatus::Error(format!("Commit failed: {}", e)),
                         result.first_sync_mode,
-                        None,
+                        Some(get_user_friendly_error(
+                            &(format!("Commit failed: {}", e)).to_string(),
+                        )),
                         format!("Commit failed: {}", e),
                     ));
                 }
@@ -1089,7 +1127,9 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     SyncStatus::Error(format!("Push failed: {}", e)),
                     result.first_sync_mode,
-                    None,
+                    Some(get_user_friendly_error(
+                        &(format!("Push failed: {}", e)).to_string(),
+                    )),
                     format!("Push failed: {}", e),
                 ));
             }
