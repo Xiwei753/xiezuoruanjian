@@ -73,6 +73,10 @@ class EditorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_editor)
 
+        window.decorView.post {
+            UiFontUtil.applySansSerifFallback(window.decorView.rootView)
+        }
+
         toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener {
@@ -80,6 +84,7 @@ class EditorActivity : AppCompatActivity() {
         }
 
         editorEditText = findViewById(R.id.editorEditText)
+        editorEditText.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
         tvWordCount = findViewById(R.id.tvWordCount)
         tvSessionAdded = findViewById(R.id.tvSessionAdded)
         tvSpeed = findViewById(R.id.tvSpeed)

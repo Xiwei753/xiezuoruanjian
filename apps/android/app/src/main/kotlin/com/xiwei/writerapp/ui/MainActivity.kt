@@ -53,6 +53,10 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
 
+        window.decorView.post {
+            UiFontUtil.applySansSerifFallback(window.decorView.rootView)
+        }
+
         projectRecyclerView = findViewById(R.id.projectRecyclerView)
         recentEditsRecyclerView = findViewById(R.id.recentEditsRecyclerView)
         fabNewProject = findViewById(R.id.fabNewProject)

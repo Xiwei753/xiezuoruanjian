@@ -47,6 +47,10 @@ class ChapterListActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_chapter_list)
 
+        window.decorView.post {
+            UiFontUtil.applySansSerifFallback(window.decorView.rootView)
+        }
+
         val toolbar: MaterialToolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
         toolbar.setNavigationOnClickListener { finish() }
