@@ -22,7 +22,9 @@ data class LocalSettings(
     val windowWidth: Double = 800.0,
     val windowHeight: Double = 600.0,
     val editorTypingAnimationEnabled: Boolean = true,
-    val editorSmoothCursorEnabled: Boolean = true
+    val editorSmoothCursorEnabled: Boolean = true,
+    val editorTypingAnimationDurationMs: Int = 100,
+    val editorSmoothCursorDurationMs: Int = 80
 )
 
 data class Project(
