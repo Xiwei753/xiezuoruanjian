@@ -1,4 +1,5 @@
 use eframe::egui;
+use fontdb::{Database, Family, Query};
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -6,9 +7,6 @@ use writer_core::chapter::Chapter;
 use writer_core::facade::WriterCore;
 use writer_core::project::Project;
 use writer_core::volume::Volume;
-use fontdb::{Database, Query, Family};
-
-
 
 fn configure_fonts(ctx: &egui::Context) -> Option<String> {
     let mut db = Database::new();
@@ -49,22 +47,25 @@ fn configure_fonts(ctx: &egui::Context) -> Option<String> {
     if let (Some(path), Some(family)) = (found_path, found_family) {
         if let Ok(font_data) = std::fs::read(&path) {
             let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert(
-                family.clone(),
-                egui::FontData::from_owned(font_data).into(),
-            );
+            fonts
+                .font_data
+                .insert(family.clone(), egui::FontData::from_owned(font_data).into());
 
             // Put the found CJK font at the highest priority for both proportional and monospace
             if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
                 vec.insert(0, family.clone());
             } else {
-                fonts.families.insert(egui::FontFamily::Proportional, vec![family.clone()]);
+                fonts
+                    .families
+                    .insert(egui::FontFamily::Proportional, vec![family.clone()]);
             }
 
             if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
                 vec.insert(0, family.clone());
             } else {
-                fonts.families.insert(egui::FontFamily::Monospace, vec![family.clone()]);
+                fonts
+                    .families
+                    .insert(egui::FontFamily::Monospace, vec![family.clone()]);
             }
 
             ctx.set_fonts(fonts);
