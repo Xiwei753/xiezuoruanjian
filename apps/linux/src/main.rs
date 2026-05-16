@@ -114,8 +114,7 @@ impl WriterApp {
                             self.reload_projects();
                         }
                         Err(e) => {
-                            self.state.error_message =
-                        Some(format!("创建工作区失败: {}", e));
+                            self.state.error_message = Some(format!("创建工作区失败: {}", e));
                         }
                     }
                 }
@@ -340,14 +339,16 @@ impl eframe::App for WriterApp {
                                 self.state.selected_project_id.as_deref() == Some(&p_id);
 
                             ui.horizontal(|ui| {
-                                let response = ui.selectable_label(is_p_selected, format!("📖 {}", p_title));
+                                let response =
+                                    ui.selectable_label(is_p_selected, format!("📖 {}", p_title));
                                 if response.clicked() {
                                     self.state.selected_project_id = Some(p_id.clone());
                                     project_to_expand = Some(p_id.clone());
                                 }
                                 if is_p_selected {
                                     if ui.button("+").on_hover_text("新建分卷").clicked() {
-                                        self.state.show_new_volume_input = !self.state.show_new_volume_input;
+                                        self.state.show_new_volume_input =
+                                            !self.state.show_new_volume_input;
                                     }
                                 }
                             });
@@ -359,7 +360,10 @@ impl eframe::App for WriterApp {
                                     if ui.button("确定").clicked() {
                                         if let Some(core) = &self.state.core {
                                             if !self.state.new_volume_name.is_empty() {
-                                                match core.create_volume(&p_id, &self.state.new_volume_name) {
+                                                match core.create_volume(
+                                                    &p_id,
+                                                    &self.state.new_volume_name,
+                                                ) {
                                                     Ok(_) => {
                                                         self.state.cached_volumes.remove(&p_id);
                                                         self.ensure_volumes_loaded(&p_id);
@@ -400,8 +404,13 @@ impl eframe::App for WriterApp {
                                                     Some((p_id.clone(), v_id.clone()));
                                             }
                                             if is_v_selected {
-                                                if ui.button("+").on_hover_text("新建章节").clicked() {
-                                                    self.state.show_new_chapter_input = !self.state.show_new_chapter_input;
+                                                if ui
+                                                    .button("+")
+                                                    .on_hover_text("新建章节")
+                                                    .clicked()
+                                                {
+                                                    self.state.show_new_chapter_input =
+                                                        !self.state.show_new_chapter_input;
                                                 }
                                             }
                                         });
@@ -409,21 +418,41 @@ impl eframe::App for WriterApp {
                                         if is_v_selected && self.state.show_new_chapter_input {
                                             ui.horizontal(|ui| {
                                                 ui.add_space(40.0);
-                                                ui.text_edit_singleline(&mut self.state.new_chapter_name);
+                                                ui.text_edit_singleline(
+                                                    &mut self.state.new_chapter_name,
+                                                );
                                                 if ui.button("确定").clicked() {
                                                     if let Some(core) = &self.state.core {
                                                         if !self.state.new_chapter_name.is_empty() {
-                                                            match core.create_chapter(&p_id, &v_id, &self.state.new_chapter_name) {
+                                                            match core.create_chapter(
+                                                                &p_id,
+                                                                &v_id,
+                                                                &self.state.new_chapter_name,
+                                                            ) {
                                                                 Ok(_) => {
-                                                                    let key = (p_id.clone(), v_id.clone());
-                                                                    self.state.cached_chapters.remove(&key);
-                                                                    self.ensure_chapters_loaded(&p_id, &v_id);
-                                                                    self.state.new_chapter_name.clear();
-                                                                    self.state.show_new_chapter_input = false;
+                                                                    let key = (
+                                                                        p_id.clone(),
+                                                                        v_id.clone(),
+                                                                    );
+                                                                    self.state
+                                                                        .cached_chapters
+                                                                        .remove(&key);
+                                                                    self.ensure_chapters_loaded(
+                                                                        &p_id, &v_id,
+                                                                    );
+                                                                    self.state
+                                                                        .new_chapter_name
+                                                                        .clear();
+                                                                    self.state
+                                                                        .show_new_chapter_input =
+                                                                        false;
                                                                 }
                                                                 Err(e) => {
                                                                     self.state.error_message =
-                                                                        Some(format!("创建章节失败: {}", e));
+                                                                        Some(format!(
+                                                                            "创建章节失败: {}",
+                                                                            e
+                                                                        ));
                                                                 }
                                                             }
                                                         }
