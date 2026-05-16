@@ -42,6 +42,12 @@ struct AppState {
     show_new_chapter_input: bool,
     new_chapter_name: String,
 
+    // Management states
+    rename_target: Option<(String, String, String)>, // (project_id, volume_id, chapter_id), empty string for parent
+    rename_new_name: String,
+    delete_target: Option<(String, String, String, String)>, // (project_id, volume_id, chapter_id, title)
+    delete_target_type: Option<String>,                      // "project", "volume", "chapter"
+
     // Editor state
     chapter_content: String,
 
@@ -72,6 +78,10 @@ impl Default for AppState {
             new_volume_name: String::new(),
             show_new_chapter_input: false,
             new_chapter_name: String::new(),
+            rename_target: None,
+            rename_new_name: String::new(),
+            delete_target: None,
+            delete_target_type: None,
             chapter_content: String::new(),
             last_content: String::new(),
             last_edit_time: None,
@@ -289,6 +299,145 @@ impl eframe::App for WriterApp {
             self.state.error_message = None;
         }
 
+        // Check if there is a pending delete confirmation
+        let mut confirm_delete = false;
+        let mut cancel_delete = false;
+
+        if let (Some((_p_id, _v_id, c_id, title)), Some(t_type)) =
+            (&self.state.delete_target, &self.state.delete_target_type)
+        {
+            egui::Window::new("确认删除")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "你确定要删除{} \"{}\" 吗？",
+                        if t_type == "project" {
+                            "作品"
+                        } else if t_type == "volume" {
+                            "分卷及其包含的章节"
+                        } else {
+                            "章节"
+                        },
+                        title
+                    ));
+                    if t_type == "chapter"
+                        && self.state.selected_chapter_id.as_deref() == Some(c_id.as_str())
+                    {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "注意: 这是当前正在编辑的章节，删除后将关闭编辑。",
+                        );
+                    }
+
+                    ui.horizontal(|ui| {
+                        if ui.button("确定删除").clicked() {
+                            confirm_delete = true;
+                        }
+                        if ui.button("取消").clicked() {
+                            cancel_delete = true;
+                        }
+                    });
+                });
+        }
+
+        if confirm_delete {
+            let target = self.state.delete_target.clone().unwrap();
+            let t_type = self.state.delete_target_type.clone().unwrap();
+
+            // Force save if we are deleting currently selected chapter
+            if t_type == "chapter"
+                && self.state.selected_chapter_id.as_deref() == Some(target.2.as_str())
+            {
+                self.save_chapter();
+            }
+
+            if let Some(core) = &self.state.core {
+                let mut deleted = false;
+                match t_type.as_str() {
+                    "project" => {
+                        if let Err(e) = core.delete_project(&target.0) {
+                            self.state.error_message = Some(format!("删除作品失败: {}", e));
+                        } else {
+                            deleted = true;
+                        }
+                    }
+                    "volume" => {
+                        if let Err(e) = core.delete_volume(&target.0, &target.1) {
+                            self.state.error_message = Some(format!("删除分卷失败: {}", e));
+                        } else {
+                            deleted = true;
+                        }
+                    }
+                    "chapter" => {
+                        if let Err(e) = core.delete_chapter(&target.0, &target.1, &target.2) {
+                            self.state.error_message = Some(format!("删除章节失败: {}", e));
+                        } else {
+                            deleted = true;
+                        }
+                    }
+                    _ => {}
+                }
+
+                if deleted {
+                    // Clear editor if the deleted item contains the selected chapter
+                    let mut clear_editor = false;
+                    if t_type == "project"
+                        && self.state.selected_project_id.as_deref() == Some(target.0.as_str())
+                    {
+                        clear_editor = true;
+                    } else if t_type == "volume"
+                        && self.state.selected_volume_id.as_deref() == Some(target.1.as_str())
+                    {
+                        clear_editor = true;
+                    } else if t_type == "chapter"
+                        && self.state.selected_chapter_id.as_deref() == Some(target.2.as_str())
+                    {
+                        clear_editor = true;
+                    }
+
+                    if clear_editor {
+                        self.state.selected_project_id = None;
+                        self.state.selected_volume_id = None;
+                        self.state.selected_chapter_id = None;
+                        self.state.selected_chapter_title = None;
+                        self.state.chapter_content.clear();
+                        self.state.last_content.clear();
+                        self.state.last_edit_time = None;
+                        self.state.save_message = None;
+                    }
+                }
+            }
+            // Execute reload functions without holding onto `core` borrow inside
+            if self.state.error_message.is_none() {
+                let target = self.state.delete_target.clone().unwrap();
+                let t_type = self.state.delete_target_type.clone().unwrap();
+                match t_type.as_str() {
+                    "project" => {
+                        self.reload_projects();
+                    }
+                    "volume" => {
+                        self.state.cached_volumes.remove(&target.0);
+                        self.ensure_volumes_loaded(&target.0);
+                    }
+                    "chapter" => {
+                        let key = (target.0.clone(), target.1.clone());
+                        self.state.cached_chapters.remove(&key);
+                        self.ensure_chapters_loaded(&target.0, &target.1);
+                    }
+                    _ => {}
+                }
+            }
+
+            self.state.delete_target = None;
+            self.state.delete_target_type = None;
+        }
+
+        if cancel_delete {
+            self.state.delete_target = None;
+            self.state.delete_target_type = None;
+        }
+
         if self.state.workspace_path.is_some() {
             let mut chapter_to_load = None;
             let mut project_to_expand = None;
@@ -332,7 +481,8 @@ impl eframe::App for WriterApp {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         // We clone the projects list to avoid borrow checker issues
                         let projects = self.state.projects.clone();
-                        for project in &projects {
+                        let mut reload_proj = false;
+                        for (i, project) in projects.iter().enumerate() {
                             let p_id = project.id.clone();
                             let p_title = project.title.clone();
                             let is_p_selected =
@@ -350,8 +500,70 @@ impl eframe::App for WriterApp {
                                         self.state.show_new_volume_input =
                                             !self.state.show_new_volume_input;
                                     }
+
+                                    ui.menu_button("⋮", |ui| {
+                                        if ui.button("重命名").clicked() {
+                                            self.save_chapter();
+                                            self.state.rename_target = Some((p_id.clone(), "".to_string(), "".to_string()));
+                                            self.state.rename_new_name = p_title.clone();
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("删除").clicked() {
+                                            self.state.delete_target = Some((p_id.clone(), "".to_string(), "".to_string(), p_title.clone()));
+                                            self.state.delete_target_type = Some("project".to_string());
+                                            ui.close_menu();
+                                        }
+                                        if i > 0 && ui.button("上移").clicked() {
+                                            self.save_chapter();
+                                            if let Some(core) = &self.state.core {
+                                                let mut new_order: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+                                                new_order.swap(i, i - 1);
+                                                if let Err(e) = core.reorder_projects(&new_order) {
+                                                    self.state.error_message = Some(format!("上移作品失败: {}", e));
+                                                } else {
+                                                    reload_proj = true;
+                                                }
+                                            }
+                                            ui.close_menu();
+                                        }
+                                        if i < projects.len() - 1 && ui.button("下移").clicked() {
+                                            self.save_chapter();
+                                            if let Some(core) = &self.state.core {
+                                                let mut new_order: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+                                                new_order.swap(i, i + 1);
+                                                if let Err(e) = core.reorder_projects(&new_order) {
+                                                    self.state.error_message = Some(format!("下移作品失败: {}", e));
+                                                } else {
+                                                    reload_proj = true;
+                                                }
+                                            }
+                                            ui.close_menu();
+                                        }
+                                    });
                                 }
                             });
+
+                            if Some(&(p_id.clone(), "".to_string(), "".to_string())) == self.state.rename_target.as_ref() {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(20.0);
+                                    ui.text_edit_singleline(&mut self.state.rename_new_name);
+                                    if ui.button("保存").clicked() {
+                                        if let Some(core) = &self.state.core {
+                                            if !self.state.rename_new_name.is_empty() {
+                                                if let Err(e) = core.rename_project(&p_id, &self.state.rename_new_name) {
+                                                    self.state.error_message = Some(format!("重命名作品失败: {}", e));
+                                                } else {
+                                                    reload_proj = true;
+                                                }
+                                            }
+                                        }
+                                        self.state.rename_target = None;
+                                    }
+                                    if ui.button("取消").clicked() {
+                                        self.state.rename_target = None;
+                                    }
+                                });
+                            }
 
                             if is_p_selected && self.state.show_new_volume_input {
                                 ui.horizontal(|ui| {
@@ -384,7 +596,8 @@ impl eframe::App for WriterApp {
                             if is_p_selected {
                                 if let Some(volumes) = self.state.cached_volumes.get(&p_id) {
                                     let volumes = volumes.clone();
-                                    for volume in volumes {
+                                    let mut reload_vol = false;
+                                    for (j, volume) in volumes.iter().enumerate() {
                                         let v_id = volume.id.clone();
                                         let v_title = volume.title.clone();
                                         let is_v_selected =
@@ -412,8 +625,70 @@ impl eframe::App for WriterApp {
                                                     self.state.show_new_chapter_input =
                                                         !self.state.show_new_chapter_input;
                                                 }
+
+                                                ui.menu_button("⋮", |ui| {
+                                                    if ui.button("重命名").clicked() {
+                                                        self.save_chapter();
+                                                        self.state.rename_target = Some((p_id.clone(), v_id.clone(), "".to_string()));
+                                                        self.state.rename_new_name = v_title.clone();
+                                                        ui.close_menu();
+                                                    }
+                                                    if ui.button("删除").clicked() {
+                                                        self.state.delete_target = Some((p_id.clone(), v_id.clone(), "".to_string(), v_title.clone()));
+                                                        self.state.delete_target_type = Some("volume".to_string());
+                                                        ui.close_menu();
+                                                    }
+                                                    if j > 0 && ui.button("上移").clicked() {
+                                                        self.save_chapter();
+                                                        if let Some(core) = &self.state.core {
+                                                            let mut new_order: Vec<String> = volumes.iter().map(|v| v.id.clone()).collect();
+                                                            new_order.swap(j, j - 1);
+                                                            if let Err(e) = core.reorder_volumes(&p_id, &new_order) {
+                                                                self.state.error_message = Some(format!("上移分卷失败: {}", e));
+                                                            } else {
+                                                                reload_vol = true;
+                                                            }
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                    if j < volumes.len() - 1 && ui.button("下移").clicked() {
+                                                        self.save_chapter();
+                                                        if let Some(core) = &self.state.core {
+                                                            let mut new_order: Vec<String> = volumes.iter().map(|v| v.id.clone()).collect();
+                                                            new_order.swap(j, j + 1);
+                                                            if let Err(e) = core.reorder_volumes(&p_id, &new_order) {
+                                                                self.state.error_message = Some(format!("下移分卷失败: {}", e));
+                                                            } else {
+                                                                reload_vol = true;
+                                                            }
+                                                        }
+                                                        ui.close_menu();
+                                                    }
+                                                });
                                             }
                                         });
+
+                                        if Some(&(p_id.clone(), v_id.clone(), "".to_string())) == self.state.rename_target.as_ref() {
+                                            ui.horizontal(|ui| {
+                                                ui.add_space(40.0);
+                                                ui.text_edit_singleline(&mut self.state.rename_new_name);
+                                                if ui.button("保存").clicked() {
+                                                    if let Some(core) = &self.state.core {
+                                                        if !self.state.rename_new_name.is_empty() {
+                                                            if let Err(e) = core.rename_volume(&p_id, &v_id, &self.state.rename_new_name) {
+                                                                self.state.error_message = Some(format!("重命名分卷失败: {}", e));
+                                                            } else {
+                                                                reload_vol = true;
+                                                            }
+                                                        }
+                                                    }
+                                                    self.state.rename_target = None;
+                                                }
+                                                if ui.button("取消").clicked() {
+                                                    self.state.rename_target = None;
+                                                }
+                                            });
+                                        }
 
                                         if is_v_selected && self.state.show_new_chapter_input {
                                             ui.horizontal(|ui| {
@@ -467,7 +742,8 @@ impl eframe::App for WriterApp {
                                                 self.state.cached_chapters.get(&key)
                                             {
                                                 let chapters = chapters.clone();
-                                                for chapter in chapters {
+                                                let mut reload_chap = false;
+                                                for (k, chapter) in chapters.iter().enumerate() {
                                                     let c_id = chapter.id.clone();
                                                     let c_title = chapter.title.clone();
                                                     let is_c_selected =
@@ -490,13 +766,90 @@ impl eframe::App for WriterApp {
                                                                 c_title.clone(),
                                                             ));
                                                         }
+
+                                                        ui.menu_button("⋮", |ui| {
+                                                            if ui.button("重命名").clicked() {
+                                                                self.save_chapter();
+                                                                self.state.rename_target = Some((p_id.clone(), v_id.clone(), c_id.clone()));
+                                                                self.state.rename_new_name = c_title.clone();
+                                                                ui.close_menu();
+                                                            }
+                                                            if ui.button("删除").clicked() {
+                                                                self.state.delete_target = Some((p_id.clone(), v_id.clone(), c_id.clone(), c_title.clone()));
+                                                                self.state.delete_target_type = Some("chapter".to_string());
+                                                                ui.close_menu();
+                                                            }
+                                                            if k > 0 && ui.button("上移").clicked() {
+                                                                self.save_chapter();
+                                                                if let Some(core) = &self.state.core {
+                                                                    let mut new_order: Vec<String> = chapters.iter().map(|c| c.id.clone()).collect();
+                                                                    new_order.swap(k, k - 1);
+                                                                    if let Err(e) = core.reorder_chapters(&p_id, &v_id, &new_order) {
+                                                                        self.state.error_message = Some(format!("上移章节失败: {}", e));
+                                                                    } else {
+                                                                        reload_chap = true;
+                                                                    }
+                                                                }
+                                                                ui.close_menu();
+                                                            }
+                                                            if k < chapters.len() - 1 && ui.button("下移").clicked() {
+                                                                self.save_chapter();
+                                                                if let Some(core) = &self.state.core {
+                                                                    let mut new_order: Vec<String> = chapters.iter().map(|c| c.id.clone()).collect();
+                                                                    new_order.swap(k, k + 1);
+                                                                    if let Err(e) = core.reorder_chapters(&p_id, &v_id, &new_order) {
+                                                                        self.state.error_message = Some(format!("下移章节失败: {}", e));
+                                                                    } else {
+                                                                        reload_chap = true;
+                                                                    }
+                                                                }
+                                                                ui.close_menu();
+                                                            }
+                                                        });
                                                     });
+
+                                                    if Some(&(p_id.clone(), v_id.clone(), c_id.clone())) == self.state.rename_target.as_ref() {
+                                                        ui.horizontal(|ui| {
+                                                            ui.add_space(60.0);
+                                                            ui.text_edit_singleline(&mut self.state.rename_new_name);
+                                                            if ui.button("保存").clicked() {
+                                                                if let Some(core) = &self.state.core {
+                                                                    if !self.state.rename_new_name.is_empty() {
+                                                                        if let Err(e) = core.rename_chapter(&p_id, &v_id, &c_id, &self.state.rename_new_name) {
+                                                                            self.state.error_message = Some(format!("重命名章节失败: {}", e));
+                                                                        } else {
+                                                                            reload_chap = true;
+                                                                            if is_c_selected {
+                                                                                self.state.selected_chapter_title = Some(self.state.rename_new_name.clone());
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                                self.state.rename_target = None;
+                                                            }
+                                                            if ui.button("取消").clicked() {
+                                                                self.state.rename_target = None;
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                if reload_chap {
+                                                    self.state.cached_chapters.remove(&key);
+                                                    self.ensure_chapters_loaded(&p_id, &v_id);
                                                 }
                                             }
                                         }
                                     }
+                                    if reload_vol {
+                                        self.state.cached_volumes.remove(&p_id);
+                                        self.ensure_volumes_loaded(&p_id);
+                                    }
                                 }
                             }
+                        }
+
+                        if reload_proj {
+                            self.reload_projects();
                         }
                     });
                 });
