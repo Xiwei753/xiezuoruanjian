@@ -111,4 +111,6 @@
     <string name="action_more_project">作品更多操作</string>
     <string name="action_more_volume">分卷更多操作</string>
     <string name="action_more_chapter">章节更多操作</string>
+    <string name="action_sync_now">立即同步</string>
+    <string name="action_sync_dry_run">检查同步计划</string>
 </resources>

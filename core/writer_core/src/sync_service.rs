@@ -113,6 +113,25 @@ impl SyncResult {
         user_message: Option<String>,
         error: String,
     ) -> Self {
+        let mut msg = user_message.clone();
+
+        if msg.is_none() || msg.as_ref().unwrap().is_empty() {
+            let lower_err = error.to_lowercase();
+            if lower_err.contains("failed to resolve address") || lower_err.contains("no address associated with hostname") || lower_err.contains("could not resolve host") || lower_err.contains("name resolution") {
+                msg = Some("无法解析 GitHub。请检查手机网络、DNS、代理/VPN/Clash 等设置是否允许本应用访问 GitHub，然后重试。".to_string());
+            } else if lower_err.contains("authentication failed") || lower_err.contains("invalid credentials") || lower_err.contains("401") || lower_err.contains("403") {
+                msg = Some("GitHub 授权失败。请检查 Token 是否有效且具备读写权限。".to_string());
+            } else if lower_err.contains("repository not found") || lower_err.contains("not found") || lower_err.contains("404") {
+                msg = Some("找不到远端仓库或没有权限。请检查仓库地址是否正确，以及 Token 是否对该仓库有读写权限。".to_string());
+            } else if lower_err.contains("ssl") || lower_err.contains("certificate") {
+                msg = Some("SSL 证书校验失败。可能是网络环境受限或代理干扰，请检查网络设置。".to_string());
+            } else if lower_err.contains("timeout") || lower_err.contains("connection refused") || lower_err.contains("network unreachable") {
+                msg = Some("网络连接失败或超时。请检查网络状态或代理设置。".to_string());
+            } else {
+                msg = Some(format!("同步失败，请重试或检查配置。底层原因：{}", error));
+            }
+        }
+
         Self {
             status,
             uploaded_files: Vec::new(),
@@ -122,7 +141,7 @@ impl SyncResult {
             commit_hash: None,
             error: Some(error),
             first_sync_mode,
-            user_message,
+            user_message: msg,
         }
     }
 

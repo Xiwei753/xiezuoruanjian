@@ -274,11 +274,16 @@ class SettingsActivity : AppCompatActivity() {
     private fun handleDryRun() {
         saveCurrentState()
 
+        btnDryRun.isEnabled = false
+        btnDryRun.text = "检查中..."
+
         Thread {
             val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during dry run")) {
                 settingsRepository.performSyncDryRun(currentSyncConfig)
             }
             runOnUiThread {
+                btnDryRun.isEnabled = true
+                btnDryRun.text = getString(R.string.action_sync_dry_run)
                 when (result) {
                     is NativeResult.Success -> {
                         val plan = result.data
@@ -306,11 +311,16 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
 
+        btnPerformSync.isEnabled = false
+        btnPerformSync.text = "同步中..."
+
         Thread {
             val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during sync")) {
                 settingsRepository.performSync(currentSyncConfig)
             }
             runOnUiThread {
+                btnPerformSync.isEnabled = true
+                btnPerformSync.text = getString(R.string.action_sync_now)
                 when (result) {
                     is NativeResult.Success -> {
                         val syncResult = result.data
@@ -327,7 +337,7 @@ class SettingsActivity : AppCompatActivity() {
                                     .show()
                             } else if (syncResult.error != null) {
                                 AlertDialog.Builder(this@SettingsActivity)
-                                    .setMessage(syncResult.error)
+                                    .setMessage("同步失败，未知错误，请重试。")
                                     .setPositiveButton(getString(R.string.action_ok), null)
                                     .show()
                             } else if (syncResult.conflicts.isNotEmpty()) {

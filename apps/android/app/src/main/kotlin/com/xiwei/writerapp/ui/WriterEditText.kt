@@ -35,24 +35,20 @@ class WriterEditText @JvmOverloads constructor(
         typingAnimationEnabled = enabled
     }
 
-    private inner class TypingAnimationSpan : ReplacementSpan() {
-        var progress: Float = 0f
-
-        override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
-            if (fm != null) {
-                paint.getFontMetricsInt(fm)
-            }
-            return paint.measureText(text, start, end).toInt()
-        }
-
-        override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
-            val originalAlpha = paint.alpha
-            val offsetX = (1f - progress) * -10f
-            paint.alpha = (originalAlpha * progress).toInt().coerceIn(0, 255)
-            canvas.drawText(text, start, end, x + offsetX, y.toFloat(), paint)
-            paint.alpha = originalAlpha
+    private inner class TransparentSpan : android.text.style.CharacterStyle(), android.text.style.UpdateAppearance {
+        override fun updateDrawState(tp: android.text.TextPaint) {
+            tp.color = android.graphics.Color.TRANSPARENT
         }
     }
+
+    private inner class TypingAnimState(
+        val start: Int,
+        val end: Int,
+        val span: TransparentSpan,
+        var progress: Float = 0f
+    )
+
+    private val activeTypingAnims = mutableListOf<TypingAnimState>()
 
     // Custom Cursor
     private var cursorRuntimeReady = false
@@ -102,23 +98,27 @@ class WriterEditText @JvmOverloads constructor(
                     val isComposing = composingStart != -1 && composingEnd != -1 && start < composingEnd && end > composingStart
 
                     if (end <= editable.length && !isComposing) {
-                        val span = TypingAnimationSpan()
+                        val span = TransparentSpan()
                         isUpdatingSpan = true
                         editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                         isUpdatingSpan = false
 
+                        val animState = TypingAnimState(start, end, span)
+                        activeTypingAnims.add(animState)
+
                         val lineTop = layout?.getLineTop(layout.getLineForOffset(start)) ?: 0
                         val lineBottom = layout?.getLineBottom(layout.getLineForOffset(end)) ?: height
-                        val typeRect = android.graphics.Rect(0, lineTop + paddingTop - 16, width, lineBottom + paddingTop + 16)
+                        val typeRect = android.graphics.Rect(0, lineTop + extendedPaddingTop - 16, width, lineBottom + extendedPaddingTop + 16)
 
                         ValueAnimator.ofFloat(0f, 1f).apply {
                             duration = 100
                             addUpdateListener { anim ->
-                                span.progress = anim.animatedValue as Float
+                                animState.progress = anim.animatedValue as Float
                                 invalidate(typeRect)
                             }
                             addListener(object : android.animation.AnimatorListenerAdapter() {
                                 override fun onAnimationEnd(animation: android.animation.Animator) {
+                                    activeTypingAnims.remove(animState)
                                     isUpdatingSpan = true
                                     editable.removeSpan(span)
                                     isUpdatingSpan = false
@@ -236,10 +236,10 @@ class WriterEditText @JvmOverloads constructor(
     private fun invalidateCursorRect() {
         if (!cursorRuntimeReady || !smoothCursorEnabled || currentCursorX < 0 || width <= 0 || height <= 0) return
 
-        val left = (currentCursorX + paddingLeft - 8f).toInt()
-        val top = (currentCursorTop + paddingTop - 8f).toInt()
-        val right = (currentCursorX + paddingLeft + 16f).toInt()
-        val bottom = (currentCursorBottom + paddingTop + 8f).toInt()
+        val left = (currentCursorX + compoundPaddingLeft - 8f).toInt()
+        val top = (currentCursorTop + extendedPaddingTop - 8f).toInt()
+        val right = (currentCursorX + compoundPaddingLeft + 16f).toInt()
+        val bottom = (currentCursorBottom + extendedPaddingTop + 8f).toInt()
 
         if (!lastInvalidateRect.isEmpty) {
             invalidate(lastInvalidateRect)
@@ -316,11 +316,37 @@ class WriterEditText @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (!cursorRuntimeReady) return
+
+        if (activeTypingAnims.isNotEmpty() && layout != null) {
+            val textStr = text ?: ""
+            val curPaint = paint
+            val originalColor = currentTextColor
+            val originalAlpha = android.graphics.Color.alpha(originalColor)
+
+            for (anim in activeTypingAnims) {
+                if (anim.start >= textStr.length || anim.end > textStr.length || anim.start >= anim.end) continue
+                val line = layout.getLineForOffset(anim.start)
+                val x = layout.getPrimaryHorizontal(anim.start)
+                val baseline = layout.getLineBaseline(line)
+
+                val drawAlpha = (originalAlpha * anim.progress).toInt().coerceIn(0, 255)
+                curPaint.color = originalColor
+                curPaint.alpha = drawAlpha
+
+                val offsetX = (1f - anim.progress) * -10f
+                val drawX = x + compoundPaddingLeft + offsetX
+                val drawY = baseline + extendedPaddingTop
+
+                canvas.drawText(textStr, anim.start, anim.end, drawX, drawY.toFloat(), curPaint)
+            }
+            curPaint.color = originalColor
+        }
+
         if (smoothCursorEnabled && isFocused && selectionStart == selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
             cursorPaint.color = currentTextColor
-            val drawX = currentCursorX + paddingLeft
-            val drawTop = currentCursorTop + paddingTop
-            val drawBottom = currentCursorBottom + paddingTop
+            val drawX = currentCursorX + compoundPaddingLeft
+            val drawTop = currentCursorTop + extendedPaddingTop
+            val drawBottom = currentCursorBottom + extendedPaddingTop
             canvas.drawLine(drawX, drawTop, drawX, drawBottom, cursorPaint)
         }
     }
