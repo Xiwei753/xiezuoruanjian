@@ -251,9 +251,20 @@ class MainActivity : AppCompatActivity() {
         inner class ProjectViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
             val tvProjectTitle: TextView = itemView.findViewById(R.id.tvProjectTitle)
             val tvProjectDate: TextView = itemView.findViewById(R.id.tvProjectDate)
+            val btnMoreProject: android.widget.ImageButton = itemView.findViewById(R.id.btnMoreProject)
 
             init {
                 itemView.isHapticFeedbackEnabled = false
+                btnMoreProject.isHapticFeedbackEnabled = false
+
+                btnMoreProject.setOnClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val project = projects[pos]
+                        showProjectMenu(btnMoreProject, project, pos)
+                    }
+                }
+
                 itemView.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {

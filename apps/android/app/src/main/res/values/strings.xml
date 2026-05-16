@@ -108,4 +108,7 @@
     <string name="confirm_delete_volume">确认删除分卷</string>
     <string name="confirm_delete_chapter">确认删除章节</string>
     <string name="warning_delete_volume">删除分卷会同时删除其中所有章节</string>
+    <string name="action_more_project">作品更多操作</string>
+    <string name="action_more_volume">分卷更多操作</string>
+    <string name="action_more_chapter">章节更多操作</string>
 </resources>

@@ -31,4 +31,15 @@
             android:textColor="?attr/colorOnSurfaceVariant" />
 
     </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/btnMoreChapter"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="center_vertical|end"
+        android:layout_marginEnd="8dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/action_more_chapter"
+        android:src="@drawable/ic_more_vert"
+        app:tint="?attr/colorOnSurfaceVariant" />
 </com.google.android.material.card.MaterialCardView>
