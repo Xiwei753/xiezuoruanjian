@@ -31,19 +31,32 @@ struct AppBackend {
     open_workspace_dialog: qt_method!(fn(&mut self)),
     create_new_project: qt_method!(fn(&mut self, title: QString)),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
-    create_new_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
+    create_new_chapter:
+        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
 
     rename_project: qt_method!(fn(&mut self, project_id: QString, new_title: QString)),
     delete_project: qt_method!(fn(&mut self, project_id: QString)),
     reorder_projects: qt_method!(fn(&mut self, ordered_ids_joined: QString)),
 
-    rename_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, new_title: QString)),
+    rename_volume:
+        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, new_title: QString)),
     delete_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
     reorder_volumes: qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString)),
 
-    rename_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString)),
-    delete_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
-    reorder_chapters: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString)),
+    rename_chapter: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            volume_id: QString,
+            chapter_id: QString,
+            new_title: QString,
+        )
+    ),
+    delete_chapter:
+        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
+    reorder_chapters: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString)
+    ),
 
     get_tree_model: qt_method!(fn(&self) -> QJsonArray),
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
@@ -148,7 +161,7 @@ impl AppBackend {
         self.error_occurred();
     }
 
-        fn calculate_word_count(&mut self, text: QString) {
+    fn calculate_word_count(&mut self, text: QString) {
         let text_str = text.to_string();
         let count = text_str.chars().filter(|c| !c.is_whitespace()).count() as i32;
         self.set_word_count(count);
@@ -250,7 +263,7 @@ impl AppBackend {
 
     fn create_new_project(&mut self, title: QString) {
         if let Some(core_ref) = &self.core {
-                        let result = {
+            let result = {
                 let core = core_ref.borrow();
                 core.create_project(&title.to_string())
             };
@@ -270,7 +283,7 @@ impl AppBackend {
 
     fn create_new_volume(&mut self, project_id: QString, title: QString) {
         if let Some(core_ref) = &self.core {
-                        let result = {
+            let result = {
                 let core = core_ref.borrow();
                 core.create_volume(&project_id.to_string(), &title.to_string())
             };
@@ -290,9 +303,13 @@ impl AppBackend {
 
     fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) {
         if let Some(core_ref) = &self.core {
-                        let result = {
+            let result = {
                 let core = core_ref.borrow();
-                core.create_chapter(&project_id.to_string(), &volume_id.to_string(), &title.to_string())
+                core.create_chapter(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &title.to_string(),
+                )
             };
             match result {
                 Ok(chap) => {
@@ -316,7 +333,6 @@ impl AppBackend {
             };
             match result {
                 Ok(_) => {
-
                     self.reload_tree();
                     self.projects_reloaded();
                 }
@@ -350,7 +366,11 @@ impl AppBackend {
     fn reorder_projects(&mut self, ordered_ids_joined: QString) {
         if let Some(core_ref) = &self.core {
             let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
             let result = {
                 let core = core_ref.borrow();
                 core.reorder_projects(&ids)
@@ -369,11 +389,14 @@ impl AppBackend {
         if let Some(core_ref) = &self.core {
             let result = {
                 let core = core_ref.borrow();
-                core.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string())
+                core.rename_volume(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &new_title.to_string(),
+                )
             };
             match result {
                 Ok(_) => {
-
                     self.reload_tree();
                     self.projects_reloaded();
                 }
@@ -406,7 +429,11 @@ impl AppBackend {
     fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) {
         if let Some(core_ref) = &self.core {
             let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
             let result = {
                 let core = core_ref.borrow();
                 core.reorder_volumes(&project_id.to_string(), &ids)
@@ -421,15 +448,25 @@ impl AppBackend {
         }
     }
 
-    fn rename_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) {
+    fn rename_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        new_title: QString,
+    ) {
         if let Some(core_ref) = &self.core {
             let result = {
                 let core = core_ref.borrow();
-                core.rename_chapter(&project_id.to_string(), &volume_id.to_string(), &chapter_id.to_string(), &new_title.to_string())
+                core.rename_chapter(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &chapter_id.to_string(),
+                    &new_title.to_string(),
+                )
             };
             match result {
                 Ok(_) => {
-
                     self.reload_tree();
                     self.projects_reloaded();
                 }
@@ -442,7 +479,11 @@ impl AppBackend {
         if let Some(core_ref) = &self.core {
             let result = {
                 let core = core_ref.borrow();
-                core.delete_chapter(&project_id.to_string(), &volume_id.to_string(), &chapter_id.to_string())
+                core.delete_chapter(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &chapter_id.to_string(),
+                )
             };
             match result {
                 Ok(_) => {
@@ -458,10 +499,19 @@ impl AppBackend {
         }
     }
 
-    fn reorder_chapters(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString) {
+    fn reorder_chapters(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        ordered_ids_joined: QString,
+    ) {
         if let Some(core_ref) = &self.core {
             let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
             let result = {
                 let core = core_ref.borrow();
                 core.reorder_chapters(&project_id.to_string(), &volume_id.to_string(), &ids)
