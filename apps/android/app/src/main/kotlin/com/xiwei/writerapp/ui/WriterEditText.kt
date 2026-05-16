@@ -152,6 +152,8 @@ class WriterEditText @JvmOverloads constructor(
             }
         })
         cursorRuntimeReady = true
+
+        typeface = android.graphics.Typeface.create("sans-serif", typeface?.style ?: android.graphics.Typeface.NORMAL)
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
