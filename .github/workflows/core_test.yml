@@ -30,7 +30,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake g++ python3
+        sudo apt-get install -y cmake g++ python3 qt6-base-dev qt6-declarative-dev
     - name: Run check_all.sh
       run: |
         export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT

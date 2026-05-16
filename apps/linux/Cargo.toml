@@ -5,8 +5,10 @@ edition = "2021"
 
 [dependencies]
 writer_core = { path = "../../core/writer_core" }
-eframe = "0.27.2"
-egui = "0.27.2"
 rfd = "0.14.1"
-chrono = "0.4"
-fontdb = "0.23.0"
+qmetaobject = "0.2.10"
+
+[build-dependencies]
+cpp_build = "0.5.11"
+qmetaobject = "0.2.10"
+qt-build-utils = "0.8.1"
