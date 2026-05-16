@@ -386,6 +386,10 @@ impl WriterCore {
         crate::project::delete_project(&self.workspace_path, project_id)
     }
 
+    pub fn reorder_projects(&self, ordered_ids: &[String]) -> crate::error::Result<()> {
+        crate::project::reorder_projects(&self.workspace_path, ordered_ids)
+    }
+
     pub fn rename_volume(
         &self,
         project_id: &str,

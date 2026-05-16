@@ -109,4 +109,77 @@ class WorkspaceRepository(context: Context) {
             NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
+
+    fun renameProject(projectId: String, newTitle: String) {
+        when (val result = bridge.renameProject(projectId, newTitle)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("重命名作品失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun deleteProject(projectId: String) {
+        when (val result = bridge.deleteProject(projectId)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("删除作品失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun reorderProjects(orderedProjectIds: List<String>) {
+        when (val result = bridge.reorderProjects(orderedProjectIds)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("重排作品失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun renameVolume(projectId: String, volumeId: String, newTitle: String) {
+        when (val result = bridge.renameVolume(projectId, volumeId, newTitle)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("重命名分卷失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun deleteVolume(projectId: String, volumeId: String) {
+        when (val result = bridge.deleteVolume(projectId, volumeId)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("删除分卷失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun reorderVolumes(projectId: String, orderedVolumeIds: List<String>) {
+        when (val result = bridge.reorderVolumes(projectId, orderedVolumeIds)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("重排分卷失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String) {
+        when (val result = bridge.renameChapter(projectId, volumeId, chapterId, newTitle)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("重命名章节失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun deleteChapter(projectId: String, volumeId: String, chapterId: String) {
+        when (val result = bridge.deleteChapter(projectId, volumeId, chapterId)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("删除章节失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
+    fun reorderChapters(projectId: String, volumeId: String, orderedChapterIds: List<String>) {
+        when (val result = bridge.reorderChapters(projectId, volumeId, orderedChapterIds)) {
+            is NativeResult.Success<*> -> {}
+            is NativeResult.Error -> throw RepositoryException("重排章节失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
 }

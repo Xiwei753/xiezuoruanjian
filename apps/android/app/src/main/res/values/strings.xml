@@ -99,4 +99,13 @@
     <string name="action_ok">确定</string>
     <string name="sync_error_not_loaded">Native Core 未加载</string>
 
+
+    <string name="action_rename">重命名</string>
+    <string name="action_delete">删除</string>
+    <string name="action_move_up">上移</string>
+    <string name="action_move_down">下移</string>
+    <string name="confirm_delete_project">确认删除作品</string>
+    <string name="confirm_delete_volume">确认删除分卷</string>
+    <string name="confirm_delete_chapter">确认删除章节</string>
+    <string name="warning_delete_volume">删除分卷会同时删除其中所有章节</string>
 </resources>

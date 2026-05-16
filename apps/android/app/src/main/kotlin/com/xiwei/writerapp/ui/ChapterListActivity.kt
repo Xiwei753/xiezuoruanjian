@@ -190,6 +190,227 @@ class ChapterListActivity : AppCompatActivity() {
             .show()
     }
 
+
+    private fun showVolumeMenu(view: View, volumeId: String, volumeTitle: String) {
+        val pid = projectId ?: return
+        val popup = android.widget.PopupMenu(this, view)
+        popup.menu.add(0, 1, 0, getString(R.string.action_rename))
+        popup.menu.add(0, 2, 0, getString(R.string.action_delete))
+
+        val volumes = listItems.filterIsInstance<ListItem.VolumeHeader>()
+        val index = volumes.indexOfFirst { it.volumeId == volumeId }
+
+        if (index > 0) {
+            popup.menu.add(0, 3, 0, getString(R.string.action_move_up))
+        }
+        if (index >= 0 && index < volumes.size - 1) {
+            popup.menu.add(0, 4, 0, getString(R.string.action_move_down))
+        }
+
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> {
+                    showRenameVolumeDialog(volumeId, volumeTitle)
+                    true
+                }
+                2 -> {
+                    showDeleteVolumeDialog(volumeId, volumeTitle)
+                    true
+                }
+                3 -> {
+                    moveVolumeUp(volumeId)
+                    true
+                }
+                4 -> {
+                    moveVolumeDown(volumeId)
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    private fun showRenameVolumeDialog(volumeId: String, currentTitle: String) {
+        val pid = projectId ?: return
+        val editText = android.widget.EditText(this)
+        editText.setText(currentTitle)
+        editText.setSelection(currentTitle.length)
+        editText.hint = getString(R.string.hint_volume_title)
+        editText.setPadding(48, 48, 48, 48)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.action_rename)
+            .setView(editText)
+            .setPositiveButton(R.string.action_ok) { _, _ ->
+                val newTitle = editText.text.toString().trim()
+                if (newTitle.isNotEmpty() && newTitle != currentTitle) {
+                    ErrorUtil.safeRun(this) {
+                        workspaceRepository.renameVolume(pid, volumeId, newTitle)
+                        loadChapters()
+                    }
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    private fun showDeleteVolumeDialog(volumeId: String, title: String) {
+        val pid = projectId ?: return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.confirm_delete_volume)
+            .setMessage("确定要删除分卷 \"${title}\" 吗？\n" + getString(R.string.warning_delete_volume))
+            .setPositiveButton(R.string.action_delete) { _, _ ->
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.deleteVolume(pid, volumeId)
+                    loadChapters()
+                    loadProjectStats()
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    private fun moveVolumeUp(volumeId: String) {
+        val pid = projectId ?: return
+        val volumes = listItems.filterIsInstance<ListItem.VolumeHeader>().map { it.volumeId }.toMutableList()
+        val index = volumes.indexOf(volumeId)
+        if (index <= 0) return
+        val temp = volumes[index]
+        volumes[index] = volumes[index - 1]
+        volumes[index - 1] = temp
+
+        ErrorUtil.safeRun(this) {
+            workspaceRepository.reorderVolumes(pid, volumes)
+            loadChapters()
+        }
+    }
+
+    private fun moveVolumeDown(volumeId: String) {
+        val pid = projectId ?: return
+        val volumes = listItems.filterIsInstance<ListItem.VolumeHeader>().map { it.volumeId }.toMutableList()
+        val index = volumes.indexOf(volumeId)
+        if (index == -1 || index >= volumes.size - 1) return
+        val temp = volumes[index]
+        volumes[index] = volumes[index + 1]
+        volumes[index + 1] = temp
+
+        ErrorUtil.safeRun(this) {
+            workspaceRepository.reorderVolumes(pid, volumes)
+            loadChapters()
+        }
+    }
+
+    private fun showChapterMenu(view: View, volumeId: String, chapterId: String, chapterTitle: String) {
+        val pid = projectId ?: return
+        val popup = android.widget.PopupMenu(this, view)
+        popup.menu.add(0, 1, 0, getString(R.string.action_rename))
+        popup.menu.add(0, 2, 0, getString(R.string.action_delete))
+
+        val chapters = listItems.filterIsInstance<ListItem.Chapter>().filter { it.volumeId == volumeId }
+        val index = chapters.indexOfFirst { it.chapterId == chapterId }
+
+        if (index > 0) {
+            popup.menu.add(0, 3, 0, getString(R.string.action_move_up))
+        }
+        if (index >= 0 && index < chapters.size - 1) {
+            popup.menu.add(0, 4, 0, getString(R.string.action_move_down))
+        }
+
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> {
+                    showRenameChapterDialog(volumeId, chapterId, chapterTitle)
+                    true
+                }
+                2 -> {
+                    showDeleteChapterDialog(volumeId, chapterId, chapterTitle)
+                    true
+                }
+                3 -> {
+                    moveChapterUp(volumeId, chapterId)
+                    true
+                }
+                4 -> {
+                    moveChapterDown(volumeId, chapterId)
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    private fun showRenameChapterDialog(volumeId: String, chapterId: String, currentTitle: String) {
+        val pid = projectId ?: return
+        val editText = android.widget.EditText(this)
+        editText.setText(currentTitle)
+        editText.setSelection(currentTitle.length)
+        editText.hint = getString(R.string.hint_chapter_title)
+        editText.setPadding(48, 48, 48, 48)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.action_rename)
+            .setView(editText)
+            .setPositiveButton(R.string.action_ok) { _, _ ->
+                val newTitle = editText.text.toString().trim()
+                if (newTitle.isNotEmpty() && newTitle != currentTitle) {
+                    ErrorUtil.safeRun(this) {
+                        workspaceRepository.renameChapter(pid, volumeId, chapterId, newTitle)
+                        loadChapters()
+                    }
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    private fun showDeleteChapterDialog(volumeId: String, chapterId: String, title: String) {
+        val pid = projectId ?: return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.confirm_delete_chapter)
+            .setMessage("确定要删除章节 \"${title}\" 吗？")
+            .setPositiveButton(R.string.action_delete) { _, _ ->
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.deleteChapter(pid, volumeId, chapterId)
+                    loadChapters()
+                    loadProjectStats()
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    private fun moveChapterUp(volumeId: String, chapterId: String) {
+        val pid = projectId ?: return
+        val chapters = listItems.filterIsInstance<ListItem.Chapter>().filter { it.volumeId == volumeId }.map { it.chapterId }.toMutableList()
+        val index = chapters.indexOf(chapterId)
+        if (index <= 0) return
+        val temp = chapters[index]
+        chapters[index] = chapters[index - 1]
+        chapters[index - 1] = temp
+
+        ErrorUtil.safeRun(this) {
+            workspaceRepository.reorderChapters(pid, volumeId, chapters)
+            loadChapters()
+        }
+    }
+
+    private fun moveChapterDown(volumeId: String, chapterId: String) {
+        val pid = projectId ?: return
+        val chapters = listItems.filterIsInstance<ListItem.Chapter>().filter { it.volumeId == volumeId }.map { it.chapterId }.toMutableList()
+        val index = chapters.indexOf(chapterId)
+        if (index == -1 || index >= chapters.size - 1) return
+        val temp = chapters[index]
+        chapters[index] = chapters[index + 1]
+        chapters[index + 1] = temp
+
+        ErrorUtil.safeRun(this) {
+            workspaceRepository.reorderChapters(pid, volumeId, chapters)
+            loadChapters()
+        }
+    }
+
     private inner class ChapterAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
         inner class VolumeHeaderViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {

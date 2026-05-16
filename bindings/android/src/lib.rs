@@ -592,7 +592,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyn
 // --- Renaming, Deleting, Reordering ---
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameProject(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameProjectNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,
@@ -617,7 +617,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameProj
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteProject(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteProjectNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,
@@ -637,7 +637,32 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteProj
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameVolume(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderProjectsNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    ordered_ids_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let ordered_ids_json = match jstring_to_string(&mut env, &ordered_ids_json_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let ordered_ids: Vec<String> = match serde_json::from_str(&ordered_ids_json) {
+        Ok(ids) => ids,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.reorder_projects(&ordered_ids))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameVolumeNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,
@@ -670,7 +695,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameVolu
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteVolume(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteVolumeNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,
@@ -695,7 +720,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteVolu
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderVolumes(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderVolumesNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,
@@ -725,7 +750,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderVol
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameChapter(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameChapterNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,
@@ -763,7 +788,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameChap
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteChapter(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteChapterNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,
@@ -796,7 +821,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteChap
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderChapters(
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderChaptersNative(
     mut env: JNIEnv,
     _class: JClass,
     workspace_path_j: JString,

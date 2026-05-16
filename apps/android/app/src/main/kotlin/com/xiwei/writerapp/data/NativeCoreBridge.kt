@@ -540,4 +540,137 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
+
+    private external fun renameProjectNative(workspacePath: String, projectId: String, newTitle: String): String?
+    private external fun deleteProjectNative(workspacePath: String, projectId: String): String?
+    private external fun reorderProjectsNative(workspacePath: String, orderedIdsJson: String): String?
+
+    private external fun renameVolumeNative(workspacePath: String, projectId: String, volumeId: String, newTitle: String): String?
+    private external fun deleteVolumeNative(workspacePath: String, projectId: String, volumeId: String): String?
+    private external fun reorderVolumesNative(workspacePath: String, projectId: String, orderedIdsJson: String): String?
+
+    private external fun renameChapterNative(workspacePath: String, projectId: String, volumeId: String, chapterId: String, newTitle: String): String?
+    private external fun deleteChapterNative(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
+    private external fun reorderChaptersNative(workspacePath: String, projectId: String, volumeId: String, orderedIdsJson: String): String?
+
+    fun renameProject(projectId: String, newTitle: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = renameProjectNative(workspaceDir, projectId, newTitle)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteProject(projectId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = deleteProjectNative(workspaceDir, projectId)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun reorderProjects(orderedProjectIds: List<String>): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val idsJson = gson.toJson(orderedProjectIds)
+            val resultJson = reorderProjectsNative(workspaceDir, idsJson)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun renameVolume(projectId: String, volumeId: String, newTitle: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = renameVolumeNative(workspaceDir, projectId, volumeId, newTitle)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteVolume(projectId: String, volumeId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = deleteVolumeNative(workspaceDir, projectId, volumeId)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun reorderVolumes(projectId: String, orderedVolumeIds: List<String>): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val idsJson = gson.toJson(orderedVolumeIds)
+            val resultJson = reorderVolumesNative(workspaceDir, projectId, idsJson)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = renameChapterNative(workspaceDir, projectId, volumeId, chapterId, newTitle)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteChapter(projectId: String, volumeId: String, chapterId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = deleteChapterNative(workspaceDir, projectId, volumeId, chapterId)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun reorderChapters(projectId: String, volumeId: String, orderedChapterIds: List<String>): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val idsJson = gson.toJson(orderedChapterIds)
+            val resultJson = reorderChaptersNative(workspaceDir, projectId, volumeId, idsJson)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val response = gson.fromJson(resultJson, RustResponse::class.java)
+            return if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
 }
