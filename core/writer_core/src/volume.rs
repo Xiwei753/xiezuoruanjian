@@ -11,6 +11,8 @@ pub struct Volume {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub order: i32,
 }
 
 pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volume>> {
@@ -36,6 +38,7 @@ pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volum
             }
         }
     }
+    volumes.sort_by_key(|v| v.order);
     Ok(volumes)
 }
 
@@ -47,6 +50,7 @@ pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Re
         title: title.to_string(),
         created_at: now.clone(),
         updated_at: now,
+        order: 0,
     };
 
     let volume_dir = workspace_path
@@ -62,4 +66,75 @@ pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Re
     crate::storage::atomic_write_string(&meta_path, &content)?;
 
     Ok(volume)
+}
+
+pub fn rename_volume(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    new_title: &str,
+) -> Result<()> {
+    let volume_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id);
+    let meta_path = volume_dir.join("volume.json");
+
+    if !meta_path.exists() {
+        return Err(crate::error::Error::VolumeNotFound);
+    }
+
+    let meta_str = fs::read_to_string(&meta_path)?;
+    let mut meta: Volume = serde_json::from_str(&meta_str)?;
+
+    meta.title = new_title.to_string();
+    meta.updated_at = Utc::now().to_rfc3339();
+
+    let updated_meta_str = serde_json::to_string_pretty(&meta)?;
+    crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+
+    Ok(())
+}
+
+pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -> Result<()> {
+    let volume_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id);
+    if volume_dir.exists() {
+        fs::remove_dir_all(volume_dir)?;
+    } else {
+        return Err(crate::error::Error::VolumeNotFound);
+    }
+    Ok(())
+}
+
+pub fn reorder_volumes(
+    workspace_path: &Path,
+    project_id: &str,
+    ordered_ids: &[String],
+) -> Result<()> {
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let volume_dir = workspace_path
+            .join("projects")
+            .join(project_id)
+            .join("volumes")
+            .join(id);
+        let meta_path = volume_dir.join("volume.json");
+
+        if meta_path.exists() {
+            if let Ok(meta_str) = fs::read_to_string(&meta_path) {
+                if let Ok(mut meta) = serde_json::from_str::<Volume>(&meta_str) {
+                    meta.order = index as i32;
+                    meta.updated_at = Utc::now().to_rfc3339();
+                    if let Ok(updated_meta_str) = serde_json::to_string_pretty(&meta) {
+                        let _ = crate::storage::atomic_write_string(&meta_path, &updated_meta_str);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }

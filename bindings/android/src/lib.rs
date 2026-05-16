@@ -588,3 +588,247 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyn
     let core = WriterCore::new(&workspace_path);
     result_to_jstring(&mut env, core.perform_sync(&config))
 }
+
+// --- Renaming, Deleting, Reordering ---
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameProject(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    new_title_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let new_title = match jstring_to_string(&mut env, &new_title_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.rename_project(&project_id, &new_title))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteProject(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.delete_project(&project_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameVolume(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+    new_title_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let new_title = match jstring_to_string(&mut env, &new_title_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(
+        &mut env,
+        core.rename_volume(&project_id, &volume_id, &new_title),
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteVolume(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.delete_volume(&project_id, &volume_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderVolumes(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    ordered_ids_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let ordered_ids_json = match jstring_to_string(&mut env, &ordered_ids_json_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let ordered_ids: Vec<String> = match serde_json::from_str(&ordered_ids_json) {
+        Ok(ids) => ids,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.reorder_volumes(&project_id, &ordered_ids))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameChapter(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+    chapter_id_j: JString,
+    new_title_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let chapter_id = match jstring_to_string(&mut env, &chapter_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let new_title = match jstring_to_string(&mut env, &new_title_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(
+        &mut env,
+        core.rename_chapter(&project_id, &volume_id, &chapter_id, &new_title),
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteChapter(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+    chapter_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let chapter_id = match jstring_to_string(&mut env, &chapter_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(
+        &mut env,
+        core.delete_chapter(&project_id, &volume_id, &chapter_id),
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderChapters(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+    ordered_ids_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let ordered_ids_json = match jstring_to_string(&mut env, &ordered_ids_json_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let ordered_ids: Vec<String> = match serde_json::from_str(&ordered_ids_json) {
+        Ok(ids) => ids,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(
+        &mut env,
+        core.reorder_chapters(&project_id, &volume_id, &ordered_ids),
+    )
+}
