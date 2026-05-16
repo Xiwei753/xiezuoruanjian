@@ -43,6 +43,14 @@ pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volum
 }
 
 pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Result<Volume> {
+    let volumes = list_volumes(workspace_path, project_id)?;
+    let order = volumes
+        .iter()
+        .map(|v| v.order)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let volume = Volume {
@@ -50,7 +58,7 @@ pub fn create_volume(workspace_path: &Path, project_id: &str, title: &str) -> Re
         title: title.to_string(),
         created_at: now.clone(),
         updated_at: now,
-        order: 0,
+        order,
     };
 
     let volume_dir = workspace_path

@@ -64,6 +64,14 @@ pub fn create_chapter(
     volume_id: &str,
     title: &str,
 ) -> Result<Chapter> {
+    let chapters = list_chapters(workspace_path, project_id, volume_id)?;
+    let order = chapters
+        .iter()
+        .map(|c| c.order)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let chapter = Chapter {
@@ -71,7 +79,7 @@ pub fn create_chapter(
         title: title.to_string(),
         created_at: now.clone(),
         updated_at: now,
-        order: 0,
+        order,
         word_count: 0,
         hash: String::new(),
         note: None,

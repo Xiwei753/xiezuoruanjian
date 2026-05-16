@@ -68,6 +68,14 @@ pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<Proj
 }
 
 pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
+    let projects = list_projects(workspace_path)?;
+    let order = projects
+        .iter()
+        .map(|p| p.order)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0);
+
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let project = Project {
@@ -75,7 +83,7 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
         title: title.to_string(),
         created_at: now.clone(),
         updated_at: now,
-        order: 0,
+        order,
     };
 
     let project_dir = workspace_path.join("projects").join(&id);
@@ -119,6 +127,26 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
         fs::remove_dir_all(project_dir)?;
     } else {
         return Err(crate::error::Error::ProjectNotFound);
+    }
+    Ok(())
+}
+
+pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result<()> {
+    for (index, id) in ordered_ids.iter().enumerate() {
+        let project_dir = workspace_path.join("projects").join(id);
+        let meta_path = project_dir.join("project.json");
+
+        if meta_path.exists() {
+            if let Ok(meta_str) = std::fs::read_to_string(&meta_path) {
+                if let Ok(mut meta) = serde_json::from_str::<Project>(&meta_str) {
+                    meta.order = index as i32;
+                    meta.updated_at = Utc::now().to_rfc3339();
+                    if let Ok(updated_meta_str) = serde_json::to_string_pretty(&meta) {
+                        let _ = crate::storage::atomic_write_string(&meta_path, &updated_meta_str);
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

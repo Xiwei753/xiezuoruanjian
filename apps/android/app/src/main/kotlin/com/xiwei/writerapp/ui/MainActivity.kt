@@ -147,6 +147,105 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+
+    private fun showProjectMenu(view: View, project: Project, position: Int) {
+        val popup = android.widget.PopupMenu(this, view)
+        popup.menu.add(0, 1, 0, getString(R.string.action_rename))
+        popup.menu.add(0, 2, 0, getString(R.string.action_delete))
+        if (position > 0) {
+            popup.menu.add(0, 3, 0, getString(R.string.action_move_up))
+        }
+        if (position < projects.size - 1) {
+            popup.menu.add(0, 4, 0, getString(R.string.action_move_down))
+        }
+
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> {
+                    showRenameProjectDialog(project)
+                    true
+                }
+                2 -> {
+                    showDeleteProjectDialog(project)
+                    true
+                }
+                3 -> {
+                    moveProjectUp(position)
+                    true
+                }
+                4 -> {
+                    moveProjectDown(position)
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    private fun showRenameProjectDialog(project: Project) {
+        val editText = android.widget.EditText(this)
+        editText.setText(project.title)
+        editText.setSelection(project.title.length)
+        editText.hint = getString(R.string.hint_project_title)
+        editText.setPadding(48, 48, 48, 48)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.action_rename)
+            .setView(editText)
+            .setPositiveButton(R.string.action_ok) { _, _ ->
+                val newTitle = editText.text.toString().trim()
+                if (newTitle.isNotEmpty() && newTitle != project.title) {
+                    ErrorUtil.safeRun(this) {
+                        workspaceRepository.renameProject(project.id, newTitle)
+                        loadProjects()
+                    }
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    private fun showDeleteProjectDialog(project: Project) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.confirm_delete_project)
+            .setMessage("确定要删除作品 \"${project.title}\" 吗？此操作无法恢复。")
+            .setPositiveButton(R.string.action_delete) { _, _ ->
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.deleteProject(project.id)
+                    loadProjects()
+                }
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
+    private fun moveProjectUp(position: Int) {
+        if (position <= 0) return
+        val orderedIds = projects.map { it.id }.toMutableList()
+        val temp = orderedIds[position]
+        orderedIds[position] = orderedIds[position - 1]
+        orderedIds[position - 1] = temp
+
+        ErrorUtil.safeRun(this) {
+            workspaceRepository.reorderProjects(orderedIds)
+            loadProjects()
+        }
+    }
+
+    private fun moveProjectDown(position: Int) {
+        if (position >= projects.size - 1) return
+        val orderedIds = projects.map { it.id }.toMutableList()
+        val temp = orderedIds[position]
+        orderedIds[position] = orderedIds[position + 1]
+        orderedIds[position + 1] = temp
+
+        ErrorUtil.safeRun(this) {
+            workspaceRepository.reorderProjects(orderedIds)
+            loadProjects()
+        }
+    }
+
     private inner class ProjectAdapter : RecyclerView.Adapter<ProjectAdapter.ProjectViewHolder>() {
 
         inner class ProjectViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -155,12 +254,24 @@ class MainActivity : AppCompatActivity() {
 
             init {
                 itemView.setOnClickListener {
-                    val selectedProject = projects[adapterPosition]
-                    val intent = Intent(this@MainActivity, ChapterListActivity::class.java).apply {
-                        putExtra("PROJECT_ID", selectedProject.id)
-                        putExtra("PROJECT_TITLE", selectedProject.title)
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val selectedProject = projects[pos]
+                        val intent = Intent(this@MainActivity, ChapterListActivity::class.java).apply {
+                            putExtra("PROJECT_ID", selectedProject.id)
+                            putExtra("PROJECT_TITLE", selectedProject.title)
+                        }
+                        startActivity(intent)
                     }
-                    startActivity(intent)
+                }
+
+                itemView.setOnLongClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val project = projects[pos]
+                        showProjectMenu(itemView, project, pos)
+                    }
+                    true
                 }
             }
         }
