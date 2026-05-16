@@ -416,10 +416,21 @@ class ChapterListActivity : AppCompatActivity() {
         inner class VolumeHeaderViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
             val tvVolumeTitle: TextView = itemView.findViewById(R.id.tvVolumeTitle)
             val btnAddChapter: View = itemView.findViewById(R.id.btnAddChapter)
+            val btnMoreVolume: android.widget.ImageButton = itemView.findViewById(R.id.btnMoreVolume)
 
             init {
                 itemView.isHapticFeedbackEnabled = false
                 btnAddChapter.isHapticFeedbackEnabled = false
+                btnMoreVolume.isHapticFeedbackEnabled = false
+
+                btnMoreVolume.setOnClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val item = listItems[pos] as? ListItem.VolumeHeader ?: return@setOnClickListener
+                        showVolumeMenu(btnMoreVolume, item.volumeId, item.volumeTitle)
+                    }
+                }
+
                 btnAddChapter.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {
@@ -445,9 +456,20 @@ class ChapterListActivity : AppCompatActivity() {
         inner class ChapterViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
             val tvChapterTitle: TextView = itemView.findViewById(R.id.tvChapterTitle)
             val tvWordCount: TextView = itemView.findViewById(R.id.tvWordCount)
+            val btnMoreChapter: android.widget.ImageButton = itemView.findViewById(R.id.btnMoreChapter)
 
             init {
                 itemView.isHapticFeedbackEnabled = false
+                btnMoreChapter.isHapticFeedbackEnabled = false
+
+                btnMoreChapter.setOnClickListener {
+                    val pos = adapterPosition
+                    if (pos != RecyclerView.NO_POSITION) {
+                        val item = listItems[pos] as? ListItem.Chapter ?: return@setOnClickListener
+                        showChapterMenu(btnMoreChapter, item.volumeId, item.chapterId, item.chapterTitle)
+                    }
+                }
+
                 itemView.setOnClickListener {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {
