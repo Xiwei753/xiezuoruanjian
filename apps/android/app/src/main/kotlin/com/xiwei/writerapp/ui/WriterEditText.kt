@@ -9,11 +9,13 @@ import android.animation.PropertyValuesHolder
 import android.text.Editable
 import android.text.Spanned
 import android.text.TextWatcher
-import android.text.style.ReplacementSpan
 import android.view.inputmethod.BaseInputConnection
 import android.text.style.LeadingMarginSpan
 import android.util.AttributeSet
 import androidx.appcompat.widget.AppCompatEditText
+import android.text.style.CharacterStyle
+import android.text.TextPaint
+import kotlin.math.abs
 
 class WriterEditText @JvmOverloads constructor(
     context: Context,
@@ -23,28 +25,31 @@ class WriterEditText @JvmOverloads constructor(
 
     private var autoIndentEnabled: Boolean = false
     private var autoIndentPx: Int = 0
-    private var currentIndentSpan: LeadingMarginSpan.Standard? = null
     private var isUpdatingSpan = false
 
     // Typing Animation
     private var typingAnimationEnabled = false
+    private var typingAnimationDurationMs: Long = 100L
     private var lastAddedStart = -1
     private var lastAddedCount = 0
 
-    fun setTypingAnimationEnabled(enabled: Boolean) {
+    fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         typingAnimationEnabled = enabled
+        typingAnimationDurationMs = durationMs
     }
 
-    private inner class TypingAnimationSpan : android.text.style.CharacterStyle() {
+    private inner class TypingAnimationSpan : CharacterStyle() {
         var progress: Float = 0f
-        override fun updateDrawState(tp: android.text.TextPaint) {
-            tp.color = android.graphics.Color.TRANSPARENT
+        override fun updateDrawState(tp: TextPaint) {
+            val originalAlpha = tp.alpha
+            tp.alpha = (originalAlpha * progress).toInt().coerceIn(0, 255)
         }
     }
 
     // Custom Cursor
     private var cursorRuntimeReady = false
     private var smoothCursorEnabled = false
+    private var smoothCursorDurationMs: Long = 80L
     private var cursorAnimator: ValueAnimator? = null
     private var currentCursorX = -1f
     private var currentCursorTop = -1f
@@ -62,13 +67,30 @@ class WriterEditText @JvmOverloads constructor(
             }
         }
     }
-    private val cursorRect = RectF()
 
     init {
         addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            private var isPasteOrDelete = false
+
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+                if (isUpdatingSpan) return
+                if (count > 0 && after == 0) {
+                    // Deletion
+                    isPasteOrDelete = true
+                    if (smoothCursorEnabled) {
+                        cursorAnimator?.cancel()
+                    }
+                } else if (after > 50) {
+                    // Large paste
+                    isPasteOrDelete = true
+                } else {
+                    isPasteOrDelete = false
+                }
+            }
+
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (!isUpdatingSpan && count > 0 && count < 50) {
+                if (isUpdatingSpan) return
+                if (!isPasteOrDelete && count > 0 && count < 50) {
                     lastAddedStart = start
                     lastAddedCount = count
                 } else {
@@ -76,11 +98,12 @@ class WriterEditText @JvmOverloads constructor(
                     lastAddedCount = 0
                 }
             }
+
             override fun afterTextChanged(s: Editable?) {
                 if (isUpdatingSpan) return
-
                 val editable = s ?: return
 
+                // Handle Typing Animation
                 if (typingAnimationEnabled && lastAddedCount > 0 && lastAddedStart >= 0) {
                     val start = lastAddedStart
                     val end = start + lastAddedCount
@@ -95,22 +118,21 @@ class WriterEditText @JvmOverloads constructor(
                         editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                         isUpdatingSpan = false
 
-                        val lineTop = layout?.getLineTop(layout.getLineForOffset(start)) ?: 0
-                        val lineBottom = layout?.getLineBottom(layout.getLineForOffset(end)) ?: height
-                        val typeRect = android.graphics.Rect(0, lineTop + paddingTop - 16, width, lineBottom + paddingTop + 16)
-
                         ValueAnimator.ofFloat(0f, 1f).apply {
-                            duration = 100
+                            duration = typingAnimationDurationMs
                             addUpdateListener { anim ->
                                 span.progress = anim.animatedValue as Float
-                                invalidate(typeRect)
+                                // Since we modified TextPaint via CharacterStyle, we just need to invalidate the text region.
+                                // Instead of recalculating layout, a simple invalidate over the view does the trick
+                                // or we can just invalidate the whole view for simplicity without layout measure
+                                invalidate()
                             }
                             addListener(object : android.animation.AnimatorListenerAdapter() {
                                 override fun onAnimationEnd(animation: android.animation.Animator) {
                                     isUpdatingSpan = true
                                     editable.removeSpan(span)
                                     isUpdatingSpan = false
-                                    invalidate(typeRect)
+                                    invalidate()
                                 }
                             })
                             start()
@@ -120,23 +142,8 @@ class WriterEditText @JvmOverloads constructor(
                     lastAddedCount = 0
                 }
 
-                if (currentIndentSpan == null && autoIndentEnabled && autoIndentPx > 0 && editable.isNotEmpty()) {
-                    // Create span if it was missing (e.g. text was empty initially)
-                    applyIndentation()
-                    return
-                }
-
-                val span = currentIndentSpan ?: return
-
-                // Fast path: just ensure the existing span covers the whole text.
-                // Re-applying an existing span is extremely cheap if it's already there.
-                val start = editable.getSpanStart(span)
-                val end = editable.getSpanEnd(span)
-                if (start != 0 || end != editable.length) {
-                    isUpdatingSpan = true
-                    editable.setSpan(span, 0, editable.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
-                    isUpdatingSpan = false
-                }
+                // Handle Auto Indent
+                updateParagraphIndentSpans(editable)
             }
         })
         cursorRuntimeReady = true
@@ -148,6 +155,70 @@ class WriterEditText @JvmOverloads constructor(
         }
 
         typeface = android.graphics.Typeface.create("sans-serif", typeface?.style ?: android.graphics.Typeface.NORMAL)
+    }
+
+    private fun updateParagraphIndentSpans(editable: Editable) {
+        if (!autoIndentEnabled || autoIndentPx <= 0) {
+            val existingSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
+            if (existingSpans.isNotEmpty()) {
+                isUpdatingSpan = true
+                for (span in existingSpans) {
+                    editable.removeSpan(span)
+                }
+                isUpdatingSpan = false
+            }
+            return
+        }
+
+        isUpdatingSpan = true
+        val existingSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
+        val spanRanges = mutableMapOf<Int, Int>() // start -> end
+        for (span in existingSpans) {
+            val start = editable.getSpanStart(span)
+            val end = editable.getSpanEnd(span)
+            spanRanges[start] = end
+        }
+
+        var paragraphStart = 0
+        val textLength = editable.length
+
+        val spansToRemove = existingSpans.toMutableList()
+
+        while (paragraphStart < textLength) {
+            var paragraphEnd = editable.indexOf('\n', paragraphStart)
+            if (paragraphEnd == -1) {
+                paragraphEnd = textLength
+            } else {
+                paragraphEnd += 1 // Include newline character in the span
+            }
+
+            // Don't indent completely empty lines (where start == end, meaning just a newline or EOF)
+            if (paragraphEnd > paragraphStart && !(paragraphEnd - paragraphStart == 1 && editable[paragraphStart] == '\n')) {
+                // We need a span from paragraphStart to paragraphEnd
+                val currentSpanEnd = spanRanges[paragraphStart]
+                if (currentSpanEnd == paragraphEnd) {
+                    // Match found, remove from the to-delete list
+                    val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && editable.getSpanEnd(it) == paragraphEnd && it.getLeadingMargin(true) == autoIndentPx }
+                    if (span != null) {
+                        spansToRemove.remove(span)
+                    } else {
+                        // Shouldn't happen but just in case
+                        editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                } else {
+                    editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+
+            paragraphStart = paragraphEnd
+        }
+
+        // Remove spans that are no longer valid
+        for (span in spansToRemove) {
+            editable.removeSpan(span)
+        }
+
+        isUpdatingSpan = false
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
@@ -163,39 +234,18 @@ class WriterEditText @JvmOverloads constructor(
         }
 
         if (oldEnabled != this.autoIndentEnabled || oldPx != this.autoIndentPx) {
-            applyIndentation()
+            val editable = text
+            if (editable != null) {
+                // If disabled, remove all spans. If enabled, apply new spans.
+                updateParagraphIndentSpans(editable)
+            }
         }
     }
 
-    private fun applyIndentation() {
-        val editable = text ?: return
-
-        isUpdatingSpan = true
-
-        // Remove old span entirely
-        val existingSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
-        for (span in existingSpans) {
-            editable.removeSpan(span)
-        }
-        currentIndentSpan = null
-
-        if (autoIndentEnabled && autoIndentPx > 0 && editable.isNotEmpty()) {
-            val newSpan = LeadingMarginSpan.Standard(autoIndentPx, 0)
-            currentIndentSpan = newSpan
-            editable.setSpan(
-                newSpan,
-                0,
-                editable.length,
-                Spanned.SPAN_INCLUSIVE_INCLUSIVE
-            )
-        }
-
-        isUpdatingSpan = false
-    }
-
-    fun setSmoothCursorEnabled(enabled: Boolean) {
+    fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         val wasEnabled = smoothCursorEnabled
         smoothCursorEnabled = enabled
+        smoothCursorDurationMs = durationMs
         isCursorVisible = !enabled
         if (enabled && isFocused) {
             startCursorBlink()
@@ -264,7 +314,7 @@ class WriterEditText @JvmOverloads constructor(
         val targetTop = layout.getLineTop(line).toFloat()
         val targetBottom = layout.getLineBottom(line).toFloat()
 
-        val isNewLine = currentCursorTop >= 0 && kotlin.math.abs(targetTop - currentCursorTop) > 1f
+        val isNewLine = currentCursorTop >= 0 && abs(targetTop - currentCursorTop) > 1f
 
         if (currentCursorX < 0 || !animate || isNewLine) {
             invalidateCursorRect()
@@ -282,7 +332,7 @@ class WriterEditText @JvmOverloads constructor(
         val pBottom = PropertyValuesHolder.ofFloat("bottom", currentCursorBottom, targetBottom)
 
         cursorAnimator = ValueAnimator.ofPropertyValuesHolder(pX, pTop, pBottom).apply {
-            duration = 80
+            duration = smoothCursorDurationMs
             addUpdateListener { anim ->
                 invalidateCursorRect()
                 currentCursorX = anim.getAnimatedValue("x") as Float
@@ -311,31 +361,6 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-
-        val editable = text
-        if (editable != null && layout != null && typingAnimationEnabled) {
-            val spans = editable.getSpans(0, editable.length, TypingAnimationSpan::class.java)
-            for (span in spans) {
-                val start = editable.getSpanStart(span)
-                val end = editable.getSpanEnd(span)
-                if (start >= 0 && end <= editable.length && start < end) {
-                    val progress = span.progress
-                    val originalAlpha = paint.alpha
-                    paint.alpha = (originalAlpha * progress).toInt().coerceIn(0, 255)
-
-                    val offsetX = (1f - progress) * -10f
-
-                    for (i in start until end) {
-                        val line = layout.getLineForOffset(i)
-                        val x = layout.getPrimaryHorizontal(i)
-                        val baseline = layout.getLineBaseline(line)
-                        val charToDraw = editable.substring(i, i + 1)
-                        canvas.drawText(charToDraw, x + compoundPaddingLeft + offsetX, baseline.toFloat() + compoundPaddingTop, paint)
-                    }
-                    paint.alpha = originalAlpha
-                }
-            }
-        }
 
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && isFocused && selectionStart == selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {

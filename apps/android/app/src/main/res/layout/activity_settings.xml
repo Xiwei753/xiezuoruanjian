@@ -149,12 +149,68 @@
                     android:text="@string/pref_editor_smooth_cursor"
                     android:layout_marginTop="8dp"/>
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="8dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_editor_typing_animation_duration"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:id="@+id/tvTypingAnimationDurationValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorPrimary"/>
+            </LinearLayout>
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sbTypingAnimationDuration"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0.0"
+                android:valueTo="240.0"
+                android:stepSize="10.0"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="8dp">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_editor_smooth_cursor_duration"
+                    android:textSize="16sp"/>
+                <TextView
+                    android:id="@+id/tvSmoothCursorDurationValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorPrimary"/>
+            </LinearLayout>
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sbSmoothCursorDuration"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0.0"
+                android:valueTo="240.0"
+                android:stepSize="10.0"/>
+
             <com.google.android.material.slider.Slider
                 android:id="@+id/sbAutoIndentWidth"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:valueFrom="0.0"
-                android:valueTo="4.0"
+                android:valueTo="8.0"
                 android:stepSize="0.5"
                 android:layout_marginBottom="24dp"/>
                 </LinearLayout>

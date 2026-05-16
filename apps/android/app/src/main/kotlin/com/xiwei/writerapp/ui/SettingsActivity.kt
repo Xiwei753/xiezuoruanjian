@@ -57,6 +57,10 @@ class SettingsActivity : AppCompatActivity() {
 
     private lateinit var switchTypingAnimation: MaterialSwitch
     private lateinit var switchSmoothCursor: MaterialSwitch
+    private lateinit var sbTypingAnimationDuration: Slider
+    private lateinit var tvTypingAnimationDurationValue: TextView
+    private lateinit var sbSmoothCursorDuration: Slider
+    private lateinit var tvSmoothCursorDurationValue: TextView
 
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnPerformSync: MaterialButton
@@ -104,6 +108,10 @@ class SettingsActivity : AppCompatActivity() {
         tvAutoIndentWidthValue = findViewById(R.id.tvAutoIndentWidthValue)
         switchTypingAnimation = findViewById(R.id.switchTypingAnimation)
         switchSmoothCursor = findViewById(R.id.switchSmoothCursor)
+        sbTypingAnimationDuration = findViewById(R.id.sbTypingAnimationDuration)
+        tvTypingAnimationDurationValue = findViewById(R.id.tvTypingAnimationDurationValue)
+        sbSmoothCursorDuration = findViewById(R.id.sbSmoothCursorDuration)
+        tvSmoothCursorDurationValue = findViewById(R.id.tvSmoothCursorDurationValue)
 
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
 
@@ -134,6 +142,12 @@ class SettingsActivity : AppCompatActivity() {
         sbAutoIndentWidth.addOnChangeListener { _, value, _ ->
             tvAutoIndentWidthValue.text = "${value}字符"
         }
+        sbTypingAnimationDuration.addOnChangeListener { _, value, _ ->
+            tvTypingAnimationDurationValue.text = "${value.toInt()}ms"
+        }
+        sbSmoothCursorDuration.addOnChangeListener { _, value, _ ->
+            tvSmoothCursorDurationValue.text = "${value.toInt()}ms"
+        }
 
         // Save on drag stop
         val saveSettingsListener = object : Slider.OnSliderTouchListener {
@@ -147,6 +161,8 @@ class SettingsActivity : AppCompatActivity() {
         sbAutoSaveDelay.addOnSliderTouchListener(saveSettingsListener)
         sbSyncInterval.addOnSliderTouchListener(saveSettingsListener)
         sbAutoIndentWidth.addOnSliderTouchListener(saveSettingsListener)
+        sbTypingAnimationDuration.addOnSliderTouchListener(saveSettingsListener)
+        sbSmoothCursorDuration.addOnSliderTouchListener(saveSettingsListener)
 
 
         // Setup Theme Spinner
@@ -169,12 +185,16 @@ class SettingsActivity : AppCompatActivity() {
 
         switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
         switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
+        sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
+        sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
 
         // Initial texts
         tvFontSizeValue.text = "${currentSettings.editorFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
         tvAutoSaveDelayValue.text = "${(currentSettings.autoSaveDelayMs / 1000).toInt()}秒"
         tvAutoIndentWidthValue.text = "${currentSettings.autoIndentWidth}字符"
+        tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
+        tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
 
         switchAutoSave.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
         switchAutoIndent.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
@@ -406,7 +426,9 @@ class SettingsActivity : AppCompatActivity() {
             autoIndentWidth = sbAutoIndentWidth.value,
             themeMode = themeStr,
             editorTypingAnimationEnabled = switchTypingAnimation.isChecked,
-            editorSmoothCursorEnabled = switchSmoothCursor.isChecked
+            editorSmoothCursorEnabled = switchSmoothCursor.isChecked,
+            editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
+            editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt()
         )
 
         ErrorUtil.safeRun(this) {
