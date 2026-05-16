@@ -133,11 +133,17 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
 
 pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result<()> {
     let projects = list_projects(workspace_path)?;
-    let existing_ids: std::collections::HashSet<_> = projects.iter().map(|p| p.id.clone()).collect();
+    let existing_ids: std::collections::HashSet<_> =
+        projects.iter().map(|p| p.id.clone()).collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
 
-    if existing_ids.len() != new_ids.len() || existing_ids != new_ids || ordered_ids.len() != new_ids.len() {
-        return Err(crate::error::Error::Other("Invalid ordered_ids for reorder".to_string()));
+    if existing_ids.len() != new_ids.len()
+        || existing_ids != new_ids
+        || ordered_ids.len() != new_ids.len()
+    {
+        return Err(crate::error::Error::Other(
+            "Invalid ordered_ids for reorder".to_string(),
+        ));
     }
 
     for (index, id) in ordered_ids.iter().enumerate() {

@@ -128,8 +128,13 @@ pub fn reorder_volumes(
     let existing_ids: std::collections::HashSet<_> = volumes.iter().map(|v| v.id.clone()).collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
 
-    if existing_ids.len() != new_ids.len() || existing_ids != new_ids || ordered_ids.len() != new_ids.len() {
-        return Err(crate::error::Error::Other("Invalid ordered_ids for reorder".to_string()));
+    if existing_ids.len() != new_ids.len()
+        || existing_ids != new_ids
+        || ordered_ids.len() != new_ids.len()
+    {
+        return Err(crate::error::Error::Other(
+            "Invalid ordered_ids for reorder".to_string(),
+        ));
     }
 
     for (index, id) in ordered_ids.iter().enumerate() {

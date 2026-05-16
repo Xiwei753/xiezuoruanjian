@@ -262,11 +262,17 @@ pub fn reorder_chapters(
     ordered_ids: &[String],
 ) -> Result<()> {
     let chapters = list_chapters(workspace_path, project_id, volume_id)?;
-    let existing_ids: std::collections::HashSet<_> = chapters.iter().map(|c| c.id.clone()).collect();
+    let existing_ids: std::collections::HashSet<_> =
+        chapters.iter().map(|c| c.id.clone()).collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
 
-    if existing_ids.len() != new_ids.len() || existing_ids != new_ids || ordered_ids.len() != new_ids.len() {
-        return Err(crate::error::Error::Other("Invalid ordered_ids for reorder".to_string()));
+    if existing_ids.len() != new_ids.len()
+        || existing_ids != new_ids
+        || ordered_ids.len() != new_ids.len()
+    {
+        return Err(crate::error::Error::Other(
+            "Invalid ordered_ids for reorder".to_string(),
+        ));
     }
 
     for (index, id) in ordered_ids.iter().enumerate() {
