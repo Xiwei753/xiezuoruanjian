@@ -77,7 +77,11 @@ data class SyncConfig(
     val transport: SyncTransport? = SyncTransport.HttpsToken,
     val branch: String? = "main",
     @SerializedName("auto_sync") val autoSync: Boolean? = false,
-    @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300
+    @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300,
+    @SerializedName("proxy_enabled") val proxyEnabled: Boolean? = false,
+    @SerializedName("proxy_type") val proxyType: String? = "http",
+    @SerializedName("proxy_host") val proxyHost: String? = "127.0.0.1",
+    @SerializedName("proxy_port") val proxyPort: Int? = 7890
 ) {
     fun normalize(): SyncConfig {
         return copy(
@@ -86,7 +90,11 @@ data class SyncConfig(
             transport = transport ?: SyncTransport.HttpsToken,
             branch = if (branch.isNullOrEmpty()) "main" else branch,
             autoSync = autoSync ?: false,
-            syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds
+            syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
+            proxyEnabled = proxyEnabled ?: false,
+            proxyType = if (proxyType.isNullOrEmpty()) "http" else proxyType,
+            proxyHost = if (proxyHost.isNullOrEmpty()) "127.0.0.1" else proxyHost,
+            proxyPort = if (proxyPort == null || proxyPort <= 0) 7890 else proxyPort
         )
     }
 }

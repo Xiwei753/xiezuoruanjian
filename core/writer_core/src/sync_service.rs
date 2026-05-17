@@ -29,6 +29,26 @@ pub struct SyncConfig {
     pub branch: String,
     pub auto_sync: bool,
     pub sync_interval_seconds: u32,
+    #[serde(default)]
+    pub proxy_enabled: bool,
+    #[serde(default = "default_proxy_type")]
+    pub proxy_type: String,
+    #[serde(default = "default_proxy_host")]
+    pub proxy_host: String,
+    #[serde(default = "default_proxy_port")]
+    pub proxy_port: u16,
+}
+
+fn default_proxy_type() -> String {
+    "http".to_string()
+}
+
+fn default_proxy_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_proxy_port() -> u16 {
+    7890
 }
 
 fn default_branch() -> String {
@@ -160,6 +180,7 @@ pub trait GitBackend {
         remote_url: &str,
         local_repo_path: &Path,
         auth: Option<&GitAuth>,
+        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()>;
     fn open_repo(&self, local_repo_path: &Path) -> crate::Result<()>;
     fn pull(
@@ -167,6 +188,7 @@ pub trait GitBackend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
+        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()>;
     fn stage_paths(&self, local_repo_path: &Path, paths: &[&str]) -> crate::Result<()>;
     fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>>;
@@ -175,6 +197,7 @@ pub trait GitBackend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
+        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()>;
     fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>>;
     fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>>; // Returns changed files
@@ -183,6 +206,23 @@ pub trait GitBackend {
 pub struct Git2Backend;
 
 impl Git2Backend {
+    fn build_proxy_options<'a>(
+        config: Option<&'a SyncConfig>,
+    ) -> crate::Result<git2::ProxyOptions<'a>> {
+        let mut proxy_opts = git2::ProxyOptions::new();
+        if let Some(cfg) = config {
+            if cfg.proxy_enabled {
+                let proxy_url =
+                    format!("{}://{}:{}", cfg.proxy_type, cfg.proxy_host, cfg.proxy_port);
+
+                // libgit2 socks5 support might be missing depending on build features.
+                // It will error out during fetch/push if not supported, but we can catch it.
+                proxy_opts.url(&proxy_url);
+            }
+        }
+        Ok(proxy_opts)
+    }
+
     fn build_callbacks<'a>(auth: Option<&'a GitAuth>) -> git2::RemoteCallbacks<'a> {
         let mut callbacks = git2::RemoteCallbacks::new();
         if let Some(auth) = auth {
@@ -267,10 +307,13 @@ impl GitBackend for Git2Backend {
         remote_url: &str,
         local_repo_path: &Path,
         auth: Option<&GitAuth>,
+        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let mut fetch_options = git2::FetchOptions::new();
         let callbacks = Self::build_callbacks(auth);
         fetch_options.remote_callbacks(callbacks);
+        let proxy_opts = Self::build_proxy_options(proxy_config)?;
+        fetch_options.proxy_options(proxy_opts);
 
         let mut builder = git2::build::RepoBuilder::new();
         builder.fetch_options(fetch_options);
@@ -301,6 +344,7 @@ impl GitBackend for Git2Backend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
+        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
             crate::Error::Io(std::io::Error::new(
@@ -317,6 +361,7 @@ impl GitBackend for Git2Backend {
 
         let mut fetch_options = git2::FetchOptions::new();
         fetch_options.remote_callbacks(Self::build_callbacks(auth));
+        fetch_options.proxy_options(Self::build_proxy_options(proxy_config)?);
 
         remote
             .fetch(&[branch], Some(&mut fetch_options), None)
@@ -596,6 +641,7 @@ impl GitBackend for Git2Backend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
+        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
             crate::Error::Io(std::io::Error::new(
@@ -612,6 +658,7 @@ impl GitBackend for Git2Backend {
 
         let mut push_options = git2::PushOptions::new();
         push_options.remote_callbacks(Self::build_callbacks(auth));
+        push_options.proxy_options(Self::build_proxy_options(proxy_config)?);
 
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
         remote
@@ -791,6 +838,22 @@ impl SyncService {
             ));
         }
 
+        let map_git_error = |e: crate::Error| -> crate::Error {
+            if let crate::Error::Io(io_err) = &e {
+                let msg = io_err.to_string();
+                if msg.contains("unsupported proxy protocol")
+                    || msg.contains("failed to resolve address")
+                    || msg.contains("SOCKS5")
+                {
+                    return crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("代理不可用/端口不通: {}", msg),
+                    ));
+                }
+            }
+            e
+        };
+
         let auth = match &config.transport {
             SyncTransport::HttpsToken => {
                 if let Some(token) = &secrets.token {
@@ -843,8 +906,14 @@ impl SyncService {
                 // Clone
                 result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
                 result.user_message = Some("已克隆远端仓库到空工作区。".to_string());
-                if let Err(e) =
-                    backend.clone_repo(&config.remote_url, workspace_path, auth.as_ref())
+                if let Err(e) = backend
+                    .clone_repo(
+                        &config.remote_url,
+                        workspace_path,
+                        auth.as_ref(),
+                        Some(config),
+                    )
+                    .map_err(map_git_error)
                 {
                     return Ok(SyncResult::error(
                         SyncStatus::Error(e.to_string()),
@@ -907,7 +976,10 @@ impl SyncService {
         }
 
         // Pull
-        if let Err(e) = backend.pull(workspace_path, &config.branch, auth.as_ref()) {
+        if let Err(e) = backend
+            .pull(workspace_path, &config.branch, auth.as_ref(), Some(config))
+            .map_err(map_git_error)
+        {
             let e_str = e.to_string().to_lowercase();
             if e_str.contains("unrelated")
                 || e_str.contains("merge")
@@ -1123,7 +1195,10 @@ impl SyncService {
             }
 
             // Push
-            if let Err(e) = backend.push(workspace_path, &config.branch, auth.as_ref()) {
+            if let Err(e) = backend
+                .push(workspace_path, &config.branch, auth.as_ref(), Some(config))
+                .map_err(map_git_error)
+            {
                 return Ok(SyncResult::error(
                     SyncStatus::Error(format!("Push failed: {}", e)),
                     result.first_sync_mode,
@@ -1459,16 +1534,34 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "fatal: refusing to merge unrelated histories",
                 )))
             }
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -1487,6 +1580,10 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1535,6 +1632,10 @@ mod tests {
         std::fs::write(dir.path().join("some_file.txt"), "hello").unwrap();
 
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://github.com/test/test.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1549,13 +1650,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -1564,7 +1677,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -1617,6 +1736,10 @@ mod tests {
     #[test]
     fn test_sync_config_state_no_token() {
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "url".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1668,6 +1791,10 @@ mod tests {
     #[test]
     fn test_sync_config_no_token() {
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1768,6 +1895,10 @@ mod tests {
     fn test_sync_dry_run_disabled_config() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: false,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1785,6 +1916,10 @@ mod tests {
     fn test_sync_dry_run_enabled_config_scans() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1812,6 +1947,10 @@ mod tests {
     fn test_perform_sync_empty_remote_url() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1838,6 +1977,10 @@ mod tests {
     fn test_perform_sync_non_empty_remote() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1852,13 +1995,25 @@ mod tests {
 
         struct MockInitNonEmptyBackend;
         impl GitBackend for MockInitNonEmptyBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "pull failed: unable to merge unrelated histories",
@@ -1870,7 +2025,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -1911,6 +2072,10 @@ mod tests {
         std::fs::write(state_dir.join("sync_state.json"), "{}").unwrap();
 
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1925,13 +2090,25 @@ mod tests {
 
         struct MockBackendOk;
         impl GitBackend for MockBackendOk {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -1940,7 +2117,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -1975,6 +2158,10 @@ mod tests {
     fn test_first_sync_mode_clone_into_empty_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1989,13 +2176,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -2004,7 +2203,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -2035,6 +2240,10 @@ mod tests {
     fn test_first_sync_mode_init_existing_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -2049,13 +2258,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -2064,7 +2285,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -2095,6 +2322,10 @@ mod tests {
     fn test_first_sync_mode_already_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -2109,13 +2340,25 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -2124,7 +2367,13 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {

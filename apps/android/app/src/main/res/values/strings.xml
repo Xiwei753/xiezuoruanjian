@@ -86,6 +86,12 @@
     <string name="pref_https_token">HTTPS Token (PAT)</string>
     <string name="pref_auto_sync">自动同步</string>
     <string name="pref_sync_interval">同步间隔 (秒)</string>
+    <string name="pref_proxy_enable">启用代理 (Proxy)</string>
+    <string name="pref_proxy_type">代理类型</string>
+    <string name="pref_proxy_host">代理主机</string>
+    <string name="pref_proxy_port">代理端口</string>
+    <string name="pref_proxy_hint">提示: Android 上 127.0.0.1 指手机本机，不是电脑</string>
+    <string name="sync_error_proxy_unavailable">代理不可用或端口不通，请检查配置。</string>
     <string name="token_configured">Token 已配置</string>
     <string name="token_not_configured">Token 未配置</string>
     <string name="btn_dry_run">检查同步计划</string>
@@ -114,4 +120,9 @@
     <string name="action_more_project">作品更多操作</string>
     <string name="action_more_volume">分卷更多操作</string>
     <string name="action_more_chapter">章节更多操作</string>
+
+    <string-array name="proxy_types">
+        <item>http</item>
+        <item>socks5</item>
+    </string-array>
 </resources>

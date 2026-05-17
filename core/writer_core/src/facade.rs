@@ -333,6 +333,10 @@ impl WriterCore {
                 branch: "main".to_string(),
                 auto_sync: false,
                 sync_interval_seconds: 300,
+                proxy_enabled: false,
+                proxy_type: "http".to_string(),
+                proxy_host: "127.0.0.1".to_string(),
+                proxy_port: 7890,
             });
         }
         let content = std::fs::read_to_string(&config_path)?;
