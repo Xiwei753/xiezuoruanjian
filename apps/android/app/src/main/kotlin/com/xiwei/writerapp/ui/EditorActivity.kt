@@ -22,6 +22,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.text.Spannable
 import android.text.style.BackgroundColorSpan
+import android.util.Log
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.WorkspaceRepository
@@ -166,7 +167,12 @@ class EditorActivity : AppCompatActivity() {
                 val meta = result.second
                 currentChapterNote = meta.note
 
-                editorEditText.setText(content)
+                Log.d("WriterEditorAnim", "EditorActivity open chapter start")
+                editorEditText.runWithoutTextAnimations {
+                    editorEditText.setText(content)
+                }
+                Log.d("WriterEditorAnim", "EditorActivity open chapter end")
+
                 initialWordCount = calculateWordCount(content)
                 lastWordCount = initialWordCount
                 sessionStartTime = System.currentTimeMillis()
@@ -177,11 +183,15 @@ class EditorActivity : AppCompatActivity() {
                     workspaceRepository.recordRecentEdit(projectId!!, volumeId!!, chapterId!!)
                 }
             } else {
-                editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
+                editorEditText.runWithoutTextAnimations {
+                    editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
+                }
                 editorEditText.isEnabled = false
             }
         } else {
-            editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
+            editorEditText.runWithoutTextAnimations {
+                editorEditText.setText(getString(R.string.error_missing_chapter_identifiers))
+            }
             editorEditText.isEnabled = false
         }
 
@@ -365,7 +375,9 @@ class EditorActivity : AppCompatActivity() {
                 val currentMatch = searchResults[currentSearchIndex]
                 val editable = editorEditText.text
                 if (editable != null) {
-                    editable.replace(currentMatch.first, currentMatch.second, replaceStr)
+                    editorEditText.runWithoutTextAnimations {
+                        editable.replace(currentMatch.first, currentMatch.second, replaceStr)
+                    }
                     // The text watcher on editorEditText will trigger performSearch(),
                     // which resets indices. So we just let that handle the update.
                 }
@@ -380,7 +392,9 @@ class EditorActivity : AppCompatActivity() {
                 if (editable != null) {
                     val content = editable.toString()
                     val newContent = content.replace(searchStr, replaceStr)
-                    editorEditText.setText(newContent)
+                    editorEditText.runWithoutTextAnimations {
+                        editorEditText.setText(newContent)
+                    }
                     performSearch() // to clear/update results
                 }
             }
