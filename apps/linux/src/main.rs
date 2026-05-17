@@ -16,18 +16,50 @@ struct AppBackend {
     workspace_path: qt_property!(QString; READ workspace_path NOTIFY workspace_opened),
     save_status: qt_property!(QString; READ save_status WRITE set_save_status NOTIFY save_status_changed),
     word_count: qt_property!(i32; READ word_count WRITE set_word_count NOTIFY word_count_changed),
+    error_message: qt_property!(QString; READ error_message NOTIFY error_occurred),
+    selected_item_id: qt_property!(QString; READ selected_item_id NOTIFY selected_item_changed),
+    chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
 
     workspace_opened: qt_signal!(),
     projects_reloaded: qt_signal!(),
     save_status_changed: qt_signal!(),
     word_count_changed: qt_signal!(),
+    error_occurred: qt_signal!(),
+    selected_item_changed: qt_signal!(),
+    chapter_path_changed: qt_signal!(),
 
     open_workspace_dialog: qt_method!(fn(&mut self)),
-    create_new_project: qt_method!(fn(&mut self)),
-    create_new_volume: qt_method!(fn(&mut self, project_id: QString)),
-    create_new_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
+    create_new_project: qt_method!(fn(&mut self, title: QString)),
+    create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
+    create_new_chapter:
+        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
+
+    rename_project: qt_method!(fn(&mut self, project_id: QString, new_title: QString)),
+    delete_project: qt_method!(fn(&mut self, project_id: QString)),
+    reorder_projects: qt_method!(fn(&mut self, ordered_ids_joined: QString)),
+
+    rename_volume:
+        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, new_title: QString)),
+    delete_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
+    reorder_volumes: qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString)),
+
+    rename_chapter: qt_method!(
+        fn(
+            &mut self,
+            project_id: QString,
+            volume_id: QString,
+            chapter_id: QString,
+            new_title: QString,
+        )
+    ),
+    delete_chapter:
+        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
+    reorder_chapters: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString)
+    ),
 
     get_tree_model: qt_method!(fn(&self) -> QJsonArray),
+    calculate_word_count: qt_method!(fn(&mut self, text: QString)),
 
     select_project: qt_method!(fn(&mut self, project_id: QString)),
     select_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
@@ -43,6 +75,7 @@ struct AppBackend {
     current_workspace: String,
     current_save_status: String,
     current_word_count: i32,
+    current_error_message: String,
 
     selected_project_id: Option<String>,
     selected_volume_id: Option<String>,
@@ -74,6 +107,66 @@ impl AppBackend {
         self.word_count_changed();
     }
 
+    fn error_message(&self) -> QString {
+        self.current_error_message.clone().into()
+    }
+
+    fn chapter_path(&self) -> QString {
+        if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
+            &self.core,
+            &self.selected_project_id,
+            &self.selected_volume_id,
+            &self.selected_chapter_id,
+        ) {
+            let core = core_ref.borrow();
+            // Just format it nicely
+            let mut path = String::new();
+            if let Ok(projects) = core.list_projects() {
+                if let Some(proj) = projects.iter().find(|x| x.id == *p) {
+                    path.push_str(&proj.title);
+                }
+            }
+            if let Ok(volumes) = core.list_volumes(p) {
+                if let Some(vol) = volumes.iter().find(|x| x.id == *v) {
+                    path.push_str(" > ");
+                    path.push_str(&vol.title);
+                }
+            }
+            if let Ok(chapters) = core.list_chapters(p, v) {
+                if let Some(chap) = chapters.iter().find(|x| x.id == *c) {
+                    path.push_str(" > ");
+                    path.push_str(&chap.title);
+                }
+            }
+            return path.into();
+        }
+        "".into()
+    }
+
+    fn selected_item_id(&self) -> QString {
+        if let Some(ref id) = self.selected_chapter_id {
+            return id.clone().into();
+        }
+        if let Some(ref id) = self.selected_volume_id {
+            return id.clone().into();
+        }
+        if let Some(ref id) = self.selected_project_id {
+            return id.clone().into();
+        }
+        "".into()
+    }
+
+    fn set_error(&mut self, msg: &str) {
+        self.current_error_message = msg.to_string();
+        self.error_occurred();
+    }
+
+    fn calculate_word_count(&mut self, text: QString) {
+        let text_str = text.to_string();
+        let count = text_str.chars().filter(|c| !c.is_whitespace()).count() as i32;
+        self.set_word_count(count);
+    }
+
     fn open_workspace_dialog(&mut self) {
         if let Some(path) = FileDialog::new().pick_folder() {
             let core = WriterCore::new(&path);
@@ -81,11 +174,11 @@ impl AppBackend {
             // Validate first, if invalid try to create.
             if !core.validate_workspace().unwrap_or(false) {
                 if let Err(e) = core.create_workspace() {
-                    println!("Error creating workspace: {}", e);
+                    self.set_error(&format!("无法创建工作区: {}", e));
                     return;
                 }
                 if !core.validate_workspace().unwrap_or(false) {
-                    println!("Invalid workspace even after creation");
+                    self.set_error("创建后工作区依然无效");
                     return;
                 }
             }
@@ -168,58 +261,290 @@ impl AppBackend {
         self.cached_tree.clone()
     }
 
-    fn create_new_project(&mut self) {
+    fn create_new_project(&mut self, title: QString) {
         if let Some(core_ref) = &self.core {
-            let core = core_ref.borrow();
-            if core.create_project("新作品").is_ok() {
-                drop(core);
-                self.reload_tree();
-                self.projects_reloaded();
+            let result = {
+                let core = core_ref.borrow();
+                core.create_project(&title.to_string())
+            };
+            match result {
+                Ok(proj) => {
+                    self.selected_project_id = Some(proj.id.clone());
+                    self.selected_item_changed();
+                    self.selected_volume_id = None;
+                    self.selected_chapter_id = None;
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("创建作品失败: {}", e)),
             }
         }
     }
 
-    fn create_new_volume(&mut self, project_id: QString) {
+    fn create_new_volume(&mut self, project_id: QString, title: QString) {
         if let Some(core_ref) = &self.core {
-            let core = core_ref.borrow();
-            if core
-                .create_volume(&project_id.to_string(), "新分卷")
-                .is_ok()
-            {
-                drop(core);
-                self.reload_tree();
-                self.projects_reloaded();
+            let result = {
+                let core = core_ref.borrow();
+                core.create_volume(&project_id.to_string(), &title.to_string())
+            };
+            match result {
+                Ok(vol) => {
+                    self.selected_project_id = Some(project_id.to_string());
+                    self.selected_volume_id = Some(vol.id.clone());
+                    self.selected_item_changed();
+                    self.selected_chapter_id = None;
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("创建分卷失败: {}", e)),
             }
         }
     }
 
-    fn create_new_chapter(&mut self, project_id: QString, volume_id: QString) {
+    fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) {
         if let Some(core_ref) = &self.core {
-            let core = core_ref.borrow();
-            if core
-                .create_chapter(&project_id.to_string(), &volume_id.to_string(), "新章节")
-                .is_ok()
-            {
-                drop(core);
-                self.reload_tree();
-                self.projects_reloaded();
+            let result = {
+                let core = core_ref.borrow();
+                core.create_chapter(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &title.to_string(),
+                )
+            };
+            match result {
+                Ok(chap) => {
+                    self.selected_project_id = Some(project_id.to_string());
+                    self.selected_volume_id = Some(volume_id.to_string());
+                    self.selected_chapter_id = Some(chap.id.clone());
+                    self.selected_item_changed();
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("创建章节失败: {}", e)),
+            }
+        }
+    }
+
+    fn rename_project(&mut self, project_id: QString, new_title: QString) {
+        if let Some(core_ref) = &self.core {
+            let result = {
+                let core = core_ref.borrow();
+                core.rename_project(&project_id.to_string(), &new_title.to_string())
+            };
+            match result {
+                Ok(_) => {
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("重命名作品失败: {}", e)),
+            }
+        }
+    }
+
+    fn delete_project(&mut self, project_id: QString) {
+        if let Some(core_ref) = &self.core {
+            let result = {
+                let core = core_ref.borrow();
+                core.delete_project(&project_id.to_string())
+            };
+            match result {
+                Ok(_) => {
+                    if self.selected_project_id.as_deref() == Some(&project_id.to_string()) {
+                        self.selected_project_id = None;
+                        self.selected_volume_id = None;
+                        self.selected_chapter_id = None;
+                    }
+
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("删除作品失败: {}", e)),
+            }
+        }
+    }
+
+    fn reorder_projects(&mut self, ordered_ids_joined: QString) {
+        if let Some(core_ref) = &self.core {
+            let ordered_ids_str = ordered_ids_joined.to_string();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            let result = {
+                let core = core_ref.borrow();
+                core.reorder_projects(&ids)
+            };
+            match result {
+                Ok(_) => {
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("重排作品失败: {}", e)),
+            }
+        }
+    }
+
+    fn rename_volume(&mut self, project_id: QString, volume_id: QString, new_title: QString) {
+        if let Some(core_ref) = &self.core {
+            let result = {
+                let core = core_ref.borrow();
+                core.rename_volume(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &new_title.to_string(),
+                )
+            };
+            match result {
+                Ok(_) => {
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("重命名分卷失败: {}", e)),
+            }
+        }
+    }
+
+    fn delete_volume(&mut self, project_id: QString, volume_id: QString) {
+        if let Some(core_ref) = &self.core {
+            let result = {
+                let core = core_ref.borrow();
+                core.delete_volume(&project_id.to_string(), &volume_id.to_string())
+            };
+            match result {
+                Ok(_) => {
+                    if self.selected_volume_id.as_deref() == Some(&volume_id.to_string()) {
+                        self.selected_volume_id = None;
+                        self.selected_chapter_id = None;
+                    }
+
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("删除分卷失败: {}", e)),
+            }
+        }
+    }
+
+    fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) {
+        if let Some(core_ref) = &self.core {
+            let ordered_ids_str = ordered_ids_joined.to_string();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            let result = {
+                let core = core_ref.borrow();
+                core.reorder_volumes(&project_id.to_string(), &ids)
+            };
+            match result {
+                Ok(_) => {
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("重排分卷失败: {}", e)),
+            }
+        }
+    }
+
+    fn rename_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        new_title: QString,
+    ) {
+        if let Some(core_ref) = &self.core {
+            let result = {
+                let core = core_ref.borrow();
+                core.rename_chapter(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &chapter_id.to_string(),
+                    &new_title.to_string(),
+                )
+            };
+            match result {
+                Ok(_) => {
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("重命名章节失败: {}", e)),
+            }
+        }
+    }
+
+    fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {
+        if let Some(core_ref) = &self.core {
+            let result = {
+                let core = core_ref.borrow();
+                core.delete_chapter(
+                    &project_id.to_string(),
+                    &volume_id.to_string(),
+                    &chapter_id.to_string(),
+                )
+            };
+            match result {
+                Ok(_) => {
+                    if self.selected_chapter_id.as_deref() == Some(&chapter_id.to_string()) {
+                        self.selected_chapter_id = None;
+                    }
+
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("删除章节失败: {}", e)),
+            }
+        }
+    }
+
+    fn reorder_chapters(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        ordered_ids_joined: QString,
+    ) {
+        if let Some(core_ref) = &self.core {
+            let ordered_ids_str = ordered_ids_joined.to_string();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            let result = {
+                let core = core_ref.borrow();
+                core.reorder_chapters(&project_id.to_string(), &volume_id.to_string(), &ids)
+            };
+            match result {
+                Ok(_) => {
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+                Err(e) => self.set_error(&format!("重排章节失败: {}", e)),
             }
         }
     }
 
     fn select_project(&mut self, project_id: QString) {
         self.selected_project_id = Some(project_id.to_string());
+        self.selected_item_changed();
+        self.chapter_path_changed();
     }
 
     fn select_volume(&mut self, project_id: QString, volume_id: QString) {
         self.selected_project_id = Some(project_id.to_string());
         self.selected_volume_id = Some(volume_id.to_string());
+        self.selected_item_changed();
+        self.chapter_path_changed();
     }
 
     fn select_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {
         self.selected_project_id = Some(project_id.to_string());
         self.selected_volume_id = Some(volume_id.to_string());
         self.selected_chapter_id = Some(chapter_id.to_string());
+        self.selected_item_changed();
+        self.chapter_path_changed();
     }
 
     fn get_chapter_content(
@@ -242,16 +567,25 @@ impl AppBackend {
     }
 
     fn save_current_chapter(&mut self, content: QString) {
-        if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
+        let save_result = if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
             &self.core,
             &self.selected_project_id,
             &self.selected_volume_id,
             &self.selected_chapter_id,
         ) {
             let core = core_ref.borrow();
-            if core.write_chapter(p, v, c, &content.to_string()).is_ok() {
+            core.write_chapter(p, v, c, &content.to_string())
+        } else {
+            return;
+        };
+
+        match save_result {
+            Ok(_) => {
                 self.current_save_status = "已保存".to_string();
                 self.save_status_changed();
+            }
+            Err(e) => {
+                self.set_error(&format!("保存失败: {}", e));
             }
         }
     }
