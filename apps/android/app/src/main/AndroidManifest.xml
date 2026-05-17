@@ -17,7 +17,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".ui.ChapterListActivity" android:exported="false" />
-        <activity android:name=".ui.EditorActivity" android:exported="false" />
+        <activity android:name=".ui.EditorActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" />
     </application>
 

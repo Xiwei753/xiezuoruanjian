@@ -212,12 +212,20 @@ impl Git2Backend {
         let mut proxy_opts = git2::ProxyOptions::new();
         if let Some(cfg) = config {
             if cfg.proxy_enabled {
-                let proxy_url =
-                    format!("{}://{}:{}", cfg.proxy_type, cfg.proxy_host, cfg.proxy_port);
-
-                // libgit2 socks5 support might be missing depending on build features.
-                // It will error out during fetch/push if not supported, but we can catch it.
-                proxy_opts.url(&proxy_url);
+                match cfg.proxy_type.as_str() {
+                    "auto" => {
+                        proxy_opts.auto();
+                    }
+                    "http" => {
+                        let proxy_url = format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port);
+                        proxy_opts.url(&proxy_url);
+                    }
+                    "socks5" => {
+                        let proxy_url = format!("socks5://{}:{}", cfg.proxy_host, cfg.proxy_port);
+                        proxy_opts.url(&proxy_url);
+                    }
+                    _ => {} // "none" or unknown
+                }
             }
         }
         Ok(proxy_opts)
@@ -800,6 +808,12 @@ fn get_user_friendly_error(err: &str) -> String {
     }
     if e.contains("conflict") {
         return "同步代码冲突。请在另一端解决冲突后重试。".to_string();
+    }
+    if e.contains("operation not permitted") && e.contains("127.0.0.1") {
+        return "已尝试连接手机本机代理 127.0.0.1，但连接被系统拒绝。请确认代理 App 在手机本机开启 HTTP 代理端口，或改填可访问的局域网代理地址。".to_string();
+    }
+    if e.contains("unsupported proxy protocol") && e.contains("socks5") {
+        return "当前构建版本的底层网络库不支持 SOCKS5 代理。请尝试使用 HTTP 代理或更新应用。".to_string();
     }
     format!("同步失败，请检查网络重试。({})", err)
 }

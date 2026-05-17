@@ -46,7 +46,6 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var switchAutoSync: MaterialSwitch
     private lateinit var sbSyncInterval: Slider
 
-    private lateinit var switchProxyEnabled: MaterialSwitch
     private lateinit var spinnerProxyType: Spinner
     private lateinit var etProxyHost: TextInputEditText
     private lateinit var etProxyPort: TextInputEditText
@@ -127,7 +126,6 @@ class SettingsActivity : AppCompatActivity() {
         tvTokenStatus = findViewById(R.id.tvTokenStatus)
         switchAutoSync = findViewById(R.id.switchAutoSync)
         sbSyncInterval = findViewById(R.id.sbSyncInterval)
-        switchProxyEnabled = findViewById(R.id.switchProxyEnabled)
         spinnerProxyType = findViewById(R.id.spinnerProxyType)
         etProxyHost = findViewById(R.id.etProxyHost)
         etProxyPort = findViewById(R.id.etProxyPort)
@@ -244,14 +242,18 @@ class SettingsActivity : AppCompatActivity() {
 
         spinnerProxyType.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                val enabled = position == 2 || position == 3
+                etProxyHost.isEnabled = enabled
+                etProxyPort.isEnabled = enabled
+
                 val currentPortStr = etProxyPort.text?.toString() ?: ""
                 val currentPort = currentPortStr.toIntOrNull()
 
-                if (position == 1) { // SOCKS5
+                if (position == 3) { // SOCKS5
                     if (currentPortStr.isEmpty() || currentPort == 7890) {
                         etProxyPort.setText("7891")
                     }
-                } else { // HTTP
+                } else if (position == 2) { // HTTP
                     if (currentPortStr.isEmpty() || currentPort == 7891) {
                         etProxyPort.setText("7890")
                     }
@@ -279,9 +281,14 @@ class SettingsActivity : AppCompatActivity() {
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
         tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds ?: 300}秒"
 
-        switchProxyEnabled.isChecked = currentSyncConfig.proxyEnabled ?: false
-        val proxyType = currentSyncConfig.proxyType ?: "http"
-        spinnerProxyType.setSelection(if (proxyType == "socks5") 1 else 0)
+        val proxyType = currentSyncConfig.proxyType ?: "none"
+        spinnerProxyType.setSelection(when (proxyType) {
+            "none" -> 0
+            "auto" -> 1
+            "http" -> 2
+            "socks5" -> 3
+            else -> 0
+        })
         etProxyHost.setText(currentSyncConfig.proxyHost ?: "127.0.0.1")
         val defaultPort = if (proxyType == "socks5") 7891 else 7890
         etProxyPort.setText((currentSyncConfig.proxyPort ?: defaultPort).toString())
@@ -306,10 +313,16 @@ class SettingsActivity : AppCompatActivity() {
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt(),
-            proxyEnabled = switchProxyEnabled.isChecked,
-            proxyType = if (spinnerProxyType.selectedItemPosition == 1) "socks5" else "http",
+            proxyEnabled = spinnerProxyType.selectedItemPosition >= 1,
+            proxyType = when (spinnerProxyType.selectedItemPosition) {
+                0 -> "none"
+                1 -> "auto"
+                2 -> "http"
+                3 -> "socks5"
+                else -> "none"
+            },
             proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 1) 7891 else 7890
+            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 3) 7891 else 7890
         )
     }
 
@@ -487,10 +500,16 @@ class SettingsActivity : AppCompatActivity() {
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt(),
-            proxyEnabled = switchProxyEnabled.isChecked,
-            proxyType = if (spinnerProxyType.selectedItemPosition == 1) "socks5" else "http",
+            proxyEnabled = spinnerProxyType.selectedItemPosition >= 1,
+            proxyType = when (spinnerProxyType.selectedItemPosition) {
+                0 -> "none"
+                1 -> "auto"
+                2 -> "http"
+                3 -> "socks5"
+                else -> "none"
+            },
             proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 1) 7891 else 7890
+            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 3) 7891 else 7890
         )
 
         val tokenInput = etHttpsToken.text?.toString() ?: ""

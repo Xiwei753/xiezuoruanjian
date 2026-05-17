@@ -122,7 +122,9 @@
     <string name="action_more_chapter">章节更多操作</string>
 
     <string-array name="proxy_types">
-        <item>http</item>
-        <item>socks5</item>
+        <item>关闭</item>
+        <item>自动</item>
+        <item>HTTP</item>
+        <item>SOCKS5（实验）</item>
     </string-array>
 </resources>
