@@ -79,6 +79,7 @@ class WriterEditText @JvmOverloads constructor(
                     isPasteOrDelete = true
                     if (smoothCursorEnabled) {
                         cursorAnimator?.cancel()
+                        currentCursorX = -1f // force instant snap
                     }
                 } else if (after > 50) {
                     // Large paste
@@ -110,9 +111,9 @@ class WriterEditText @JvmOverloads constructor(
 
                     val composingStart = BaseInputConnection.getComposingSpanStart(editable)
                     val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
-                    val isComposing = composingStart != -1 && composingEnd != -1 && start < composingEnd && end > composingStart
+                    val isComposing = composingStart != -1 && composingEnd != -1 && composingStart != composingEnd
 
-                    if (end <= editable.length && !isComposing) {
+                    if (end <= editable.length && !isComposing && typingAnimationDurationMs > 0) {
                         val span = TypingAnimationSpan()
                         isUpdatingSpan = true
                         editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -143,7 +144,11 @@ class WriterEditText @JvmOverloads constructor(
                 }
 
                 // Handle Auto Indent
-                updateParagraphIndentSpans(editable)
+                if (isPasteOrDelete) {
+                    updateParagraphIndentSpans(editable, isFullRebuild = true)
+                } else {
+                    updateParagraphIndentSpans(editable, updateStartPos = if (lastAddedStart >= 0) lastAddedStart else 0)
+                }
             }
         })
         cursorRuntimeReady = true
@@ -157,7 +162,7 @@ class WriterEditText @JvmOverloads constructor(
         typeface = android.graphics.Typeface.create("sans-serif", typeface?.style ?: android.graphics.Typeface.NORMAL)
     }
 
-    private fun updateParagraphIndentSpans(editable: Editable) {
+    private fun updateParagraphIndentSpans(editable: Editable, updateStartPos: Int = -1, isFullRebuild: Boolean = false) {
         if (!autoIndentEnabled || autoIndentPx <= 0) {
             val existingSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
             if (existingSpans.isNotEmpty()) {
@@ -237,7 +242,7 @@ class WriterEditText @JvmOverloads constructor(
             val editable = text
             if (editable != null) {
                 // If disabled, remove all spans. If enabled, apply new spans.
-                updateParagraphIndentSpans(editable)
+                updateParagraphIndentSpans(editable, isFullRebuild = true)
             }
         }
     }
@@ -314,10 +319,11 @@ class WriterEditText @JvmOverloads constructor(
         val targetTop = layout.getLineTop(line).toFloat()
         val targetBottom = layout.getLineBottom(line).toFloat()
 
-        val isNewLine = currentCursorTop >= 0 && abs(targetTop - currentCursorTop) > 1f
+        val isNewLine = currentCursorTop >= 0 && Math.abs(targetTop - currentCursorTop) > 1f
 
-        if (currentCursorX < 0 || !animate || isNewLine) {
+        if (currentCursorX < 0 || !animate || isNewLine || smoothCursorDurationMs <= 0) {
             invalidateCursorRect()
+            cursorAnimator?.cancel()
             currentCursorX = targetX
             currentCursorTop = targetTop
             currentCursorBottom = targetBottom
