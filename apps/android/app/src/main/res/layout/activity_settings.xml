@@ -135,18 +135,44 @@
                     android:textColor="?attr/colorPrimary"/>
             </LinearLayout>
 
+            <com.google.android.material.slider.Slider
+                android:id="@+id/sbAutoIndentWidth"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:valueFrom="0.0"
+                android:valueTo="8.0"
+                android:stepSize="0.5"
+                android:layout_marginBottom="24dp"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                style="?attr/materialCardViewElevatedStyle"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="16dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="动效与光标"
+                    android:textColor="?attr/colorPrimary"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="8dp"/>
+
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/switchTypingAnimation"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/pref_editor_typing_animation"
-                    android:layout_marginTop="8dp"/>
-
-                <com.google.android.material.materialswitch.MaterialSwitch
-                    android:id="@+id/switchSmoothCursor"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/pref_editor_smooth_cursor"
                     android:layout_marginTop="8dp"/>
 
             <LinearLayout
@@ -177,6 +203,13 @@
                 android:valueTo="240.0"
                 android:stepSize="10.0"/>
 
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchSmoothCursor"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pref_editor_smooth_cursor"
+                    android:layout_marginTop="8dp"/>
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -204,15 +237,6 @@
                 android:valueFrom="0.0"
                 android:valueTo="240.0"
                 android:stepSize="10.0"/>
-
-            <com.google.android.material.slider.Slider
-                android:id="@+id/sbAutoIndentWidth"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:valueFrom="0.0"
-                android:valueTo="8.0"
-                android:stepSize="0.5"
-                android:layout_marginBottom="24dp"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 <com.google.android.material.card.MaterialCardView
@@ -415,14 +439,6 @@
                 android:valueTo="3600.0"
                 android:stepSize="60.0"
                 android:layout_marginBottom="16dp"/>
-
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/switchProxyEnabled"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/pref_proxy_enable"
-                android:textSize="16sp"
-                android:layout_marginBottom="8dp"/>
 
             <LinearLayout
                 android:layout_width="match_parent"
