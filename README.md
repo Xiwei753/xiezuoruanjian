@@ -24,7 +24,6 @@
 ### 工具
 
 - `tools/validate_workspace.py`: 根据规范验证工作区的结构。
-- `tools/check_all.sh`: 运行格式化、代码检查、测试和构建（核心及 stub）。
 - `tools/build_core.sh`: 构建 Rust 核心库。
 
 ### Rust 核心
