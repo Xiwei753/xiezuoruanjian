@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use writer_core::facade::WriterCore;
 
-qmetaobject::qrc!(qml_resources, "/" { "qml/main.qml" });
+qmetaobject::qrc!(qml_resources, "/" { "qml/main.qml" as "main.qml" });
 
 #[allow(dead_code)]
 #[derive(QObject, Default)]
@@ -630,7 +630,7 @@ impl AppBackend {
 }
 
 fn main() {
-    std::env::set_var("QT_QPA_PLATFORM", "wayland;xcb");
+    if std::env::var("QT_QPA_PLATFORM").is_err() { std::env::set_var("QT_QPA_PLATFORM", "wayland;xcb"); }
     qml_resources();
     qmetaobject::qml_register_type::<AppBackend>(
         CStr::from_bytes_with_nul(b"WriterApp\0").unwrap(),
@@ -640,6 +640,7 @@ fn main() {
     );
 
     let mut engine = QmlEngine::new();
-    engine.load_file("qrc:/qml/main.qml".into());
+    engine.load_file("qrc:/main.qml".into());
+    // In qmetaobject 0.2.10, QML load errors are automatically printed to stderr by the underlying Qt engine.
     engine.exec();
 }
