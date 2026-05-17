@@ -3,19 +3,15 @@ package com.xiwei.writerapp.ui
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.text.Editable
-import android.text.Spanned
-import android.text.style.ReplacementSpan
 import android.util.Log
 import android.view.inputmethod.BaseInputConnection
 import android.widget.EditText
-import kotlin.math.abs
-import kotlin.math.sqrt
 
-class TypingAnimationController(private val editText: EditText) {
-
+class TypingAnimationController(
+    private val editText: EditText,
+    private val renderer: TypingOverlayRenderer
+) {
     private val DEBUG_ANIM = false
     private val TAG = "WriterEditorAnim"
 
@@ -42,16 +38,7 @@ class TypingAnimationController(private val editText: EditText) {
 
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
         if (isSuppressAnimations) {
-            val editable = editText.text
-            if (editable != null) {
-                val activeSpans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
-                for (span in activeSpans) {
-                    span.animator.cancel()
-                    if (editable.getSpanStart(span) >= 0) {
-                        editable.removeSpan(span)
-                    }
-                }
-            }
+            renderer.clear()
             if (DEBUG_ANIM) {
                 Log.d(TAG, "beforeTextChanged - suppressed animation")
             }
@@ -61,8 +48,10 @@ class TypingAnimationController(private val editText: EditText) {
         if (count > 0 && after == 0) {
             // Deletion
             isPasteOrDelete = true
+        } else if (count > 100) {
+            // Treat very large replacements as paste to avoid massive animations
+            isPasteOrDelete = true
         } else {
-            // Include normal insertions and large pastes
             isPasteOrDelete = false
         }
 
@@ -111,60 +100,39 @@ class TypingAnimationController(private val editText: EditText) {
 
         if (typingAnimationEnabled && lastAddedCount > 0 && lastAddedStart >= 0) {
             val start = lastAddedStart
-            val totalEnd = start + lastAddedCount
-
-            val activeSpans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
-            if (DEBUG_ANIM) {
-                Log.d(TAG, "active typing spans count: ${activeSpans.size}")
-            }
-
-            // Remove oldest spans if we exceed limits to prevent infinite buildup
-            if (activeSpans.size >= MAX_ANIMATIONS) {
-                activeSpans.sortBy { editable.getSpanStart(it) }
-                for (i in 0 until (activeSpans.size - MAX_ANIMATIONS + 1)) {
-                    activeSpans[i].animator.cancel()
-                    if (editable.getSpanStart(activeSpans[i]) >= 0) {
-                        editable.removeSpan(activeSpans[i])
-                    }
-                }
-            }
-
-            // Cap the amount of text we animate to prevent freezing on large fast pastes
             val animLimit = Math.min(MAX_ANIMATIONS, lastAddedCount)
-            var end = start
+            val end = Math.min(start + animLimit, editable.length)
 
-            // Iterate character by character and stop at newline
-            while (end < start + animLimit && end < editable.length) {
-                val cp = Character.codePointAt(editable, end)
-                if (cp == '\n'.code) {
-                    break
-                }
-                end += Character.charCount(cp)
-            }
+            if (end > start && typingAnimationDurationMs > 0) {
+                val insertedText = editable.subSequence(start, end).toString()
 
-            if (end > start && end <= editable.length && typingAnimationDurationMs > 0) {
                 val animator = ValueAnimator.ofFloat(0f, 1f).apply {
                     duration = typingAnimationDurationMs
                     interpolator = android.view.animation.DecelerateInterpolator()
                 }
 
-                val span = TypingAnimSpan(cursorBeforeX, cursorBeforeY, animator)
+                val anim = OverlayAnim(
+                    insertedStart = start,
+                    insertedText = insertedText,
+                    startX = cursorBeforeX,
+                    startY = cursorBeforeY,
+                    progress = 0f,
+                    animator = animator
+                )
 
-                onSpanUpdate(true)
-                editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                onSpanUpdate(false)
+                renderer.addAnim(anim)
 
-                animator.addUpdateListener { anim ->
-                    span.progress = anim.animatedValue as Float
+                if (DEBUG_ANIM) {
+                    Log.d(TAG, "afterTextChanged - created anim: insertedStart=${anim.insertedStart}, length=${insertedText.length}")
+                }
+
+                animator.addUpdateListener { a ->
+                    anim.progress = a.animatedValue as Float
                     editText.invalidate()
                 }
                 animator.addListener(object : AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: Animator) {
-                        onSpanUpdate(true)
-                        if (editable.getSpanStart(span) >= 0) {
-                            editable.removeSpan(span)
-                        }
-                        onSpanUpdate(false)
+                        renderer.removeAnim(anim)
                         editText.invalidate()
                     }
                 })
@@ -176,95 +144,6 @@ class TypingAnimationController(private val editText: EditText) {
     }
 
     fun onDetachedFromWindow() {
-        val editable = editText.text ?: return
-        val activeSpans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
-        for (span in activeSpans) {
-            span.animator.cancel()
-            if (editable.getSpanStart(span) >= 0) {
-                editable.removeSpan(span)
-            }
-        }
-    }
-
-    inner class TypingAnimSpan(
-        val startX: Float,
-        val startY: Float,
-        val animator: ValueAnimator
-    ) : ReplacementSpan() {
-        var progress: Float = 0f
-
-        override fun getSize(
-            paint: Paint,
-            text: CharSequence?,
-            start: Int,
-            end: Int,
-            fm: Paint.FontMetricsInt?
-        ): Int {
-            if (text == null) return 0
-            val measureText = text.subSequence(start, end).toString()
-            return paint.measureText(measureText).toInt()
-        }
-
-        override fun draw(
-            canvas: Canvas,
-            text: CharSequence?,
-            start: Int,
-            end: Int,
-            x: Float,
-            top: Int,
-            y: Int,
-            bottom: Int,
-            paint: Paint
-        ) {
-            if (text == null) return
-
-            val layout = editText.layout ?: return
-            val originalAlpha = paint.alpha
-            paint.alpha = (originalAlpha * progress).toInt().coerceIn(0, 255)
-
-            var i = start
-            while (i < end) {
-                val cp = Character.codePointAt(text, i)
-                val charCount = Character.charCount(cp)
-                val textToDraw = text.subSequence(i, i + charCount).toString()
-
-                val destX = layout.getPrimaryHorizontal(i)
-                val line = layout.getLineForOffset(i)
-                val destY = layout.getLineBaseline(line).toFloat()
-
-                var sX = startX
-                var sY = startY
-
-                if (sX < 0 || sY < 0) {
-                    sX = destX
-                    sY = destY
-                } else {
-                    val dx = destX - sX
-                    val dy = destY - sY
-                    val distSq = dx * dx + dy * dy
-                    val maxDist = 80f
-                    if (distSq > maxDist * maxDist) {
-                        val dist = sqrt(distSq.toDouble()).toFloat()
-                        sX = destX - (dx / dist) * maxDist
-                        sY = destY - (dy / dist) * maxDist
-                    }
-                }
-
-                val currentX = sX + (destX - sX) * progress
-                val currentY = sY + (destY - sY) * progress
-
-                // In ReplacementSpan, Canvas is already translated by compoundPaddingLeft/Top.
-                // We should just draw at the target positions computed relative to layout.
-                canvas.drawText(
-                    textToDraw,
-                    currentX,
-                    currentY,
-                    paint
-                )
-                i += charCount
-            }
-
-            paint.alpha = originalAlpha
-        }
+        renderer.clear()
     }
 }
