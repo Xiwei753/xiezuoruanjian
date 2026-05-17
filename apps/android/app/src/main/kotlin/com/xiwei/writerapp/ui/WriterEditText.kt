@@ -12,6 +12,7 @@ import android.text.TextWatcher
 import android.view.inputmethod.BaseInputConnection
 import android.text.style.LeadingMarginSpan
 import android.util.AttributeSet
+import android.util.Log
 import androidx.appcompat.widget.AppCompatEditText
 import android.text.style.CharacterStyle
 import android.text.TextPaint
@@ -32,17 +33,23 @@ class WriterEditText @JvmOverloads constructor(
     private var typingAnimationDurationMs: Long = 100L
     private var lastAddedStart = -1
     private var lastAddedCount = 0
+    private var cursorBeforeX = -1f
+    private var cursorBeforeY = -1f
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         typingAnimationEnabled = enabled
         typingAnimationDurationMs = durationMs
     }
 
-    private inner class TypingAnimationSpan : CharacterStyle() {
+    inner class TypingAnimSpan(
+        val startX: Float,
+        val startY: Float,
+        val animator: ValueAnimator
+    ) : CharacterStyle() {
         var progress: Float = 0f
         override fun updateDrawState(tp: TextPaint) {
-            val originalAlpha = tp.alpha
-            tp.alpha = (originalAlpha * progress).toInt().coerceIn(0, 255)
+            // Make the original text transparent so we can draw it manually
+            tp.color = android.graphics.Color.TRANSPARENT
         }
     }
 
@@ -87,6 +94,17 @@ class WriterEditText @JvmOverloads constructor(
                 } else {
                     isPasteOrDelete = false
                 }
+
+                // Capture cursor coordinates before text is added
+                if (after > 0 && layout != null) {
+                    val line = layout.getLineForOffset(start)
+                    cursorBeforeX = layout.getPrimaryHorizontal(start)
+                    cursorBeforeY = layout.getLineBaseline(line).toFloat()
+                }
+
+                if (true) {
+                    Log.d("WriterEditorAnim", "beforeTextChanged - oldLength: ${s?.length ?: 0}, newLength(expected): ${(s?.length ?: 0) - count + after}, replaced count: $count with after: $after. cursorBefore: ($cursorBeforeX, $cursorBeforeY)")
+                }
             }
 
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -109,37 +127,48 @@ class WriterEditText @JvmOverloads constructor(
                     val start = lastAddedStart
                     val end = start + lastAddedCount
 
-                    val composingStart = BaseInputConnection.getComposingSpanStart(editable)
-                    val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
-                    val isComposing = composingStart != -1 && composingEnd != -1 && composingStart != composingEnd
+                    // Get currently active typing animation spans
+                    val activeSpans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
 
-                    if (end <= editable.length && !isComposing && typingAnimationDurationMs > 0) {
-                        val span = TypingAnimationSpan()
+                    // If we have too many concurrent animations (e.g. fast typing or huge paste chunking),
+                    // cancel oldest to prevent lag
+                    var skippedReason: String? = null
+                    if (activeSpans.size >= 20) {
+                        val oldestSpan = activeSpans.first()
+                        oldestSpan.animator.cancel()
+                        skippedReason = "max_limit_exceeded (canceled oldest)"
+                    }
+
+                    if (end <= editable.length && typingAnimationDurationMs > 0) {
+                        if (true) {
+                            Log.d("WriterEditorAnim", "afterTextChanged - insertedRange: [$start, $end], animationCount: ${activeSpans.size + 1}, skippedReason: ${skippedReason ?: "none"}")
+                        }
+
+                        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+                            duration = typingAnimationDurationMs
+                            interpolator = android.view.animation.DecelerateInterpolator()
+                        }
+
+                        val span = TypingAnimSpan(cursorBeforeX, cursorBeforeY, animator)
                         isUpdatingSpan = true
                         editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                         isUpdatingSpan = false
 
-                        ValueAnimator.ofFloat(0f, 1f).apply {
-                            duration = typingAnimationDurationMs
-                            addUpdateListener { anim ->
-                                span.progress = anim.animatedValue as Float
-                                // Since we modified TextPaint via CharacterStyle, we just need to invalidate the text region.
-                                // Instead of recalculating layout, a simple invalidate over the view does the trick
-                                // or we can just invalidate the whole view for simplicity without layout measure
+                        animator.addUpdateListener { anim ->
+                            span.progress = anim.animatedValue as Float
+                            invalidate()
+                        }
+                        animator.addListener(object : android.animation.AnimatorListenerAdapter() {
+                            override fun onAnimationEnd(animation: android.animation.Animator) {
+                                isUpdatingSpan = true
+                                if (editable.getSpanStart(span) >= 0) {
+                                    editable.removeSpan(span)
+                                }
+                                isUpdatingSpan = false
                                 invalidate()
                             }
-                            addListener(object : android.animation.AnimatorListenerAdapter() {
-                                override fun onAnimationEnd(animation: android.animation.Animator) {
-                                    isUpdatingSpan = true
-                                    if (editable.getSpanStart(span) >= 0) {
-                                        editable.removeSpan(span)
-                                    }
-                                    isUpdatingSpan = false
-                                    invalidate()
-                                }
-                            })
-                            start()
-                        }
+                        })
+                        animator.start()
                     }
                     lastAddedStart = -1
                     lastAddedCount = 0
@@ -387,6 +416,72 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+
+        // Draw typing animation spans manually
+        if (typingAnimationEnabled && text != null && layout != null) {
+            val editable = text!!
+            val spans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
+            if (spans.isNotEmpty()) {
+                val tp = paint
+                val originalAlpha = tp.alpha
+
+                for (span in spans) {
+                    val start = editable.getSpanStart(span)
+                    val end = editable.getSpanEnd(span)
+                    if (start < 0 || end < 0 || start >= end) continue
+
+                    val progress = span.progress
+                    tp.alpha = (originalAlpha * progress).toInt().coerceIn(0, 255)
+
+                    // Draw each character in the span
+                    var i = start
+                    while (i < end) {
+                        val cp = Character.codePointAt(editable, i)
+                        val charCount = Character.charCount(cp)
+                        val textToDraw = editable.subSequence(i, i + charCount).toString()
+
+                        // Final destination
+                        val destX = layout.getPrimaryHorizontal(i)
+                        val line = layout.getLineForOffset(i)
+                        val destY = layout.getLineBaseline(line).toFloat()
+
+                        // Clamped start coordinates
+                        var sX = span.startX
+                        var sY = span.startY
+
+                        // If starting position was invalid or not captured, default to destination
+                        if (sX < 0 || sY < 0) {
+                            sX = destX
+                            sY = destY
+                        } else {
+                            // Clamp delta to prevent flying across the screen on huge pastes
+                            val dx = destX - sX
+                            val dy = destY - sY
+                            val distSq = dx * dx + dy * dy
+                            val maxDist = 80f // Limit animation origin distance
+                            if (distSq > maxDist * maxDist) {
+                                val dist = Math.sqrt(distSq.toDouble()).toFloat()
+                                sX = destX - (dx / dist) * maxDist
+                                sY = destY - (dy / dist) * maxDist
+                            }
+                        }
+
+                        // Interpolate position
+                        val currentX = sX + (destX - sX) * progress
+                        val currentY = sY + (destY - sY) * progress
+
+                        canvas.drawText(
+                            textToDraw,
+                            currentX + compoundPaddingLeft,
+                            currentY + compoundPaddingTop,
+                            tp
+                        )
+                        i += charCount
+                    }
+                }
+                tp.alpha = originalAlpha
+            }
+        }
 
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && isFocused && selectionStart == selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
