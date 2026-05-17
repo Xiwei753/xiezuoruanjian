@@ -73,18 +73,45 @@ class EditorActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_editor)
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
         }
 
-        val rootView = findViewById<View>(android.R.id.content)
-        ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
+        val mainLayout = findViewById<View>(R.id.editorCoordinatorLayout)
+        val appBarLayout = findViewById<View>(R.id.appBarLayout)
+        val editorStatusBar = findViewById<View>(R.id.editorStatusBar)
+        editorEditText = findViewById(R.id.editorEditText)
+
+        ViewCompat.setOnApplyWindowInsetsListener(mainLayout) { view, insets ->
             val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
             val systemBarsInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(0, 0, 0, imeInsets.bottom)
-            insets
+
+            // Top padding for AppBar to sit below status bar
+            appBarLayout.setPadding(0, systemBarsInsets.top, 0, 0)
+
+            // Stats bar needs to sit above nav bar and IME
+            val bottomInset = maxOf(imeInsets.bottom, systemBarsInsets.bottom)
+            val params = editorStatusBar.layoutParams as android.view.ViewGroup.MarginLayoutParams
+            params.bottomMargin = bottomInset + (16 * resources.displayMetrics.density).toInt()
+            editorStatusBar.layoutParams = params
+
+            // Editor padding needs to account for stats bar + inset
+            editorStatusBar.post {
+                val statsBarHeight = editorStatusBar.height
+                // 32dp extra padding so we can scroll past last line
+                val extraPadding = (32 * resources.displayMetrics.density).toInt()
+                editorEditText.setPadding(
+                    editorEditText.paddingLeft,
+                    editorEditText.paddingTop,
+                    editorEditText.paddingRight,
+                    statsBarHeight + bottomInset + extraPadding
+                )
+            }
+
+            WindowInsetsCompat.CONSUMED
         }
 
         toolbar = findViewById(R.id.toolbar)
@@ -93,7 +120,7 @@ class EditorActivity : AppCompatActivity() {
             onBackPressedDispatcher.onBackPressed()
         }
 
-        editorEditText = findViewById(R.id.editorEditText)
+
         editorEditText.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
         tvWordCount = findViewById(R.id.tvWordCount)
         tvSessionAdded = findViewById(R.id.tvSessionAdded)
