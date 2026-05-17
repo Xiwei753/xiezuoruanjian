@@ -2,21 +2,10 @@ package com.xiwei.writerapp.ui
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.RectF
-import android.animation.ValueAnimator
-import android.animation.PropertyValuesHolder
 import android.text.Editable
-import android.text.Spanned
 import android.text.TextWatcher
-import android.view.inputmethod.BaseInputConnection
-import android.text.style.LeadingMarginSpan
 import android.util.AttributeSet
-import android.util.Log
 import androidx.appcompat.widget.AppCompatEditText
-import android.text.style.CharacterStyle
-import android.text.TextPaint
-import kotlin.math.abs
 
 class WriterEditText @JvmOverloads constructor(
     context: Context,
@@ -40,6 +29,22 @@ class WriterEditText @JvmOverloads constructor(
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
         autoIndentController.setAutoIndent(enabled, widthChars)
+    }
+
+    fun runWithoutTextAnimations(block: () -> Unit) {
+        val oldAnimEnabled = typingAnimationController.isSuppressAnimations
+        val oldIndentEnabled = autoIndentController.isSuppressing
+        typingAnimationController.isSuppressAnimations = true
+        autoIndentController.isSuppressing = true
+        try {
+            block()
+        } finally {
+            typingAnimationController.isSuppressAnimations = oldAnimEnabled
+            autoIndentController.isSuppressing = oldIndentEnabled
+            if (text != null) {
+                autoIndentController.updateParagraphIndentSpans(text!!, isFullRebuild = true)
+            }
+        }
     }
 
     init {

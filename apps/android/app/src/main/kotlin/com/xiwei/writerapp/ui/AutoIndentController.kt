@@ -16,6 +16,8 @@ class AutoIndentController(private val editText: EditText) {
     var isUpdatingSpan = false
         private set
 
+    var isSuppressing = false
+
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
         val oldEnabled = this.autoIndentEnabled
         val oldPx = this.autoIndentPx
@@ -37,6 +39,8 @@ class AutoIndentController(private val editText: EditText) {
     }
 
     fun updateParagraphIndentSpans(editable: Editable, updateStartPos: Int = -1, isFullRebuild: Boolean = false) {
+        if (isSuppressing) return
+
         if (!autoIndentEnabled || autoIndentPx <= 0) {
             val existingSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
             if (existingSpans.isNotEmpty()) {

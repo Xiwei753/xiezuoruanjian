@@ -24,6 +24,8 @@ class TypingAnimationController(private val editText: EditText) {
     var typingAnimationDurationMs: Long = 100L
         private set
 
+    var isSuppressAnimations = false
+
     private var lastAddedStart = -1
     private var lastAddedCount = 0
     private var cursorBeforeX = -1f
@@ -39,6 +41,23 @@ class TypingAnimationController(private val editText: EditText) {
     }
 
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+        if (isSuppressAnimations) {
+            val editable = editText.text
+            if (editable != null) {
+                val activeSpans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
+                for (span in activeSpans) {
+                    span.animator.cancel()
+                    if (editable.getSpanStart(span) >= 0) {
+                        editable.removeSpan(span)
+                    }
+                }
+            }
+            if (DEBUG_ANIM) {
+                Log.d(TAG, "beforeTextChanged - suppressed animation")
+            }
+            return
+        }
+
         if (count > 0 && after == 0) {
             // Deletion
             isPasteOrDelete = true
@@ -59,6 +78,12 @@ class TypingAnimationController(private val editText: EditText) {
     }
 
     fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+        if (isSuppressAnimations) {
+            lastAddedStart = -1
+            lastAddedCount = 0
+            return
+        }
+
         if (!isPasteOrDelete && count > 0) {
             lastAddedStart = start
             lastAddedCount = count
@@ -70,6 +95,7 @@ class TypingAnimationController(private val editText: EditText) {
 
     fun afterTextChanged(editable: Editable?, onSpanUpdate: (Boolean) -> Unit) {
         if (editable == null) return
+        if (isSuppressAnimations) return
 
         val composingStart = BaseInputConnection.getComposingSpanStart(editable)
         val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
@@ -88,20 +114,35 @@ class TypingAnimationController(private val editText: EditText) {
             val totalEnd = start + lastAddedCount
 
             val activeSpans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
+            if (DEBUG_ANIM) {
+                Log.d(TAG, "active typing spans count: ${activeSpans.size}")
+            }
 
             // Remove oldest spans if we exceed limits to prevent infinite buildup
             if (activeSpans.size >= MAX_ANIMATIONS) {
                 activeSpans.sortBy { editable.getSpanStart(it) }
                 for (i in 0 until (activeSpans.size - MAX_ANIMATIONS + 1)) {
                     activeSpans[i].animator.cancel()
+                    if (editable.getSpanStart(activeSpans[i]) >= 0) {
+                        editable.removeSpan(activeSpans[i])
+                    }
                 }
             }
 
             // Cap the amount of text we animate to prevent freezing on large fast pastes
             val animLimit = Math.min(MAX_ANIMATIONS, lastAddedCount)
-            val end = start + animLimit
+            var end = start
 
-            if (end <= editable.length && typingAnimationDurationMs > 0) {
+            // Iterate character by character and stop at newline
+            while (end < start + animLimit && end < editable.length) {
+                val cp = Character.codePointAt(editable, end)
+                if (cp == '\n'.code) {
+                    break
+                }
+                end += Character.charCount(cp)
+            }
+
+            if (end > start && end <= editable.length && typingAnimationDurationMs > 0) {
                 val animator = ValueAnimator.ofFloat(0f, 1f).apply {
                     duration = typingAnimationDurationMs
                     interpolator = android.view.animation.DecelerateInterpolator()
@@ -139,6 +180,9 @@ class TypingAnimationController(private val editText: EditText) {
         val activeSpans = editable.getSpans(0, editable.length, TypingAnimSpan::class.java)
         for (span in activeSpans) {
             span.animator.cancel()
+            if (editable.getSpanStart(span) >= 0) {
+                editable.removeSpan(span)
+            }
         }
     }
 
