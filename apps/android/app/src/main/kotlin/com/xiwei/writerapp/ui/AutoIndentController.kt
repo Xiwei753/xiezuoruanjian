@@ -64,25 +64,17 @@ class AutoIndentController(private val editText: EditText) {
             spanRanges[start] = end
         }
 
-        // Optimization: only process affected area if possible
         var paragraphStart = 0
         var scanEnd = editable.length
 
         if (!isFullRebuild && updateStartPos >= 0) {
-            // Find paragraph start
             var prevNewline = editable.lastIndexOf('\n', updateStartPos - 1)
             paragraphStart = if (prevNewline == -1) 0 else prevNewline + 1
-
-            // Limit scan to some reasonable bounds if it's not a full rebuild, but let's
-            // be safe and process to the end, or at least past the updated region.
-            // A simple implementation processes from the modified paragraph to the end,
-            // avoiding touching spans before the edit point.
         }
 
         val textLength = editable.length
         val spansToRemove = mutableListOf<LeadingMarginSpan.Standard>()
 
-        // Identify spans in the scan region to potentially remove
         for (span in existingSpans) {
             val start = editable.getSpanStart(span)
             if (start >= paragraphStart) {
@@ -105,22 +97,31 @@ class AutoIndentController(private val editText: EditText) {
             val overlapsComposing = isComposing && paragraphEnd > composingStart && paragraphStart < composingEnd
 
             if (overlapsComposing) {
-                // Keep the span overlapping with composing region to prevent jitter
                 val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && editable.getSpanEnd(it) == paragraphEnd && it.getLeadingMargin(true) == autoIndentPx }
                 if (span != null) {
                     spansToRemove.remove(span)
                 }
             } else if (paragraphEnd > paragraphStart && !(paragraphEnd - paragraphStart == 1 && editable[paragraphStart] == '\n')) {
                 val currentSpanEnd = spanRanges[paragraphStart]
-                if (currentSpanEnd == paragraphEnd) {
+
+                // Only replace spans if their boundaries or properties have fundamentally changed.
+                // Avoid replacing during single character inputs when span range end updates naturally.
+                if (currentSpanEnd != paragraphEnd) {
+                    val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && it.getLeadingMargin(true) == autoIndentPx }
+                    if (span != null && editable.getSpanEnd(span) == paragraphEnd - 1 && editable.length >= paragraphEnd) {
+                         // The text grew by 1 naturally at the end of the span, let the span grow.
+                         spansToRemove.remove(span)
+                         editable.setSpan(span, paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    } else {
+                         editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                } else {
                     val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && editable.getSpanEnd(it) == paragraphEnd && it.getLeadingMargin(true) == autoIndentPx }
                     if (span != null) {
                         spansToRemove.remove(span)
                     } else {
                         editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     }
-                } else {
-                    editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             }
 

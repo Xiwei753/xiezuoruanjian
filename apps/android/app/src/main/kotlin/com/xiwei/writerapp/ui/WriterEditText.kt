@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.AttributeSet
+import android.view.MotionEvent
 import androidx.appcompat.widget.AppCompatEditText
 
 class WriterEditText @JvmOverloads constructor(
@@ -17,8 +18,10 @@ class WriterEditText @JvmOverloads constructor(
     private var controllersReady = false
 
     private var typingAnimationController: TypingAnimationController? = null
+    private var typingOverlayRenderer: TypingOverlayRenderer? = null
     private var smoothCursorRenderer: SmoothCursorRenderer? = null
     private var autoIndentController: AutoIndentController? = null
+    private var editorFlingScroller: EditorFlingScroller? = null
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
@@ -56,9 +59,11 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     init {
-        typingAnimationController = TypingAnimationController(this)
+        typingOverlayRenderer = TypingOverlayRenderer(this)
+        typingAnimationController = TypingAnimationController(this, typingOverlayRenderer!!)
         smoothCursorRenderer = SmoothCursorRenderer(this)
         autoIndentController = AutoIndentController(this)
+        editorFlingScroller = EditorFlingScroller(this)
         controllersReady = true
 
         addTextChangedListener(object : TextWatcher {
@@ -109,6 +114,7 @@ class WriterEditText @JvmOverloads constructor(
         if (!controllersReady) return
         smoothCursorRenderer?.onDetachedFromWindow()
         typingAnimationController?.onDetachedFromWindow()
+        editorFlingScroller?.onDetachedFromWindow()
     }
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
@@ -117,9 +123,24 @@ class WriterEditText @JvmOverloads constructor(
         smoothCursorRenderer?.onFocusChanged(focused)
     }
 
+    override fun onTouchEvent(event: MotionEvent?): Boolean {
+        if (event != null && controllersReady) {
+            editorFlingScroller?.onTouchEvent(event)
+        }
+        return super.onTouchEvent(event)
+    }
+
+    override fun computeScroll() {
+        super.computeScroll()
+        if (controllersReady) {
+            editorFlingScroller?.computeScroll()
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (!controllersReady) return
         smoothCursorRenderer?.draw(canvas)
+        typingOverlayRenderer?.onDraw(canvas)
     }
 }
