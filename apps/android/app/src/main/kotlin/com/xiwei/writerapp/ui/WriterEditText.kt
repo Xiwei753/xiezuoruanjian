@@ -14,68 +14,84 @@ class WriterEditText @JvmOverloads constructor(
 ) : AppCompatEditText(context, attrs, defStyleAttr) {
 
     private var isUpdatingSpanWrapper = false
+    private var controllersReady = false
 
-    private val typingAnimationController = TypingAnimationController(this)
-    private val smoothCursorRenderer = SmoothCursorRenderer(this)
-    private val autoIndentController = AutoIndentController(this)
+    private var typingAnimationController: TypingAnimationController? = null
+    private var smoothCursorRenderer: SmoothCursorRenderer? = null
+    private var autoIndentController: AutoIndentController? = null
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
-        typingAnimationController.setTypingAnimationEnabled(enabled, durationMs)
+        if (!controllersReady) return
+        typingAnimationController?.setTypingAnimationEnabled(enabled, durationMs)
     }
 
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
-        smoothCursorRenderer.setSmoothCursorEnabled(enabled, durationMs)
+        if (!controllersReady) return
+        smoothCursorRenderer?.setSmoothCursorEnabled(enabled, durationMs)
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
-        autoIndentController.setAutoIndent(enabled, widthChars)
+        if (!controllersReady) return
+        autoIndentController?.setAutoIndent(enabled, widthChars)
     }
 
     fun runWithoutTextAnimations(block: () -> Unit) {
-        val oldAnimEnabled = typingAnimationController.isSuppressAnimations
-        val oldIndentEnabled = autoIndentController.isSuppressing
-        typingAnimationController.isSuppressAnimations = true
-        autoIndentController.isSuppressing = true
+        if (!controllersReady) {
+            block()
+            return
+        }
+        val oldAnimEnabled = typingAnimationController?.isSuppressAnimations ?: false
+        val oldIndentEnabled = autoIndentController?.isSuppressing ?: false
+        typingAnimationController?.isSuppressAnimations = true
+        autoIndentController?.isSuppressing = true
         try {
             block()
         } finally {
-            typingAnimationController.isSuppressAnimations = oldAnimEnabled
-            autoIndentController.isSuppressing = oldIndentEnabled
+            typingAnimationController?.isSuppressAnimations = oldAnimEnabled
+            autoIndentController?.isSuppressing = oldIndentEnabled
             if (text != null) {
-                autoIndentController.updateParagraphIndentSpans(text!!, isFullRebuild = true)
+                autoIndentController?.updateParagraphIndentSpans(text!!, isFullRebuild = true)
             }
         }
     }
 
     init {
+        typingAnimationController = TypingAnimationController(this)
+        smoothCursorRenderer = SmoothCursorRenderer(this)
+        autoIndentController = AutoIndentController(this)
+        controllersReady = true
+
         addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
-                if (isUpdatingSpanWrapper || autoIndentController.isUpdatingSpan) return
-                typingAnimationController.beforeTextChanged(s, start, count, after)
+                if (!controllersReady) return
+                if (isUpdatingSpanWrapper || autoIndentController?.isUpdatingSpan == true) return
+                typingAnimationController?.beforeTextChanged(s, start, count, after)
             }
 
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (isUpdatingSpanWrapper || autoIndentController.isUpdatingSpan) return
-                typingAnimationController.onTextChanged(s, start, before, count)
+                if (!controllersReady) return
+                if (isUpdatingSpanWrapper || autoIndentController?.isUpdatingSpan == true) return
+                typingAnimationController?.onTextChanged(s, start, before, count)
             }
 
             override fun afterTextChanged(s: Editable?) {
-                if (isUpdatingSpanWrapper || autoIndentController.isUpdatingSpan) return
+                if (!controllersReady) return
+                if (isUpdatingSpanWrapper || autoIndentController?.isUpdatingSpan == true) return
                 val editable = s ?: return
 
-                typingAnimationController.afterTextChanged(editable) { updating ->
+                typingAnimationController?.afterTextChanged(editable) { updating ->
                     isUpdatingSpanWrapper = updating
                 }
 
-                autoIndentController.updateParagraphIndentSpans(editable)
+                autoIndentController?.updateParagraphIndentSpans(editable)
             }
         })
 
-        smoothCursorRenderer.cursorRuntimeReady = true
+        smoothCursorRenderer?.cursorRuntimeReady = true
 
         viewTreeObserver.addOnGlobalLayoutListener {
-            if (smoothCursorRenderer.smoothCursorEnabled && isFocused) {
-                smoothCursorRenderer.updateCursorTarget(false)
+            if (smoothCursorRenderer?.smoothCursorEnabled == true && isFocused) {
+                smoothCursorRenderer?.updateCursorTarget(false)
             }
         }
 
@@ -84,22 +100,26 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
-        smoothCursorRenderer.onSelectionChanged(selStart, selEnd)
+        if (!controllersReady) return
+        smoothCursorRenderer?.onSelectionChanged(selStart, selEnd)
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        smoothCursorRenderer.onDetachedFromWindow()
-        typingAnimationController.onDetachedFromWindow()
+        if (!controllersReady) return
+        smoothCursorRenderer?.onDetachedFromWindow()
+        typingAnimationController?.onDetachedFromWindow()
     }
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
-        smoothCursorRenderer.onFocusChanged(focused)
+        if (!controllersReady) return
+        smoothCursorRenderer?.onFocusChanged(focused)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        smoothCursorRenderer.draw(canvas)
+        if (!controllersReady) return
+        smoothCursorRenderer?.draw(canvas)
     }
 }

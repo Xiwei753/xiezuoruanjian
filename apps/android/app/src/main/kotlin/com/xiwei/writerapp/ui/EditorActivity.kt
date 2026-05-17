@@ -167,11 +167,9 @@ class EditorActivity : AppCompatActivity() {
                 val meta = result.second
                 currentChapterNote = meta.note
 
-                Log.d("WriterEditorAnim", "EditorActivity open chapter start")
                 editorEditText.runWithoutTextAnimations {
                     editorEditText.setText(content)
                 }
-                Log.d("WriterEditorAnim", "EditorActivity open chapter end")
 
                 initialWordCount = calculateWordCount(content)
                 lastWordCount = initialWordCount
