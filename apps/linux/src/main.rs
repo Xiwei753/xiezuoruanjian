@@ -635,6 +635,8 @@ impl AppBackend {
 }
 
 fn main() {
+    std::env::set_var("QSG_INFO", "1");
+    std::env::set_var("QSG_RENDER_LOOP", "basic");
 
     qml_resources();
     qmetaobject::qml_register_type::<AppBackend>(

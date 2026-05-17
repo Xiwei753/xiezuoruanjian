@@ -124,17 +124,11 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent?): Boolean {
-        if (event != null && controllersReady) {
-            editorFlingScroller?.onTouchEvent(event)
-        }
         return super.onTouchEvent(event)
     }
 
     override fun computeScroll() {
         super.computeScroll()
-        if (controllersReady) {
-            editorFlingScroller?.computeScroll()
-        }
     }
 
     override fun onDraw(canvas: Canvas) {

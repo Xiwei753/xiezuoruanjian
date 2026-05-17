@@ -3,6 +3,7 @@ package com.xiwei.writerapp.ui
 import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.util.TypedValue
 import android.widget.EditText
@@ -15,7 +16,8 @@ data class OverlayAnim(
     val startX: Float,
     val startY: Float,
     var progress: Float,
-    val animator: ValueAnimator
+    val animator: ValueAnimator,
+    val span: ForegroundColorSpan
 ) {
     val codePoints: List<Int> = buildList {
         var i = 0
@@ -33,20 +35,11 @@ class TypingOverlayRenderer(private val editText: EditText) {
     private val activeAnims = CopyOnWriteArrayList<OverlayAnim>()
     private val MAX_ANIMATIONS = 24
 
-    private val bgPaint = Paint().apply {
-        style = Paint.Style.FILL
-    }
-
-    private fun updateBgColor() {
-        val typedValue = TypedValue()
-        editText.context.theme.resolveAttribute(com.google.android.material.R.attr.colorSurface, typedValue, true)
-        bgPaint.color = typedValue.data
-    }
-
     fun addAnim(anim: OverlayAnim) {
         if (activeAnims.size >= MAX_ANIMATIONS) {
             val oldest = activeAnims.removeAt(0)
             oldest.animator.cancel()
+            editText.text?.removeSpan(oldest.span)
         }
         activeAnims.add(anim)
     }
@@ -58,6 +51,7 @@ class TypingOverlayRenderer(private val editText: EditText) {
     fun clear() {
         for (anim in activeAnims) {
             anim.animator.cancel()
+            editText.text?.removeSpan(anim.span)
         }
         activeAnims.clear()
     }
@@ -69,8 +63,6 @@ class TypingOverlayRenderer(private val editText: EditText) {
         val paint = editText.paint
         val originalAlpha = paint.alpha
         val textLength = editText.text?.length ?: 0
-
-        updateBgColor()
 
         val padX = editText.compoundPaddingLeft.toFloat()
         val padY = editText.compoundPaddingTop.toFloat()
@@ -96,19 +88,6 @@ class TypingOverlayRenderer(private val editText: EditText) {
                 val destX = layout.getPrimaryHorizontal(i)
                 val line = layout.getLineForOffset(i)
                 val destY = layout.getLineBaseline(line).toFloat()
-
-                // Hide the underlying original character
-                val lineTop = layout.getLineTop(line).toFloat()
-                val lineBottom = layout.getLineBottom(line).toFloat()
-                val destX2 = layout.getPrimaryHorizontal(i + charCount)
-
-                canvas.drawRect(
-                    Math.min(destX, destX2) + padX,
-                    lineTop + padY,
-                    Math.max(destX, destX2) + padX,
-                    lineBottom + padY,
-                    bgPaint
-                )
 
                 // Calculate animation start position
                 var sX = anim.startX
