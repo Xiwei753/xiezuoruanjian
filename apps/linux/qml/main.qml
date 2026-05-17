@@ -5,6 +5,8 @@ import QtQuick.Window 2.15
 import QtQuick.Dialogs 1.3
 import WriterApp 1.0
 
+// Ensure imports have version numbers and are on separate lines for Qt5 compatibility.
+
 ApplicationWindow {
     id: window
     onClosing: {
@@ -99,11 +101,9 @@ ApplicationWindow {
 
     Dialog {
         id: inputDialog
-        x: (parent.width - width) / 2
-        y: (parent.height - height) / 2
         width: 300
         title: "输入"
-        standardButtons: Dialog.Ok | Dialog.Cancel
+        standardButtons: StandardButton.Ok | StandardButton.Cancel
 
         property string actionType: ""
         property var contextData: ({})
@@ -118,9 +118,11 @@ ApplicationWindow {
             }
         }
 
-        onOpened: {
-            inputField.text = contextData.initialText || "";
-            inputField.forceActiveFocus();
+        onVisibleChanged: {
+            if (visible) {
+                inputField.text = contextData.initialText || "";
+                inputField.forceActiveFocus();
+            }
         }
 
         onAccepted: {
@@ -147,31 +149,29 @@ ApplicationWindow {
     MessageDialog {
         id: errorDialog
         title: "错误"
-        buttons: MessageDialog.Ok
+        standardButtons: StandardButton.Ok
         text: backend.error_message
     }
 
     MessageDialog {
         id: confirmDialog
         title: "确认删除"
-        buttons: MessageDialog.Yes | MessageDialog.No
+        standardButtons: StandardButton.Yes | StandardButton.No
 
         property string actionType: ""
         property var contextData: ({})
 
-        onButtonClicked: function(button, role) {
-            if (role === MessageDialog.YesRole) {
-                if (actionType === "delete_project") {
-                    backend.delete_project(contextData.id);
-                } else if (actionType === "delete_volume") {
-                    backend.delete_volume(contextData.projectId, contextData.id);
-                } else if (actionType === "delete_chapter") {
-                    let wasSelected = (backend.selected_item_id === contextData.id);
-                    backend.delete_chapter(contextData.projectId, contextData.volumeId, contextData.id);
-                    if (wasSelected) {
-                        editorArea.text = "";
-                        backend.save_status = "已保存";
-                    }
+        onYes: {
+            if (actionType === "delete_project") {
+                backend.delete_project(contextData.id);
+            } else if (actionType === "delete_volume") {
+                backend.delete_volume(contextData.projectId, contextData.id);
+            } else if (actionType === "delete_chapter") {
+                let wasSelected = (backend.selected_item_id === contextData.id);
+                backend.delete_chapter(contextData.projectId, contextData.volumeId, contextData.id);
+                if (wasSelected) {
+                    editorArea.text = "";
+                    backend.save_status = "已保存";
                 }
             }
         }
