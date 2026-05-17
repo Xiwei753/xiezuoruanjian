@@ -7,6 +7,9 @@ import WriterApp 1.0
 
 ApplicationWindow {
     id: window
+    onClosing: {
+        saveCurrentIfNeeded();
+    }
     visible: true
     width: 1024
     height: 768
@@ -85,11 +88,6 @@ ApplicationWindow {
         }
     }
 
-    onClosing: {
-        if (backend.save_status === "未保存") {
-            backend.save_current_chapter(editorArea.text);
-        }
-    }
 
 
     Dialog {
@@ -422,7 +420,7 @@ ApplicationWindow {
                     anchors.centerIn: parent
                     text: "请在左侧选择或创建一个章节"
                     color: "gray"
-                    visible: editorArea.text === "" && backend.save_status !== "未保存"
+                    visible: !backend.selected_item_id || backend.selected_item_id === ""
                 }
 
                 TextArea {

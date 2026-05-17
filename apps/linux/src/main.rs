@@ -592,6 +592,7 @@ impl AppBackend {
 }
 
 fn main() {
+    std::env::set_var("QT_QPA_PLATFORM", "wayland;xcb");
     qml_resources();
     qmetaobject::qml_register_type::<AppBackend>(
         CStr::from_bytes_with_nul(b"WriterApp\0").unwrap(),
