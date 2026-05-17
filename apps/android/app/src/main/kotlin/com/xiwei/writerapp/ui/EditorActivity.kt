@@ -8,6 +8,8 @@ import android.text.TextWatcher
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.appbar.MaterialToolbar
 import android.content.Intent
 import android.view.Menu
@@ -75,6 +77,14 @@ class EditorActivity : AppCompatActivity() {
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
+        }
+
+        val rootView = findViewById<View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
+            val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val systemBarsInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(0, 0, 0, imeInsets.bottom)
+            insets
         }
 
         toolbar = findViewById(R.id.toolbar)
