@@ -5,8 +5,6 @@ import QtQuick.Window 2.15
 import QtQuick.Dialogs 1.3
 import WriterApp 1.0
 
-// Ensure imports have version numbers and are on separate lines for Qt5 compatibility.
-
 ApplicationWindow {
     id: window
     onClosing: {
@@ -15,8 +13,10 @@ ApplicationWindow {
     visible: true
     width: 1024
     height: 768
+    minimumWidth: 800
+    minimumHeight: 600
     title: "Writer"
-    color: "#1e1e1e" // Dark theme
+    color: "#1e1e1e"
 
     property bool loadingChapter: false
 
@@ -46,7 +46,7 @@ ApplicationWindow {
         for (let i = 0; i < treeModel.count; i++) {
             let sib = treeModel.get(i);
             if (sib.type === node.type && sib.projectId === node.projectId && sib.volumeId === node.volumeId) {
-                if (sib.id === node.id) return i !== index; // If it's the first sibling, index === i so we can't move up. Wait, this loop always finds the first one.
+                if (sib.id === node.id) return i !== index;
             }
         }
         return false;
@@ -100,8 +100,6 @@ ApplicationWindow {
             treeView.currentIndex = -1;
         }
     }
-
-
 
     Dialog {
         id: inputDialog
@@ -227,29 +225,34 @@ ApplicationWindow {
         background: Rectangle { color: "#2d2d2d" }
         RowLayout {
             anchors.fill: parent
-            anchors.margins: 5
+            anchors.leftMargin: 10
+            anchors.rightMargin: 10
+            spacing: 15
             Label {
                 id: statusLabel
                 text: backend.save_status
                 color: "white"
-                Layout.minimumWidth: 100
             }
             Label {
                 id: wordCountLabel
                 text: "字数: " + backend.word_count
                 color: "white"
-                Layout.minimumWidth: 100
             }
             Item { Layout.fillWidth: true }
             Label {
                 text: backend.chapter_path
                 color: "gray"
-                Layout.minimumWidth: 100
+                elide: Text.ElideRight
+                Layout.maximumWidth: 250
+                clip: true
             }
             Label {
                 id: workspacePathLabel
                 text: backend.workspace_path
                 color: "gray"
+                elide: Text.ElideRight
+                Layout.maximumWidth: 250
+                clip: true
             }
         }
     }
@@ -260,13 +263,14 @@ ApplicationWindow {
 
         Rectangle {
             SplitView.preferredWidth: 250
-            SplitView.minimumWidth: 150
+            SplitView.minimumWidth: 200
             color: "#252526"
 
             ListView {
                 id: treeView
                 anchors.fill: parent
                 model: treeModel
+                clip: true
 
                 Text {
                     anchors.centerIn: parent
@@ -276,7 +280,7 @@ ApplicationWindow {
                 }
 
                 delegate: Item {
-                    width: parent.width
+                    width: ListView.view.width
                     height: 30
                     Rectangle {
                         anchors.fill: parent
@@ -284,7 +288,6 @@ ApplicationWindow {
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
-
                                 treeView.currentIndex = index;
                                 let node = treeModel.get(index);
                                 saveCurrentIfNeeded();
@@ -309,17 +312,25 @@ ApplicationWindow {
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: (model.type === "project" ? 5 : model.type === "volume" ? 20 : 35)
+                            spacing: 5
+
                             Text {
                                 text: model.title
                                 color: "white"
                                 Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                clip: true
                             }
 
                             ToolButton {
                                 visible: treeView.currentIndex === index
                                 text: "⋮"
                                 onClicked: contextMenu.open()
-                                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 18 }
+                                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                background: Item {}
+                                padding: 0
+                                Layout.preferredWidth: 30
+                                Layout.alignment: Qt.AlignVCenter
 
                                 Menu {
                                     id: contextMenu
@@ -421,7 +432,7 @@ ApplicationWindow {
 
             Timer {
                 id: autoSaveTimer
-                interval: 1500 // 1.5 seconds
+                interval: 1500
                 repeat: false
                 onTriggered: {
                     if (backend.save_status === "未保存") {
@@ -437,31 +448,38 @@ ApplicationWindow {
                 visible: !backend.has_selected_chapter_prop
             }
 
-            ScrollView {
+            Item {
                 anchors.fill: parent
-                anchors.margins: 20
                 visible: backend.has_selected_chapter_prop
 
-                TextArea {
-                    id: editorArea
-                    color: "#d4d4d4"
-                    font.pixelSize: 16
-                    wrapMode: TextArea.Wrap
-                    background: null
-                    enabled: backend.has_selected_chapter_prop
-                    width: parent.availableWidth
-                    focus: true
-                    activeFocusOnTab: true
-                    selectByMouse: true
-                    persistentSelection: true
+                ScrollView {
+                    id: editorScroll
+                    anchors.fill: parent
+                    anchors.margins: 20
+                    clip: true
 
-                    onTextChanged: {
-                        backend.calculate_word_count(text);
-                        if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存") {
-                            backend.save_status = "未保存";
-                        }
-                        if (!loadingChapter && backend.has_selected_chapter_prop) {
-                            autoSaveTimer.restart();
+                    TextArea {
+                        id: editorArea
+                        color: "#d4d4d4"
+                        font.pixelSize: 16
+                        wrapMode: TextArea.Wrap
+                        background: null
+                        enabled: backend.has_selected_chapter_prop
+                        width: editorScroll.width
+                        height: Math.max(editorScroll.height, contentHeight)
+                        focus: true
+                        activeFocusOnTab: true
+                        selectByMouse: true
+                        persistentSelection: true
+
+                        onTextChanged: {
+                            backend.calculate_word_count(text);
+                            if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存") {
+                                backend.save_status = "未保存";
+                            }
+                            if (!loadingChapter && backend.has_selected_chapter_prop) {
+                                autoSaveTimer.restart();
+                            }
                         }
                     }
                 }
