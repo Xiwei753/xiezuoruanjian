@@ -465,8 +465,7 @@ ApplicationWindow {
                         wrapMode: TextArea.Wrap
                         background: null
                         enabled: backend.has_selected_chapter_prop
-                        width: editorScroll.width
-                        height: Math.max(editorScroll.height, contentHeight)
+                        width: editorScroll.availableWidth
                         focus: true
                         activeFocusOnTab: true
                         selectByMouse: true

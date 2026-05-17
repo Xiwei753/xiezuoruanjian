@@ -34,7 +34,14 @@ If your system's `qmake` is named `qmake-qt5` (e.g. on Fedora), explicitly provi
 QMAKE=/usr/bin/qmake-qt5 cargo run -p linux
 ```
 
-If you encounter wayland/xcb display errors, the app defaults to Wayland if available, falling back to xcb. You can override it by setting:
+If you encounter wayland/xcb display errors, you can test specific Qt platform plugins manually by setting `QT_QPA_PLATFORM`:
+
+For X11 / Xwayland:
 ```bash
-QT_QPA_PLATFORM=xcb cargo run -p linux
+QT_QPA_PLATFORM=xcb QMAKE=/usr/bin/qmake-qt5 cargo run -p linux
+```
+
+For Wayland:
+```bash
+QT_QPA_PLATFORM=wayland QMAKE=/usr/bin/qmake-qt5 cargo run -p linux
 ```
