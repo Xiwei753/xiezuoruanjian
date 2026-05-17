@@ -131,7 +131,9 @@ class WriterEditText @JvmOverloads constructor(
                             addListener(object : android.animation.AnimatorListenerAdapter() {
                                 override fun onAnimationEnd(animation: android.animation.Animator) {
                                     isUpdatingSpan = true
-                                    editable.removeSpan(span)
+                                    if (editable.getSpanStart(span) >= 0) {
+                                        editable.removeSpan(span)
+                                    }
                                     isUpdatingSpan = false
                                     invalidate()
                                 }
@@ -168,7 +170,9 @@ class WriterEditText @JvmOverloads constructor(
             if (existingSpans.isNotEmpty()) {
                 isUpdatingSpan = true
                 for (span in existingSpans) {
-                    editable.removeSpan(span)
+                    if (editable.getSpanStart(span) >= 0) {
+                        editable.removeSpan(span)
+                    }
                 }
                 isUpdatingSpan = false
             }
@@ -189,6 +193,10 @@ class WriterEditText @JvmOverloads constructor(
 
         val spansToRemove = existingSpans.toMutableList()
 
+        val composingStart = BaseInputConnection.getComposingSpanStart(editable)
+        val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
+        val isComposing = composingStart != -1 && composingEnd != -1
+
         while (paragraphStart < textLength) {
             var paragraphEnd = editable.indexOf('\n', paragraphStart)
             if (paragraphEnd == -1) {
@@ -197,8 +205,18 @@ class WriterEditText @JvmOverloads constructor(
                 paragraphEnd += 1 // Include newline character in the span
             }
 
-            // Don't indent completely empty lines (where start == end, meaning just a newline or EOF)
-            if (paragraphEnd > paragraphStart && !(paragraphEnd - paragraphStart == 1 && editable[paragraphStart] == '\n')) {
+            // Skip paragraph if it overlaps with composing region (to prevent jitter during IME input)
+            val overlapsComposing = isComposing && paragraphEnd > composingStart && paragraphStart < composingEnd
+
+            if (overlapsComposing) {
+                // If the paragraph overlaps composing, we must preserve its existing span to avoid jitter.
+                // Find the existing span for this paragraph and remove it from spansToRemove so it isn't deleted.
+                val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && editable.getSpanEnd(it) == paragraphEnd && it.getLeadingMargin(true) == autoIndentPx }
+                if (span != null) {
+                    spansToRemove.remove(span)
+                }
+            } else if (paragraphEnd > paragraphStart && !(paragraphEnd - paragraphStart == 1 && editable[paragraphStart] == '\n')) {
+                // Don't indent completely empty lines (where start == end, meaning just a newline or EOF)
                 // We need a span from paragraphStart to paragraphEnd
                 val currentSpanEnd = spanRanges[paragraphStart]
                 if (currentSpanEnd == paragraphEnd) {
@@ -220,7 +238,9 @@ class WriterEditText @JvmOverloads constructor(
 
         // Remove spans that are no longer valid
         for (span in spansToRemove) {
-            editable.removeSpan(span)
+            if (editable.getSpanStart(span) >= 0) {
+                editable.removeSpan(span)
+            }
         }
 
         isUpdatingSpan = false

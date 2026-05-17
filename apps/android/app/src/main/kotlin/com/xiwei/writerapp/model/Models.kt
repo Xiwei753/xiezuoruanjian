@@ -94,7 +94,9 @@ data class SyncConfig(
             proxyEnabled = proxyEnabled ?: false,
             proxyType = if (proxyType.isNullOrEmpty()) "http" else proxyType,
             proxyHost = if (proxyHost.isNullOrEmpty()) "127.0.0.1" else proxyHost,
-            proxyPort = if (proxyPort == null || proxyPort <= 0) 7890 else proxyPort
+            proxyPort = if (proxyPort == null || proxyPort <= 0) {
+                if (proxyType == "socks5") 7891 else 7890
+            } else proxyPort
         )
     }
 }
