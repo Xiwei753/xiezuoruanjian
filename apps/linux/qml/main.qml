@@ -23,11 +23,14 @@ ApplicationWindow {
         onError_occurred: {
             errorDialog.open();
         }
-
+        onClear_editor: {
+            editorArea.text = "";
+            backend.save_status = "未选择章节";
+        }
     }
 
     function saveCurrentIfNeeded() {
-        if (backend.save_status === "未保存") {
+        if (backend.save_status === "未保存" && backend.has_selected_chapter() && backend.selected_chapter_exists()) {
             backend.save_current_chapter(editorArea.text);
         }
     }
@@ -85,6 +88,10 @@ ApplicationWindow {
         }
         if (matchIndex !== -1) {
             treeView.currentIndex = matchIndex;
+        }
+
+        if (treeModel.count === 0) {
+            treeView.currentIndex = -1;
         }
     }
 
@@ -256,6 +263,14 @@ ApplicationWindow {
                 id: treeView
                 anchors.fill: parent
                 model: treeModel
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "未选择作品"
+                    color: "gray"
+                    visible: treeModel.count === 0
+                }
+
                 delegate: Item {
                     width: parent.width
                     height: 30
@@ -284,7 +299,7 @@ ApplicationWindow {
                                 }
                             }
                         }
-                                                RowLayout {
+                        RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: (model.type === "project" ? 5 : model.type === "volume" ? 20 : 35)
                             Text {
@@ -293,102 +308,99 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                             }
 
-                            RowLayout {
-                                visible: treeView.currentIndex === index
-                                spacing: 2
-                                ToolButton {
-                                    text: "↑"
-                                    visible: !isFirstSibling(index)
-                                    onClicked: {
-                                        // A simple hack: just swap with the previous item of the same type and call backend
-                                        // Wait, the backend reorder takes an array of IDs.
-                                        // To simplify, let's collect all IDs of the same type and swap them, then call backend.
-                                        let ids = [];
-                                        let my_pos = -1;
-                                        for (let i = 0; i < treeModel.count; i++) {
-                                            let node = treeModel.get(i);
-                                            if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
-                                                if (node.id === model.id) my_pos = ids.length;
-                                                ids.push(node.id);
-                                            }
-                                        }
-                                        if (my_pos > 0) {
-                                            let temp = ids[my_pos];
-                                            ids[my_pos] = ids[my_pos - 1];
-                                            ids[my_pos - 1] = temp;
-
-                                            if (model.type === "project") backend.reorder_projects(ids.join(","));
-                                            else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
-                                            else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
-                                        }
-                                    }
-                                    contentItem: Text { text: parent.text; color: "white" }
-                                }
-                                ToolButton {
-                                    text: "↓"
-                                    visible: !isLastSibling(index)
-                                    onClicked: {
-                                        let ids = [];
-                                        let my_pos = -1;
-                                        for (let i = 0; i < treeModel.count; i++) {
-                                            let node = treeModel.get(i);
-                                            if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
-                                                if (node.id === model.id) my_pos = ids.length;
-                                                ids.push(node.id);
-                                            }
-                                        }
-                                        if (my_pos < ids.length - 1) {
-                                            let temp = ids[my_pos];
-                                            ids[my_pos] = ids[my_pos + 1];
-                                            ids[my_pos + 1] = temp;
-
-                                            if (model.type === "project") backend.reorder_projects(ids.join(","));
-                                            else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
-                                            else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
-                                        }
-                                    }
-                                    contentItem: Text { text: parent.text; color: "white" }
-                                }
-                                ToolButton {
-                                    text: "R"
-                                    onClicked: {
-                                        inputDialog.actionType = "rename_" + model.type;
-                                        inputDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId, initialText: model.title.trim() };
-                                        inputDialog.open();
-                                    }
-                                    contentItem: Text { text: parent.text; color: "white" }
-                                }
-                                ToolButton {
-                                    text: "X"
-                                    onClicked: {
-                                        if (model.type === "volume") {
-                                            confirmDialog.text = "确定要删除此分卷及其包含的所有章节吗？";
-                                        } else {
-                                            confirmDialog.text = "确定要删除吗？";
-                                        }
-                                        confirmDialog.actionType = "delete_" + model.type;
-                                        confirmDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId };
-                                        confirmDialog.open();
-                                    }
-                                    contentItem: Text { text: parent.text; color: "red" }
-                                }
-                            }
-
                             ToolButton {
-                                text: "+"
-                                visible: model.type !== "chapter"
-                                onClicked: {
-                                    if (model.type === "project") {
-                                        inputDialog.actionType = "create_volume";
-                                        inputDialog.contextData = { projectId: model.id, initialText: "新分卷" };
-                                        inputDialog.open();
-                                    } else if (model.type === "volume") {
-                                        inputDialog.actionType = "create_chapter";
-                                        inputDialog.contextData = { projectId: model.projectId, volumeId: model.id, initialText: "新章节" };
-                                        inputDialog.open();
+                                visible: treeView.currentIndex === index
+                                text: "⋮"
+                                onClicked: contextMenu.open()
+                                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 18 }
+
+                                Menu {
+                                    id: contextMenu
+                                    MenuItem {
+                                        text: model.type === "project" ? "新建分卷" : "新建章节"
+                                        visible: model.type !== "chapter"
+                                        onTriggered: {
+                                            if (model.type === "project") {
+                                                inputDialog.actionType = "create_volume";
+                                                inputDialog.contextData = { projectId: model.id, initialText: "新分卷" };
+                                                inputDialog.open();
+                                            } else if (model.type === "volume") {
+                                                inputDialog.actionType = "create_chapter";
+                                                inputDialog.contextData = { projectId: model.projectId, volumeId: model.id, initialText: "新章节" };
+                                                inputDialog.open();
+                                            }
+                                        }
+                                    }
+                                    MenuItem {
+                                        text: "重命名"
+                                        onTriggered: {
+                                            inputDialog.actionType = "rename_" + model.type;
+                                            inputDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId, initialText: model.title.trim() };
+                                            inputDialog.open();
+                                        }
+                                    }
+                                    MenuItem {
+                                        text: "删除"
+                                        onTriggered: {
+                                            if (model.type === "volume") {
+                                                confirmDialog.text = "确定要删除此分卷及其包含的所有章节吗？";
+                                            } else {
+                                                confirmDialog.text = "确定要删除吗？";
+                                            }
+                                            confirmDialog.actionType = "delete_" + model.type;
+                                            confirmDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId };
+                                            confirmDialog.open();
+                                        }
+                                    }
+                                    MenuItem {
+                                        text: "上移"
+                                        visible: !isFirstSibling(index)
+                                        onTriggered: {
+                                            let ids = [];
+                                            let my_pos = -1;
+                                            for (let i = 0; i < treeModel.count; i++) {
+                                                let node = treeModel.get(i);
+                                                if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
+                                                    if (node.id === model.id) my_pos = ids.length;
+                                                    ids.push(node.id);
+                                                }
+                                            }
+                                            if (my_pos > 0) {
+                                                let temp = ids[my_pos];
+                                                ids[my_pos] = ids[my_pos - 1];
+                                                ids[my_pos - 1] = temp;
+
+                                                if (model.type === "project") backend.reorder_projects(ids.join(","));
+                                                else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
+                                                else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
+                                            }
+                                        }
+                                    }
+                                    MenuItem {
+                                        text: "下移"
+                                        visible: !isLastSibling(index)
+                                        onTriggered: {
+                                            let ids = [];
+                                            let my_pos = -1;
+                                            for (let i = 0; i < treeModel.count; i++) {
+                                                let node = treeModel.get(i);
+                                                if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
+                                                    if (node.id === model.id) my_pos = ids.length;
+                                                    ids.push(node.id);
+                                                }
+                                            }
+                                            if (my_pos < ids.length - 1) {
+                                                let temp = ids[my_pos];
+                                                ids[my_pos] = ids[my_pos + 1];
+                                                ids[my_pos + 1] = temp;
+
+                                                if (model.type === "project") backend.reorder_projects(ids.join(","));
+                                                else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
+                                                else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
+                                            }
+                                        }
                                     }
                                 }
-                                contentItem: Text { text: parent.text; color: "white" }
                             }
                         }
                     }
@@ -429,12 +441,15 @@ ApplicationWindow {
                     font.pixelSize: 16
                     wrapMode: TextArea.Wrap
                     background: null
-                                        onTextChanged: {
+                    enabled: backend.has_selected_chapter()
+                    onTextChanged: {
                         backend.calculate_word_count(text);
-                        if (backend.save_status !== "未保存") {
+                        if (backend.has_selected_chapter() && backend.save_status !== "未保存") {
                             backend.save_status = "未保存";
                         }
-                        autoSaveTimer.restart();
+                        if (backend.has_selected_chapter()) {
+                            autoSaveTimer.restart();
+                        }
                     }
                 }
             }

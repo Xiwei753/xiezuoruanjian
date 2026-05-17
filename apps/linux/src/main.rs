@@ -27,6 +27,7 @@ struct AppBackend {
     error_occurred: qt_signal!(),
     selected_item_changed: qt_signal!(),
     chapter_path_changed: qt_signal!(),
+    clear_editor: qt_signal!(),
 
     open_workspace_dialog: qt_method!(fn(&mut self)),
     create_new_project: qt_method!(fn(&mut self, title: QString)),
@@ -71,6 +72,10 @@ struct AppBackend {
     ),
     save_current_chapter: qt_method!(fn(&mut self, content: QString)),
 
+    has_selected_chapter: qt_method!(fn(&self) -> bool),
+    selected_chapter_exists: qt_method!(fn(&self) -> bool),
+    clear_editor_state: qt_method!(fn(&mut self)),
+
     core: Option<Rc<RefCell<WriterCore>>>,
     current_workspace: String,
     current_save_status: String,
@@ -109,6 +114,32 @@ impl AppBackend {
 
     fn error_message(&self) -> QString {
         self.current_error_message.clone().into()
+    }
+
+    fn has_selected_chapter(&self) -> bool {
+        self.selected_chapter_id.is_some()
+    }
+
+    fn selected_chapter_exists(&self) -> bool {
+        if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
+            &self.core,
+            &self.selected_project_id,
+            &self.selected_volume_id,
+            &self.selected_chapter_id,
+        ) {
+            let core = core_ref.borrow();
+            if let Ok(chapters) = core.list_chapters(p, v) {
+                return chapters.iter().any(|chap| chap.id == *c);
+            }
+        }
+        false
+    }
+
+    fn clear_editor_state(&mut self) {
+        self.selected_chapter_id = None;
+        self.selected_item_changed();
+        self.chapter_path_changed();
+        self.clear_editor();
     }
 
     fn chapter_path(&self) -> QString {
@@ -212,7 +243,7 @@ impl AppBackend {
                             let mut v_map = QJsonObject::default();
                             v_map.insert(
                                 "title".into(),
-                                QJsonValue::from(QString::from(format!("  {}", v.title))),
+                                QJsonValue::from(QString::from(v.title.clone())),
                             );
                             v_map
                                 .insert("id".into(), QJsonValue::from(QString::from(v.id.clone())));
@@ -228,7 +259,7 @@ impl AppBackend {
                                     let mut c_map = QJsonObject::default();
                                     c_map.insert(
                                         "title".into(),
-                                        QJsonValue::from(QString::from(format!("    {}", c.title))),
+                                        QJsonValue::from(QString::from(c.title.clone())),
                                     );
                                     c_map.insert(
                                         "id".into(),
@@ -352,7 +383,7 @@ impl AppBackend {
                     if self.selected_project_id.as_deref() == Some(&project_id.to_string()) {
                         self.selected_project_id = None;
                         self.selected_volume_id = None;
-                        self.selected_chapter_id = None;
+                        self.clear_editor_state();
                     }
 
                     self.reload_tree();
@@ -415,7 +446,7 @@ impl AppBackend {
                 Ok(_) => {
                     if self.selected_volume_id.as_deref() == Some(&volume_id.to_string()) {
                         self.selected_volume_id = None;
-                        self.selected_chapter_id = None;
+                        self.clear_editor_state();
                     }
 
                     self.reload_tree();
@@ -488,7 +519,7 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     if self.selected_chapter_id.as_deref() == Some(&chapter_id.to_string()) {
-                        self.selected_chapter_id = None;
+                        self.clear_editor_state();
                     }
 
                     self.reload_tree();
@@ -567,6 +598,12 @@ impl AppBackend {
     }
 
     fn save_current_chapter(&mut self, content: QString) {
+        if !self.selected_chapter_exists() {
+            self.clear_editor_state();
+            self.set_error("当前章节已不存在，已停止保存。");
+            return;
+        }
+
         let save_result = if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
             &self.core,
             &self.selected_project_id,
