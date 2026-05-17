@@ -18,6 +18,8 @@ ApplicationWindow {
     title: "Writer"
     color: "#1e1e1e" // Dark theme
 
+    property bool loadingChapter: false
+
     AppBackend {
         id: backend
         onWorkspace_opened: reloadTree()
@@ -26,8 +28,10 @@ ApplicationWindow {
             errorDialog.open();
         }
         onClear_editor: {
+            loadingChapter = true;
             editorArea.text = "";
             backend.save_status = "未选择章节";
+            loadingChapter = false;
         }
     }
 
@@ -284,6 +288,7 @@ ApplicationWindow {
                                 treeView.currentIndex = index;
                                 let node = treeModel.get(index);
                                 saveCurrentIfNeeded();
+                                loadingChapter = true;
                                 if (node.type === "project") {
                                     backend.select_project(node.id);
                                     editorArea.text = "";
@@ -296,7 +301,9 @@ ApplicationWindow {
                                     backend.select_chapter(node.projectId, node.volumeId, node.id);
                                     editorArea.text = backend.get_chapter_content(node.projectId, node.volumeId, node.id);
                                     backend.save_status = "已保存";
+                                    editorArea.forceActiveFocus();
                                 }
+                                loadingChapter = false;
                             }
                         }
                         RowLayout {
@@ -412,28 +419,28 @@ ApplicationWindow {
             SplitView.fillWidth: true
             color: "#1e1e1e"
 
+            Timer {
+                id: autoSaveTimer
+                interval: 1500 // 1.5 seconds
+                repeat: false
+                onTriggered: {
+                    if (backend.save_status === "未保存") {
+                        backend.save_current_chapter(editorArea.text);
+                    }
+                }
+            }
+
+            Text {
+                anchors.centerIn: parent
+                text: "请在左侧选择或创建一个章节"
+                color: "gray"
+                visible: !backend.has_selected_chapter_prop
+            }
+
             ScrollView {
                 anchors.fill: parent
                 anchors.margins: 20
-
-                Timer {
-                    id: autoSaveTimer
-                    interval: 1500 // 1.5 seconds
-                    repeat: false
-                    onTriggered: {
-                        if (backend.save_status === "未保存") {
-                            backend.save_current_chapter(editorArea.text);
-                        }
-                    }
-                }
-
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "请在左侧选择或创建一个章节"
-                    color: "gray"
-                    visible: !backend.selected_item_id || backend.selected_item_id === ""
-                }
+                visible: backend.has_selected_chapter_prop
 
                 TextArea {
                     id: editorArea
@@ -441,13 +448,19 @@ ApplicationWindow {
                     font.pixelSize: 16
                     wrapMode: TextArea.Wrap
                     background: null
-                    enabled: backend.has_selected_chapter()
+                    enabled: backend.has_selected_chapter_prop
+                    width: parent.availableWidth
+                    focus: true
+                    activeFocusOnTab: true
+                    selectByMouse: true
+                    persistentSelection: true
+
                     onTextChanged: {
                         backend.calculate_word_count(text);
-                        if (backend.has_selected_chapter() && backend.save_status !== "未保存") {
+                        if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存") {
                             backend.save_status = "未保存";
                         }
-                        if (backend.has_selected_chapter()) {
+                        if (!loadingChapter && backend.has_selected_chapter_prop) {
                             autoSaveTimer.restart();
                         }
                     }

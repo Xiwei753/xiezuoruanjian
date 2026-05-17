@@ -19,6 +19,7 @@ struct AppBackend {
     word_count: qt_property!(i32; READ word_count WRITE set_word_count NOTIFY word_count_changed),
     error_message: qt_property!(QString; READ error_message NOTIFY error_occurred),
     selected_item_id: qt_property!(QString; READ selected_item_id NOTIFY selected_item_changed),
+    has_selected_chapter_prop: qt_property!(bool; READ has_selected_chapter_prop NOTIFY selected_item_changed),
     chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
 
     workspace_opened: qt_signal!(),
@@ -173,6 +174,10 @@ impl AppBackend {
             return path.into();
         }
         "".into()
+    }
+
+    fn has_selected_chapter_prop(&self) -> bool {
+        self.selected_chapter_id.is_some()
     }
 
     fn selected_item_id(&self) -> QString {
