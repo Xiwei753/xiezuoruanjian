@@ -242,6 +242,24 @@ class SettingsActivity : AppCompatActivity() {
             else -> spinnerTheme.setSelection(0, false)
         }
 
+        spinnerProxyType.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                val currentPortStr = etProxyPort.text?.toString() ?: ""
+                val currentPort = currentPortStr.toIntOrNull()
+
+                if (position == 1) { // SOCKS5
+                    if (currentPortStr.isEmpty() || currentPort == 7890) {
+                        etProxyPort.setText("7891")
+                    }
+                } else { // HTTP
+                    if (currentPortStr.isEmpty() || currentPort == 7891) {
+                        etProxyPort.setText("7890")
+                    }
+                }
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+
         tvWorkspacePath.text = WorkspaceManager.getWorkspaceDir(this).absolutePath
 
         btnDryRun.setOnClickListener {
@@ -265,7 +283,8 @@ class SettingsActivity : AppCompatActivity() {
         val proxyType = currentSyncConfig.proxyType ?: "http"
         spinnerProxyType.setSelection(if (proxyType == "socks5") 1 else 0)
         etProxyHost.setText(currentSyncConfig.proxyHost ?: "127.0.0.1")
-        etProxyPort.setText((currentSyncConfig.proxyPort ?: 7890).toString())
+        val defaultPort = if (proxyType == "socks5") 7891 else 7890
+        etProxyPort.setText((currentSyncConfig.proxyPort ?: defaultPort).toString())
 
         if (!currentSyncSecrets.token.isNullOrEmpty()) {
             tvTokenStatus.text = getString(R.string.token_configured)
@@ -290,7 +309,7 @@ class SettingsActivity : AppCompatActivity() {
             proxyEnabled = switchProxyEnabled.isChecked,
             proxyType = if (spinnerProxyType.selectedItemPosition == 1) "socks5" else "http",
             proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: 7890
+            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 1) 7891 else 7890
         )
     }
 
@@ -311,13 +330,23 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun handleDryRun() {
+        if (isDryRunning || isSyncing) return
+        isDryRunning = true
+        btnDryRun.text = "检查中..."
+        btnDryRun.isEnabled = false
+        btnPerformSync.isEnabled = false
         saveCurrentState()
 
         Thread {
             val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during dry run")) {
                 settingsRepository.performSyncDryRun(currentSyncConfig)
             }
+            if (isDestroyed || isFinishing) return@Thread
             runOnUiThread {
+                isDryRunning = false
+                btnDryRun.text = "检查同步计划"
+                btnDryRun.isEnabled = true
+                btnPerformSync.isEnabled = true
                 when (result) {
                     is NativeResult.Success -> {
                         val plan = result.data
@@ -327,15 +356,9 @@ class SettingsActivity : AppCompatActivity() {
                         }
                     }
                     is NativeResult.Error -> {
-                        isSyncing = false
-                        btnPerformSync.text = "立即同步"
-                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
                     }
                     NativeResult.NotLoaded -> {
-                        isSyncing = false
-                        btnPerformSync.text = "立即同步"
-                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -344,18 +367,21 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private var isSyncing = false
+    private var isDryRunning = false
 
     private fun handlePerformSync() {
-        if (isSyncing) return
+        if (isSyncing || isDryRunning) return
         isSyncing = true
         btnPerformSync.text = "同步中..."
         btnPerformSync.isEnabled = false
+        btnDryRun.isEnabled = false
         saveCurrentState()
 
         if (currentSyncSecrets.token.isNullOrEmpty()) {
             isSyncing = false
             btnPerformSync.text = "立即同步"
             btnPerformSync.isEnabled = true
+            btnDryRun.isEnabled = true
             Toast.makeText(this, getString(R.string.sync_error_no_token), Toast.LENGTH_SHORT).show()
             return
         }
@@ -364,12 +390,14 @@ class SettingsActivity : AppCompatActivity() {
             val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during sync")) {
                 settingsRepository.performSync(currentSyncConfig)
             }
+            if (isDestroyed || isFinishing) return@Thread
             runOnUiThread {
+                isSyncing = false
+                btnPerformSync.text = "立即同步"
+                btnPerformSync.isEnabled = true
+                btnDryRun.isEnabled = true
                 when (result) {
                     is NativeResult.Success -> {
-                        isSyncing = false
-                        btnPerformSync.text = "立即同步"
-                        btnPerformSync.isEnabled = true
                         val syncResult = result.data
                         if (syncResult != null) {
                             if (syncResult.userMessage != null) {
@@ -395,15 +423,9 @@ class SettingsActivity : AppCompatActivity() {
                         }
                     }
                     is NativeResult.Error -> {
-                        isSyncing = false
-                        btnPerformSync.text = "立即同步"
-                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
                     }
                     NativeResult.NotLoaded -> {
-                        isSyncing = false
-                        btnPerformSync.text = "立即同步"
-                        btnPerformSync.isEnabled = true
                         Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -468,7 +490,7 @@ class SettingsActivity : AppCompatActivity() {
             proxyEnabled = switchProxyEnabled.isChecked,
             proxyType = if (spinnerProxyType.selectedItemPosition == 1) "socks5" else "http",
             proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: 7890
+            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 1) 7891 else 7890
         )
 
         val tokenInput = etHttpsToken.text?.toString() ?: ""
