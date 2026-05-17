@@ -7,8 +7,9 @@ use std::rc::Rc;
 
 use writer_core::facade::WriterCore;
 
-qmetaobject::qrc!(qml_resources, "qml" { "qml/main.qml" });
+qmetaobject::qrc!(qml_resources, "/" { "qml/main.qml" });
 
+#[allow(dead_code)]
 #[derive(QObject, Default)]
 struct AppBackend {
     base: qt_base_class!(trait QObject),
@@ -639,6 +640,6 @@ fn main() {
     );
 
     let mut engine = QmlEngine::new();
-    engine.load_file("qrc:/qml/qml/main.qml".into());
+    engine.load_file("qrc:/qml/main.qml".into());
     engine.exec();
 }
