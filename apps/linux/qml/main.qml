@@ -374,12 +374,8 @@ ApplicationWindow {
                             text: "自动缩进"
                         }
                         Label {
-                            text: "Linux 端暂未实现自动缩进效果"
-                            color: "gray"
-                            font.pixelSize: 12
+                            text: "自动缩进宽度 (字符数):"
                         }
-
-                        Label { text: "自动缩进宽度:" }
                         SpinBox {
                             id: autoIndentWidthSpin
                             from: 0
@@ -876,6 +872,7 @@ ApplicationWindow {
                         wrapMode: TextArea.Wrap
                         background: Rectangle { color: "transparent" }
                         enabled: backend.has_selected_chapter_prop
+                        leftPadding: backend.setting_auto_indent_enabled ? (backend.setting_auto_indent_width > 0 ? backend.setting_auto_indent_width * (backend.setting_font_size > 0 ? backend.setting_font_size : 16) * 0.6 : 0) : 0
                         focus: true
                         activeFocusOnTab: true
                         selectByMouse: true
