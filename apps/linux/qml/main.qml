@@ -371,17 +371,24 @@ ApplicationWindow {
 
                         CheckBox {
                             id: autoIndentCheck
-                            text: "自动缩进"
+                            text: "自动缩进 (Linux端暂未支持)"
+                            enabled: false
                         }
                         Label {
-                            text: "自动缩进宽度 (字符数):"
+                            text: "Linux 端暂未支持视觉自动缩进，设置不会在本端生效"
+                            color: "gray"
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
                         }
+
+                        Label { text: "自动缩进宽度 (字符数):" }
                         SpinBox {
                             id: autoIndentWidthSpin
                             from: 0
                             to: 800
                             value: 200
                             stepSize: 50
+                            enabled: false
                         }
 
                         CheckBox {
@@ -872,7 +879,6 @@ ApplicationWindow {
                         wrapMode: TextArea.Wrap
                         background: Rectangle { color: "transparent" }
                         enabled: backend.has_selected_chapter_prop
-                        leftPadding: backend.setting_auto_indent_enabled ? (backend.setting_auto_indent_width > 0 ? backend.setting_auto_indent_width * (backend.setting_font_size > 0 ? backend.setting_font_size : 16) * 0.6 : 0) : 0
                         focus: true
                         activeFocusOnTab: true
                         selectByMouse: true
