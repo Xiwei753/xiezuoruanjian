@@ -107,6 +107,10 @@ pub struct SyncDiagnosticsResult {
     pub auth_ok: bool,
     pub repo_ok: bool,
     pub branch_ok: bool,
+    pub network_status: String,
+    pub auth_status: String,
+    pub repo_status: String,
+    pub branch_status: String,
     pub proxy_used: bool,
     pub proxy_type: String,
     pub proxy_host: String,
@@ -123,6 +127,10 @@ impl SyncDiagnosticsResult {
             auth_ok: false,
             repo_ok: false,
             branch_ok: false,
+            network_status: "unchecked".to_string(),
+            auth_status: "unchecked".to_string(),
+            repo_status: "unchecked".to_string(),
+            branch_status: "unchecked".to_string(),
             proxy_used: false,
             proxy_type: "none".to_string(),
             proxy_host: "".to_string(),
@@ -844,7 +852,7 @@ fn get_user_friendly_error(err: &str) -> String {
         return "同步代码冲突。请在另一端解决冲突后重试。".to_string();
     }
     if e.contains("operation not permitted") && e.contains("127.0.0.1") {
-        return "已尝试连接手机本机代理 127.0.0.1，但连接被系统拒绝。请确认代理 App 在手机本机开启 HTTP 代理端口，或改填可访问的局域网代理地址。".to_string();
+        return "代理 127.0.0.1:7890 连接被拒绝，请确认手机代理 App 开启本机 HTTP 端口，或选择不使用手动代理，改走系统 VPN/全局模式。".to_string();
     }
     if e.contains("unsupported proxy protocol") && e.contains("socks5") {
         return "当前构建版本的底层网络库不支持 SOCKS5 代理。请尝试使用 HTTP 代理或更新应用。".to_string();
@@ -897,7 +905,7 @@ impl SyncService {
         }
 
         let direction = git2::Direction::Fetch;
-        let mut connection: git2::RemoteConnection = match remote.connect_auth(direction, Some(callbacks), Some(proxy_opts)) {
+        let connection: git2::RemoteConnection = match remote.connect_auth(direction, Some(callbacks), Some(proxy_opts)) {
             Ok(c) => c,
             Err(e) => {
                 let err_msg = e.to_string();
@@ -905,16 +913,37 @@ impl SyncService {
                 result.raw_error = Some(clean_msg.clone());
                 result.user_message = get_user_friendly_error(&clean_msg);
 
-                if clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") {
-                    result.network_ok = false;
-                } else {
-                    result.network_ok = true; // Could connect but failed later
-                }
+                let is_network_error = clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") || clean_msg.contains("timeout") || clean_msg.contains("operation not permitted");
 
-                if clean_msg.contains("authentication failed") || clean_msg.contains("401") || clean_msg.contains("invalid credentials") || clean_msg.contains("not found") {
-                    result.auth_ok = false;
-                } else if result.network_ok {
-                    result.auth_ok = true;
+                if is_network_error {
+                    result.network_ok = false;
+                    result.network_status = "failed".to_string();
+                    result.auth_status = "skipped".to_string();
+                    result.repo_status = "skipped".to_string();
+                    result.branch_status = "skipped".to_string();
+                } else {
+                    result.network_ok = true;
+                    result.network_status = "ok".to_string();
+
+                    if clean_msg.contains("authentication failed") || clean_msg.contains("401") || clean_msg.contains("invalid credentials") {
+                        result.auth_ok = false;
+                        result.auth_status = "failed".to_string();
+                        result.repo_status = "skipped".to_string();
+                        result.branch_status = "skipped".to_string();
+                    } else if clean_msg.contains("not found") || clean_msg.contains("404") {
+                        // Might happen here depending on git provider response
+                        result.auth_ok = true;
+                        result.auth_status = "ok".to_string();
+                        result.repo_ok = false;
+                        result.repo_status = "failed".to_string();
+                        result.branch_status = "skipped".to_string();
+                    } else {
+                        // Unknown error
+                        result.auth_ok = false;
+                        result.auth_status = "failed".to_string();
+                        result.repo_status = "skipped".to_string();
+                        result.branch_status = "skipped".to_string();
+                    }
                 }
 
                 return Ok(result);
@@ -922,16 +951,30 @@ impl SyncService {
         };
 
         result.network_ok = true;
+        result.network_status = "ok".to_string();
         result.auth_ok = true;
+        result.auth_status = "ok".to_string();
         result.repo_ok = true;
 
         let list = match connection.list() {
-            Ok(l) => l,
+            Ok(l) => {
+                result.repo_status = "ok".to_string();
+                l
+            },
             Err(e) => {
                 let err_msg = e.to_string();
                 let clean_msg = err_msg.replace(&token, "***TOKEN***");
                 result.raw_error = Some(clean_msg.clone());
                 result.user_message = get_user_friendly_error(&clean_msg);
+
+                if clean_msg.contains("not found") || clean_msg.contains("404") {
+                    result.repo_ok = false;
+                    result.repo_status = "failed".to_string();
+                } else {
+                    result.repo_ok = false;
+                    result.repo_status = "failed".to_string();
+                }
+                result.branch_status = "skipped".to_string();
                 return Ok(result);
             }
         };
@@ -947,10 +990,12 @@ impl SyncService {
 
         if found_branch {
             result.branch_ok = true;
+            result.branch_status = "ok".to_string();
             result.success = true;
             result.user_message = "诊断成功：连接正常，权限有效，仓库和分支存在。".to_string();
         } else {
             result.branch_ok = false;
+            result.branch_status = "failed".to_string();
             result.success = false;
             result.user_message = format!("分支 {} 不存在于远程仓库。", config.branch);
         }
