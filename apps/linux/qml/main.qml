@@ -271,8 +271,6 @@ ApplicationWindow {
             backend.setting_line_spacing = lineSpacingSpin.value / 100.0;
             backend.setting_auto_save_enabled = autoSaveCheck.checked;
             backend.setting_auto_save_delay_ms = autoSaveDelaySpin.value;
-            backend.setting_auto_indent_enabled = autoIndentCheck.checked;
-            backend.setting_auto_indent_width = autoIndentWidthSpin.value / 100.0;
             backend.setting_theme_mode = themeModeCombo.currentText;
             backend.setting_typing_animation_enabled = typingAnimCheck.checked;
             backend.setting_smooth_cursor_enabled = smoothCursorCheck.checked;
@@ -346,7 +344,7 @@ ApplicationWindow {
                             value: 16
                         }
 
-                        Label { text: "行距 (Linux端暂未实现视觉应用):" }
+                        Label { text: "行距:" }
                         SpinBox {
                             id: lineSpacingSpin
                             from: 100
@@ -876,6 +874,8 @@ ApplicationWindow {
                         id: editorArea
                         color: "#d4d4d4"
                         font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+                        lineHeightMode: Text.ProportionalHeight
+                        lineHeight: backend.setting_line_spacing > 0 ? backend.setting_line_spacing : 1.5
                         wrapMode: TextArea.Wrap
                         background: Rectangle { color: "transparent" }
                         enabled: backend.has_selected_chapter_prop
