@@ -268,7 +268,6 @@ ApplicationWindow {
 
         function applyEditorFormToBackend() {
             backend.setting_font_size = fontSizeSpin.value;
-            backend.setting_line_spacing = lineSpacingSpin.value / 100.0;
             backend.setting_auto_save_enabled = autoSaveCheck.checked;
             backend.setting_auto_save_delay_ms = autoSaveDelaySpin.value;
             backend.setting_theme_mode = themeModeCombo.currentText;
@@ -344,13 +343,14 @@ ApplicationWindow {
                             value: 16
                         }
 
-                        Label { text: "行距:" }
+                        Label { text: "行距 (Linux端暂未支持):" }
                         SpinBox {
                             id: lineSpacingSpin
                             from: 100
                             to: 300
                             value: 150
                             stepSize: 10
+                            enabled: false
                         }
 
                         CheckBox {
@@ -874,8 +874,6 @@ ApplicationWindow {
                         id: editorArea
                         color: "#d4d4d4"
                         font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
-                        lineHeightMode: Text.ProportionalHeight
-                        lineHeight: backend.setting_line_spacing > 0 ? backend.setting_line_spacing : 1.5
                         wrapMode: TextArea.Wrap
                         background: Rectangle { color: "transparent" }
                         enabled: backend.has_selected_chapter_prop
