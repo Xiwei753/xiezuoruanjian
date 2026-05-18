@@ -170,7 +170,23 @@ data class SyncResult(
     @SerializedName("user_message") val userMessage: String? = null
 )
 
+
+data class SyncDiagnosticsResult(
+    val success: Boolean,
+    @SerializedName("network_ok") val networkOk: Boolean,
+    @SerializedName("auth_ok") val authOk: Boolean,
+    @SerializedName("repo_ok") val repoOk: Boolean,
+    @SerializedName("branch_ok") val branchOk: Boolean,
+    @SerializedName("proxy_used") val proxyUsed: Boolean,
+    @SerializedName("proxy_type") val proxyType: String,
+    @SerializedName("proxy_host") val proxyHost: String,
+    @SerializedName("proxy_port") val proxyPort: Int,
+    @SerializedName("user_message") val userMessage: String,
+    @SerializedName("raw_error") val rawError: String?
+)
+
 data class SyncPlan(
+
     @SerializedName("files_to_upload") val filesToUpload: List<String> = emptyList(),
     @SerializedName("files_to_download") val filesToDownload: List<String> = emptyList(),
     @SerializedName("files_to_delete_local") val filesToDeleteLocal: List<String> = emptyList(),

@@ -84,8 +84,11 @@ class SmoothCursorRenderer(private val editText: EditText) {
         if (!lastInvalidateRect.isEmpty) {
             editText.invalidate(lastInvalidateRect)
         }
+        val unionRect = Rect(lastInvalidateRect)
+        unionRect.union(left, top, right, bottom)
+
         lastInvalidateRect.set(left, top, right, bottom)
-        editText.invalidate(lastInvalidateRect)
+        editText.invalidate(unionRect)
     }
 
     fun updateCursorTarget(animate: Boolean) {
@@ -99,9 +102,9 @@ class SmoothCursorRenderer(private val editText: EditText) {
         val targetTop = layout.getLineTop(line).toFloat()
         val targetBottom = layout.getLineBottom(line).toFloat()
 
-        val isNewLine = currentCursorTop >= 0 && abs(targetTop - currentCursorTop) > 1f
 
-        if (currentCursorX < 0 || !animate || isNewLine || smoothCursorDurationMs <= 0) {
+
+        if (currentCursorX < 0 || !animate || smoothCursorDurationMs <= 0) {
             invalidateCursorRect()
             cursorAnimator?.cancel()
             currentCursorX = targetX
@@ -136,6 +139,7 @@ class SmoothCursorRenderer(private val editText: EditText) {
     }
 
     fun onFocusChanged(focused: Boolean) {
+        if (smoothCursorEnabled) editText.isCursorVisible = false
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled) {
             if (focused) startCursorBlink() else stopCursorBlink()
@@ -144,6 +148,7 @@ class SmoothCursorRenderer(private val editText: EditText) {
     }
 
     fun onSelectionChanged(selStart: Int, selEnd: Int) {
+        if (smoothCursorEnabled) editText.isCursorVisible = false
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && selStart == selEnd) {
             updateCursorTarget(true)
@@ -154,6 +159,7 @@ class SmoothCursorRenderer(private val editText: EditText) {
     }
 
     fun draw(canvas: Canvas) {
+        if (smoothCursorEnabled) editText.isCursorVisible = false
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && editText.isFocused && editText.selectionStart == editText.selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
             cursorPaint.color = editText.currentTextColor

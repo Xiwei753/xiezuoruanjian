@@ -262,6 +262,20 @@ impl WriterCore {
         crate::sync_service::SyncService::get_sync_ignored_paths(&self.workspace_path)
     }
 
+
+    pub fn perform_sync_diagnostics(
+        &self,
+        config: &crate::sync_service::SyncConfig,
+    ) -> crate::error::Result<crate::sync_service::SyncDiagnosticsResult> {
+        let backend = crate::sync_service::Git2Backend;
+        let secrets = self.load_sync_secrets().unwrap_or_default();
+        crate::sync_service::SyncService::perform_sync_diagnostics(
+            config,
+            &secrets,
+            &backend,
+        )
+    }
+
     pub fn perform_sync_dry_run(
         &self,
         config: &crate::sync_service::SyncConfig,

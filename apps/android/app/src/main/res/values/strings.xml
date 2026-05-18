@@ -95,6 +95,7 @@
     <string name="token_configured">Token 已配置</string>
     <string name="token_not_configured">Token 未配置</string>
     <string name="btn_dry_run">检查同步计划</string>
+    <string name="btn_test_connection">测试 GitHub 连接</string>
     <string name="btn_perform_sync">立即同步</string>
 
     <!-- Sync Prompts & Errors -->

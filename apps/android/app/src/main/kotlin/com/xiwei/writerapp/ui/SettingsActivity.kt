@@ -67,6 +67,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var tvSmoothCursorDurationValue: TextView
 
     private lateinit var btnDryRun: MaterialButton
+    private lateinit var btnTestConnection: MaterialButton
     private lateinit var btnPerformSync: MaterialButton
 
     private lateinit var currentSyncConfig: SyncConfig
@@ -130,6 +131,8 @@ class SettingsActivity : AppCompatActivity() {
         etProxyHost = findViewById(R.id.etProxyHost)
         etProxyPort = findViewById(R.id.etProxyPort)
         btnDryRun = findViewById(R.id.btnDryRun)
+        btnTestConnection = findViewById(R.id.btnTestConnection)
+        btnTestConnection = findViewById(R.id.btnTestConnection)
         btnPerformSync = findViewById(R.id.btnPerformSync)
 
 
@@ -267,6 +270,9 @@ class SettingsActivity : AppCompatActivity() {
         btnDryRun.setOnClickListener {
             handleDryRun()
         }
+        btnTestConnection.setOnClickListener {
+            handleTestConnection()
+        }
 
         btnPerformSync.setOnClickListener {
             handlePerformSync()
@@ -343,11 +349,12 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun handleDryRun() {
-        if (isDryRunning || isSyncing) return
+        if (isDryRunning || isSyncing || isTesting) return
         isDryRunning = true
         btnDryRun.text = "检查中..."
         btnDryRun.isEnabled = false
         btnPerformSync.isEnabled = false
+        btnTestConnection.isEnabled = false
         saveCurrentState()
 
         Thread {
@@ -360,6 +367,7 @@ class SettingsActivity : AppCompatActivity() {
                 btnDryRun.text = "检查同步计划"
                 btnDryRun.isEnabled = true
                 btnPerformSync.isEnabled = true
+                btnTestConnection.isEnabled = true
                 when (result) {
                     is NativeResult.Success -> {
                         val plan = result.data
@@ -379,15 +387,70 @@ class SettingsActivity : AppCompatActivity() {
         }.start()
     }
 
+
+    private var isTesting = false
+    private fun handleTestConnection() {
+        if (isTesting || isDryRunning || isSyncing) return
+        isTesting = true
+        btnTestConnection.text = "检查中..."
+        btnTestConnection.isEnabled = false
+        btnDryRun.isEnabled = false
+        btnPerformSync.isEnabled = false
+        btnTestConnection.isEnabled = false
+        saveCurrentState()
+
+        Thread {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during diagnostic run")) {
+                settingsRepository.performSyncDiagnostics(currentSyncConfig)
+            }
+            if (isDestroyed || isFinishing) return@Thread
+            runOnUiThread {
+                isTesting = false
+                btnTestConnection.text = getString(R.string.btn_test_connection)
+                btnTestConnection.isEnabled = true
+                btnDryRun.isEnabled = true
+                btnPerformSync.isEnabled = true
+                btnTestConnection.isEnabled = true
+                when (result) {
+                    is NativeResult.Success -> {
+                        val diag = result.data
+                        if (diag != null) {
+                            val msgBuilder = StringBuilder()
+                            msgBuilder.append("网络连接: ${if (diag.networkOk) "正常" else "失败"}\n")
+                            msgBuilder.append("身份认证: ${if (diag.authOk) "正常" else "失败"}\n")
+                            msgBuilder.append("仓库访问: ${if (diag.repoOk) "正常" else "失败"}\n")
+                            msgBuilder.append("分支存在: ${if (diag.branchOk) "是" else "否"}\n")
+                            msgBuilder.append("代理配置: ${if (diag.proxyUsed) "${diag.proxyType}://${diag.proxyHost}:${diag.proxyPort}" else "未使用"}\n\n")
+                            msgBuilder.append(diag.userMessage)
+
+                            AlertDialog.Builder(this@SettingsActivity)
+                                .setTitle(if (diag.success) "诊断成功" else "诊断失败")
+                                .setMessage(msgBuilder.toString())
+                                .setPositiveButton(getString(R.string.action_ok), null)
+                                .show()
+                        }
+                    }
+                    is NativeResult.Error -> {
+                        Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
+                    }
+                    NativeResult.NotLoaded -> {
+                        Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }.start()
+    }
+
     private var isSyncing = false
     private var isDryRunning = false
 
     private fun handlePerformSync() {
-        if (isSyncing || isDryRunning) return
+        if (isSyncing || isDryRunning || isTesting) return
         isSyncing = true
         btnPerformSync.text = "同步中..."
         btnPerformSync.isEnabled = false
         btnDryRun.isEnabled = false
+        btnTestConnection.isEnabled = false
         saveCurrentState()
 
         if (currentSyncSecrets.token.isNullOrEmpty()) {
@@ -395,6 +458,7 @@ class SettingsActivity : AppCompatActivity() {
             btnPerformSync.text = "立即同步"
             btnPerformSync.isEnabled = true
             btnDryRun.isEnabled = true
+            btnTestConnection.isEnabled = true
             Toast.makeText(this, getString(R.string.sync_error_no_token), Toast.LENGTH_SHORT).show()
             return
         }
@@ -409,6 +473,7 @@ class SettingsActivity : AppCompatActivity() {
                 btnPerformSync.text = "立即同步"
                 btnPerformSync.isEnabled = true
                 btnDryRun.isEnabled = true
+                btnTestConnection.isEnabled = true
                 when (result) {
                     is NativeResult.Success -> {
                         val syncResult = result.data
