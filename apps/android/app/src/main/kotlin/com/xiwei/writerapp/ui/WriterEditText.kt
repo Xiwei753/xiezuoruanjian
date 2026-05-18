@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.AttributeSet
-import android.view.MotionEvent
 import androidx.appcompat.widget.AppCompatEditText
 
 class WriterEditText @JvmOverloads constructor(
@@ -21,7 +20,6 @@ class WriterEditText @JvmOverloads constructor(
     private var typingOverlayRenderer: TypingOverlayRenderer? = null
     private var smoothCursorRenderer: SmoothCursorRenderer? = null
     private var autoIndentController: AutoIndentController? = null
-    private var editorFlingScroller: EditorFlingScroller? = null
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
@@ -63,7 +61,6 @@ class WriterEditText @JvmOverloads constructor(
         typingAnimationController = TypingAnimationController(this, typingOverlayRenderer!!)
         smoothCursorRenderer = SmoothCursorRenderer(this)
         autoIndentController = AutoIndentController(this)
-        editorFlingScroller = EditorFlingScroller(this)
         controllersReady = true
 
         addTextChangedListener(object : TextWatcher {
@@ -114,21 +111,12 @@ class WriterEditText @JvmOverloads constructor(
         if (!controllersReady) return
         smoothCursorRenderer?.onDetachedFromWindow()
         typingAnimationController?.onDetachedFromWindow()
-        editorFlingScroller?.onDetachedFromWindow()
     }
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
         if (!controllersReady) return
         smoothCursorRenderer?.onFocusChanged(focused)
-    }
-
-    override fun onTouchEvent(event: MotionEvent?): Boolean {
-        return super.onTouchEvent(event)
-    }
-
-    override fun computeScroll() {
-        super.computeScroll()
     }
 
     override fun onDraw(canvas: Canvas) {

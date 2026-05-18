@@ -43,6 +43,20 @@ cargo test
 
 **支持目标说明**：官方只支持 `arm64-v8a` 构建。不支持 `x86_64` Android 设备或模拟器。如需支持 `x86_64`，开源用户可自行修改 `tools/build_android.sh` 和 `apps/android/app/build.gradle.kts` 添加对应 ABI。
 
+### Linux 客户端
+
+由于尚未实现完整的构建脚本，可以使用以下命令运行：
+
+```bash
+cargo run -p linux
+```
+
+如果遇到渲染相关问题（例如 Wayland 下的双重 UI 或黑屏错位），可尝试使用以下命令开启基础渲染循环并打开调试日志：
+
+```bash
+QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p linux
+```
+
 ### 实机测试验证步骤
 
 - 新建作品。
