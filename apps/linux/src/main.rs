@@ -53,6 +53,9 @@ struct AppBackend {
     setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
     setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
 
+    setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
+    setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
+
     settings_changed: qt_signal!(),
 
     load_local_settings: qt_method!(fn(&mut self)),
@@ -141,6 +144,8 @@ struct AppBackend {
     current_setting_auto_indent_enabled: bool,
     current_setting_auto_indent_width: f32,
     current_setting_theme_mode: String,
+    current_setting_typing_animation_enabled: bool,
+    current_setting_smooth_cursor_enabled: bool,
 }
 
 impl AppBackend {
@@ -242,6 +247,12 @@ impl AppBackend {
     fn setting_theme_mode(&self) -> QString { self.current_setting_theme_mode.clone().into() }
     fn set_setting_theme_mode(&mut self, val: QString) { self.current_setting_theme_mode = val.to_string(); self.settings_changed(); }
 
+    fn setting_typing_animation_enabled(&self) -> bool { self.current_setting_typing_animation_enabled }
+    fn set_setting_typing_animation_enabled(&mut self, val: bool) { self.current_setting_typing_animation_enabled = val; self.settings_changed(); }
+
+    fn setting_smooth_cursor_enabled(&self) -> bool { self.current_setting_smooth_cursor_enabled }
+    fn set_setting_smooth_cursor_enabled(&mut self, val: bool) { self.current_setting_smooth_cursor_enabled = val; self.settings_changed(); }
+
     fn load_local_settings(&mut self) {
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
@@ -252,6 +263,8 @@ impl AppBackend {
                 self.current_setting_auto_save_delay_ms = settings.auto_save_delay_ms as u32;
                 self.current_setting_auto_indent_enabled = settings.auto_indent_enabled;
                 self.current_setting_auto_indent_width = settings.auto_indent_width;
+                self.current_setting_typing_animation_enabled = settings.editor_typing_animation_enabled;
+                self.current_setting_smooth_cursor_enabled = settings.editor_smooth_cursor_enabled;
             }
 
             if let Ok(sync_settings) = core.load_syncable_settings() {
@@ -280,6 +293,8 @@ impl AppBackend {
             local.auto_save_delay_ms = self.current_setting_auto_save_delay_ms as u64;
             local.auto_indent_enabled = self.current_setting_auto_indent_enabled;
             local.auto_indent_width = self.current_setting_auto_indent_width;
+            local.editor_typing_animation_enabled = self.current_setting_typing_animation_enabled;
+            local.editor_smooth_cursor_enabled = self.current_setting_smooth_cursor_enabled;
 
             if let Err(e) = core.save_local_settings(&local) {
                 error_msg = Some(format!("保存本地设置失败: {}", e));

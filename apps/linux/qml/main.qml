@@ -243,6 +243,7 @@ ApplicationWindow {
     Popup {
         id: settingsDialog
         property bool actionInProgress: false
+        property bool hasExistingToken: false
 
         width: 600
         height: 700
@@ -260,7 +261,9 @@ ApplicationWindow {
             backend.sync_proxy_type = proxyTypeCombo.currentText;
             backend.sync_proxy_host = proxyHostInput.text;
             backend.sync_proxy_port = parseInt(proxyPortInput.text) || 0;
-            backend.sync_token = tokenInput.text;
+            if (tokenInput.text.length > 0) {
+                backend.sync_token = tokenInput.text;
+            }
         }
 
         function applyEditorFormToBackend() {
@@ -271,6 +274,8 @@ ApplicationWindow {
             backend.setting_auto_indent_enabled = autoIndentCheck.checked;
             backend.setting_auto_indent_width = autoIndentWidthSpin.value / 100.0;
             backend.setting_theme_mode = themeModeCombo.currentText;
+            backend.setting_typing_animation_enabled = typingAnimCheck.checked;
+            backend.setting_smooth_cursor_enabled = smoothCursorCheck.checked;
         }
 
         onAboutToShow: {
@@ -281,6 +286,8 @@ ApplicationWindow {
             autoSaveDelaySpin.value = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500;
             autoIndentCheck.checked = backend.setting_auto_indent_enabled;
             autoIndentWidthSpin.value = backend.setting_auto_indent_width > 0 ? backend.setting_auto_indent_width * 100 : 200;
+            typingAnimCheck.checked = backend.setting_typing_animation_enabled;
+            smoothCursorCheck.checked = backend.setting_smooth_cursor_enabled;
 
             var modes = ["system", "light", "dark"];
             themeModeCombo.currentIndex = modes.indexOf(backend.setting_theme_mode);
@@ -295,7 +302,9 @@ ApplicationWindow {
             proxyTypeCombo.currentIndex = proxyTypeCombo.indexOfValue(backend.sync_proxy_type);
             proxyHostInput.text = backend.sync_proxy_host;
             proxyPortInput.text = backend.sync_proxy_port.toString();
-            tokenInput.text = backend.sync_token;
+            settingsDialog.hasExistingToken = (backend.sync_token.length > 0);
+            tokenInput.text = "";
+            tokenInput.placeholderText = settingsDialog.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置";
             syncResultLabel.text = backend.sync_action_result;
         }
 
@@ -379,11 +388,29 @@ ApplicationWindow {
                             stepSize: 50
                         }
 
+                        CheckBox {
+                            id: typingAnimCheck
+                            text: "输入动画 (Linux端暂未实现)"
+                            enabled: false
+                        }
+
+                        CheckBox {
+                            id: smoothCursorCheck
+                            text: "平滑光标 (Linux端暂未实现)"
+                            enabled: false
+                        }
+
                         Label { text: "主题模式:" }
                         ComboBox {
                             id: themeModeCombo
                             Layout.fillWidth: true
                             model: ["system", "light", "dark"]
+                        }
+                        Label {
+                            text: "Linux 端当前仅支持暗色主题，设置值将同步至其他平台"
+                            color: "gray"
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
                         }
 
                         Button {
@@ -391,7 +418,9 @@ ApplicationWindow {
                             enabled: !settingsDialog.actionInProgress
                             onClicked: {
                                 applyEditorFormToBackend();
-                                backend.save_local_settings();
+                                if (!backend.save_local_settings()) {
+                                    errorDialog.open();
+                                }
                             }
                         }
                     }
