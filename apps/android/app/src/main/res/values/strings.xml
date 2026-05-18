@@ -90,9 +90,10 @@
     <string name="pref_proxy_type">代理类型</string>
     <string name="pref_proxy_host">代理主机</string>
     <string name="pref_proxy_port">代理端口</string>
-    <string name="pref_proxy_hint">提示: Android 上 127.0.0.1 指手机本机，不是电脑</string>
+    <string name="pref_proxy_hint">提示: 如果手机已经用 Clash/VPN 全局代理，通常先选择“不使用手动代理”测试。127.0.0.1 指手机本机，不是电脑。HTTP 代理端口必须由代理 App 在手机本机开放。</string>
     <string name="sync_error_proxy_unavailable">代理不可用或端口不通，请检查配置。</string>
     <string name="token_configured">Token 已配置</string>
+    <string name="token_input_active">Token 已输入，保存/测试时会使用</string>
     <string name="token_not_configured">Token 未配置</string>
     <string name="btn_dry_run">检查同步计划</string>
     <string name="btn_test_connection">测试 GitHub 连接</string>

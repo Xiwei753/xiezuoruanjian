@@ -127,6 +127,14 @@ class SettingsActivity : AppCompatActivity() {
         tvTokenStatus = findViewById(R.id.tvTokenStatus)
         switchAutoSync = findViewById(R.id.switchAutoSync)
         sbSyncInterval = findViewById(R.id.sbSyncInterval)
+
+        etHttpsToken.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                updateTokenStatusUI()
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
         spinnerProxyType = findViewById(R.id.spinnerProxyType)
         etProxyHost = findViewById(R.id.etProxyHost)
         etProxyPort = findViewById(R.id.etProxyPort)
@@ -298,13 +306,7 @@ class SettingsActivity : AppCompatActivity() {
         val defaultPort = if (proxyType == "socks5") 7891 else 7890
         etProxyPort.setText((currentSyncConfig.proxyPort ?: defaultPort).toString())
 
-        if (!currentSyncSecrets.token.isNullOrEmpty()) {
-            tvTokenStatus.text = getString(R.string.token_configured)
-            tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.material_dynamic_primary40))
-        } else {
-            tvTokenStatus.text = getString(R.string.token_not_configured)
-            tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
-        }
+        updateTokenStatusUI()
 
     }
 
@@ -344,7 +346,9 @@ class SettingsActivity : AppCompatActivity() {
                 settingsRepository.saveSyncSecrets(uiSecrets)
             }
         }
-        loadSyncState()
+        currentSyncConfig = uiConfig
+        currentSyncSecrets = uiSecrets
+        updateTokenStatusUI()
     }
 
     private fun handleDryRun() {
@@ -371,7 +375,7 @@ class SettingsActivity : AppCompatActivity() {
                     is NativeResult.Success -> {
                         val plan = result.data
                         if (plan != null) {
-                            val msg = getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.ignoredFiles.size)
+                            val msg = "同步计划检查完成: " + getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.ignoredFiles.size)
                             Toast.makeText(this@SettingsActivity, msg, Toast.LENGTH_LONG).show()
                         }
                     }
@@ -415,10 +419,18 @@ class SettingsActivity : AppCompatActivity() {
                         val diag = result.data
                         if (diag != null) {
                             val msgBuilder = StringBuilder()
-                            msgBuilder.append("网络连接: ${if (diag.networkOk) "正常" else "失败"}\n")
-                            msgBuilder.append("身份认证: ${if (diag.authOk) "正常" else "失败"}\n")
-                            msgBuilder.append("仓库访问: ${if (diag.repoOk) "正常" else "失败"}\n")
-                            msgBuilder.append("分支存在: ${if (diag.branchOk) "是" else "否"}\n")
+                            val mapStatus = { s: String ->
+                                when (s) {
+                                    "ok" -> "正常"
+                                    "failed" -> "失败"
+                                    "skipped" -> "已跳过"
+                                    else -> "未检查"
+                                }
+                            }
+                            msgBuilder.append("网络连接: ${mapStatus(diag.networkStatus)}\n")
+                            msgBuilder.append("身份认证: ${mapStatus(diag.authStatus)}\n")
+                            msgBuilder.append("仓库访问: ${mapStatus(diag.repoStatus)}\n")
+                            msgBuilder.append("分支存在: ${mapStatus(diag.branchStatus)}\n")
                             msgBuilder.append("代理配置: ${if (diag.proxyUsed) "${diag.proxyType}://${diag.proxyHost}:${diag.proxyPort}" else "未使用"}\n\n")
                             msgBuilder.append(diag.userMessage)
 
@@ -494,7 +506,7 @@ class SettingsActivity : AppCompatActivity() {
                                     .show()
                             } else if (syncResult.conflicts.isNotEmpty()) {
                                 Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_conflict), Toast.LENGTH_LONG).show()
-                            } else {
+                            } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success) {
                                 Toast.makeText(this@SettingsActivity, getString(R.string.sync_success), Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -508,6 +520,22 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun updateTokenStatusUI() {
+        val input = etHttpsToken.text?.toString() ?: ""
+        if (input.isNotEmpty()) {
+            tvTokenStatus.text = getString(R.string.token_input_active)
+            tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.material_dynamic_primary40))
+        } else {
+            if (currentSyncSecrets.token.isNullOrEmpty()) {
+                tvTokenStatus.text = getString(R.string.token_not_configured)
+                tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
+            } else {
+                tvTokenStatus.text = getString(R.string.token_configured)
+                tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.material_dynamic_primary40))
+            }
+        }
     }
 
     private fun loadSyncState() {
