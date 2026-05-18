@@ -2,7 +2,6 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Window 2.15
-import QtQuick.Dialogs 1.3
 import WriterApp 1.0
 
 ApplicationWindow {
@@ -101,100 +100,148 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    Popup {
         id: inputDialog
+        property string actionType: ""
+        property var contextData: ({})
+
         width: 300
-        title: "输入"
-        standardButtons: StandardButton.Ok | StandardButton.Cancel
+        height: 150
+        modal: true
+        focus: true
+        anchors.centerIn: parent
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        onOpened: {
+            inputField.text = contextData.initialText || "";
+            inputField.forceActiveFocus();
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            Label { text: "请输入名称:" }
+            TextField {
+                id: inputField
+                Layout.fillWidth: true
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "取消"
+                    onClicked: inputDialog.close()
+                }
+                Button {
+                    text: "确定"
+                    onClicked: {
+                        if (actionType === "create_project") {
+                            backend.create_new_project(inputField.text);
+                        } else if (actionType === "create_volume") {
+                            backend.create_new_volume(contextData.projectId, inputField.text);
+                        } else if (actionType === "create_chapter") {
+                            backend.create_new_chapter(contextData.projectId, contextData.volumeId, inputField.text);
+                        } else if (actionType === "rename_project") {
+                            backend.rename_project(contextData.id, inputField.text);
+                        } else if (actionType === "rename_volume") {
+                            backend.rename_volume(contextData.projectId, contextData.id, inputField.text);
+                        } else if (actionType === "rename_chapter") {
+                            backend.rename_chapter(contextData.projectId, contextData.volumeId, contextData.id, inputField.text);
+                        }
+                        inputDialog.close()
+                    }
+                }
+            }
+        }
+    }
+    Popup {
+        id: errorDialog
+        width: 400
+        height: 150
+        modal: true
+        focus: true
+        anchors.centerIn: parent
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            Label { text: "错误"; font.bold: true;                         font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+                        // Note: Linux行距视觉应用暂未完成 (QML limitation) }
+            Label {
+                text: backend.error_message
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                wrapMode: Text.Wrap
+            }
+            Button {
+                text: "确定"
+                Layout.alignment: Qt.AlignRight
+                onClicked: errorDialog.close()
+            }
+        }
+    }
+    Popup {
+        id: confirmDialog
+        width: 300
+        height: 150
+        modal: true
+        focus: true
+        anchors.centerIn: parent
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
         property string actionType: ""
         property var contextData: ({})
 
         ColumnLayout {
             anchors.fill: parent
-            TextField {
-                id: inputField
+            anchors.margins: 10
+            Label { text: "确认删除"; font.bold: true;                         font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+                        // Note: Linux行距视觉应用暂未完成 (QML limitation) }
+            Label { text: "您确定要删除此项目吗？" }
+            RowLayout {
                 Layout.fillWidth: true
-                focus: true
-                onAccepted: inputDialog.accept()
-            }
-        }
-
-        onVisibleChanged: {
-            if (visible) {
-                inputField.text = contextData.initialText || "";
-                inputField.forceActiveFocus();
-            }
-        }
-
-        onAccepted: {
-            if (inputField.text.trim() === "") {
-                return;
-            }
-            saveCurrentIfNeeded();
-            if (actionType === "create_project") {
-                backend.create_new_project(inputField.text);
-            } else if (actionType === "create_volume") {
-                backend.create_new_volume(contextData.projectId, inputField.text);
-            } else if (actionType === "create_chapter") {
-                backend.create_new_chapter(contextData.projectId, contextData.volumeId, inputField.text);
-            } else if (actionType === "rename_project") {
-                backend.rename_project(contextData.id, inputField.text);
-            } else if (actionType === "rename_volume") {
-                backend.rename_volume(contextData.projectId, contextData.id, inputField.text);
-            } else if (actionType === "rename_chapter") {
-                backend.rename_chapter(contextData.projectId, contextData.volumeId, contextData.id, inputField.text);
-            }
-        }
-    }
-
-    MessageDialog {
-        id: errorDialog
-        title: "错误"
-        standardButtons: StandardButton.Ok
-        text: backend.error_message
-    }
-
-    MessageDialog {
-        id: confirmDialog
-        title: "确认删除"
-        standardButtons: StandardButton.Yes | StandardButton.No
-
-        property string actionType: ""
-        property var contextData: ({})
-
-        onYes: {
-            if (actionType === "delete_project") {
-                backend.delete_project(contextData.id);
-            } else if (actionType === "delete_volume") {
-                backend.delete_volume(contextData.projectId, contextData.id);
-            } else if (actionType === "delete_chapter") {
-                let wasSelected = (backend.selected_item_id === contextData.id);
-                backend.delete_chapter(contextData.projectId, contextData.volumeId, contextData.id);
-                if (wasSelected) {
-                    editorArea.text = "";
-                    backend.save_status = "已保存";
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "取消"
+                    onClicked: confirmDialog.close()
+                }
+                Button {
+                    text: "确定"
+                    onClicked: {
+                        if (actionType === "delete_project") {
+                            backend.delete_project(contextData.id);
+                        } else if (actionType === "delete_volume") {
+                            backend.delete_volume(contextData.projectId, contextData.id);
+                        } else if (actionType === "delete_chapter") {
+                            let wasSelected = (backend.selected_item_id === contextData.id);
+                            backend.delete_chapter(contextData.projectId, contextData.volumeId, contextData.id);
+                            if (wasSelected) {
+                                editorArea.text = "";
+                                backend.save_status = "已保存";
+                            }
+                        }
+                        confirmDialog.close();
+                    }
                 }
             }
         }
     }
-
     ListModel {
         id: treeModel
     }
 
 
     Popup {
-        id: syncSettingsDialog
-        property bool syncingInProgress: false
+        id: settingsDialog
+        property bool actionInProgress: false
 
-
-        width: 500
-        height: 600
+        width: 600
+        height: 700
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
+        anchors.centerIn: parent
 
         function applySyncFormToBackend() {
             backend.sync_enabled = syncEnabledCheck.checked;
@@ -208,7 +255,29 @@ ApplicationWindow {
             backend.sync_token = tokenInput.text;
         }
 
+        function applyEditorFormToBackend() {
+            backend.setting_font_size = fontSizeSpin.value;
+            backend.setting_line_spacing = lineSpacingSpin.value / 100.0;
+            backend.setting_auto_save_enabled = autoSaveCheck.checked;
+            backend.setting_auto_save_delay_ms = autoSaveDelaySpin.value;
+            backend.setting_auto_indent_enabled = autoIndentCheck.checked;
+            backend.setting_auto_indent_width = autoIndentWidthSpin.value / 100.0;
+            backend.setting_theme_mode = themeModeCombo.currentText;
+        }
+
         onAboutToShow: {
+            backend.load_local_settings();
+            fontSizeSpin.value = backend.setting_font_size > 0 ? backend.setting_font_size : 16;
+            lineSpacingSpin.value = backend.setting_line_spacing > 0 ? backend.setting_line_spacing * 100 : 150;
+            autoSaveCheck.checked = backend.setting_auto_save_enabled;
+            autoSaveDelaySpin.value = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500;
+            autoIndentCheck.checked = backend.setting_auto_indent_enabled;
+            autoIndentWidthSpin.value = backend.setting_auto_indent_width > 0 ? backend.setting_auto_indent_width * 100 : 200;
+
+            var modes = ["system", "light", "dark"];
+            themeModeCombo.currentIndex = modes.indexOf(backend.setting_theme_mode);
+            if (themeModeCombo.currentIndex === -1) themeModeCombo.currentIndex = 0;
+
             backend.load_sync_config();
             syncEnabledCheck.checked = backend.sync_enabled;
             remoteUrlInput.text = backend.sync_remote_url;
@@ -222,140 +291,263 @@ ApplicationWindow {
             syncResultLabel.text = backend.sync_action_result;
         }
 
-
         Connections {
             target: backend
             function onSync_action_completed() {
                 syncResultLabel.text = backend.sync_action_result;
-                syncSettingsDialog.syncingInProgress = false;
+                settingsDialog.actionInProgress = false;
             }
         }
 
-
-        ScrollView {
+        ColumnLayout {
             anchors.fill: parent
-            clip: true
 
-            ColumnLayout {
-                width: parent.width - 20
-                spacing: 10
+            TabBar {
+                id: settingsTabBar
+                Layout.fillWidth: true
+                TabButton { text: "编辑器设置" }
+                TabButton { text: "同步设置" }
+                TabButton { text: "关于" }
+            }
 
-                CheckBox {
-                    id: syncEnabledCheck
-                    text: "启用同步"
-                }
+            StackLayout {
+                currentIndex: settingsTabBar.currentIndex
+                Layout.fillWidth: true
+                Layout.fillHeight: true
 
-                Label { text: "GitHub 仓库地址:" }
-                TextField {
-                    id: remoteUrlInput
-                    Layout.fillWidth: true
-                    placeholderText: "https://github.com/user/repo.git"
-                }
+                ScrollView {
+                    clip: true
+                    ColumnLayout {
+                        width: parent.width - 20
+                        spacing: 15
 
-                Label { text: "分支:" }
-                TextField {
-                    id: branchInput
-                    Layout.fillWidth: true
-                    placeholderText: "main"
-                }
-
-                CheckBox {
-                    id: autoSyncCheck
-                    text: "自动同步"
-                }
-
-                Label { text: "同步间隔 (秒):" }
-                TextField {
-                    id: syncIntervalInput
-                    Layout.fillWidth: true
-                    validator: IntValidator { bottom: 60 }
-                }
-
-                Label { text: "代理类型:" }
-                ComboBox {
-                    id: proxyTypeCombo
-                    Layout.fillWidth: true
-                    model: ["none", "auto", "http", "socks5"]
-                }
-
-                Label { text: "代理 Host:" }
-                TextField {
-                    id: proxyHostInput
-                    Layout.fillWidth: true
-                    placeholderText: "127.0.0.1"
-                }
-
-                Label { text: "代理 Port:" }
-                TextField {
-                    id: proxyPortInput
-                    Layout.fillWidth: true
-                    validator: IntValidator { bottom: 0; top: 65535 }
-                }
-
-                Label { text: "Token (Personal Access Token):" }
-                TextField {
-                    id: tokenInput
-                    Layout.fillWidth: true
-                    echoMode: TextInput.Password
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    Button {
-                        text: "保存设置"
-                        enabled: !syncSettingsDialog.syncingInProgress
-                        onClicked: {
-                            applySyncFormToBackend();
-                            syncSettingsDialog.syncingInProgress = true;
-                            if (backend.save_sync_config()) {
-                                syncSettingsDialog.syncingInProgress = false;
-                            } else {
-                                syncSettingsDialog.syncingInProgress = false;
-                            }
+                        Label { text: "字号:" }
+                        SpinBox {
+                            id: fontSizeSpin
+                            from: 10
+                            to: 72
+                            value: 16
                         }
-                    }
-                    Button {
-                        text: "检查同步计划"
-                        enabled: !syncSettingsDialog.syncingInProgress
-                        onClicked: {
-                            applySyncFormToBackend();
-                            syncSettingsDialog.syncingInProgress = true;
-                            if (backend.save_sync_config()) {
-                                backend.perform_sync_dry_run();
-                            } else {
-                                syncSettingsDialog.syncingInProgress = false;
-                            }
+
+                        Label { text: "行距 (Linux端暂未实现视觉应用):" }
+                        SpinBox {
+                            id: lineSpacingSpin
+                            from: 100
+                            to: 300
+                            value: 150
+                            stepSize: 10
                         }
-                    }
-                    Button {
-                        text: "立即同步"
-                        enabled: !syncSettingsDialog.syncingInProgress
-                        onClicked: {
-                            applySyncFormToBackend();
-                            syncSettingsDialog.syncingInProgress = true;
-                            if (backend.save_sync_config()) {
-                                backend.perform_sync();
-                            } else {
-                                syncSettingsDialog.syncingInProgress = false;
+
+                        CheckBox {
+                            id: autoSaveCheck
+                            text: "自动保存"
+                        }
+
+                        Label { text: "自动保存延迟 (毫秒):" }
+                        SpinBox {
+                            id: autoSaveDelaySpin
+                            from: 500
+                            to: 60000
+                            stepSize: 500
+                            value: 1500
+                        }
+
+                        CheckBox {
+                            id: autoIndentCheck
+                            text: "自动缩进"
+                        }
+                        Label {
+                            text: "Linux 端暂未实现自动缩进效果"
+                            color: "gray"
+                            font.pixelSize: 12
+                        }
+
+                        Label { text: "自动缩进宽度:" }
+                        SpinBox {
+                            id: autoIndentWidthSpin
+                            from: 0
+                            to: 800
+                            value: 200
+                            stepSize: 50
+                        }
+
+                        Label { text: "主题模式:" }
+                        ComboBox {
+                            id: themeModeCombo
+                            Layout.fillWidth: true
+                            model: ["system", "light", "dark"]
+                        }
+
+                        Button {
+                            text: "保存设置"
+                            enabled: !settingsDialog.actionInProgress
+                            onClicked: {
+                                applyEditorFormToBackend();
+                                backend.save_local_settings();
                             }
                         }
                     }
                 }
 
-                TextArea {
-                    id: syncResultLabel
-                    Layout.fillWidth: true
-                    readOnly: true
-                    wrapMode: Text.Wrap
-                    background: Rectangle { color: "#eeeeee" }
-                    color: "black"
+                ScrollView {
+                    clip: true
+                    ColumnLayout {
+                        width: parent.width - 20
+                        spacing: 10
+
+                        CheckBox {
+                            id: syncEnabledCheck
+                            text: "启用同步"
+                        }
+
+                        Label { text: "GitHub 仓库地址:" }
+                        TextField {
+                            id: remoteUrlInput
+                            Layout.fillWidth: true
+                            placeholderText: "https://github.com/user/repo.git"
+                        }
+
+                        Label { text: "分支:" }
+                        TextField {
+                            id: branchInput
+                            Layout.fillWidth: true
+                            placeholderText: "main"
+                        }
+
+                        CheckBox {
+                            id: autoSyncCheck
+                            text: "自动同步"
+                        }
+
+                        Label { text: "同步间隔 (秒):" }
+                        TextField {
+                            id: syncIntervalInput
+                            Layout.fillWidth: true
+                            validator: IntValidator { bottom: 60 }
+                        }
+
+                        Label { text: "代理类型:" }
+                        ComboBox {
+                            id: proxyTypeCombo
+                            Layout.fillWidth: true
+                            model: ["none", "auto", "http", "socks5"]
+                        }
+
+                        Label { text: "代理 Host:" }
+                        TextField {
+                            id: proxyHostInput
+                            Layout.fillWidth: true
+                            placeholderText: "127.0.0.1"
+                        }
+
+                        Label { text: "代理 Port:" }
+                        TextField {
+                            id: proxyPortInput
+                            Layout.fillWidth: true
+                            validator: IntValidator { bottom: 0; top: 65535 }
+                        }
+
+                        Label { text: "Token (Personal Access Token):" }
+                        TextField {
+                            id: tokenInput
+                            Layout.fillWidth: true
+                            echoMode: TextInput.Password
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+
+                            Button {
+                                text: "保存"
+                                enabled: !settingsDialog.actionInProgress
+                                onClicked: {
+                                    applySyncFormToBackend();
+                                    settingsDialog.actionInProgress = true;
+                                    if (backend.save_sync_config()) {
+                                        settingsDialog.actionInProgress = false;
+                                        syncResultLabel.text = "配置已保存";
+                                    } else {
+                                        settingsDialog.actionInProgress = false;
+                                    }
+                                }
+                            }
+
+                            Button {
+                                text: "测试 GitHub 连接"
+                                enabled: !settingsDialog.actionInProgress
+                                onClicked: {
+                                    applySyncFormToBackend();
+                                    settingsDialog.actionInProgress = true;
+                                    if (backend.save_sync_config()) {
+                                        backend.perform_sync_diagnostics();
+                                    } else {
+                                        settingsDialog.actionInProgress = false;
+                                    }
+                                }
+                            }
+
+                            Button {
+                                text: "检查同步计划"
+                                enabled: !settingsDialog.actionInProgress
+                                onClicked: {
+                                    applySyncFormToBackend();
+                                    settingsDialog.actionInProgress = true;
+                                    if (backend.save_sync_config()) {
+                                        backend.perform_sync_dry_run();
+                                    } else {
+                                        settingsDialog.actionInProgress = false;
+                                    }
+                                }
+                            }
+                            Button {
+                                text: "立即同步"
+                                enabled: !settingsDialog.actionInProgress
+                                onClicked: {
+                                    applySyncFormToBackend();
+                                    settingsDialog.actionInProgress = true;
+                                    if (backend.save_sync_config()) {
+                                        backend.perform_sync();
+                                    } else {
+                                        settingsDialog.actionInProgress = false;
+                                    }
+                                }
+                            }
+                        }
+
+                        TextArea {
+                            id: syncResultLabel
+                            Layout.fillWidth: true
+                            readOnly: true
+                            wrapMode: Text.Wrap
+                            background: Rectangle { color: "#eeeeee" }
+                            color: "black"
+                        }
+                    }
+                }
+
+                Item {
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        Label {
+                            text: "Writer Application (Linux)"
+                            font.pixelSize: 20
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        Label {
+                            text: "Version 1.0.0"
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                    }
                 }
             }
         }
     }
+    ColumnLayout {
+        anchors.fill: parent
 
-    header: ToolBar {
+        ToolBar {
+            Layout.fillWidth: true
         background: Rectangle { color: "#2d2d2d" }
         RowLayout {
             anchors.fill: parent
@@ -391,8 +583,8 @@ ApplicationWindow {
             }
 
             ToolButton {
-                text: "同步设置"
-                onClicked: syncSettingsDialog.open()
+                text: "设置"
+                onClicked: settingsDialog.open()
                 contentItem: Text {
                     text: parent.text
                     color: "white"
@@ -405,7 +597,8 @@ ApplicationWindow {
         }
     }
 
-    footer: ToolBar {
+        ToolBar {
+            Layout.fillWidth: true
         background: Rectangle { color: "#2d2d2d" }
         RowLayout {
             anchors.fill: parent
@@ -441,9 +634,10 @@ ApplicationWindow {
         }
     }
 
-    SplitView {
-        anchors.fill: parent
-        orientation: Qt.Horizontal
+        SplitView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            orientation: Qt.Horizontal
 
         Rectangle {
             SplitView.preferredWidth: 250
@@ -648,7 +842,8 @@ ApplicationWindow {
                     TextArea {
                         id: editorArea
                         color: "#d4d4d4"
-                        font.pixelSize: 16
+                                                font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+                        // Note: Linux行距视觉应用暂未完成 (QML limitation)
                         wrapMode: TextArea.Wrap
                         background: Rectangle { color: "transparent" }
                         enabled: backend.has_selected_chapter_prop
@@ -661,7 +856,11 @@ ApplicationWindow {
                         persistentSelection: true
 
                         onTextChanged: {
-                            backend.calculate_word_count(text);
+backend.calculate_word_count(text);
+                            if (backend.setting_auto_save_enabled) {
+                                autoSaveTimer.interval = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500;
+                                autoSaveTimer.restart();
+                            }
                             if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存") {
                                 backend.save_status = "未保存";
                             }
@@ -674,4 +873,8 @@ ApplicationWindow {
             }
         }
     }
+}
+}
+
+}
 }

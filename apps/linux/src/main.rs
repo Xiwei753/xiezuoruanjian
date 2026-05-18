@@ -45,6 +45,20 @@ struct AppBackend {
     sync_action_result: qt_property!(QString; READ sync_action_result NOTIFY sync_action_completed),
     sync_action_completed: qt_signal!(),
 
+    setting_font_size: qt_property!(f32; READ setting_font_size WRITE set_setting_font_size NOTIFY settings_changed),
+    setting_line_spacing: qt_property!(f32; READ setting_line_spacing WRITE set_setting_line_spacing NOTIFY settings_changed),
+    setting_auto_save_enabled: qt_property!(bool; READ setting_auto_save_enabled WRITE set_setting_auto_save_enabled NOTIFY settings_changed),
+    setting_auto_save_delay_ms: qt_property!(u32; READ setting_auto_save_delay_ms WRITE set_setting_auto_save_delay_ms NOTIFY settings_changed),
+    setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
+    setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
+    setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
+
+    settings_changed: qt_signal!(),
+
+    load_local_settings: qt_method!(fn(&mut self)),
+    save_local_settings: qt_method!(fn(&mut self) -> bool),
+    perform_sync_diagnostics: qt_method!(fn(&mut self)),
+
     load_sync_config: qt_method!(fn(&mut self)),
     save_sync_config: qt_method!(fn(&mut self) -> bool),
     perform_sync_dry_run: qt_method!(fn(&mut self)),
@@ -119,6 +133,14 @@ struct AppBackend {
     current_sync_proxy_port: u16,
     current_sync_token: String,
     current_sync_action_result: String,
+
+    current_setting_font_size: f32,
+    current_setting_line_spacing: f32,
+    current_setting_auto_save_enabled: bool,
+    current_setting_auto_save_delay_ms: u32,
+    current_setting_auto_indent_enabled: bool,
+    current_setting_auto_indent_width: f32,
+    current_setting_theme_mode: String,
 }
 
 impl AppBackend {
@@ -197,6 +219,139 @@ impl AppBackend {
     fn sync_action_result(&self) -> QString {
         self.current_sync_action_result.clone().into()
     }
+
+
+    fn setting_font_size(&self) -> f32 { self.current_setting_font_size }
+    fn set_setting_font_size(&mut self, val: f32) { self.current_setting_font_size = val; self.settings_changed(); }
+
+    fn setting_line_spacing(&self) -> f32 { self.current_setting_line_spacing }
+    fn set_setting_line_spacing(&mut self, val: f32) { self.current_setting_line_spacing = val; self.settings_changed(); }
+
+    fn setting_auto_save_enabled(&self) -> bool { self.current_setting_auto_save_enabled }
+    fn set_setting_auto_save_enabled(&mut self, val: bool) { self.current_setting_auto_save_enabled = val; self.settings_changed(); }
+
+    fn setting_auto_save_delay_ms(&self) -> u32 { self.current_setting_auto_save_delay_ms }
+    fn set_setting_auto_save_delay_ms(&mut self, val: u32) { self.current_setting_auto_save_delay_ms = val; self.settings_changed(); }
+
+    fn setting_auto_indent_enabled(&self) -> bool { self.current_setting_auto_indent_enabled }
+    fn set_setting_auto_indent_enabled(&mut self, val: bool) { self.current_setting_auto_indent_enabled = val; self.settings_changed(); }
+
+    fn setting_auto_indent_width(&self) -> f32 { self.current_setting_auto_indent_width }
+    fn set_setting_auto_indent_width(&mut self, val: f32) { self.current_setting_auto_indent_width = val; self.settings_changed(); }
+
+    fn setting_theme_mode(&self) -> QString { self.current_setting_theme_mode.clone().into() }
+    fn set_setting_theme_mode(&mut self, val: QString) { self.current_setting_theme_mode = val.to_string(); self.settings_changed(); }
+
+    fn load_local_settings(&mut self) {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+
+            if let Ok(settings) = core.load_local_settings() {
+                self.current_setting_line_spacing = settings.editor_line_spacing_multiplier;
+                self.current_setting_auto_save_enabled = settings.auto_save_enabled;
+                self.current_setting_auto_save_delay_ms = settings.auto_save_delay_ms as u32;
+                self.current_setting_auto_indent_enabled = settings.auto_indent_enabled;
+                self.current_setting_auto_indent_width = settings.auto_indent_width;
+            }
+
+            if let Ok(sync_settings) = core.load_syncable_settings() {
+                self.current_setting_font_size = sync_settings.font_size as f32;
+                if self.current_setting_font_size <= 0.0 {
+                    self.current_setting_font_size = 16.0;
+                }
+                self.current_setting_theme_mode = sync_settings.theme_mode.clone();
+            } else {
+                self.current_setting_font_size = 16.0;
+                self.current_setting_theme_mode = "system".to_string();
+            }
+
+            self.settings_changed();
+        }
+    }
+
+    fn save_local_settings(&mut self) -> bool {
+        let mut error_msg: Option<String> = None;
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+
+            let mut local = core.load_local_settings().unwrap_or_default();
+            local.editor_line_spacing_multiplier = self.current_setting_line_spacing;
+            local.auto_save_enabled = self.current_setting_auto_save_enabled;
+            local.auto_save_delay_ms = self.current_setting_auto_save_delay_ms as u64;
+            local.auto_indent_enabled = self.current_setting_auto_indent_enabled;
+            local.auto_indent_width = self.current_setting_auto_indent_width;
+
+            if let Err(e) = core.save_local_settings(&local) {
+                error_msg = Some(format!("保存本地设置失败: {}", e));
+            }
+
+            let mut syncable = core.load_syncable_settings().unwrap_or_default();
+            syncable.font_size = self.current_setting_font_size as f64;
+            syncable.theme_mode = self.current_setting_theme_mode.clone();
+
+            if let Err(e) = core.save_syncable_settings(&syncable) {
+                error_msg = Some(format!("保存同步设置失败: {}", e));
+            }
+        }
+
+        if let Some(msg) = error_msg {
+            self.set_error(&msg);
+            false
+        } else {
+            true
+        }
+    }
+
+    fn perform_sync_diagnostics(&mut self) {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            if let Ok(config) = core.load_sync_config() {
+                match core.perform_sync_diagnostics(&config) {
+                    Ok(result) => {
+                        let mut msg = format!("诊断结果: {}
+网络连接: {}
+身份认证: {}
+仓库访问: {}
+分支存在: {}",
+                            if result.success { "成功" } else { "失败" },
+                            if result.network_ok { "正常" } else { "异常" },
+                            if result.auth_ok { "正常" } else { "异常" },
+                            if result.repo_ok { "正常" } else { "异常" },
+                            if result.branch_ok { "正常" } else { "异常" },
+                        );
+                        if result.proxy_used {
+                            msg.push_str(&format!("
+已使用代理: {}://{}:{}", result.proxy_type, result.proxy_host, result.proxy_port));
+                        }
+                        if !result.user_message.is_empty() {
+                            msg.push_str(&format!("
+
+说明:
+{}", result.user_message));
+                        }
+                        if let Some(err) = result.raw_error {
+                            msg.push_str(&format!("
+
+错误详情:
+{}", err));
+                        }
+                        self.current_sync_action_result = msg;
+                        self.sync_action_completed();
+                    }
+                    Err(e) => {
+                        self.current_sync_action_result = format!("诊断过程发生错误:
+{}", e);
+                        self.sync_action_completed();
+                    }
+                }
+            } else {
+                self.current_sync_action_result = "无法加载同步配置，请先保存配置。".to_string();
+                self.sync_action_completed();
+            }
+        }
+    }
+
+
 
     fn load_sync_config(&mut self) {
         if let Some(core_ref) = &self.core {
@@ -283,84 +438,49 @@ impl AppBackend {
     }
 
     fn perform_sync_dry_run(&mut self) {
-        let mut error_msg: Option<String> = None;
-        let mut lines = Vec::new();
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            let config = match core.load_sync_config() {
-                Ok(c) => c,
-                Err(e) => {
-                    error_msg = Some(format!("无法读取同步配置: {}", e));
-                    // we need to break out early, but we are inside `if let`.
-                    writer_core::sync_service::SyncConfig {
-                        enabled: false,
-                        remote_url: "".to_string(),
-                        transport: writer_core::sync_service::SyncTransport::HttpsToken,
-                        branch: "main".to_string(),
-                        auto_sync: false,
-                        sync_interval_seconds: 300,
-                        proxy_enabled: false,
-                        proxy_type: "none".to_string(),
-                        proxy_host: "".to_string(),
-                        proxy_port: 0,
-                    }
-                }
-            };
-
-            if error_msg.is_none() {
+            if let Ok(config) = core.load_sync_config() {
                 match core.perform_sync_dry_run(&config) {
                     Ok(plan) => {
-                        if !plan.files_to_upload.is_empty() {
-                            lines.push(format!("准备上传: {} 个文件", plan.files_to_upload.len()));
-                            for f in plan.files_to_upload.iter().take(5) {
-                                lines.push(format!("  + {}", f));
-                            }
-                            if plan.files_to_upload.len() > 5 {
-                                lines.push("  ...".to_string());
-                            }
-                        }
-                        if !plan.files_to_download.is_empty() {
-                            lines
-                                .push(format!("准备下载: {} 个文件", plan.files_to_download.len()));
-                            for f in plan.files_to_download.iter().take(5) {
-                                lines.push(format!("  ↓ {}", f));
-                            }
-                        }
-                        if !plan.files_to_delete_local.is_empty() {
-                            lines.push(format!(
-                                "准备本地删除: {} 个文件",
-                                plan.files_to_delete_local.len()
-                            ));
-                        }
-                        if !plan.files_to_delete_remote.is_empty() {
-                            lines.push(format!(
-                                "准备远端删除: {} 个文件",
-                                plan.files_to_delete_remote.len()
-                            ));
-                        }
-                        if !plan.ignored_files.is_empty() {
-                            lines.push(format!("忽略文件: {} 个", plan.ignored_files.len()));
-                        }
+                        let mut msg = String::new();
+                        msg.push_str("同步计划检查完成
+");
+                        msg.push_str(&format!("需要上传的文件数: {}
+", plan.files_to_upload.len()));
+                        msg.push_str(&format!("需要下载的文件数: {}
+", plan.files_to_download.len()));
+                        msg.push_str(&format!("本地待删除的文件数: {}
+", plan.files_to_delete_local.len()));
+                        msg.push_str(&format!("远程待删除的文件数: {}
+", plan.files_to_delete_remote.len()));
 
-                        if lines.is_empty() {
-                            lines.push("没有需要同步的变更。".to_string());
+                        if !plan.files_to_upload.is_empty() {
+                            msg.push_str("
+将要上传的文件:
+");
+                            for f in plan.files_to_upload.iter().take(10) {
+                                msg.push_str(&format!("  - {}
+", f));
+                            }
+                            if plan.files_to_upload.len() > 10 {
+                                msg.push_str("  ... 更多文件省略
+");
+                            }
                         }
+                        self.current_sync_action_result = msg;
+                        self.sync_action_completed();
                     }
                     Err(e) => {
-                        error_msg = Some(format!("检查计划失败:\n{}", e));
+                        self.current_sync_action_result = format!("检查同步计划失败: {}", e);
+                        self.sync_action_completed();
                     }
                 }
+            } else {
+                self.current_sync_action_result = "无法加载同步配置，请先保存配置。".to_string();
+                self.sync_action_completed();
             }
         }
-
-        if let Some(msg) = error_msg {
-            self.set_error(&msg);
-            self.current_sync_action_result = msg;
-        } else {
-            self.current_sync_action_result = lines.join("\n");
-        }
-        self.sync_action_completed();
     }
 
     fn perform_sync(&mut self) {
