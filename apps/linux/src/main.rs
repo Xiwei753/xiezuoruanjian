@@ -31,6 +31,25 @@ struct AppBackend {
     chapter_path_changed: qt_signal!(),
     clear_editor: qt_signal!(),
 
+    sync_enabled: qt_property!(bool; READ sync_enabled WRITE set_sync_enabled NOTIFY sync_config_changed),
+    sync_remote_url: qt_property!(QString; READ sync_remote_url WRITE set_sync_remote_url NOTIFY sync_config_changed),
+    sync_branch: qt_property!(QString; READ sync_branch WRITE set_sync_branch NOTIFY sync_config_changed),
+    sync_auto_sync: qt_property!(bool; READ sync_auto_sync WRITE set_sync_auto_sync NOTIFY sync_config_changed),
+    sync_interval: qt_property!(u32; READ sync_interval WRITE set_sync_interval NOTIFY sync_config_changed),
+    sync_proxy_type: qt_property!(QString; READ sync_proxy_type WRITE set_sync_proxy_type NOTIFY sync_config_changed),
+    sync_proxy_host: qt_property!(QString; READ sync_proxy_host WRITE set_sync_proxy_host NOTIFY sync_config_changed),
+    sync_proxy_port: qt_property!(u16; READ sync_proxy_port WRITE set_sync_proxy_port NOTIFY sync_config_changed),
+    sync_token: qt_property!(QString; READ sync_token WRITE set_sync_token NOTIFY sync_config_changed),
+
+    sync_config_changed: qt_signal!(),
+    sync_action_result: qt_property!(QString; READ sync_action_result NOTIFY sync_action_completed),
+    sync_action_completed: qt_signal!(),
+
+    load_sync_config: qt_method!(fn(&mut self)),
+    save_sync_config: qt_method!(fn(&mut self)),
+    perform_sync_dry_run: qt_method!(fn(&mut self)),
+    perform_sync: qt_method!(fn(&mut self)),
+
     open_workspace_dialog: qt_method!(fn(&mut self)),
     create_new_project: qt_method!(fn(&mut self, title: QString)),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
@@ -89,9 +108,324 @@ struct AppBackend {
     selected_chapter_id: Option<String>,
 
     cached_tree: QJsonArray,
+
+    current_sync_enabled: bool,
+    current_sync_remote_url: String,
+    current_sync_branch: String,
+    current_sync_auto_sync: bool,
+    current_sync_interval: u32,
+    current_sync_proxy_type: String,
+    current_sync_proxy_host: String,
+    current_sync_proxy_port: u16,
+    current_sync_token: String,
+    current_sync_action_result: String,
 }
 
 impl AppBackend {
+    fn sync_enabled(&self) -> bool {
+        self.current_sync_enabled
+    }
+    fn set_sync_enabled(&mut self, val: bool) {
+        self.current_sync_enabled = val;
+        self.sync_config_changed();
+    }
+
+    fn sync_remote_url(&self) -> QString {
+        self.current_sync_remote_url.clone().into()
+    }
+    fn set_sync_remote_url(&mut self, val: QString) {
+        self.current_sync_remote_url = val.to_string();
+        self.sync_config_changed();
+    }
+
+    fn sync_branch(&self) -> QString {
+        self.current_sync_branch.clone().into()
+    }
+    fn set_sync_branch(&mut self, val: QString) {
+        self.current_sync_branch = val.to_string();
+        self.sync_config_changed();
+    }
+
+    fn sync_auto_sync(&self) -> bool {
+        self.current_sync_auto_sync
+    }
+    fn set_sync_auto_sync(&mut self, val: bool) {
+        self.current_sync_auto_sync = val;
+        self.sync_config_changed();
+    }
+
+    fn sync_interval(&self) -> u32 {
+        self.current_sync_interval
+    }
+    fn set_sync_interval(&mut self, val: u32) {
+        self.current_sync_interval = val;
+        self.sync_config_changed();
+    }
+
+    fn sync_proxy_type(&self) -> QString {
+        self.current_sync_proxy_type.clone().into()
+    }
+    fn set_sync_proxy_type(&mut self, val: QString) {
+        self.current_sync_proxy_type = val.to_string();
+        self.sync_config_changed();
+    }
+
+    fn sync_proxy_host(&self) -> QString {
+        self.current_sync_proxy_host.clone().into()
+    }
+    fn set_sync_proxy_host(&mut self, val: QString) {
+        self.current_sync_proxy_host = val.to_string();
+        self.sync_config_changed();
+    }
+
+    fn sync_proxy_port(&self) -> u16 {
+        self.current_sync_proxy_port
+    }
+    fn set_sync_proxy_port(&mut self, val: u16) {
+        self.current_sync_proxy_port = val;
+        self.sync_config_changed();
+    }
+
+    fn sync_token(&self) -> QString {
+        self.current_sync_token.clone().into()
+    }
+    fn set_sync_token(&mut self, val: QString) {
+        self.current_sync_token = val.to_string();
+        self.sync_config_changed();
+    }
+
+    fn sync_action_result(&self) -> QString {
+        self.current_sync_action_result.clone().into()
+    }
+
+    fn load_sync_config(&mut self) {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            if let Ok(config) = core.load_sync_config() {
+                self.current_sync_enabled = config.enabled;
+                self.current_sync_remote_url = config.remote_url.clone();
+                self.current_sync_branch = config.branch.clone();
+                self.current_sync_auto_sync = config.auto_sync;
+                self.current_sync_interval = config.sync_interval_seconds;
+                self.current_sync_proxy_type = config.proxy_type.clone();
+                self.current_sync_proxy_host = config.proxy_host.clone();
+                self.current_sync_proxy_port = config.proxy_port;
+            }
+            if let Ok(secrets) = core.load_sync_secrets() {
+                if let Some(t) = secrets.token {
+                    self.current_sync_token = t;
+                } else {
+                    self.current_sync_token = "".to_string();
+                }
+            }
+            self.sync_config_changed();
+        }
+    }
+
+    fn save_sync_config(&mut self) {
+        let mut error_msg: Option<String> = None;
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+
+            let mut c = core
+                .load_sync_config()
+                .unwrap_or(writer_core::sync_service::SyncConfig {
+                    enabled: false,
+                    remote_url: "".to_string(),
+                    transport: writer_core::sync_service::SyncTransport::HttpsToken,
+                    branch: "main".to_string(),
+                    auto_sync: false,
+                    sync_interval_seconds: 300,
+                    proxy_enabled: false,
+                    proxy_type: "none".to_string(),
+                    proxy_host: "".to_string(),
+                    proxy_port: 0,
+                });
+
+            c.enabled = self.current_sync_enabled;
+            c.remote_url = self.current_sync_remote_url.clone();
+            c.branch = self.current_sync_branch.clone();
+            c.auto_sync = self.current_sync_auto_sync;
+            c.sync_interval_seconds = self.current_sync_interval;
+            c.proxy_type = self.current_sync_proxy_type.clone();
+            if c.proxy_type != "none" && c.proxy_type != "auto" {
+                c.proxy_enabled = true;
+            } else {
+                c.proxy_enabled = false;
+            }
+            c.proxy_host = self.current_sync_proxy_host.clone();
+            c.proxy_port = self.current_sync_proxy_port;
+
+            let mut s = core.load_sync_secrets().unwrap_or_default();
+            s.token = if self.current_sync_token.is_empty() {
+                None
+            } else {
+                Some(self.current_sync_token.clone())
+            };
+
+            if let Err(e) = core.save_sync_config(&c) {
+                error_msg = Some(format!("保存同步配置失败: {}", e));
+            } else if let Err(e) = core.save_sync_secrets(&s) {
+                error_msg = Some(format!("保存同步凭证失败: {}", e));
+            }
+        }
+
+        if let Some(msg) = error_msg {
+            self.set_error(&msg);
+            return;
+        }
+
+        self.current_sync_action_result = "配置保存成功".to_string();
+        self.sync_action_completed();
+    }
+
+    fn perform_sync_dry_run(&mut self) {
+        let mut error_msg: Option<String> = None;
+        let mut lines = Vec::new();
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let config = match core.load_sync_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    error_msg = Some(format!("无法读取同步配置: {}", e));
+                    // we need to break out early, but we are inside `if let`.
+                    writer_core::sync_service::SyncConfig {
+                        enabled: false,
+                        remote_url: "".to_string(),
+                        transport: writer_core::sync_service::SyncTransport::HttpsToken,
+                        branch: "main".to_string(),
+                        auto_sync: false,
+                        sync_interval_seconds: 300,
+                        proxy_enabled: false,
+                        proxy_type: "none".to_string(),
+                        proxy_host: "".to_string(),
+                        proxy_port: 0,
+                    }
+                }
+            };
+
+            if error_msg.is_none() {
+                match core.perform_sync_dry_run(&config) {
+                    Ok(plan) => {
+                        if !plan.files_to_upload.is_empty() {
+                            lines.push(format!("准备上传: {} 个文件", plan.files_to_upload.len()));
+                            for f in plan.files_to_upload.iter().take(5) {
+                                lines.push(format!("  + {}", f));
+                            }
+                            if plan.files_to_upload.len() > 5 {
+                                lines.push("  ...".to_string());
+                            }
+                        }
+                        if !plan.files_to_download.is_empty() {
+                            lines
+                                .push(format!("准备下载: {} 个文件", plan.files_to_download.len()));
+                            for f in plan.files_to_download.iter().take(5) {
+                                lines.push(format!("  ↓ {}", f));
+                            }
+                        }
+                        if !plan.files_to_delete_local.is_empty() {
+                            lines.push(format!(
+                                "准备本地删除: {} 个文件",
+                                plan.files_to_delete_local.len()
+                            ));
+                        }
+                        if !plan.files_to_delete_remote.is_empty() {
+                            lines.push(format!(
+                                "准备远端删除: {} 个文件",
+                                plan.files_to_delete_remote.len()
+                            ));
+                        }
+                        if !plan.ignored_files.is_empty() {
+                            lines.push(format!("忽略文件: {} 个", plan.ignored_files.len()));
+                        }
+
+                        if lines.is_empty() {
+                            lines.push("没有需要同步的变更。".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        error_msg = Some(format!("检查计划失败:\n{}", e));
+                    }
+                }
+            }
+        }
+
+        if let Some(msg) = error_msg {
+            self.set_error(&msg);
+            self.current_sync_action_result = msg;
+        } else {
+            self.current_sync_action_result = lines.join("\n");
+        }
+        self.sync_action_completed();
+    }
+
+    fn perform_sync(&mut self) {
+        let mut error_msg: Option<String> = None;
+        let mut result_msg: Option<String> = None;
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let config = match core.load_sync_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    error_msg = Some(format!("无法读取同步配置: {}", e));
+                    writer_core::sync_service::SyncConfig {
+                        enabled: false,
+                        remote_url: "".to_string(),
+                        transport: writer_core::sync_service::SyncTransport::HttpsToken,
+                        branch: "main".to_string(),
+                        auto_sync: false,
+                        sync_interval_seconds: 300,
+                        proxy_enabled: false,
+                        proxy_type: "none".to_string(),
+                        proxy_host: "".to_string(),
+                        proxy_port: 0,
+                    }
+                }
+            };
+
+            if error_msg.is_none() {
+                match core.perform_sync(&config) {
+                    Ok(result) => {
+                        let status_str = match result.status {
+                            writer_core::sync_service::SyncStatus::Success => "同步成功",
+                            writer_core::sync_service::SyncStatus::Error(ref e) => {
+                                error_msg = Some(format!("同步失败:\n{}", e));
+                                ""
+                            }
+                            writer_core::sync_service::SyncStatus::Conflict => "同步冲突",
+                            _ => "同步未知状态",
+                        };
+
+                        if error_msg.is_none() {
+                            result_msg = Some(format!(
+                                "{}\n上传: {} 个文件\n下载: {} 个文件",
+                                status_str,
+                                result.uploaded_files.len(),
+                                result.downloaded_files.len()
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        error_msg = Some(format!("同步操作失败:\n{}", e));
+                    }
+                }
+            }
+        }
+
+        if let Some(msg) = error_msg {
+            self.current_sync_action_result = msg.clone();
+            self.set_error(&msg);
+        } else if let Some(msg) = result_msg {
+            self.current_sync_action_result = msg;
+            self.reload_tree();
+            self.projects_reloaded();
+        }
+
+        self.sync_action_completed();
+    }
+
     fn workspace_path(&self) -> QString {
         self.current_workspace.clone().into()
     }

@@ -45,3 +45,9 @@ For Wayland:
 ```bash
 QT_QPA_PLATFORM=wayland QMAKE=/usr/bin/qmake-qt5 cargo run -p linux
 ```
+
+## Features
+
+- Native file operations and directory management
+- Editor with basic operations (save, edit)
+- **GitHub Sync Configuration:** Added a UI dialogue for configuring your Git remote, automatic sync, personal access tokens (saved securely to `sync_secrets.local.json`), and proxy settings. You can trigger sync plans and execution directly from the Linux client.

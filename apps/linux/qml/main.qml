@@ -183,6 +183,161 @@ ApplicationWindow {
         id: treeModel
     }
 
+
+    Popup {
+        id: syncSettingsDialog
+        property bool syncingInProgress: false
+
+
+        width: 500
+        height: 600
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+
+        onAboutToShow: {
+            backend.load_sync_config();
+            syncEnabledCheck.checked = backend.sync_enabled;
+            remoteUrlInput.text = backend.sync_remote_url;
+            branchInput.text = backend.sync_branch;
+            autoSyncCheck.checked = backend.sync_auto_sync;
+            syncIntervalInput.text = backend.sync_interval.toString();
+            proxyTypeCombo.currentIndex = proxyTypeCombo.indexOfValue(backend.sync_proxy_type);
+            proxyHostInput.text = backend.sync_proxy_host;
+            proxyPortInput.text = backend.sync_proxy_port.toString();
+            tokenInput.text = backend.sync_token;
+            syncResultLabel.text = backend.sync_action_result;
+        }
+
+
+        Connections {
+            target: backend
+            function onSync_action_completed() {
+                syncResultLabel.text = backend.sync_action_result;
+                syncSettingsDialog.syncingInProgress = false;
+            }
+        }
+
+
+        ScrollView {
+            anchors.fill: parent
+            clip: true
+
+            ColumnLayout {
+                width: parent.width - 20
+                spacing: 10
+
+                CheckBox {
+                    id: syncEnabledCheck
+                    text: "启用同步"
+                }
+
+                Label { text: "GitHub 仓库地址:" }
+                TextField {
+                    id: remoteUrlInput
+                    Layout.fillWidth: true
+                    placeholderText: "https://github.com/user/repo.git"
+                }
+
+                Label { text: "分支:" }
+                TextField {
+                    id: branchInput
+                    Layout.fillWidth: true
+                    placeholderText: "main"
+                }
+
+                CheckBox {
+                    id: autoSyncCheck
+                    text: "自动同步"
+                }
+
+                Label { text: "同步间隔 (秒):" }
+                TextField {
+                    id: syncIntervalInput
+                    Layout.fillWidth: true
+                    validator: IntValidator { bottom: 60 }
+                }
+
+                Label { text: "代理类型:" }
+                ComboBox {
+                    id: proxyTypeCombo
+                    Layout.fillWidth: true
+                    model: ["none", "auto", "http", "socks5"]
+                }
+
+                Label { text: "代理 Host:" }
+                TextField {
+                    id: proxyHostInput
+                    Layout.fillWidth: true
+                    placeholderText: "127.0.0.1"
+                }
+
+                Label { text: "代理 Port:" }
+                TextField {
+                    id: proxyPortInput
+                    Layout.fillWidth: true
+                    validator: IntValidator { bottom: 0; top: 65535 }
+                }
+
+                Label { text: "Token (Personal Access Token):" }
+                TextField {
+                    id: tokenInput
+                    Layout.fillWidth: true
+                    echoMode: TextInput.Password
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    Button {
+                        text: "保存设置"
+                        enabled: !syncSettingsDialog.syncingInProgress
+                        onClicked: {
+                            backend.sync_enabled = syncEnabledCheck.checked;
+                            backend.sync_remote_url = remoteUrlInput.text;
+                            backend.sync_branch = branchInput.text;
+                            backend.sync_auto_sync = autoSyncCheck.checked;
+                            backend.sync_interval = parseInt(syncIntervalInput.text) || 300;
+                            backend.sync_proxy_type = proxyTypeCombo.currentText;
+                            backend.sync_proxy_host = proxyHostInput.text;
+                            backend.sync_proxy_port = parseInt(proxyPortInput.text) || 0;
+                            backend.sync_token = tokenInput.text;
+
+                            syncSettingsDialog.syncingInProgress = true;
+                            backend.save_sync_config();
+                        }
+                    }
+                    Button {
+                        text: "检查同步计划"
+                        enabled: !syncSettingsDialog.syncingInProgress
+                        onClicked: {
+                            syncSettingsDialog.syncingInProgress = true;
+                            backend.perform_sync_dry_run();
+                        }
+                    }
+                    Button {
+                        text: "立即同步"
+                        enabled: !syncSettingsDialog.syncingInProgress
+                        onClicked: {
+                            syncSettingsDialog.syncingInProgress = true;
+                            backend.perform_sync();
+                        }
+                    }
+                }
+
+                TextArea {
+                    id: syncResultLabel
+                    Layout.fillWidth: true
+                    readOnly: true
+                    wrapMode: Text.Wrap
+                    background: Rectangle { color: "#eeeeee" }
+                    color: "black"
+                }
+            }
+        }
+    }
+
     header: ToolBar {
         background: Rectangle { color: "#2d2d2d" }
         RowLayout {
@@ -217,6 +372,18 @@ ApplicationWindow {
                     verticalAlignment: Text.AlignVCenter
                 }
             }
+
+            ToolButton {
+                text: "同步设置"
+                onClicked: syncSettingsDialog.open()
+                contentItem: Text {
+                    text: parent.text
+                    color: "white"
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
             Item { Layout.fillWidth: true }
         }
     }
