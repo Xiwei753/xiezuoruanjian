@@ -539,6 +539,34 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveSyncSe
 
 // Perform Sync Dry Run
 #[no_mangle]
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyncDiagnostics(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    config_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let config_json = match jstring_to_string(&mut env, &config_json_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let config = match serde_json::from_str(&config_json) {
+        Ok(c) => c,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.perform_sync_diagnostics(&config);
+    result_to_jstring(&mut env, result)
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyncDryRun(
     mut env: JNIEnv,
     _class: JClass,

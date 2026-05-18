@@ -73,6 +73,10 @@ class SettingsRepository(context: Context) {
         }
     }
 
+    fun performSyncDiagnostics(config: SyncConfig): NativeResult<SyncDiagnosticsResult> {
+        return bridge.performSyncDiagnostics(config)
+    }
+
     fun performSyncDryRun(config: SyncConfig): NativeResult<SyncPlan> {
         return bridge.performSyncDryRun(config)
     }

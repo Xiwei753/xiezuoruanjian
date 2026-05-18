@@ -99,6 +99,40 @@ pub struct SyncConflict {
     pub description: String,
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncDiagnosticsResult {
+    pub success: bool,
+    pub network_ok: bool,
+    pub auth_ok: bool,
+    pub repo_ok: bool,
+    pub branch_ok: bool,
+    pub proxy_used: bool,
+    pub proxy_type: String,
+    pub proxy_host: String,
+    pub proxy_port: u16,
+    pub user_message: String,
+    pub raw_error: Option<String>,
+}
+
+impl SyncDiagnosticsResult {
+    pub fn new() -> Self {
+        Self {
+            success: false,
+            network_ok: false,
+            auth_ok: false,
+            repo_ok: false,
+            branch_ok: false,
+            proxy_used: false,
+            proxy_type: "none".to_string(),
+            proxy_host: "".to_string(),
+            proxy_port: 0,
+            user_message: "".to_string(),
+            raw_error: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub status: SyncStatus,
@@ -819,6 +853,111 @@ fn get_user_friendly_error(err: &str) -> String {
 }
 
 impl SyncService {
+
+    pub fn perform_sync_diagnostics(
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+        _backend: &dyn GitBackend,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        let mut result = SyncDiagnosticsResult::new();
+
+        result.proxy_used = config.proxy_enabled;
+        result.proxy_type = config.proxy_type.clone();
+        result.proxy_host = config.proxy_host.clone();
+        result.proxy_port = config.proxy_port;
+
+        if config.remote_url.is_empty() {
+            result.user_message = "远程仓库地址为空。".to_string();
+            return Ok(result);
+        }
+
+        let token = secrets.token.clone().unwrap_or_default();
+        if token.is_empty() {
+            result.user_message = "缺少 GitHub Token。".to_string();
+            return Ok(result);
+        }
+
+        let temp_dir = tempfile::tempdir().map_err(|e| crate::Error::Io(e))?;
+        let repo = git2::Repository::init(temp_dir.path()).map_err(|e: git2::Error| crate::Error::Other(e.to_string()))?;
+
+        let mut remote = repo.remote_anonymous(&config.remote_url).map_err(|e: git2::Error| crate::Error::Other(e.to_string()))?;
+
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(|_user, _user_from_url, _cred| {
+            git2::Cred::userpass_plaintext("oauth2", &token)
+        });
+
+        let mut proxy_opts = git2::ProxyOptions::new();
+        if config.proxy_enabled && config.proxy_type != "none" {
+            let protocol = if config.proxy_type == "socks5" { "socks5h" } else { "http" };
+            let proxy_url = format!("{}://{}:{}", protocol, config.proxy_host, config.proxy_port);
+            let _ = proxy_opts.url(&proxy_url);
+        } else {
+            let _ = proxy_opts.auto();
+        }
+
+        let direction = git2::Direction::Fetch;
+        let mut connection: git2::RemoteConnection = match remote.connect_auth(direction, Some(callbacks), Some(proxy_opts)) {
+            Ok(c) => c,
+            Err(e) => {
+                let err_msg = e.to_string();
+                let clean_msg = err_msg.replace(&token, "***TOKEN***");
+                result.raw_error = Some(clean_msg.clone());
+                result.user_message = get_user_friendly_error(&clean_msg);
+
+                if clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") {
+                    result.network_ok = false;
+                } else {
+                    result.network_ok = true; // Could connect but failed later
+                }
+
+                if clean_msg.contains("authentication failed") || clean_msg.contains("401") || clean_msg.contains("invalid credentials") || clean_msg.contains("not found") {
+                    result.auth_ok = false;
+                } else if result.network_ok {
+                    result.auth_ok = true;
+                }
+
+                return Ok(result);
+            }
+        };
+
+        result.network_ok = true;
+        result.auth_ok = true;
+        result.repo_ok = true;
+
+        let list = match connection.list() {
+            Ok(l) => l,
+            Err(e) => {
+                let err_msg = e.to_string();
+                let clean_msg = err_msg.replace(&token, "***TOKEN***");
+                result.raw_error = Some(clean_msg.clone());
+                result.user_message = get_user_friendly_error(&clean_msg);
+                return Ok(result);
+            }
+        };
+
+        let branch_ref = format!("refs/heads/{}", config.branch);
+        let mut found_branch = false;
+        for head in list {
+            if head.name() == branch_ref {
+                found_branch = true;
+                break;
+            }
+        }
+
+        if found_branch {
+            result.branch_ok = true;
+            result.success = true;
+            result.user_message = "诊断成功：连接正常，权限有效，仓库和分支存在。".to_string();
+        } else {
+            result.branch_ok = false;
+            result.success = false;
+            result.user_message = format!("分支 {} 不存在于远程仓库。", config.branch);
+        }
+
+        Ok(result)
+    }
+
     pub fn perform_sync_dry_run(
         workspace_path: &Path,
         config: &SyncConfig,
