@@ -196,6 +196,18 @@ ApplicationWindow {
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
 
+        function applySyncFormToBackend() {
+            backend.sync_enabled = syncEnabledCheck.checked;
+            backend.sync_remote_url = remoteUrlInput.text;
+            backend.sync_branch = branchInput.text;
+            backend.sync_auto_sync = autoSyncCheck.checked;
+            backend.sync_interval = parseInt(syncIntervalInput.text) || 300;
+            backend.sync_proxy_type = proxyTypeCombo.currentText;
+            backend.sync_proxy_host = proxyHostInput.text;
+            backend.sync_proxy_port = parseInt(proxyPortInput.text) || 0;
+            backend.sync_token = tokenInput.text;
+        }
+
         onAboutToShow: {
             backend.load_sync_config();
             syncEnabledCheck.checked = backend.sync_enabled;
@@ -294,34 +306,39 @@ ApplicationWindow {
                         text: "保存设置"
                         enabled: !syncSettingsDialog.syncingInProgress
                         onClicked: {
-                            backend.sync_enabled = syncEnabledCheck.checked;
-                            backend.sync_remote_url = remoteUrlInput.text;
-                            backend.sync_branch = branchInput.text;
-                            backend.sync_auto_sync = autoSyncCheck.checked;
-                            backend.sync_interval = parseInt(syncIntervalInput.text) || 300;
-                            backend.sync_proxy_type = proxyTypeCombo.currentText;
-                            backend.sync_proxy_host = proxyHostInput.text;
-                            backend.sync_proxy_port = parseInt(proxyPortInput.text) || 0;
-                            backend.sync_token = tokenInput.text;
-
+                            applySyncFormToBackend();
                             syncSettingsDialog.syncingInProgress = true;
-                            backend.save_sync_config();
+                            if (backend.save_sync_config()) {
+                                syncSettingsDialog.syncingInProgress = false;
+                            } else {
+                                syncSettingsDialog.syncingInProgress = false;
+                            }
                         }
                     }
                     Button {
                         text: "检查同步计划"
                         enabled: !syncSettingsDialog.syncingInProgress
                         onClicked: {
+                            applySyncFormToBackend();
                             syncSettingsDialog.syncingInProgress = true;
-                            backend.perform_sync_dry_run();
+                            if (backend.save_sync_config()) {
+                                backend.perform_sync_dry_run();
+                            } else {
+                                syncSettingsDialog.syncingInProgress = false;
+                            }
                         }
                     }
                     Button {
                         text: "立即同步"
                         enabled: !syncSettingsDialog.syncingInProgress
                         onClicked: {
+                            applySyncFormToBackend();
                             syncSettingsDialog.syncingInProgress = true;
-                            backend.perform_sync();
+                            if (backend.save_sync_config()) {
+                                backend.perform_sync();
+                            } else {
+                                syncSettingsDialog.syncingInProgress = false;
+                            }
                         }
                     }
                 }
