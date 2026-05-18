@@ -539,8 +539,6 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveSyncSe
 
 // Perform Sync Dry Run
 #[no_mangle]
-
-#[no_mangle]
 pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyncDiagnostics(
     mut env: JNIEnv,
     _class: JClass,

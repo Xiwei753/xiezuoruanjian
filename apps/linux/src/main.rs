@@ -46,7 +46,7 @@ struct AppBackend {
     sync_action_completed: qt_signal!(),
 
     load_sync_config: qt_method!(fn(&mut self)),
-    save_sync_config: qt_method!(fn(&mut self)),
+    save_sync_config: qt_method!(fn(&mut self) -> bool),
     perform_sync_dry_run: qt_method!(fn(&mut self)),
     perform_sync: qt_method!(fn(&mut self)),
 
@@ -222,7 +222,7 @@ impl AppBackend {
         }
     }
 
-    fn save_sync_config(&mut self) {
+    fn save_sync_config(&mut self) -> bool {
         let mut error_msg: Option<String> = None;
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
@@ -248,7 +248,7 @@ impl AppBackend {
             c.auto_sync = self.current_sync_auto_sync;
             c.sync_interval_seconds = self.current_sync_interval;
             c.proxy_type = self.current_sync_proxy_type.clone();
-            if c.proxy_type != "none" && c.proxy_type != "auto" {
+            if c.proxy_type != "none" {
                 c.proxy_enabled = true;
             } else {
                 c.proxy_enabled = false;
@@ -272,11 +272,14 @@ impl AppBackend {
 
         if let Some(msg) = error_msg {
             self.set_error(&msg);
-            return;
+            self.current_sync_action_result = msg;
+            self.sync_action_completed();
+            return false;
         }
 
         self.current_sync_action_result = "配置保存成功".to_string();
         self.sync_action_completed();
+        true
     }
 
     fn perform_sync_dry_run(&mut self) {

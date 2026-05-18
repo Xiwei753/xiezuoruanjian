@@ -132,7 +132,6 @@ class SettingsActivity : AppCompatActivity() {
         etProxyPort = findViewById(R.id.etProxyPort)
         btnDryRun = findViewById(R.id.btnDryRun)
         btnTestConnection = findViewById(R.id.btnTestConnection)
-        btnTestConnection = findViewById(R.id.btnTestConnection)
         btnPerformSync = findViewById(R.id.btnPerformSync)
 
 
