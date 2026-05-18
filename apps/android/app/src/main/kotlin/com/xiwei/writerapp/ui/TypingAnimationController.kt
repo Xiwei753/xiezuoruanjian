@@ -6,6 +6,9 @@ import android.animation.ValueAnimator
 import android.text.Editable
 import android.util.Log
 import android.view.inputmethod.BaseInputConnection
+import android.text.style.ForegroundColorSpan
+import android.graphics.Color
+import android.text.Spanned
 import android.widget.EditText
 
 class TypingAnimationController(
@@ -48,7 +51,7 @@ class TypingAnimationController(
         if (count > 0 && after == 0) {
             // Deletion
             isPasteOrDelete = true
-        } else if (count > 100) {
+        } else if (after > 100) {
             // Treat very large replacements as paste to avoid massive animations
             isPasteOrDelete = true
         } else {
@@ -111,13 +114,17 @@ class TypingAnimationController(
                     interpolator = android.view.animation.DecelerateInterpolator()
                 }
 
+                val transparentSpan = ForegroundColorSpan(Color.TRANSPARENT)
+                editable.setSpan(transparentSpan, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
                 val anim = OverlayAnim(
                     insertedStart = start,
                     insertedText = insertedText,
                     startX = cursorBeforeX,
                     startY = cursorBeforeY,
                     progress = 0f,
-                    animator = animator
+                    animator = animator,
+                    span = transparentSpan
                 )
 
                 renderer.addAnim(anim)
@@ -133,6 +140,7 @@ class TypingAnimationController(
                 animator.addListener(object : AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: Animator) {
                         renderer.removeAnim(anim)
+                        editable.removeSpan(transparentSpan)
                         editText.invalidate()
                     }
                 })

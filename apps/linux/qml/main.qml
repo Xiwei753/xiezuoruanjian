@@ -441,31 +441,36 @@ ApplicationWindow {
                 }
             }
 
-            Text {
-                anchors.centerIn: parent
-                text: "请在左侧选择或创建一个章节"
-                color: "gray"
-                visible: !backend.has_selected_chapter_prop
-            }
-
-            Item {
+            Rectangle {
                 anchors.fill: parent
-                visible: backend.has_selected_chapter_prop
+                color: "#1e1e1e"
+                clip: true
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "请在左侧选择或创建一个章节"
+                    color: "gray"
+                    visible: !backend.has_selected_chapter_prop
+                }
 
                 ScrollView {
                     id: editorScroll
                     anchors.fill: parent
                     anchors.margins: 20
                     clip: true
+                    visible: backend.has_selected_chapter_prop
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
                     TextArea {
                         id: editorArea
                         color: "#d4d4d4"
                         font.pixelSize: 16
                         wrapMode: TextArea.Wrap
-                        background: null
+                        background: Rectangle { color: "transparent" }
                         enabled: backend.has_selected_chapter_prop
                         width: editorScroll.availableWidth
+                        implicitWidth: editorScroll.availableWidth
+                        implicitHeight: Math.max(editorScroll.availableHeight, contentHeight + topPadding + bottomPadding)
                         focus: true
                         activeFocusOnTab: true
                         selectByMouse: true
