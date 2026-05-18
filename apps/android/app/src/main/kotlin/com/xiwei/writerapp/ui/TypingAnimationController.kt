@@ -4,11 +4,7 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.text.Editable
-import android.util.Log
 import android.view.inputmethod.BaseInputConnection
-import android.text.style.ForegroundColorSpan
-import android.graphics.Color
-import android.text.Spanned
 import android.widget.EditText
 
 class TypingAnimationController(
@@ -43,16 +39,14 @@ class TypingAnimationController(
         if (isSuppressAnimations) {
             renderer.clear()
             if (DEBUG_ANIM) {
-                Log.d(TAG, "beforeTextChanged - suppressed animation")
+                android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")
             }
             return
         }
 
         if (count > 0 && after == 0) {
-            // Deletion
             isPasteOrDelete = true
         } else if (after > 100) {
-            // Treat very large replacements as paste to avoid massive animations
             isPasteOrDelete = true
         } else {
             isPasteOrDelete = false
@@ -65,7 +59,7 @@ class TypingAnimationController(
         }
 
         if (DEBUG_ANIM) {
-            Log.d(TAG, "beforeTextChanged - replaced: $count, after: $after, cursor: ($cursorBeforeX, $cursorBeforeY)")
+            android.util.Log.d(TAG, "beforeTextChanged - replaced: $count, after: $after, cursor: ($cursorBeforeX, $cursorBeforeY)")
         }
     }
 
@@ -93,9 +87,8 @@ class TypingAnimationController(
         val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
         val isComposing = composingStart != -1 && composingEnd != -1
 
-        // Skip animation for composing regions (wait for commitText)
         if (isComposing && lastAddedStart >= composingStart && lastAddedStart < composingEnd) {
-             if (DEBUG_ANIM) Log.d(TAG, "afterTextChanged - skipping animation for composing text.")
+             if (DEBUG_ANIM) android.util.Log.d(TAG, "afterTextChanged - skipping animation for composing text.")
              lastAddedStart = -1
              lastAddedCount = 0
              return
@@ -103,8 +96,8 @@ class TypingAnimationController(
 
         if (typingAnimationEnabled && lastAddedCount > 0 && lastAddedStart >= 0) {
             val start = lastAddedStart
-            val animLimit = Math.min(MAX_ANIMATIONS, lastAddedCount)
-            val end = Math.min(start + animLimit, editable.length)
+            val animLimit = kotlin.math.min(MAX_ANIMATIONS, lastAddedCount)
+            val end = kotlin.math.min(start + animLimit, editable.length)
 
             if (end > start && typingAnimationDurationMs > 0) {
                 val insertedText = editable.subSequence(start, end).toString()
@@ -114,23 +107,19 @@ class TypingAnimationController(
                     interpolator = android.view.animation.DecelerateInterpolator()
                 }
 
-                val transparentSpan = ForegroundColorSpan(Color.TRANSPARENT)
-                editable.setSpan(transparentSpan, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-
                 val anim = OverlayAnim(
                     insertedStart = start,
                     insertedText = insertedText,
                     startX = cursorBeforeX,
                     startY = cursorBeforeY,
                     progress = 0f,
-                    animator = animator,
-                    span = transparentSpan
+                    animator = animator
                 )
 
                 renderer.addAnim(anim)
 
                 if (DEBUG_ANIM) {
-                    Log.d(TAG, "afterTextChanged - created anim: insertedStart=${anim.insertedStart}, length=${insertedText.length}")
+                    android.util.Log.d(TAG, "afterTextChanged - created anim: insertedStart=${anim.insertedStart}, length=${insertedText.length}")
                 }
 
                 animator.addUpdateListener { a ->
@@ -140,7 +129,6 @@ class TypingAnimationController(
                 animator.addListener(object : AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: Animator) {
                         renderer.removeAnim(anim)
-                        editable.removeSpan(transparentSpan)
                         editText.invalidate()
                     }
                 })

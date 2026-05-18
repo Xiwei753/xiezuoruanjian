@@ -3,8 +3,6 @@ package com.xiwei.writerapp.ui
 import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.text.style.ForegroundColorSpan
-import android.util.Log
 import android.util.TypedValue
 import android.widget.EditText
 import java.util.concurrent.CopyOnWriteArrayList
@@ -16,8 +14,7 @@ data class OverlayAnim(
     val startX: Float,
     val startY: Float,
     var progress: Float,
-    val animator: ValueAnimator,
-    val span: ForegroundColorSpan
+    val animator: ValueAnimator
 ) {
     val codePoints: List<Int> = buildList {
         var i = 0
@@ -39,7 +36,6 @@ class TypingOverlayRenderer(private val editText: EditText) {
         if (activeAnims.size >= MAX_ANIMATIONS) {
             val oldest = activeAnims.removeAt(0)
             oldest.animator.cancel()
-            editText.text?.removeSpan(oldest.span)
         }
         activeAnims.add(anim)
     }
@@ -51,7 +47,6 @@ class TypingOverlayRenderer(private val editText: EditText) {
     fun clear() {
         for (anim in activeAnims) {
             anim.animator.cancel()
-            editText.text?.removeSpan(anim.span)
         }
         activeAnims.clear()
     }
@@ -89,7 +84,6 @@ class TypingOverlayRenderer(private val editText: EditText) {
                 val line = layout.getLineForOffset(i)
                 val destY = layout.getLineBaseline(line).toFloat()
 
-                // Calculate animation start position
                 var sX = anim.startX
                 var sY = anim.startY
 
@@ -124,7 +118,7 @@ class TypingOverlayRenderer(private val editText: EditText) {
             }
 
             if (DEBUG_ANIM) {
-                Log.d(TAG, "onDraw - insertedStart: ${anim.insertedStart}, visibleAnimatedCodepoints: $drawnCodepoints, skippedNewlines: $skippedNewlines, overlayCount: ${activeAnims.size}")
+                android.util.Log.d(TAG, "onDraw - insertedStart: ${anim.insertedStart}, visibleAnimatedCodepoints: $drawnCodepoints, skippedNewlines: $skippedNewlines, overlayCount: ${activeAnims.size}")
             }
         }
 

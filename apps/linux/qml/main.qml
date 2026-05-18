@@ -166,8 +166,11 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 10
-            Label { text: "错误"; font.bold: true;                         font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
-                        // Note: Linux行距视觉应用暂未完成 (QML limitation) }
+            Label {
+                text: "错误"
+                font.bold: true
+                font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+            }
             Label {
                 text: backend.error_message
                 Layout.fillWidth: true
@@ -196,8 +199,11 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 10
-            Label { text: "确认删除"; font.bold: true;                         font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
-                        // Note: Linux行距视觉应用暂未完成 (QML limitation) }
+            Label {
+                text: "确认删除"
+                font.bold: true
+                font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+            }
             Label { text: "您确定要删除此项目吗？" }
             RowLayout {
                 Layout.fillWidth: true
@@ -548,324 +554,322 @@ ApplicationWindow {
 
         ToolBar {
             Layout.fillWidth: true
-        background: Rectangle { color: "#2d2d2d" }
-        RowLayout {
-            anchors.fill: parent
-            ToolButton {
-                text: "打开/创建工作区"
-                onClicked: backend.open_workspace_dialog()
-                contentItem: Text {
-                    text: parent.text
-                    color: "white"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+            background: Rectangle { color: "#2d2d2d" }
+            RowLayout {
+                anchors.fill: parent
+                ToolButton {
+                    text: "打开/创建工作区"
+                    onClicked: backend.open_workspace_dialog()
+                    contentItem: Text {
+                        text: parent.text
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
-            }
-            ToolButton {
-                text: "新建作品"
-                onClicked: { inputDialog.actionType = "create_project"; inputDialog.contextData = { initialText: "新作品" }; inputDialog.open(); }
-                contentItem: Text {
-                    text: parent.text
-                    color: "white"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                ToolButton {
+                    text: "新建作品"
+                    onClicked: { inputDialog.actionType = "create_project"; inputDialog.contextData = { initialText: "新作品" }; inputDialog.open(); }
+                    contentItem: Text {
+                        text: parent.text
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
-            }
-            ToolButton {
-                text: "保存"
-                onClicked: backend.save_current_chapter(editorArea.text)
-                contentItem: Text {
-                    text: parent.text
-                    color: "white"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                ToolButton {
+                    text: "保存"
+                    onClicked: backend.save_current_chapter(editorArea.text)
+                    contentItem: Text {
+                        text: parent.text
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
-            }
-
-            ToolButton {
-                text: "设置"
-                onClicked: settingsDialog.open()
-                contentItem: Text {
-                    text: parent.text
-                    color: "white"
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                ToolButton {
+                    text: "设置"
+                    onClicked: settingsDialog.open()
+                    contentItem: Text {
+                        text: parent.text
+                        color: "white"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
                 }
+                Item { Layout.fillWidth: true }
             }
-
-            Item { Layout.fillWidth: true }
         }
-    }
 
         ToolBar {
             Layout.fillWidth: true
-        background: Rectangle { color: "#2d2d2d" }
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 10
-            anchors.rightMargin: 10
-            spacing: 15
-            Label {
-                id: statusLabel
-                text: backend.save_status
-                color: "white"
-            }
-            Label {
-                id: wordCountLabel
-                text: "字数: " + backend.word_count
-                color: "white"
-            }
-            Item { Layout.fillWidth: true }
-            Label {
-                text: backend.chapter_path
-                color: "gray"
-                elide: Text.ElideRight
-                Layout.maximumWidth: 250
-                clip: true
-            }
-            Label {
-                id: workspacePathLabel
-                text: backend.workspace_path
-                color: "gray"
-                elide: Text.ElideRight
-                Layout.maximumWidth: 250
-                clip: true
+            background: Rectangle { color: "#2d2d2d" }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                spacing: 15
+                Label {
+                    id: statusLabel
+                    text: backend.save_status
+                    color: "white"
+                }
+                Label {
+                    id: wordCountLabel
+                    text: "字数: " + backend.word_count
+                    color: "white"
+                }
+                Item { Layout.fillWidth: true }
+                Label {
+                    text: backend.chapter_path
+                    color: "gray"
+                    elide: Text.ElideRight
+                    Layout.maximumWidth: 250
+                    clip: true
+                }
+                Label {
+                    id: workspacePathLabel
+                    text: backend.workspace_path
+                    color: "gray"
+                    elide: Text.ElideRight
+                    Layout.maximumWidth: 250
+                    clip: true
+                }
             }
         }
-    }
 
         SplitView {
             Layout.fillWidth: true
             Layout.fillHeight: true
             orientation: Qt.Horizontal
 
-        Rectangle {
-            SplitView.preferredWidth: 250
-            SplitView.minimumWidth: 200
-            color: "#252526"
+            Rectangle {
+                SplitView.preferredWidth: 250
+                SplitView.minimumWidth: 200
+                color: "#252526"
 
-            ListView {
-                id: treeView
-                anchors.fill: parent
-                model: treeModel
-                clip: true
+                ListView {
+                    id: treeView
+                    anchors.fill: parent
+                    model: treeModel
+                    clip: true
 
-                Text {
-                    anchors.centerIn: parent
-                    text: "未选择作品"
-                    color: "gray"
-                    visible: treeModel.count === 0
-                }
-
-                delegate: Item {
-                    width: ListView.view.width
-                    height: 30
-                    Rectangle {
-                        anchors.fill: parent
-                        color: treeView.currentIndex === index ? "#37373d" : "transparent"
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: {
-                                treeView.currentIndex = index;
-                                let node = treeModel.get(index);
-                                saveCurrentIfNeeded();
-                                loadingChapter = true;
-                                if (node.type === "project") {
-                                    backend.select_project(node.id);
-                                    editorArea.text = "";
-                                    backend.save_status = "已保存";
-                                } else if (node.type === "volume") {
-                                    backend.select_volume(node.projectId, node.id);
-                                    editorArea.text = "";
-                                    backend.save_status = "已保存";
-                                } else if (node.type === "chapter") {
-                                    backend.select_chapter(node.projectId, node.volumeId, node.id);
-                                    editorArea.text = backend.get_chapter_content(node.projectId, node.volumeId, node.id);
-                                    backend.save_status = "已保存";
-                                    editorArea.forceActiveFocus();
-                                }
-                                loadingChapter = false;
-                            }
-                        }
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: (model.type === "project" ? 5 : model.type === "volume" ? 20 : 35)
-                            spacing: 5
-
-                            Text {
-                                text: model.title
-                                color: "white"
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                                clip: true
-                            }
-
-                            ToolButton {
-                                visible: treeView.currentIndex === index
-                                text: "⋮"
-                                onClicked: contextMenu.open()
-                                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                background: Item {}
-                                padding: 0
-                                Layout.preferredWidth: 30
-                                Layout.alignment: Qt.AlignVCenter
-
-                                Menu {
-                                    id: contextMenu
-                                    MenuItem {
-                                        text: model.type === "project" ? "新建分卷" : "新建章节"
-                                        visible: model.type !== "chapter"
-                                        onTriggered: {
-                                            if (model.type === "project") {
-                                                inputDialog.actionType = "create_volume";
-                                                inputDialog.contextData = { projectId: model.id, initialText: "新分卷" };
-                                                inputDialog.open();
-                                            } else if (model.type === "volume") {
-                                                inputDialog.actionType = "create_chapter";
-                                                inputDialog.contextData = { projectId: model.projectId, volumeId: model.id, initialText: "新章节" };
-                                                inputDialog.open();
-                                            }
-                                        }
-                                    }
-                                    MenuItem {
-                                        text: "重命名"
-                                        onTriggered: {
-                                            inputDialog.actionType = "rename_" + model.type;
-                                            inputDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId, initialText: model.title.trim() };
-                                            inputDialog.open();
-                                        }
-                                    }
-                                    MenuItem {
-                                        text: "删除"
-                                        onTriggered: {
-                                            if (model.type === "volume") {
-                                                confirmDialog.text = "确定要删除此分卷及其包含的所有章节吗？";
-                                            } else {
-                                                confirmDialog.text = "确定要删除吗？";
-                                            }
-                                            confirmDialog.actionType = "delete_" + model.type;
-                                            confirmDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId };
-                                            confirmDialog.open();
-                                        }
-                                    }
-                                    MenuItem {
-                                        text: "上移"
-                                        visible: !isFirstSibling(index)
-                                        onTriggered: {
-                                            let ids = [];
-                                            let my_pos = -1;
-                                            for (let i = 0; i < treeModel.count; i++) {
-                                                let node = treeModel.get(i);
-                                                if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
-                                                    if (node.id === model.id) my_pos = ids.length;
-                                                    ids.push(node.id);
-                                                }
-                                            }
-                                            if (my_pos > 0) {
-                                                let temp = ids[my_pos];
-                                                ids[my_pos] = ids[my_pos - 1];
-                                                ids[my_pos - 1] = temp;
-
-                                                if (model.type === "project") backend.reorder_projects(ids.join(","));
-                                                else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
-                                                else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
-                                            }
-                                        }
-                                    }
-                                    MenuItem {
-                                        text: "下移"
-                                        visible: !isLastSibling(index)
-                                        onTriggered: {
-                                            let ids = [];
-                                            let my_pos = -1;
-                                            for (let i = 0; i < treeModel.count; i++) {
-                                                let node = treeModel.get(i);
-                                                if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
-                                                    if (node.id === model.id) my_pos = ids.length;
-                                                    ids.push(node.id);
-                                                }
-                                            }
-                                            if (my_pos < ids.length - 1) {
-                                                let temp = ids[my_pos];
-                                                ids[my_pos] = ids[my_pos + 1];
-                                                ids[my_pos + 1] = temp;
-
-                                                if (model.type === "project") backend.reorder_projects(ids.join(","));
-                                                else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
-                                                else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    Text {
+                        anchors.centerIn: parent
+                        text: "未选择作品"
+                        color: "gray"
+                        visible: treeModel.count === 0
                     }
-                }
-            }
-        }
 
-        Rectangle {
-            SplitView.fillWidth: true
-            color: "#1e1e1e"
+                    delegate: Item {
+                        width: ListView.view.width
+                        height: 30
+                        Rectangle {
+                            anchors.fill: parent
+                            color: treeView.currentIndex === index ? "#37373d" : "transparent"
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: {
+                                    treeView.currentIndex = index;
+                                    let node = treeModel.get(index);
+                                    saveCurrentIfNeeded();
+                                    loadingChapter = true;
+                                    if (node.type === "project") {
+                                        backend.select_project(node.id);
+                                        editorArea.text = "";
+                                        backend.save_status = "已保存";
+                                    } else if (node.type === "volume") {
+                                        backend.select_volume(node.projectId, node.id);
+                                        editorArea.text = "";
+                                        backend.save_status = "已保存";
+                                    } else if (node.type === "chapter") {
+                                        backend.select_chapter(node.projectId, node.volumeId, node.id);
+                                        editorArea.text = backend.get_chapter_content(node.projectId, node.volumeId, node.id);
+                                        backend.save_status = "已保存";
+                                        editorArea.forceActiveFocus();
+                                    }
+                                    loadingChapter = false;
+                                }
+                            }
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: (model.type === "project" ? 5 : model.type === "volume" ? 20 : 35)
+                                spacing: 5
 
-            Timer {
-                id: autoSaveTimer
-                interval: 1500
-                repeat: false
-                onTriggered: {
-                    if (backend.save_status === "未保存") {
-                        backend.save_current_chapter(editorArea.text);
+                                Text {
+                                    text: model.title
+                                    color: "white"
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    clip: true
+                                }
+
+                                ToolButton {
+                                    visible: treeView.currentIndex === index
+                                    text: "⋮"
+                                    onClicked: contextMenu.open()
+                                    contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    background: Item {}
+                                    padding: 0
+                                    Layout.preferredWidth: 30
+                                    Layout.alignment: Qt.AlignVCenter
+
+                                    Menu {
+                                        id: contextMenu
+                                        MenuItem {
+                                            text: model.type === "project" ? "新建分卷" : "新建章节"
+                                            visible: model.type !== "chapter"
+                                            onTriggered: {
+                                                if (model.type === "project") {
+                                                    inputDialog.actionType = "create_volume";
+                                                    inputDialog.contextData = { projectId: model.id, initialText: "新分卷" };
+                                                    inputDialog.open();
+                                                } else if (model.type === "volume") {
+                                                    inputDialog.actionType = "create_chapter";
+                                                    inputDialog.contextData = { projectId: model.projectId, volumeId: model.id, initialText: "新章节" };
+                                                    inputDialog.open();
+                                                }
+                                            }
+                                        }
+                                        MenuItem {
+                                            text: "重命名"
+                                            onTriggered: {
+                                                inputDialog.actionType = "rename_" + model.type;
+                                                inputDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId, initialText: model.title.trim() };
+                                                inputDialog.open();
+                                            }
+                                        }
+                                        MenuItem {
+                                            text: "删除"
+                                            onTriggered: {
+                                                if (model.type === "volume") {
+                                                    confirmDialog.text = "确定要删除此分卷及其包含的所有章节吗？";
+                                                } else {
+                                                    confirmDialog.text = "确定要删除吗？";
+                                                }
+                                                confirmDialog.actionType = "delete_" + model.type;
+                                                confirmDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId };
+                                                confirmDialog.open();
+                                            }
+                                        }
+                                        MenuItem {
+                                            text: "上移"
+                                            visible: !isFirstSibling(index)
+                                            onTriggered: {
+                                                let ids = [];
+                                                let my_pos = -1;
+                                                for (let i = 0; i < treeModel.count; i++) {
+                                                    let node = treeModel.get(i);
+                                                    if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
+                                                        if (node.id === model.id) my_pos = ids.length;
+                                                        ids.push(node.id);
+                                                    }
+                                                }
+                                                if (my_pos > 0) {
+                                                    let temp = ids[my_pos];
+                                                    ids[my_pos] = ids[my_pos - 1];
+                                                    ids[my_pos - 1] = temp;
+
+                                                    if (model.type === "project") backend.reorder_projects(ids.join(","));
+                                                    else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
+                                                    else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
+                                                }
+                                            }
+                                        }
+                                        MenuItem {
+                                            text: "下移"
+                                            visible: !isLastSibling(index)
+                                            onTriggered: {
+                                                let ids = [];
+                                                let my_pos = -1;
+                                                for (let i = 0; i < treeModel.count; i++) {
+                                                    let node = treeModel.get(i);
+                                                    if (node.type === model.type && node.projectId === model.projectId && node.volumeId === model.volumeId) {
+                                                        if (node.id === model.id) my_pos = ids.length;
+                                                        ids.push(node.id);
+                                                    }
+                                                }
+                                                if (my_pos < ids.length - 1) {
+                                                    let temp = ids[my_pos];
+                                                    ids[my_pos] = ids[my_pos + 1];
+                                                    ids[my_pos + 1] = temp;
+
+                                                    if (model.type === "project") backend.reorder_projects(ids.join(","));
+                                                    else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","));
+                                                    else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             Rectangle {
-                anchors.fill: parent
+                SplitView.fillWidth: true
                 color: "#1e1e1e"
-                clip: true
 
-                Text {
-                    anchors.centerIn: parent
-                    text: "请在左侧选择或创建一个章节"
-                    color: "gray"
-                    visible: !backend.has_selected_chapter_prop
+                Timer {
+                    id: autoSaveTimer
+                    interval: 1500
+                    repeat: false
+                    onTriggered: {
+                        if (backend.save_status === "未保存") {
+                            backend.save_current_chapter(editorArea.text);
+                        }
+                    }
                 }
 
-                ScrollView {
-                    id: editorScroll
+                Rectangle {
                     anchors.fill: parent
-                    anchors.margins: 20
+                    color: "#1e1e1e"
                     clip: true
-                    visible: backend.has_selected_chapter_prop
-                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                    TextArea {
-                        id: editorArea
-                        color: "#d4d4d4"
-                                                font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
-                        // Note: Linux行距视觉应用暂未完成 (QML limitation)
-                        wrapMode: TextArea.Wrap
-                        background: Rectangle { color: "transparent" }
-                        enabled: backend.has_selected_chapter_prop
-                        width: editorScroll.availableWidth
-                        implicitWidth: editorScroll.availableWidth
-                        implicitHeight: Math.max(editorScroll.availableHeight, contentHeight + topPadding + bottomPadding)
-                        focus: true
-                        activeFocusOnTab: true
-                        selectByMouse: true
-                        persistentSelection: true
+                    Text {
+                        anchors.centerIn: parent
+                        text: "请在左侧选择或创建一个章节"
+                        color: "gray"
+                        visible: !backend.has_selected_chapter_prop
+                    }
 
-                        onTextChanged: {
-backend.calculate_word_count(text);
-                            if (backend.setting_auto_save_enabled) {
-                                autoSaveTimer.interval = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500;
-                                autoSaveTimer.restart();
-                            }
-                            if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存") {
-                                backend.save_status = "未保存";
-                            }
-                            if (!loadingChapter && backend.has_selected_chapter_prop) {
-                                autoSaveTimer.restart();
+                    ScrollView {
+                        id: editorScroll
+                        anchors.fill: parent
+                        anchors.margins: 20
+                        clip: true
+                        visible: backend.has_selected_chapter_prop
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                        TextArea {
+                            id: editorArea
+                            color: "#d4d4d4"
+                            font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+                            wrapMode: TextArea.Wrap
+                            background: Rectangle { color: "transparent" }
+                            enabled: backend.has_selected_chapter_prop
+                            width: editorScroll.availableWidth
+                            implicitWidth: editorScroll.availableWidth
+                            implicitHeight: Math.max(editorScroll.availableHeight, contentHeight + topPadding + bottomPadding)
+                            focus: true
+                            activeFocusOnTab: true
+                            selectByMouse: true
+                            persistentSelection: true
+
+                            onTextChanged: {
+                                backend.calculate_word_count(text);
+                                if (backend.setting_auto_save_enabled) {
+                                    autoSaveTimer.interval = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500;
+                                    autoSaveTimer.restart();
+                                }
+                                if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存") {
+                                    backend.save_status = "未保存";
+                                }
+                                if (!loadingChapter && backend.has_selected_chapter_prop) {
+                                    autoSaveTimer.restart();
+                                }
                             }
                         }
                     }
@@ -873,8 +877,4 @@ backend.calculate_word_count(text);
             }
         }
     }
-}
-}
-
-}
 }
