@@ -43,6 +43,28 @@ cargo test
 
 **支持目标说明**：官方只支持 `arm64-v8a` 构建。不支持 `x86_64` Android 设备或模拟器。如需支持 `x86_64`，开源用户可自行修改 `tools/build_android.sh` 和 `apps/android/app/build.gradle.kts` 添加对应 ABI。
 
+#### Android 固定签名与 GitHub Actions 配置
+
+为了支持 GitHub Actions 构建出的 APK 可以长期稳定覆盖安装（免除用户每次重新安装丢失数据的问题），我们需要配置固定的签名证书。
+
+1. **本地生成 Keystore**
+   ```bash
+   keytool -genkey -v -keystore writer_release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias my_alias
+   ```
+2. **生成 Base64 Keystore 字符串**
+   ```bash
+   base64 -w 0 writer_release.jks > keystore_base64.txt
+   ```
+3. **配置 GitHub Secrets**
+   进入仓库 Settings -> Secrets and variables -> Actions，添加以下 Secrets：
+   - `ANDROID_KEYSTORE_BASE64` (填入 `keystore_base64.txt` 中的内容)
+   - `ANDROID_KEYSTORE_PASSWORD` (上述 keystore 的密码)
+   - `ANDROID_KEY_ALIAS` (如 `my_alias`)
+   - `ANDROID_KEY_PASSWORD` (上述 alias 的密码)
+
+**注意**：
+- 如果你之前安装过没有配置签名的 GitHub Actions 产物（使用的是默认随机 debug 签名），在第一次安装配置了固定签名的版本时，**必须先卸载旧版**。在此之后，即可连续覆盖安装升级。
+
 ### Linux 客户端
 
 由于尚未实现完整的构建脚本，可以使用以下命令运行：
