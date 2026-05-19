@@ -249,3 +249,16 @@ mod tests {
         assert!(core.execute_action("unknown.action", "", "").is_err());
     }
 }
+
+#[test]
+fn test_execute_invalid_json() {
+    use crate::facade::WriterCore;
+    use tempfile::tempdir;
+    let temp_dir = tempdir().unwrap();
+    let core = WriterCore::new(temp_dir.path());
+    core.create_workspace().unwrap();
+
+    let result = core.execute_action("settings.editor.font_size.set", "{invalid json}", "").unwrap();
+    assert!(!result.success);
+    assert_eq!(result.message.unwrap(), "invalid args json");
+}
