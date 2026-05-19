@@ -169,7 +169,7 @@ class ActionRegistryActivity : AppCompatActivity() {
         }
 
         if (!isBlocked) {
-            if (action.kind == "Mutation") {
+            if (isMutation(action)) {
                 val btnApply = MaterialButton(this@ActionRegistryActivity).apply {
                     text = getString(R.string.action_apply)
                     textSize = 14f
@@ -193,7 +193,7 @@ class ActionRegistryActivity : AppCompatActivity() {
         content.addView(buttonRow)
         card.addView(content)
 
-        if (!isBlocked && action.kind == "Mutation") {
+        if (!isBlocked && isMutation(action)) {
             preloadMutationState(action, uiContainer)
         }
 
@@ -430,25 +430,42 @@ class ActionRegistryActivity : AppCompatActivity() {
         }
     }
 
+    private fun normalizedKind(action: ActionDescriptor): String {
+        return action.kind.lowercase()
+    }
+
+    private fun normalizedRisk(action: ActionDescriptor): String {
+        return action.riskLevel.lowercase()
+    }
+
+    private fun isMutation(action: ActionDescriptor): Boolean {
+        return normalizedKind(action) == "mutation"
+    }
+
+    private fun isBlockedRisk(action: ActionDescriptor): Boolean {
+        val risk = normalizedRisk(action)
+        return risk == "dangerous" || risk == "contentwrite"
+    }
+
     private fun isActionBlocked(action: ActionDescriptor): Boolean {
-        return action.riskLevel == "Dangerous" || action.riskLevel == "ContentWrite"
+        return isBlockedRisk(action)
     }
 
     private fun kindLabel(kind: String): String {
-        return when (kind) {
-            "Query" -> getString(R.string.action_kind_query)
-            "Preview" -> getString(R.string.action_kind_preview)
-            "Mutation" -> getString(R.string.action_kind_mutation)
+        return when (kind.lowercase()) {
+            "query" -> getString(R.string.action_kind_query)
+            "preview" -> getString(R.string.action_kind_preview)
+            "mutation" -> getString(R.string.action_kind_mutation)
             else -> kind
         }
     }
 
     private fun riskLabel(risk: String): String {
-        return when (risk) {
-            "SafeRead" -> getString(R.string.risk_safe_read)
-            "SafeWrite" -> getString(R.string.risk_safe_write)
-            "ContentWrite" -> getString(R.string.risk_content_write)
-            "Dangerous" -> getString(R.string.risk_dangerous)
+        return when (risk.lowercase()) {
+            "saferead" -> getString(R.string.risk_safe_read)
+            "safewrite" -> getString(R.string.risk_safe_write)
+            "contentwrite" -> getString(R.string.risk_content_write)
+            "dangerous" -> getString(R.string.risk_dangerous)
             else -> risk
         }
     }
