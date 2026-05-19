@@ -9,6 +9,8 @@ use crate::trash;
 use crate::volume::{self, Volume};
 use crate::workspace;
 use std::path::{Path, PathBuf};
+use crate::action_registry::{ActionDescriptor, ActionResult, ActionRegistry};
+use serde_json::Value;
 
 /// The main entry point for client applications (Android, Linux).
 /// This struct holds the workspace root and provides high-level methods.
@@ -35,6 +37,210 @@ impl WriterCore {
     }
 
     /// List all projects in the workspace.
+
+    pub fn list_registered_actions(&self) -> crate::error::Result<Vec<ActionDescriptor>> {
+        let registry = ActionRegistry::new();
+        Ok(registry.list_registered_actions())
+    }
+
+    pub fn get_action(&self, action_id: &str) -> crate::error::Result<Option<ActionDescriptor>> {
+        let registry = ActionRegistry::new();
+        Ok(registry.get_action(action_id))
+    }
+
+    pub fn execute_action(&self, action_id: &str, args_json: &str, _context_json: &str) -> crate::error::Result<ActionResult> {
+        let registry = ActionRegistry::new();
+        let _action = registry.get_action(action_id).ok_or_else(|| {
+            crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Action not found: {}", action_id),
+            ))
+        })?;
+
+        let args: Value = if args_json.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(args_json).unwrap_or(Value::Null)
+        };
+
+        match action_id {
+            "settings.editor.font_size.get" => {
+                let settings = self.load_local_settings()?;
+                Ok(ActionResult {
+                    success: true,
+                    message: None,
+                    data: Some(serde_json::json!({ "fontSize": settings.editor_font_size })),
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+            "settings.editor.font_size.set" => {
+                if let Some(font_size) = args.get("fontSize").and_then(|v| v.as_f64()) {
+                    if font_size < 10.0 || font_size > 72.0 {
+                        return Ok(ActionResult {
+                            success: false,
+                            message: Some("Font size must be between 10 and 72".to_string()),
+                            data: None,
+                            proposed_ui: None,
+                            requires_confirmation: None,
+                        });
+                    }
+                    let mut settings = self.load_local_settings()?;
+                    settings.editor_font_size = font_size as f32;
+                    self.save_local_settings(&settings)?;
+                    Ok(ActionResult {
+                        success: true,
+                        message: Some("Font size updated".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                } else {
+                    Ok(ActionResult {
+                        success: false,
+                        message: Some("Missing or invalid fontSize parameter".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            "settings.editor.auto_save.get" => {
+                let settings = self.load_local_settings()?;
+                Ok(ActionResult {
+                    success: true,
+                    message: None,
+                    data: Some(serde_json::json!({ "enabled": settings.auto_save_enabled })),
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+            "settings.editor.auto_save.set" => {
+                if let Some(enabled) = args.get("enabled").and_then(|v| v.as_bool()) {
+                    let mut settings = self.load_local_settings()?;
+                    settings.auto_save_enabled = enabled;
+                    self.save_local_settings(&settings)?;
+                    Ok(ActionResult {
+                        success: true,
+                        message: Some("Auto save setting updated".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                } else {
+                    Ok(ActionResult {
+                        success: false,
+                        message: Some("Missing or invalid enabled parameter".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            "settings.editor.auto_save_delay.set" => {
+                if let Some(delay) = args.get("delayMs").and_then(|v| v.as_u64()) {
+                    if delay < 500 || delay > 10000 {
+                        return Ok(ActionResult {
+                            success: false,
+                            message: Some("Delay must be between 500 and 10000".to_string()),
+                            data: None,
+                            proposed_ui: None,
+                            requires_confirmation: None,
+                        });
+                    }
+                    let mut settings = self.load_local_settings()?;
+                    settings.auto_save_delay_ms = delay;
+                    self.save_local_settings(&settings)?;
+                    Ok(ActionResult {
+                        success: true,
+                        message: Some("Auto save delay updated".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                } else {
+                    Ok(ActionResult {
+                        success: false,
+                        message: Some("Missing or invalid delayMs parameter".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            "settings.sync.config.get" => {
+                let config = self.load_sync_config()?;
+                Ok(ActionResult {
+                    success: true,
+                    message: None,
+                    data: Some(serde_json::to_value(config).unwrap_or(Value::Null)),
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+            "sync.diagnostics.run" => {
+                let config = self.load_sync_config()?;
+                let secrets = self.load_sync_secrets()?;
+                let mut diagnostics_config = config.clone();
+                diagnostics_config.enabled = true; // Force enabled to run diagnostics
+                let token = secrets.token.clone().unwrap_or_default();
+                let mut secrets_for_diag = secrets.clone();
+                secrets_for_diag.token = Some(token);
+                let backend = crate::sync_service::Git2Backend;
+                let result = crate::sync_service::SyncService::perform_sync_diagnostics(
+                    &diagnostics_config,
+                    &secrets_for_diag,
+                    &backend,
+                );
+                match result {
+                    Ok(diag) => Ok(ActionResult {
+                        success: true,
+                        message: Some("Diagnostics completed".to_string()),
+                        data: Some(serde_json::to_value(diag).unwrap_or(Value::Null)),
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    }),
+                    Err(e) => Ok(ActionResult {
+                        success: false,
+                        message: Some(format!("Diagnostics failed: {}", e)),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            "sync.plan.preview" => {
+                let config = self.load_sync_config()?;
+                let plan_result = self.perform_sync_dry_run(&config);
+                match plan_result {
+                    Ok(plan) => Ok(ActionResult {
+                        success: true,
+                        message: Some("Plan calculated".to_string()),
+                        data: Some(serde_json::to_value(plan).unwrap_or(Value::Null)),
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    }),
+                    Err(e) => Ok(ActionResult {
+                        success: false,
+                        message: Some(format!("Plan calculation failed: {}", e)),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            _ => {
+                Ok(ActionResult {
+                    success: false,
+                    message: Some(format!("Action execution not implemented: {}", action_id)),
+                    data: None,
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+        }
+    }
+
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         project::list_projects(&self.workspace_path)
     }

@@ -955,6 +955,7 @@ dependencies = [
  "qmetaobject",
  "qt-build-utils",
  "rfd",
+ "serde_json",
  "writer_core",
 ]
 
