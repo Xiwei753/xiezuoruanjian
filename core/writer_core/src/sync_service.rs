@@ -995,9 +995,9 @@ impl SyncService {
             result.user_message = "诊断成功：连接正常，权限有效，仓库和分支存在。".to_string();
         } else {
             result.branch_ok = false;
-            result.branch_status = "failed".to_string();
-            result.success = false;
-            result.user_message = format!("分支 {} 不存在于远程仓库。", config.branch);
+            result.branch_status = "missing".to_string();
+            result.success = true;
+            result.user_message = format!("仓库可访问，分支 {} 不存在。首次同步将创建该分支。", config.branch);
         }
 
         Ok(result)
@@ -1174,10 +1174,12 @@ impl SyncService {
         }
 
         // Pull
-        if let Err(e) = backend
+        let mut pull_branch_missing = false;
+        let pull_failed = backend
             .pull(workspace_path, &config.branch, auth.as_ref(), Some(config))
             .map_err(map_git_error)
-        {
+            .err();
+        if let Some(e) = pull_failed {
             let e_str = e.to_string().to_lowercase();
             if e_str.contains("unrelated")
                 || e_str.contains("merge")
@@ -1197,7 +1199,23 @@ impl SyncService {
                     format!("Pull failed: {}", e),
                 ));
             }
-            if e.to_string().contains("SyncConflict_Detected") {
+            if e_str.contains("ref not found")
+                || e_str.contains("couldn't find remote ref")
+                || (e_str.contains("remote branch") && e_str.contains("not found"))
+            {
+                if result.first_sync_mode != FirstSyncMode::InitExistingWorkspace
+                    && result.first_sync_mode != FirstSyncMode::AlreadyGitRepo
+                {
+                    return Ok(SyncResult::error(
+                        SyncStatus::Error(format!("Pull failed: {}", e)),
+                        result.first_sync_mode,
+                        Some("拉取失败，远程分支不存在。".to_string()),
+                        format!("Pull failed: {}", e),
+                    ));
+                }
+                pull_branch_missing = true;
+                result.user_message = Some("远程分支不存在，首次同步将创建该分支。".to_string());
+            } else if e.to_string().contains("SyncConflict_Detected") {
                 result.status = SyncStatus::Conflict;
                 result.error = Some("Sync Conflict: automatic merge failed".to_string());
 
@@ -1323,16 +1341,16 @@ impl SyncService {
                 }
 
                 return Ok(result);
+            } else {
+                return Ok(SyncResult::error(
+                    SyncStatus::Error(format!("Pull failed: {}", e)),
+                    result.first_sync_mode,
+                    Some(get_user_friendly_error(
+                        &(format!("Pull failed: {}", e)).to_string(),
+                    )),
+                    format!("Pull failed: {}", e),
+                ));
             }
-
-            return Ok(SyncResult::error(
-                SyncStatus::Error(format!("Pull failed: {}", e)),
-                result.first_sync_mode,
-                Some(get_user_friendly_error(
-                    &(format!("Pull failed: {}", e)).to_string(),
-                )),
-                format!("Pull failed: {}", e),
-            ));
         }
         // Get Plan
         let plan = match Self::build_sync_plan_from_workspace(workspace_path) {
@@ -2637,5 +2655,96 @@ mod tests {
                 .any(|s| s.contains("sync_secrets.local.json")),
             "Secrets should be explicitly ignored"
         );
+    }
+
+    #[test]
+    fn test_first_sync_empty_remote_branch_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
+
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://github.com/test/empty-repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockEmptyRemoteBackend;
+        impl GitBackend for MockEmptyRemoteBackend {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "ref not found: refs/heads/main",
+                )))
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(Some("commit_hash".to_string()))
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec!["workspace_manifest.json".to_string()])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res =
+            SyncService::perform_sync(dir.path(), &config, &secrets, &MockEmptyRemoteBackend)
+                .unwrap();
+        assert_eq!(res.status, SyncStatus::Success);
+        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
+        assert!(res.user_message.unwrap().contains("首次同步将创建该分支"));
     }
 }

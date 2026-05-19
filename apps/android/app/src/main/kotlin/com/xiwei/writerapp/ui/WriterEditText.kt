@@ -21,7 +21,6 @@ class WriterEditText @JvmOverloads constructor(
     private var typingOverlayRenderer: TypingOverlayRenderer? = null
     private var smoothCursorRenderer: SmoothCursorRenderer? = null
     private var autoIndentController: AutoIndentController? = null
-    private var flingScroller: EditorFlingScroller? = null
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
@@ -63,7 +62,6 @@ class WriterEditText @JvmOverloads constructor(
         typingAnimationController = TypingAnimationController(this, typingOverlayRenderer!!)
         smoothCursorRenderer = SmoothCursorRenderer(this)
         autoIndentController = AutoIndentController(this)
-        flingScroller = EditorFlingScroller(this)
         controllersReady = true
 
         addTextChangedListener(object : TextWatcher {
@@ -103,19 +101,6 @@ class WriterEditText @JvmOverloads constructor(
         typeface = android.graphics.Typeface.create("sans-serif", typeface?.style ?: android.graphics.Typeface.NORMAL)
     }
 
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        val handledByFling = flingScroller?.onTouchEvent(event) ?: false
-        val handledBySuper = super.onTouchEvent(event)
-        return handledBySuper || handledByFling
-    }
-
-    override fun computeScroll() {
-        super.computeScroll()
-        if (flingScroller?.computeScroll() == true) {
-            postInvalidateOnAnimation()
-        }
-    }
-
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
         if (!controllersReady) return
@@ -127,7 +112,6 @@ class WriterEditText @JvmOverloads constructor(
         if (!controllersReady) return
         smoothCursorRenderer?.onDetachedFromWindow()
         typingAnimationController?.onDetachedFromWindow()
-        flingScroller?.abortAnimation()
     }
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
@@ -137,6 +121,7 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     override fun onDraw(canvas: Canvas) {
+        smoothCursorRenderer?.hideNativeCursorIfNeeded()
         super.onDraw(canvas)
         if (!controllersReady) return
         smoothCursorRenderer?.draw(canvas)

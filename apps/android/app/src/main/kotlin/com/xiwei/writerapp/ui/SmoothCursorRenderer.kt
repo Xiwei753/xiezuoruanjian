@@ -133,6 +133,12 @@ class SmoothCursorRenderer(private val editText: EditText) {
         }
     }
 
+    fun hideNativeCursorIfNeeded() {
+        if (smoothCursorEnabled) {
+            editText.isCursorVisible = false
+        }
+    }
+
     fun onDetachedFromWindow() {
         editText.removeCallbacks(cursorBlinkRunnable)
         cursorAnimator?.cancel()
