@@ -121,7 +121,9 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     override fun onDraw(canvas: Canvas) {
-        smoothCursorRenderer?.hideNativeCursorIfNeeded()
+        if (smoothCursorRenderer?.smoothCursorEnabled == true && selectionStart == selectionEnd) {
+            isCursorVisible = false
+        }
         super.onDraw(canvas)
         if (!controllersReady) return
         smoothCursorRenderer?.draw(canvas)

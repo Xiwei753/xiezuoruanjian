@@ -1426,6 +1426,10 @@ impl SyncService {
             }
         }
 
+        if pull_branch_missing {
+            result.user_message = Some("已初始化远端分支并完成首次同步".to_string());
+        }
+
         // Update state
         let mut state = Self::load_sync_state(workspace_path).unwrap_or_default();
         state.remote_url = Some(config.remote_url.clone());
@@ -2745,6 +2749,6 @@ mod tests {
                 .unwrap();
         assert_eq!(res.status, SyncStatus::Success);
         assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
-        assert!(res.user_message.unwrap().contains("首次同步将创建该分支"));
+        assert!(res.user_message.unwrap().contains("已初始化远端分支并完成首次同步"));
     }
 }
