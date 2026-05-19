@@ -7,7 +7,12 @@ use std::rc::Rc;
 
 use writer_core::facade::WriterCore;
 
-qmetaobject::qrc!(qml_resources, "/" { "qml/main.qml" as "main.qml" });
+qmetaobject::qrc!(qml_resources, "/" {
+    "qml/main.qml" as "main.qml",
+    "qml/SettingsDialog.qml" as "SettingsDialog.qml",
+    "qml/EditorPage.qml" as "EditorPage.qml",
+    "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
+});
 
 #[allow(dead_code)]
 #[derive(QObject, Default)]
@@ -337,11 +342,7 @@ impl AppBackend {
             if let Ok(config) = core.load_sync_config() {
                 match core.perform_sync_diagnostics(&config) {
                     Ok(result) => {
-                        let mut msg = format!("诊断结果: {}
-网络连接: {}
-身份认证: {}
-仓库访问: {}
-分支存在: {}",
+                        let mut msg = format!("诊断结果: {}\n网络连接: {}\n身份认证: {}\n仓库访问: {}\n分支存在: {}",
                             if result.success { "成功" } else { "失败" },
                             if result.network_ok { "正常" } else { "异常" },
                             if result.auth_ok { "正常" } else { "异常" },
@@ -349,27 +350,19 @@ impl AppBackend {
                             if result.branch_ok { "正常" } else { "异常" },
                         );
                         if result.proxy_used {
-                            msg.push_str(&format!("
-已使用代理: {}://{}:{}", result.proxy_type, result.proxy_host, result.proxy_port));
+                            msg.push_str(&format!("\n已使用代理: {}://{}:{}", result.proxy_type, result.proxy_host, result.proxy_port));
                         }
                         if !result.user_message.is_empty() {
-                            msg.push_str(&format!("
-
-说明:
-{}", result.user_message));
+                            msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
                         }
                         if let Some(err) = result.raw_error {
-                            msg.push_str(&format!("
-
-错误详情:
-{}", err));
+                            msg.push_str(&format!("\n\n错误详情:\n{}", err));
                         }
                         self.current_sync_action_result = msg;
                         self.sync_action_completed();
                     }
                     Err(e) => {
-                        self.current_sync_action_result = format!("诊断过程发生错误:
-{}", e);
+                        self.current_sync_action_result = format!("诊断过程发生错误:\n{}", e);
                         self.sync_action_completed();
                     }
                 }
@@ -473,28 +466,19 @@ impl AppBackend {
                 match core.perform_sync_dry_run(&config) {
                     Ok(plan) => {
                         let mut msg = String::new();
-                        msg.push_str("同步计划检查完成
-");
-                        msg.push_str(&format!("需要上传的文件数: {}
-", plan.files_to_upload.len()));
-                        msg.push_str(&format!("需要下载的文件数: {}
-", plan.files_to_download.len()));
-                        msg.push_str(&format!("本地待删除的文件数: {}
-", plan.files_to_delete_local.len()));
-                        msg.push_str(&format!("远程待删除的文件数: {}
-", plan.files_to_delete_remote.len()));
+                        msg.push_str("同步计划检查完成\n");
+                        msg.push_str(&format!("需要上传的文件数: {}\n", plan.files_to_upload.len()));
+                        msg.push_str(&format!("需要下载的文件数: {}\n", plan.files_to_download.len()));
+                        msg.push_str(&format!("本地待删除的文件数: {}\n", plan.files_to_delete_local.len()));
+                        msg.push_str(&format!("远程待删除的文件数: {}\n", plan.files_to_delete_remote.len()));
 
                         if !plan.files_to_upload.is_empty() {
-                            msg.push_str("
-将要上传的文件:
-");
+                            msg.push_str("\n将要上传的文件:\n");
                             for f in plan.files_to_upload.iter().take(10) {
-                                msg.push_str(&format!("  - {}
-", f));
+                                msg.push_str(&format!("  - {}\n", f));
                             }
                             if plan.files_to_upload.len() > 10 {
-                                msg.push_str("  ... 更多文件省略
-");
+                                msg.push_str("  ... 更多文件省略\n");
                             }
                         }
                         self.current_sync_action_result = msg;
@@ -679,7 +663,6 @@ impl AppBackend {
             &self.selected_chapter_id,
         ) {
             let core = core_ref.borrow();
-            // Just format it nicely
             let mut path = String::new();
             if let Ok(projects) = core.list_projects() {
                 if let Some(proj) = projects.iter().find(|x| x.id == *p) {
@@ -735,7 +718,6 @@ impl AppBackend {
         if let Some(path) = FileDialog::new().pick_folder() {
             let core = WriterCore::new(&path);
 
-            // Validate first, if invalid try to create.
             if !core.validate_workspace().unwrap_or(false) {
                 if let Err(e) = core.create_workspace() {
                     self.set_error(&format!("无法创建工作区: {}", e));
@@ -1170,8 +1152,12 @@ fn main() {
         CStr::from_bytes_with_nul(b"AppBackend\0").unwrap(),
     );
 
+    let qml_path = "qrc:/main.qml";
+    eprintln!("[Linux] Loading QML entry: {}", qml_path);
+
     let mut engine = QmlEngine::new();
-    engine.load_file("qrc:/main.qml".into());
-    // In qmetaobject 0.2.10, QML load errors are automatically printed to stderr by the underlying Qt engine.
+    engine.load_file(qml_path.into());
+
+    eprintln!("[Linux] QML engine started, entering event loop");
     engine.exec();
 }

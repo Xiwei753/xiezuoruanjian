@@ -1,5 +1,8 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource>
     <file alias="main.qml">qml/main.qml</file>
+    <file alias="SettingsDialog.qml">qml/SettingsDialog.qml</file>
+    <file alias="EditorPage.qml">qml/EditorPage.qml</file>
+    <file alias="ActionRegistryPage.qml">qml/ActionRegistryPage.qml</file>
 </qresource>
 </RCC>
