@@ -8,7 +8,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.widget.EditText
 
 class TypingAnimationController(
-    private val editText: EditText,
+    private val editText: WriterEditText,
     private val renderer: TypingOverlayRenderer
 ) {
     private val DEBUG_ANIM = false
@@ -44,10 +44,24 @@ class TypingAnimationController(
             return
         }
 
+        val editable = editText.text
+        var matchesComposing = false
+        if (editable != null && count > 0) {
+            val compStart = BaseInputConnection.getComposingSpanStart(editable)
+            val compEnd = BaseInputConnection.getComposingSpanEnd(editable)
+            if (compStart != -1 && compEnd != -1) {
+                if (start >= compStart && start + count <= compEnd) {
+                    matchesComposing = true
+                }
+            }
+        }
+
         if (count > 0 && after == 0) {
             isPasteOrDelete = true
         } else if (after > 100) {
             isPasteOrDelete = true
+        } else if (count > 0 && !matchesComposing) {
+            isPasteOrDelete = true // Treat replacements/deletions as paste/delete to skip animation
         } else {
             isPasteOrDelete = false
         }
@@ -79,7 +93,7 @@ class TypingAnimationController(
         }
     }
 
-    fun afterTextChanged(editable: Editable?, onSpanUpdate: (Boolean) -> Unit) {
+    fun afterTextChanged(editable: Editable?) {
         if (editable == null) return
         if (isSuppressAnimations) return
 
@@ -87,7 +101,7 @@ class TypingAnimationController(
         val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
         val isComposing = composingStart != -1 && composingEnd != -1
 
-        if (isComposing && lastAddedStart >= composingStart && lastAddedStart < composingEnd) {
+        if (isComposing && lastAddedStart >= composingStart && lastAddedStart + lastAddedCount <= composingEnd) {
              if (DEBUG_ANIM) android.util.Log.d(TAG, "afterTextChanged - skipping animation for composing text.")
              lastAddedStart = -1
              lastAddedCount = 0
@@ -107,13 +121,19 @@ class TypingAnimationController(
                     interpolator = android.view.animation.DecelerateInterpolator()
                 }
 
+                val hiddenSpan = android.text.style.ForegroundColorSpan(android.graphics.Color.TRANSPARENT)
+                editText.isUpdatingSpanWrapper = true
+                editable.setSpan(hiddenSpan, start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                editText.isUpdatingSpanWrapper = false
+
                 val anim = OverlayAnim(
                     insertedStart = start,
                     insertedText = insertedText,
                     startX = cursorBeforeX,
                     startY = cursorBeforeY,
                     progress = 0f,
-                    animator = animator
+                    animator = animator,
+                    hiddenSpan = hiddenSpan
                 )
 
                 renderer.addAnim(anim)
