@@ -883,3 +883,53 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderCha
         core.reorder_chapters(&project_id, &volume_id, &ordered_ids),
     )
 }
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listRegisteredActionsNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path: JString,
+) -> jstring {
+    let ws_path = match jstring_to_string(&mut env, &workspace_path) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let core = WriterCore::new(&ws_path);
+    let result = core.list_registered_actions();
+    result_to_jstring(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_executeActionNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path: JString,
+    action_id: JString,
+    args_json: JString,
+    context_json: JString,
+) -> jstring {
+    let ws_path = match jstring_to_string(&mut env, &workspace_path) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let act_id = match jstring_to_string(&mut env, &action_id) {
+        Ok(s) => s,
+        Err(_) => String::new(),
+    };
+    let args = match jstring_to_string(&mut env, &args_json) {
+        Ok(s) => s,
+        Err(_) => String::new(),
+    };
+    let ctx = match jstring_to_string(&mut env, &context_json) {
+        Ok(s) => s,
+        Err(_) => String::new(),
+    };
+
+    let core = WriterCore::new(&ws_path);
+    let result = core.execute_action(&act_id, &args, &ctx);
+
+    // We want to return success = true on the RustResponse wrapper if the JNI call itself was successful.
+    // ActionResult inside result already contains its own "success" flag which NativeCoreBridge will parse.
+    result_to_jstring(&mut env, result)
+}

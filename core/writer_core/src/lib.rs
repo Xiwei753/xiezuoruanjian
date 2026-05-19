@@ -1,3 +1,4 @@
+pub mod action_registry;
 pub mod ai_service;
 pub mod graph_service;
 pub mod proofreading_service;

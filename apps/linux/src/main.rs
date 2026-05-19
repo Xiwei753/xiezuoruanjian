@@ -114,6 +114,10 @@ struct AppBackend {
     selected_chapter_exists: qt_method!(fn(&self) -> bool),
     clear_editor_state: qt_method!(fn(&mut self)),
 
+    list_registered_actions: qt_method!(fn(&mut self) -> QString),
+    execute_action: qt_method!(fn(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString),
+
+
     core: Option<Rc<RefCell<WriterCore>>>,
     current_workspace: String,
     current_save_status: String,
@@ -607,6 +611,47 @@ impl AppBackend {
             }
         }
         false
+    }
+
+
+    fn list_registered_actions(&mut self) -> QString {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.list_registered_actions() {
+                Ok(actions) => {
+                    let json = serde_json::to_string(&actions).unwrap_or_else(|_| "[]".to_string());
+                    json.into()
+                },
+                Err(_) => "[]".into()
+            }
+        } else {
+            "[]".into()
+        }
+    }
+
+    fn execute_action(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.execute_action(&action_id.to_string(), &args_json.to_string(), &context_json.to_string()) {
+                Ok(result) => {
+                    let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+                    json.into()
+                },
+                Err(e) => {
+                    let err_json = serde_json::json!({
+                        "success": false,
+                        "message": e.to_string()
+                    });
+                    err_json.to_string().into()
+                }
+            }
+        } else {
+            let err_json = serde_json::json!({
+                "success": false,
+                "message": "Core not initialized"
+            });
+            err_json.to_string().into()
+        }
     }
 
     fn clear_editor_state(&mut self) {

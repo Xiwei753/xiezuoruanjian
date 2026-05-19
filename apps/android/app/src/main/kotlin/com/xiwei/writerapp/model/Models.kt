@@ -197,3 +197,25 @@ data class SyncPlan(
     @SerializedName("files_to_delete_remote") val filesToDeleteRemote: List<String> = emptyList(),
     @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList()
 )
+
+data class ActionDescriptor(
+    val id: String,
+    val title: String,
+    val description: String,
+    val category: String,
+    val kind: String,
+    val riskLevel: String,
+    val confirmRequired: Boolean,
+    val undoable: Boolean,
+    val platforms: List<String>,
+    val inputSchema: JsonElement?,
+    val uiSchema: JsonElement?
+)
+
+data class ActionResult(
+    val success: Boolean,
+    val message: String?,
+    val data: JsonElement?,
+    val proposedUi: JsonElement?,
+    val requiresConfirmation: Boolean?
+)
