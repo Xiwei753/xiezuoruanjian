@@ -199,6 +199,157 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.line_spacing.get".to_string(),
+            title: "获取行距".to_string(),
+            description: "获取当前编辑器行距倍数".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Query,
+            risk_level: ActionRiskLevel::SafeRead,
+            confirm_required: false,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: None,
+            ui_schema: None,
+        });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.line_spacing.set".to_string(),
+            title: "设置行距".to_string(),
+            description: "设置编辑器行距倍数（1.0-3.0）".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::SafeWrite,
+            confirm_required: true,
+            undoable: true,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "multiplier": { "type": "number", "minimum": 1.0, "maximum": 3.0 }
+                },
+                "required": ["multiplier"]
+            })),
+            ui_schema: Some(serde_json::json!({
+                "type": "slider",
+                "min": 100,
+                "max": 300,
+                "step": 10,
+                "displayScale": 0.01
+            })),
+        });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.auto_indent.get".to_string(),
+            title: "获取自动缩进".to_string(),
+            description: "获取自动缩进是否开启".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Query,
+            risk_level: ActionRiskLevel::SafeRead,
+            confirm_required: false,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: None,
+            ui_schema: None,
+        });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.auto_indent.set".to_string(),
+            title: "设置自动缩进".to_string(),
+            description: "开启或关闭自动缩进".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::SafeWrite,
+            confirm_required: true,
+            undoable: true,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "widthChars": { "type": "number", "minimum": 0.0, "maximum": 8.0 }
+                },
+                "required": ["enabled"]
+            })),
+            ui_schema: Some(serde_json::json!({
+                "type": "switch"
+            })),
+        });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.typing_animation.get".to_string(),
+            title: "获取输入动画".to_string(),
+            description: "获取输入动画是否开启".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Query,
+            risk_level: ActionRiskLevel::SafeRead,
+            confirm_required: false,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: None,
+            ui_schema: None,
+        });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.typing_animation.set".to_string(),
+            title: "设置输入动画".to_string(),
+            description: "开启或关闭输入动画".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::SafeWrite,
+            confirm_required: true,
+            undoable: true,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "durationMs": { "type": "integer", "minimum": 0, "maximum": 500 }
+                },
+                "required": ["enabled"]
+            })),
+            ui_schema: Some(serde_json::json!({
+                "type": "switch"
+            })),
+        });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.smooth_cursor.get".to_string(),
+            title: "获取平滑光标".to_string(),
+            description: "获取平滑光标是否开启".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Query,
+            risk_level: ActionRiskLevel::SafeRead,
+            confirm_required: false,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: None,
+            ui_schema: None,
+        });
+
+        self.actions.push(ActionDescriptor {
+            id: "settings.editor.smooth_cursor.set".to_string(),
+            title: "设置平滑光标".to_string(),
+            description: "开启或关闭平滑光标".to_string(),
+            category: "settings".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::SafeWrite,
+            confirm_required: true,
+            undoable: true,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "durationMs": { "type": "integer", "minimum": 0, "maximum": 500 }
+                },
+                "required": ["enabled"]
+            })),
+            ui_schema: Some(serde_json::json!({
+                "type": "switch"
+            })),
+        });
     }
 
     pub fn list_registered_actions(&self) -> Vec<ActionDescriptor> {

@@ -227,6 +227,146 @@ impl WriterCore {
                     })
                 }
             }
+            "settings.editor.line_spacing.get" => {
+                let settings = self.load_local_settings()?;
+                Ok(ActionResult {
+                    success: true,
+                    message: None,
+                    data: Some(serde_json::json!({ "multiplier": settings.editor_line_spacing_multiplier })),
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+            "settings.editor.line_spacing.set" => {
+                if let Some(multiplier) = args.get("multiplier").and_then(|v| v.as_f64()) {
+                    if multiplier < 1.0 || multiplier > 3.0 {
+                        return Ok(ActionResult {
+                            success: false,
+                            message: Some("Line spacing multiplier must be between 1.0 and 3.0".to_string()),
+                            data: None,
+                            proposed_ui: None,
+                            requires_confirmation: None,
+                        });
+                    }
+                    let mut settings = self.load_local_settings()?;
+                    settings.editor_line_spacing_multiplier = multiplier as f32;
+                    self.save_local_settings(&settings)?;
+                    Ok(ActionResult {
+                        success: true,
+                        message: Some("Line spacing updated".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                } else {
+                    Ok(ActionResult {
+                        success: false,
+                        message: Some("Missing or invalid multiplier parameter".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            "settings.editor.auto_indent.get" => {
+                let settings = self.load_local_settings()?;
+                Ok(ActionResult {
+                    success: true,
+                    message: None,
+                    data: Some(serde_json::json!({ "enabled": settings.auto_indent_enabled, "widthChars": settings.auto_indent_width })),
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+            "settings.editor.auto_indent.set" => {
+                if let Some(enabled) = args.get("enabled").and_then(|v| v.as_bool()) {
+                    let mut settings = self.load_local_settings()?;
+                    settings.auto_indent_enabled = enabled;
+                    if let Some(width) = args.get("widthChars").and_then(|v| v.as_f64()) {
+                        settings.auto_indent_width = width as f32;
+                    }
+                    self.save_local_settings(&settings)?;
+                    Ok(ActionResult {
+                        success: true,
+                        message: Some("Auto indent updated".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                } else {
+                    Ok(ActionResult {
+                        success: false,
+                        message: Some("Missing or invalid enabled parameter".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            "settings.editor.typing_animation.get" => {
+                let settings = self.load_local_settings()?;
+                Ok(ActionResult {
+                    success: true,
+                    message: None,
+                    data: Some(serde_json::json!({ "enabled": settings.editor_typing_animation_enabled })),
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+            "settings.editor.typing_animation.set" => {
+                if let Some(enabled) = args.get("enabled").and_then(|v| v.as_bool()) {
+                    let mut settings = self.load_local_settings()?;
+                    settings.editor_typing_animation_enabled = enabled;
+                    self.save_local_settings(&settings)?;
+                    Ok(ActionResult {
+                        success: true,
+                        message: Some("Typing animation updated".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                } else {
+                    Ok(ActionResult {
+                        success: false,
+                        message: Some("Missing or invalid enabled parameter".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
+            "settings.editor.smooth_cursor.get" => {
+                let settings = self.load_local_settings()?;
+                Ok(ActionResult {
+                    success: true,
+                    message: None,
+                    data: Some(serde_json::json!({ "enabled": settings.editor_smooth_cursor_enabled })),
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            }
+            "settings.editor.smooth_cursor.set" => {
+                if let Some(enabled) = args.get("enabled").and_then(|v| v.as_bool()) {
+                    let mut settings = self.load_local_settings()?;
+                    settings.editor_smooth_cursor_enabled = enabled;
+                    self.save_local_settings(&settings)?;
+                    Ok(ActionResult {
+                        success: true,
+                        message: Some("Smooth cursor updated".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                } else {
+                    Ok(ActionResult {
+                        success: false,
+                        message: Some("Missing or invalid enabled parameter".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
             _ => {
                 Ok(ActionResult {
                     success: false,

@@ -245,7 +245,7 @@ ApplicationWindow {
         property bool actionInProgress: false
         property bool hasExistingToken: false
 
-        width: 600
+        width: 650
         height: 700
         modal: true
         focus: true
@@ -268,8 +268,11 @@ ApplicationWindow {
 
         function applyEditorFormToBackend() {
             backend.setting_font_size = fontSizeSpin.value;
+            backend.setting_line_spacing = lineSpacingSpin.value / 100.0;
             backend.setting_auto_save_enabled = autoSaveCheck.checked;
             backend.setting_auto_save_delay_ms = autoSaveDelaySpin.value;
+            backend.setting_auto_indent_enabled = autoIndentCheck.checked;
+            backend.setting_auto_indent_width = autoIndentWidthSpin.value / 100.0;
             backend.setting_theme_mode = themeModeCombo.currentText;
             backend.setting_typing_animation_enabled = typingAnimCheck.checked;
             backend.setting_smooth_cursor_enabled = smoothCursorCheck.checked;
@@ -296,13 +299,15 @@ ApplicationWindow {
             branchInput.text = backend.sync_branch;
             autoSyncCheck.checked = backend.sync_auto_sync;
             syncIntervalInput.text = backend.sync_interval.toString();
-            proxyTypeCombo.currentIndex = proxyTypeCombo.indexOfValue(backend.sync_proxy_type);
+            proxyTypeCombo.currentIndex = proxyTypeCombo.indexOfText(backend.sync_proxy_type);
+            if (proxyTypeCombo.currentIndex === -1) proxyTypeCombo.currentIndex = 0;
             proxyHostInput.text = backend.sync_proxy_host;
             proxyPortInput.text = backend.sync_proxy_port.toString();
             settingsDialog.hasExistingToken = (backend.sync_token.length > 0);
             tokenInput.text = "";
             tokenInput.placeholderText = settingsDialog.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置";
             syncResultLabel.text = backend.sync_action_result;
+            actionResultText.text = "";
         }
 
         Connections {
@@ -321,6 +326,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 TabButton { text: "编辑器设置" }
                 TabButton { text: "同步设置" }
+                TabButton { text: "Action 调试" }
                 TabButton { text: "关于" }
             }
 
@@ -333,7 +339,7 @@ ApplicationWindow {
                     clip: true
                     ColumnLayout {
                         width: parent.width - 20
-                        spacing: 15
+                        spacing: 12
 
                         Label { text: "字号:" }
                         SpinBox {
@@ -343,14 +349,13 @@ ApplicationWindow {
                             value: 16
                         }
 
-                        Label { text: "行距 (Linux端暂未支持):" }
+                        Label { text: "行距: " + (lineSpacingSpin.value / 100).toFixed(2) + "x" }
                         SpinBox {
                             id: lineSpacingSpin
                             from: 100
                             to: 300
                             value: 150
                             stepSize: 10
-                            enabled: false
                         }
 
                         CheckBox {
@@ -369,36 +374,26 @@ ApplicationWindow {
 
                         CheckBox {
                             id: autoIndentCheck
-                            text: "自动缩进 (Linux端暂未支持)"
-                            enabled: false
-                        }
-                        Label {
-                            text: "Linux 端暂未支持视觉自动缩进，设置不会在本端生效"
-                            color: "gray"
-                            font.pixelSize: 12
-                            wrapMode: Text.Wrap
+                            text: "自动缩进"
                         }
 
-                        Label { text: "自动缩进宽度 (字符数):" }
+                        Label { text: "自动缩进宽度 (字符数): " + (autoIndentWidthSpin.value / 100).toFixed(1) }
                         SpinBox {
                             id: autoIndentWidthSpin
                             from: 0
                             to: 800
                             value: 200
                             stepSize: 50
-                            enabled: false
                         }
 
                         CheckBox {
                             id: typingAnimCheck
-                            text: "输入动画 (Linux端暂未实现)"
-                            enabled: false
+                            text: "输入动画"
                         }
 
                         CheckBox {
                             id: smoothCursorCheck
-                            text: "平滑光标 (Linux端暂未实现)"
-                            enabled: false
+                            text: "平滑光标"
                         }
 
                         Label { text: "主题模式:" }
@@ -469,6 +464,13 @@ ApplicationWindow {
                             id: proxyTypeCombo
                             Layout.fillWidth: true
                             model: ["none", "auto", "http", "socks5"]
+                            onCurrentTextChanged: {
+                                if (currentText === "http" && proxyPortInput.text === "0") {
+                                    proxyPortInput.text = "7890";
+                                } else if (currentText === "socks5" && proxyPortInput.text === "0") {
+                                    proxyPortInput.text = "7891";
+                                }
+                            }
                         }
 
                         Label { text: "代理 Host:" }
@@ -491,6 +493,12 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             echoMode: TextInput.Password
                         }
+                        Label {
+                            id: tokenStatusLabel
+                            color: settingsDialog.hasExistingToken ? "#4caf50" : "#ff9800"
+                            font.pixelSize: 12
+                            text: settingsDialog.hasExistingToken ? "Token 已配置" : "Token 未配置，同步将无法进行"
+                        }
 
                         RowLayout {
                             Layout.fillWidth: true
@@ -511,7 +519,7 @@ ApplicationWindow {
                             }
 
                             Button {
-                                text: "测试 GitHub 连接"
+                                text: "测试连接"
                                 enabled: !settingsDialog.actionInProgress
                                 onClicked: {
                                     applySyncFormToBackend();
@@ -525,7 +533,7 @@ ApplicationWindow {
                             }
 
                             Button {
-                                text: "检查同步计划"
+                                text: "同步计划"
                                 enabled: !settingsDialog.actionInProgress
                                 onClicked: {
                                     applySyncFormToBackend();
@@ -552,13 +560,207 @@ ApplicationWindow {
                             }
                         }
 
+                        Label {
+                            text: "提示：首次同步时如果远程分支不存在，系统将自动创建分支并推送初始内容。"
+                            color: "#90a4ae"
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+
                         TextArea {
                             id: syncResultLabel
                             Layout.fillWidth: true
                             readOnly: true
                             wrapMode: Text.Wrap
-                            background: Rectangle { color: "#eeeeee" }
-                            color: "black"
+                            background: Rectangle { color: "#2a2a2a"; radius: 4 }
+                            color: "#e0e0e0"
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+
+                ScrollView {
+                    clip: true
+                    ColumnLayout {
+                        width: parent.width - 20
+                        spacing: 10
+
+                        Label {
+                            text: "Action 调试入口"
+                            font.bold: true
+                            font.pixelSize: 16
+                        }
+                        Label {
+                            text: "列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。"
+                            color: "gray"
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Button {
+                                text: "列出所有 Action"
+                                onClicked: {
+                                    var result = backend.list_registered_actions();
+                                    try {
+                                        var actions = JSON.parse(result);
+                                        actionListRepeater.model = actions;
+                                        actionResultText.text = "共加载 " + actions.length + " 个 Action";
+                                    } catch(e) {
+                                        actionResultText.text = "解析 Action 列表失败: " + e;
+                                    }
+                                }
+                            }
+                            Button {
+                                text: "清空结果"
+                                onClicked: {
+                                    actionListRepeater.model = [];
+                                    actionResultText.text = "";
+                                }
+                            }
+                        }
+
+                        Repeater {
+                            id: actionListRepeater
+                            model: []
+
+                            delegate: Rectangle {
+                                width: parent.width
+                                height: actionCardCol.height + 10
+                                color: "#2a2a2a"
+                                radius: 4
+
+                                ColumnLayout {
+                                    id: actionCardCol
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 4
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            text: modelData.title || modelData.id || ""
+                                            font.bold: true
+                                            font.pixelSize: 14
+                                            color: "#e0e0e0"
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: {
+                                                var risk = modelData.riskLevel || "";
+                                                if (risk === "dangerous") return "⚠ 危险";
+                                                if (risk === "contentWrite") return "⚠ 内容写入";
+                                                if (risk === "safeWrite") return "写入";
+                                                return "只读";
+                                            }
+                                            font.pixelSize: 11
+                                            color: {
+                                                var risk = modelData.riskLevel || "";
+                                                if (risk === "dangerous") return "#f44336";
+                                                if (risk === "contentWrite") return "#ff9800";
+                                                if (risk === "safeWrite") return "#4caf50";
+                                                return "#90a4ae";
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        text: modelData.id || ""
+                                        font.pixelSize: 11
+                                        color: "#78909c"
+                                        font.family: "monospace"
+                                    }
+
+                                    Label {
+                                        text: modelData.description || ""
+                                        font.pixelSize: 12
+                                        color: "#b0bec5"
+                                        wrapMode: Text.Wrap
+                                        Layout.fillWidth: true
+                                    }
+
+                                    RowLayout {
+                                        spacing: 8
+                                        Button {
+                                            text: "执行"
+                                            visible: modelData.kind === "query" || modelData.kind === "preview"
+                                            onClicked: {
+                                                var actionId = modelData.id;
+                                                var result = backend.execute_action(actionId, "", "");
+                                                try {
+                                                    var r = JSON.parse(result);
+                                                    if (r.success) {
+                                                        actionResultText.text = "执行成功: " + (r.message || "") + "\n数据: " + JSON.stringify(r.data, null, 2);
+                                                    } else {
+                                                        actionResultText.text = "执行失败: " + (r.message || "未知错误");
+                                                    }
+                                                } catch(e) {
+                                                    actionResultText.text = "解析结果失败: " + result;
+                                                }
+                                            }
+                                        }
+                                        Button {
+                                            text: "应用 (Mutation)"
+                                            visible: modelData.kind === "mutation"
+                                            enabled: {
+                                                var risk = modelData.riskLevel || "";
+                                                return risk !== "dangerous" && risk !== "contentWrite";
+                                            }
+                                            onClicked: {
+                                                var actionId = modelData.id;
+                                                var args = "{}";
+                                                if (actionId === "settings.editor.font_size.set") {
+                                                    args = JSON.stringify({fontSize: fontSizeSpin.value});
+                                                } else if (actionId === "settings.editor.auto_save.set") {
+                                                    args = JSON.stringify({enabled: autoSaveCheck.checked});
+                                                } else if (actionId === "settings.editor.auto_save_delay.set") {
+                                                    args = JSON.stringify({delayMs: autoSaveDelaySpin.value});
+                                                } else if (actionId === "settings.editor.line_spacing.set") {
+                                                    args = JSON.stringify({multiplier: lineSpacingSpin.value / 100.0});
+                                                } else if (actionId === "settings.editor.auto_indent.set") {
+                                                    args = JSON.stringify({enabled: autoIndentCheck.checked, widthChars: autoIndentWidthSpin.value / 100.0});
+                                                } else if (actionId === "settings.editor.typing_animation.set") {
+                                                    args = JSON.stringify({enabled: typingAnimCheck.checked});
+                                                } else if (actionId === "settings.editor.smooth_cursor.set") {
+                                                    args = JSON.stringify({enabled: smoothCursorCheck.checked});
+                                                }
+                                                var result = backend.execute_action(actionId, args, "");
+                                                try {
+                                                    var r = JSON.parse(result);
+                                                    if (r.success) {
+                                                        actionResultText.text = "应用成功: " + (r.message || "") + "\n数据: " + JSON.stringify(r.data, null, 2);
+                                                    } else {
+                                                        actionResultText.text = "应用失败: " + (r.message || "未知错误");
+                                                    }
+                                                } catch(e) {
+                                                    actionResultText.text = "解析结果失败: " + result;
+                                                }
+                                            }
+                                        }
+                                        Label {
+                                            text: "危险操作已阻断"
+                                            visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
+                                            color: "#f44336"
+                                            font.pixelSize: 12
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        TextArea {
+                            id: actionResultText
+                            Layout.fillWidth: true
+                            Layout.minimumHeight: 100
+                            readOnly: true
+                            wrapMode: Text.Wrap
+                            background: Rectangle { color: "#2a2a2a"; radius: 4 }
+                            color: "#e0e0e0"
+                            font.pixelSize: 12
+                            font.family: "monospace"
+                            placeholderText: "执行结果将显示在此处..."
                         }
                     }
                 }
@@ -574,6 +776,17 @@ ApplicationWindow {
                         }
                         Label {
                             text: "Version 1.0.0"
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        Label {
+                            text: "技术栈: Rust Core + qmetaobject + Qt/QML"
+                            color: "gray"
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        Label {
+                            text: "导图功能（规划中）"
+                            color: "gray"
+                            font.pixelSize: 12
                             horizontalAlignment: Text.AlignHCenter
                         }
                     }
