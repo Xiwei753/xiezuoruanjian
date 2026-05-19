@@ -60,7 +60,7 @@ class WriterEditText @JvmOverloads constructor(
     init {
         val layer = EditorRenderLayer(this)
         renderLayer = layer
-        typingAnimationController = TypingAnimationController(this, layer.typingOverlayRenderer)
+        typingAnimationController = TypingAnimationController(this, layer)
         autoIndentController = AutoIndentController(this)
         controllersReady = true
 

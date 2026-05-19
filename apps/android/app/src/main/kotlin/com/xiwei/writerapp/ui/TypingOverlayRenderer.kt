@@ -4,7 +4,6 @@ import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.util.TypedValue
-import android.widget.EditText
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.sqrt
 

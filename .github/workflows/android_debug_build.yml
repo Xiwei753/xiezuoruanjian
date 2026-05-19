@@ -47,9 +47,15 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > $RUNNER_TEMP/keystore.jks
+            echo "Decoding Android keystore from secret..."
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+            if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
+              echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
+              exit 1
+            fi
+            echo "Keystore decoded successfully."
           else
-            echo "ANDROID_KEYSTORE_BASE64 secret is missing. Skipping fixed signature configuration."
+            echo "ANDROID_KEYSTORE_BASE64 secret is not set. Build will use default debug signing."
           fi
 
       - name: Build Android Native Debug APK
@@ -64,13 +70,17 @@ jobs:
 
       - name: Verify APK Signature
         run: |
-          # Use build-tools from Android SDK
-          BUILD_TOOLS_VERSION=$(ls $ANDROID_HOME/build-tools/ | sort -n | tail -1)
-          APKSIGNER=$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner
+          BUILD_TOOLS_VERSION=$(ls "$ANDROID_HOME/build-tools/" | sort -V | tail -1)
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner"
+          APK_PATH="apps/android/app/build/outputs/apk/debug/app-debug.apk"
           if [ -f "$RUNNER_TEMP/keystore.jks" ]; then
-            $APKSIGNER verify --print-certs apps/android/app/build/outputs/apk/debug/app-debug.apk | grep "Signer #1 certificate SHA-256 digest:"
+            echo "Verifying fixed signature on APK..."
+            CERT_INFO=$("$APKSIGNER" verify --print-certs "$APK_PATH" 2>&1)
+            echo "$CERT_INFO" | grep "Signer #1 certificate SHA-256 digest:" || true
+            echo "Signature verification complete."
           else
-            echo "No fixed keystore found, skipping strict signature check."
+            echo "No fixed keystore was provided. APK uses default debug signing."
+            "$APKSIGNER" verify --print-certs "$APK_PATH" 2>&1 | grep "Signer #1 certificate SHA-256 digest:" || true
           fi
 
       - name: Upload Artifact

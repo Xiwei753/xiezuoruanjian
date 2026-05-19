@@ -45,3 +45,59 @@ This is an early Android adaptation. Please prioritize testing:
 - Chapter editing
 - Auto-saving functionality
 - Keyboard appearance and TextField scrolling behavior (ensure it's not obscured)
+
+## Fixed APK Signing
+
+To allow continuous over-the-air upgrades without requiring users to uninstall and reinstall, the APK must be signed with a consistent keystore. Without fixed signing, each GitHub Actions run may produce an APK with a different debug certificate, making it impossible to install over a previously installed version.
+
+### How to Generate a Release Keystore
+
+```bash
+keytool -genkey -v \
+  -keystore writer-release.jks \
+  -keyalg RSA \
+  -keysize 2048 \
+  -validity 10000 \
+  -alias writer-release
+```
+
+Follow the prompts to set:
+- Keystore password
+- Key password (can be the same as keystore password)
+
+**Important:** Keep this keystore file safe. If lost, future APKs cannot upgrade over previously installed versions.
+
+### How to Base64 Encode the Keystore
+
+```bash
+base64 -w 0 writer-release.jks > writer-release.jks.b64
+```
+
+### How to Configure GitHub Secrets
+
+Go to your GitHub repository **Settings > Secrets and variables > Actions** and add:
+
+| Secret Name | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Contents of `writer-release.jks.b64` |
+| `ANDROID_KEYSTORE_PASSWORD` | Your keystore password |
+| `ANDROID_KEY_ALIAS` | Your key alias (e.g. `writer-release`) |
+| `ANDROID_KEY_PASSWORD` | Your key password |
+
+### Local Development with Fixed Signing
+
+Set environment variables before building:
+
+```bash
+export WRITER_ANDROID_KEYSTORE_PATH=/path/to/writer-release.jks
+export WRITER_ANDROID_KEYSTORE_PASSWORD=your-password
+export WRITER_ANDROID_KEY_ALIAS=writer-release
+export WRITER_ANDROID_KEY_PASSWORD=your-key-password
+./tools/build_android.sh
+```
+
+If these environment variables are not set, the build falls back to the default debug signing.
+
+### Important Note on First Upgrade
+
+If you have previously installed a version signed with a random debug certificate, you **must uninstall it first** before installing the first fixed-signing version. From the first fixed-signing version onward, all future builds can be installed as upgrades without data loss.

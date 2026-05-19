@@ -5,10 +5,9 @@ import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
-import android.widget.EditText
 import kotlin.math.abs
 
-class SmoothCursorRenderer(private val editText: EditText) {
+class SmoothCursorRenderer(private val editText: WriterEditText) {
 
     var cursorRuntimeReady = false
     var smoothCursorEnabled = false

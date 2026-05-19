@@ -5,11 +5,10 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.text.Editable
 import android.view.inputmethod.BaseInputConnection
-import android.widget.EditText
 
 class TypingAnimationController(
     private val editText: WriterEditText,
-    private val renderer: TypingOverlayRenderer
+    private val renderLayer: EditorRenderLayer
 ) {
     private val DEBUG_ANIM = false
     private val TAG = "WriterEditorAnim"
@@ -37,7 +36,7 @@ class TypingAnimationController(
 
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
         if (isSuppressAnimations) {
-            renderer.clear()
+            renderLayer.clear()
             if (DEBUG_ANIM) {
                 android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")
             }
@@ -61,7 +60,7 @@ class TypingAnimationController(
         } else if (after > 100) {
             isPasteOrDelete = true
         } else if (count > 0 && !matchesComposing) {
-            isPasteOrDelete = true // Treat replacements/deletions as paste/delete to skip animation
+            isPasteOrDelete = true
         } else {
             isPasteOrDelete = false
         }
@@ -136,7 +135,7 @@ class TypingAnimationController(
                     hiddenSpan = hiddenSpan
                 )
 
-                renderer.addAnim(anim)
+                renderLayer.addTypingAnim(anim)
 
                 if (DEBUG_ANIM) {
                     android.util.Log.d(TAG, "afterTextChanged - created anim: insertedStart=${anim.insertedStart}, length=${insertedText.length}")
@@ -148,7 +147,7 @@ class TypingAnimationController(
                 }
                 animator.addListener(object : AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: Animator) {
-                        renderer.removeAnim(anim)
+                        renderLayer.removeTypingAnim(anim)
                         editText.invalidate()
                     }
                 })
@@ -160,6 +159,6 @@ class TypingAnimationController(
     }
 
     fun onDetachedFromWindow() {
-        renderer.clear()
+        renderLayer.clear()
     }
 }

@@ -82,3 +82,9 @@ app-meta/sync/sync_secrets.local.json
 app-meta/settings/settings.local.json
 android-ndk-r25c/
 android-ndk-r25c-linux.zip
+
+# Keystore files (never commit)
+*.jks
+*.keystore
+*.p12
+*.pem
