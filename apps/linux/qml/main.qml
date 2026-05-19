@@ -328,11 +328,18 @@ ApplicationWindow {
         }
     }
 
-    // --- Content: SplitView with tree + editor ---
+    // --- Content area between header and footer ---
 
-    SplitView {
-        anchors.fill: parent.contentItem
-        orientation: Qt.Horizontal
+    Item {
+        id: contentArea
+        anchors.top: window.header.bottom
+        anchors.bottom: window.footer.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+
+        SplitView {
+            anchors.fill: parent
+            orientation: Qt.Horizontal
 
         // Left: directory tree
         Rectangle {
@@ -528,6 +535,7 @@ ApplicationWindow {
                     autoSaveTimer.restart()
                 }
             }
+        }
         }
     }
 
