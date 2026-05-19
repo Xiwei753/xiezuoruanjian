@@ -224,3 +224,48 @@ data class ActionResult(
     val proposedUi: JsonElement?,
     val requiresConfirmation: Boolean?
 )
+
+data class UiSchemaDescriptor(
+    val type: String?,
+    val min: Double?,
+    val max: Double?,
+    val step: Double?
+) {
+    companion object {
+        fun fromJson(element: JsonElement?): UiSchemaDescriptor? {
+            if (element == null || !element.isJsonObject) return null
+            val obj = element.asJsonObject
+            return UiSchemaDescriptor(
+                type = obj.get("type")?.asString,
+                min = obj.get("min")?.asDouble,
+                max = obj.get("max")?.asDouble,
+                step = obj.get("step")?.asDouble
+            )
+        }
+    }
+}
+
+data class InputSchemaProperty(
+    val name: String,
+    val type: String,
+    val minimum: Double?,
+    val maximum: Double?
+) {
+    companion object {
+        fun fromJson(element: JsonElement?): List<InputSchemaProperty> {
+            if (element == null || !element.isJsonObject) return emptyList()
+            val obj = element.asJsonObject
+            val props = obj.getAsJsonObject("properties") ?: return emptyList()
+            val required = obj.getAsJsonArray("required")?.map { it.asString } ?: emptyList()
+            return props.entrySet().map { (key, value) ->
+                val propObj = value.asJsonObject
+                InputSchemaProperty(
+                    name = key,
+                    type = propObj.get("type")?.asString ?: "string",
+                    minimum = propObj.get("minimum")?.asDouble,
+                    maximum = propObj.get("maximum")?.asDouble
+                )
+            }
+        }
+    }
+}

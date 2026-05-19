@@ -129,4 +129,22 @@
         <item>HTTP</item>
         <item>SOCKS5（实验）</item>
     </string-array>
+
+    <!-- Action Registry Debug -->
+    <string name="action_registry_title">功能注册表</string>
+    <string name="action_registry_entry">Action 调试</string>
+    <string name="action_kind_query">查询</string>
+    <string name="action_kind_preview">预览</string>
+    <string name="action_kind_mutation">变更</string>
+    <string name="risk_safe_read">安全读取</string>
+    <string name="risk_safe_write">安全写入</string>
+    <string name="risk_content_write">内容写入</string>
+    <string name="risk_dangerous">危险</string>
+    <string name="action_run">运行</string>
+    <string name="action_apply">应用</string>
+    <string name="action_confirm_title">确认操作</string>
+    <string name="action_confirm_message">确定要执行此操作吗？</string>
+    <string name="action_blocked_dangerous">危险操作，调试页不执行</string>
+    <string name="action_not_loaded">底层库未加载</string>
+    <string name="action_result_title">执行结果</string>
 </resources>

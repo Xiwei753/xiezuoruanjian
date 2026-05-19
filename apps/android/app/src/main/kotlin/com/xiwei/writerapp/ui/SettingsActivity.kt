@@ -69,6 +69,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnTestConnection: MaterialButton
     private lateinit var btnPerformSync: MaterialButton
+    private lateinit var btnActionRegistry: MaterialButton
 
     private lateinit var currentSyncConfig: SyncConfig
     private lateinit var currentSyncSecrets: SyncSecrets
@@ -149,6 +150,7 @@ class SettingsActivity : AppCompatActivity() {
         btnDryRun = findViewById(R.id.btnDryRun)
         btnTestConnection = findViewById(R.id.btnTestConnection)
         btnPerformSync = findViewById(R.id.btnPerformSync)
+        btnActionRegistry = findViewById(R.id.btnActionRegistry)
 
 
         // Live value update listeners
@@ -291,6 +293,11 @@ class SettingsActivity : AppCompatActivity() {
 
         btnPerformSync.setOnClickListener {
             handlePerformSync()
+        }
+
+        btnActionRegistry.setOnClickListener {
+            val intent = android.content.Intent(this, ActionRegistryActivity::class.java)
+            startActivity(intent)
         }
 
 
