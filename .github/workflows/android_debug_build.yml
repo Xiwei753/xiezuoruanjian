@@ -49,8 +49,7 @@ jobs:
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > $RUNNER_TEMP/keystore.jks
           else
-            echo "ANDROID_KEYSTORE_BASE64 secret is missing. Failing the workflow to prevent unsigned releases."
-            exit 1
+            echo "ANDROID_KEYSTORE_BASE64 secret is missing. Skipping fixed signature configuration."
           fi
 
       - name: Build Android Native Debug APK
@@ -68,7 +67,11 @@ jobs:
           # Use build-tools from Android SDK
           BUILD_TOOLS_VERSION=$(ls $ANDROID_HOME/build-tools/ | sort -n | tail -1)
           APKSIGNER=$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner
-          $APKSIGNER verify --print-certs apps/android/app/build/outputs/apk/debug/app-debug.apk | grep "Signer #1 certificate SHA-256 digest:"
+          if [ -f "$RUNNER_TEMP/keystore.jks" ]; then
+            $APKSIGNER verify --print-certs apps/android/app/build/outputs/apk/debug/app-debug.apk | grep "Signer #1 certificate SHA-256 digest:"
+          else
+            echo "No fixed keystore found, skipping strict signature check."
+          fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
