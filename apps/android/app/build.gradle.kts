@@ -7,6 +7,18 @@ android {
     namespace = "com.xiwei.writerapp"
     compileSdk = 34
 
+    signingConfigs {
+        create("stable") {
+            val keystorePath = System.getenv("WRITER_ANDROID_KEYSTORE_PATH")
+            if (keystorePath != null && file(keystorePath).exists()) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("WRITER_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("WRITER_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("WRITER_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.xiwei.writerapp"
         minSdk = 24
@@ -24,12 +36,20 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            if (System.getenv("WRITER_ANDROID_KEYSTORE_PATH") != null && file(System.getenv("WRITER_ANDROID_KEYSTORE_PATH")).exists()) {
+                signingConfig = signingConfigs.getByName("stable")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (System.getenv("WRITER_ANDROID_KEYSTORE_PATH") != null && file(System.getenv("WRITER_ANDROID_KEYSTORE_PATH")).exists()) {
+                signingConfig = signingConfigs.getByName("stable")
+            }
         }
     }
     compileOptions {

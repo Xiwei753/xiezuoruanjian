@@ -18,8 +18,7 @@ class WriterEditText @JvmOverloads constructor(
     private var controllersReady = false
 
     private var typingAnimationController: TypingAnimationController? = null
-    private var typingOverlayRenderer: TypingOverlayRenderer? = null
-    private var smoothCursorRenderer: SmoothCursorRenderer? = null
+    internal var renderLayer: EditorRenderLayer? = null
     private var autoIndentController: AutoIndentController? = null
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
@@ -29,7 +28,7 @@ class WriterEditText @JvmOverloads constructor(
 
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         if (!controllersReady) return
-        smoothCursorRenderer?.setSmoothCursorEnabled(enabled, durationMs)
+        renderLayer?.smoothCursorRenderer?.setSmoothCursorEnabled(enabled, durationMs)
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
@@ -46,6 +45,7 @@ class WriterEditText @JvmOverloads constructor(
         val oldIndentEnabled = autoIndentController?.isSuppressing ?: false
         typingAnimationController?.isSuppressAnimations = true
         autoIndentController?.isSuppressing = true
+        renderLayer?.clear()
         try {
             block()
         } finally {
@@ -58,9 +58,9 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     init {
-        typingOverlayRenderer = TypingOverlayRenderer(this)
-        typingAnimationController = TypingAnimationController(this, typingOverlayRenderer!!)
-        smoothCursorRenderer = SmoothCursorRenderer(this)
+        val layer = EditorRenderLayer(this)
+        renderLayer = layer
+        typingAnimationController = TypingAnimationController(this, layer.typingOverlayRenderer)
         autoIndentController = AutoIndentController(this)
         controllersReady = true
 
@@ -88,11 +88,11 @@ class WriterEditText @JvmOverloads constructor(
             }
         })
 
-        smoothCursorRenderer?.cursorRuntimeReady = true
+        layer.smoothCursorRenderer.cursorRuntimeReady = true
 
         viewTreeObserver.addOnGlobalLayoutListener {
-            if (smoothCursorRenderer?.smoothCursorEnabled == true && isFocused) {
-                smoothCursorRenderer?.updateCursorTarget(false)
+            if (layer.smoothCursorRenderer.smoothCursorEnabled && isFocused) {
+                layer.smoothCursorRenderer.updateCursorTarget(false)
             }
         }
 
@@ -102,29 +102,29 @@ class WriterEditText @JvmOverloads constructor(
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
         if (!controllersReady) return
-        smoothCursorRenderer?.onSelectionChanged(selStart, selEnd)
+        renderLayer?.onSelectionChanged(selStart, selEnd)
     }
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         if (!controllersReady) return
-        smoothCursorRenderer?.onDetachedFromWindow()
+        renderLayer?.onDetachedFromWindow()
         typingAnimationController?.onDetachedFromWindow()
     }
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
         if (!controllersReady) return
-        smoothCursorRenderer?.onFocusChanged(focused)
+        renderLayer?.onFocusChanged(focused)
     }
 
     override fun onDraw(canvas: Canvas) {
-        if (smoothCursorRenderer?.smoothCursorEnabled == true && selectionStart == selectionEnd) {
-            isCursorVisible = false
+        if (!controllersReady) {
+            super.onDraw(canvas)
+            return
         }
+        renderLayer?.beforeTextDraw()
         super.onDraw(canvas)
-        if (!controllersReady) return
-        smoothCursorRenderer?.draw(canvas)
-        typingOverlayRenderer?.onDraw(canvas)
+        renderLayer?.drawAfterText(canvas)
     }
 }
