@@ -260,6 +260,11 @@ class EditorActivity : AppCompatActivity() {
                 startActivity(intent)
                 true
             }
+            R.id.action_registry -> {
+                val intent = Intent(this, ActionRegistryActivity::class.java)
+                startActivity(intent)
+                true
+            }
             else -> super.onOptionsItemSelected(item)
         }
     }

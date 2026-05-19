@@ -12,6 +12,7 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
+import com.xiwei.writerapp.data.SettingsChangeBus
 import com.xiwei.writerapp.data.WorkspaceManager
 import com.xiwei.writerapp.model.LocalSettings
 import android.widget.Toast
@@ -564,6 +565,57 @@ class SettingsActivity : AppCompatActivity() {
                 settingsRepository.loadSyncSecrets()
             } else SyncSecrets()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (SettingsChangeBus.consumeChanged()) {
+            reloadSettings()
+        }
+    }
+
+    private fun reloadSettings() {
+        if (!::settingsRepository.isInitialized) return
+
+        currentSettings = settingsRepository.getLocalSettings()
+        val effectiveFontSize = settingsRepository.getEffectiveFontSize()
+
+        sbFontSize.value = effectiveFontSize
+        sbLineSpacing.value = currentSettings.editorLineSpacingMultiplier
+        switchAutoSave.isChecked = currentSettings.autoSaveEnabled
+        sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
+        switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
+        sbAutoIndentWidth.value = currentSettings.autoIndentWidth
+        switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
+        switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
+        sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
+        sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
+
+        tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
+        tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
+        tvAutoSaveDelayValue.text = "${(currentSettings.autoSaveDelayMs / 1000).toInt()}秒"
+        tvAutoIndentWidthValue.text = "${currentSettings.autoIndentWidth}字符"
+        tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
+        tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
+
+        val syncable = settingsRepository.getSyncableSettings()
+        if (syncable.themeMode.isNotEmpty()) {
+            currentSettings = currentSettings.copy(themeMode = syncable.themeMode)
+        }
+        when (currentSettings.themeMode) {
+            "light" -> spinnerTheme.setSelection(1, false)
+            "dark" -> spinnerTheme.setSelection(2, false)
+            else -> spinnerTheme.setSelection(0, false)
+        }
+
+        loadSyncState()
+        switchEnableSync.isChecked = currentSyncConfig.enabled ?: false
+        etGithubRepo.setText(currentSyncConfig.remoteUrl ?: "")
+        etBranch.setText(currentSyncConfig.branch ?: "main")
+        switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
+        sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
+        tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds ?: 300}秒"
+        updateTokenStatusUI()
     }
 
     override fun onBackPressed() {

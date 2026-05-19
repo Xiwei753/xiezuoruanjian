@@ -16,4 +16,8 @@
         android:title="@string/action_settings"
         android:icon="@drawable/ic_settings"
         app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_registry"
+        android:title="@string/action_registry_entry"
+        app:showAsAction="never" />
 </menu>

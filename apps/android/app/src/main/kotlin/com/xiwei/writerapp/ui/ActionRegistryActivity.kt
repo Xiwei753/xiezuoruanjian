@@ -16,6 +16,7 @@ import com.google.android.material.divider.MaterialDivider
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.NativeCoreBridge
 import com.xiwei.writerapp.data.NativeResult
+import com.xiwei.writerapp.data.SettingsChangeBus
 import com.xiwei.writerapp.model.ActionDescriptor
 import com.xiwei.writerapp.model.UiSchemaDescriptor
 import com.xiwei.writerapp.model.InputSchemaProperty
@@ -391,6 +392,10 @@ class ActionRegistryActivity : AppCompatActivity() {
             is NativeResult.Success -> {
                 val actionResult = result.data
                 val msg = actionResult.message ?: if (actionResult.success) "执行成功" else "执行失败"
+
+                if (actionResult.success && isMutation(action)) {
+                    SettingsChangeBus.notifyChanged()
+                }
 
                 resultContainer.addView(TextView(this).apply {
                     text = msg
