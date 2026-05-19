@@ -60,7 +60,7 @@ impl WriterCore {
         let args: Value = if args_json.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(args_json).unwrap_or(Value::Null)
+            match serde_json::from_str(args_json) { Ok(v) => v, Err(_) => return Ok(ActionResult { success: false, message: Some("invalid args json".to_string()), data: None, proposed_ui: None, requires_confirmation: None }) }
         };
 
         match action_id {

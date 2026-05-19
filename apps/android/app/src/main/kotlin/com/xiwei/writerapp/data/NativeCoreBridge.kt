@@ -564,6 +564,9 @@ class NativeCoreBridge(context: Context) {
     }
 
 
+    private external fun listRegisteredActionsNative(workspacePath: String): String?
+    private external fun executeActionNative(workspacePath: String, actionId: String, argsJson: String, contextJson: String): String?
+
     private external fun renameProjectNative(workspacePath: String, projectId: String, newTitle: String): String?
     private external fun deleteProjectNative(workspacePath: String, projectId: String): String?
     private external fun reorderProjectsNative(workspacePath: String, orderedIdsJson: String): String?
@@ -696,4 +699,54 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
+
+    fun listRegisteredActions(): NativeResult<List<ActionDescriptor>> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = listRegisteredActionsNative(workspaceDir)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+
+            val type = object : TypeToken<RustResponse<List<ActionDescriptor>>>() {}.type
+            val response: RustResponse<List<ActionDescriptor>> = try {
+                gson.fromJson(resultJson, type)
+            } catch (e: Exception) {
+                return NativeResult.Error("Failed to parse List<ActionDescriptor> JSON: ${e.message}")
+            }
+
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun executeAction(actionId: String, argsJson: String = "{}", contextJson: String = "{}"): NativeResult<ActionResult> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = executeActionNative(workspaceDir, actionId, argsJson, contextJson)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty response")
+
+            val type = object : TypeToken<RustResponse<ActionResult>>() {}.type
+            val response: RustResponse<ActionResult> = try {
+                gson.fromJson(resultJson, type)
+            } catch (e: Exception) {
+                return NativeResult.Error("Failed to parse ActionResult JSON: ${e.message}")
+            }
+
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
 }
