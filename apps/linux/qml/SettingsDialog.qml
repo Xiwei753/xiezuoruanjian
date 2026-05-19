@@ -9,6 +9,11 @@ Popup {
     property bool actionInProgress: false
     property bool hasExistingToken: false
 
+    property string bgColor: "#2d2d2d"
+    property string textColor: "#ffffff"
+    property string textSecondaryColor: "#999999"
+    property string borderColor: "#3e3e42"
+
     width: 650
     height: 700
     modal: true
@@ -88,6 +93,7 @@ Popup {
         TabBar {
             id: settingsTabBar
             Layout.fillWidth: true
+            background: Rectangle { color: root.bgColor }
             TabButton { text: "编辑器设置" }
             TabButton { text: "同步设置" }
             TabButton { text: "Action 调试" }
@@ -167,12 +173,6 @@ Popup {
                         Layout.fillWidth: true
                         model: ["system", "light", "dark"]
                     }
-                    Label {
-                        text: "Linux 端当前仅支持暗色主题，设置值将同步至其他平台"
-                        color: "gray"
-                        font.pixelSize: 12
-                        wrapMode: Text.Wrap
-                    }
 
                     Button {
                         text: "保存设置"
@@ -182,6 +182,8 @@ Popup {
                             if (!root.backendRef.save_local_settings()) {
                                 // Error dialog is in main.qml, signal it
                             }
+                            // Trigger theme re-apply in main.qml
+                            root.editorPageRef.applyTheme()
                         }
                     }
                 }
@@ -339,8 +341,8 @@ Popup {
                         Layout.fillWidth: true
                         readOnly: true
                         wrapMode: Text.Wrap
-                        background: Rectangle { color: "#2a2a2a"; radius: 4 }
-                        color: "#e0e0e0"
+                        background: Rectangle { color: root.borderColor; radius: 4 }
+                        color: root.textColor
                         font.pixelSize: 12
                     }
                 }
@@ -368,14 +370,16 @@ Popup {
                         font.pixelSize: 20
                         font.bold: true
                         horizontalAlignment: Text.AlignHCenter
+                        color: root.textColor
                     }
                     Label {
                         text: "Version 1.0.0"
                         horizontalAlignment: Text.AlignHCenter
+                        color: root.textColor
                     }
                     Label {
                         text: "技术栈: Rust Core + qmetaobject + Qt/QML"
-                        color: "gray"
+                        color: root.textSecondaryColor
                         horizontalAlignment: Text.AlignHCenter
                     }
                 }

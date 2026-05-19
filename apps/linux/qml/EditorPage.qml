@@ -4,10 +4,14 @@ import QtQuick.Layouts 1.15
 
 Rectangle {
     id: root
-    color: "#1e1e1e"
+    color: bgColor
 
     property var backendRef: null
     readonly property string text: editorArea.text
+
+    property string bgColor: "#1e1e1e"
+    property string textColor: "#d4d4d4"
+    property string placeholderColor: "gray"
 
     signal contentChanged()
 
@@ -25,13 +29,13 @@ Rectangle {
 
     Rectangle {
         anchors.fill: parent
-        color: "#1e1e1e"
+        color: bgColor
         clip: true
 
         Text {
             anchors.centerIn: parent
             text: "请在左侧选择或创建一个章节"
-            color: "gray"
+            color: placeholderColor
             visible: !root.backendRef || !root.backendRef.has_selected_chapter_prop
         }
 
@@ -45,7 +49,7 @@ Rectangle {
 
             TextArea {
                 id: editorArea
-                color: "#d4d4d4"
+                color: textColor
                 font.pixelSize: root.backendRef && root.backendRef.setting_font_size > 0 ? root.backendRef.setting_font_size : 16
                 wrapMode: TextArea.Wrap
                 background: Rectangle { color: "transparent" }

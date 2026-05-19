@@ -12,9 +12,41 @@ ApplicationWindow {
     minimumWidth: 800
     minimumHeight: 600
     title: "Writer"
-    color: "#1e1e1e"
+    color: bgColor
 
     property bool loadingChapter: false
+
+    // --- Theme colors ---
+    property string currentTheme: "dark"
+
+    function applyTheme() {
+        let mode = backend.setting_theme_mode
+        if (mode === "light") {
+            currentTheme = "light"
+        } else if (mode === "dark") {
+            currentTheme = "dark"
+        } else {
+            // system - default to dark on Linux for now
+            currentTheme = "dark"
+        }
+    }
+
+    property string bgColor: currentTheme === "light" ? "#ffffff" : "#1e1e1e"
+    property string headerBgColor: currentTheme === "light" ? "#f3f3f3" : "#2d2d2d"
+    property string footerBgColor: currentTheme === "light" ? "#f3f3f3" : "#2d2d2d"
+    property string treeBgColor: currentTheme === "light" ? "#f8f8f8" : "#252526"
+    property string textColor: currentTheme === "light" ? "#1e1e1e" : "#ffffff"
+    property string textSecondaryColor: currentTheme === "light" ? "#666666" : "#999999"
+    property string selectedBgColor: currentTheme === "light" ? "#e8e8e8" : "#37373d"
+    property string toolbarTextColor: currentTheme === "light" ? "#1e1e1e" : "#ffffff"
+    property string buttonHoverColor: currentTheme === "light" ? "#e0e0e0" : "#3e3e42"
+
+    Component.onCompleted: applyTheme()
+
+    Connections {
+        target: backend
+        function onSettings_changed() { applyTheme() }
+    }
 
     AppBackend {
         id: backend
@@ -107,6 +139,7 @@ ApplicationWindow {
         focus: true
         anchors.centerIn: parent
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: headerBgColor; radius: 8 }
 
         onOpened: {
             inputField.text = contextData.initialText || ""
@@ -116,10 +149,11 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 10
-            Label { text: "请输入名称:" }
+            Label { text: "请输入名称:"; color: textColor }
             TextField {
                 id: inputField
                 Layout.fillWidth: true
+                color: textColor
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -159,6 +193,7 @@ ApplicationWindow {
         focus: true
         anchors.centerIn: parent
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: headerBgColor; radius: 8 }
 
         ColumnLayout {
             anchors.fill: parent
@@ -167,12 +202,14 @@ ApplicationWindow {
                 text: "错误"
                 font.bold: true
                 font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+                color: textColor
             }
             Label {
                 text: backend.error_message
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 wrapMode: Text.Wrap
+                color: textColor
             }
             Button {
                 text: "确定"
@@ -193,6 +230,7 @@ ApplicationWindow {
         focus: true
         anchors.centerIn: parent
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: headerBgColor; radius: 8 }
 
         ColumnLayout {
             anchors.fill: parent
@@ -201,8 +239,9 @@ ApplicationWindow {
                 text: "确认删除"
                 font.bold: true
                 font.pixelSize: backend.setting_font_size > 0 ? backend.setting_font_size : 16
+                color: textColor
             }
-            Label { text: "您确定要删除此项目吗？" }
+            Label { text: "您确定要删除此项目吗？"; color: textColor }
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
@@ -231,6 +270,10 @@ ApplicationWindow {
         id: settingsDialog
         backendRef: backend
         editorPageRef: editorPage
+        bgColor: headerBgColor
+        textColor: textColor
+        textSecondaryColor: textSecondaryColor
+        borderColor: selectedBgColor
     }
 
     // --- Data ---
@@ -242,17 +285,23 @@ ApplicationWindow {
     // --- Header ---
 
     header: ToolBar {
-        background: Rectangle { color: "#2d2d2d" }
+        background: Rectangle { color: headerBgColor }
         RowLayout {
             anchors.fill: parent
+            spacing: 0
             ToolButton {
                 text: "打开/创建工作区"
                 onClicked: backend.open_workspace_dialog()
                 contentItem: Text {
                     text: parent.text
-                    color: "white"
+                    color: toolbarTextColor
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    color: parent.hovered ? buttonHoverColor : "transparent"
+                    radius: 4
                 }
             }
             ToolButton {
@@ -264,9 +313,14 @@ ApplicationWindow {
                 }
                 contentItem: Text {
                     text: parent.text
-                    color: "white"
+                    color: toolbarTextColor
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    color: parent.hovered ? buttonHoverColor : "transparent"
+                    radius: 4
                 }
             }
             ToolButton {
@@ -274,9 +328,14 @@ ApplicationWindow {
                 onClicked: backend.save_current_chapter(editorPage.text)
                 contentItem: Text {
                     text: parent.text
-                    color: "white"
+                    color: toolbarTextColor
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    color: parent.hovered ? buttonHoverColor : "transparent"
+                    radius: 4
                 }
             }
             ToolButton {
@@ -284,9 +343,14 @@ ApplicationWindow {
                 onClicked: settingsDialog.open()
                 contentItem: Text {
                     text: parent.text
-                    color: "white"
+                    color: toolbarTextColor
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+                background: Rectangle {
+                    color: parent.hovered ? buttonHoverColor : "transparent"
+                    radius: 4
                 }
             }
             Item { Layout.fillWidth: true }
@@ -296,7 +360,7 @@ ApplicationWindow {
     // --- Footer ---
 
     footer: ToolBar {
-        background: Rectangle { color: "#2d2d2d" }
+        background: Rectangle { color: footerBgColor }
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 10
@@ -304,23 +368,23 @@ ApplicationWindow {
             spacing: 15
             Label {
                 text: backend.save_status
-                color: "white"
+                color: textColor
             }
             Label {
                 text: "字数: " + backend.word_count
-                color: "white"
+                color: textColor
             }
             Item { Layout.fillWidth: true }
             Label {
                 text: backend.chapter_path
-                color: "gray"
+                color: textSecondaryColor
                 elide: Text.ElideRight
                 Layout.maximumWidth: 250
                 clip: true
             }
             Label {
                 text: backend.workspace_path
-                color: "gray"
+                color: textSecondaryColor
                 elide: Text.ElideRight
                 Layout.maximumWidth: 250
                 clip: true
@@ -345,7 +409,7 @@ ApplicationWindow {
         Rectangle {
             SplitView.preferredWidth: 250
             SplitView.minimumWidth: 200
-            color: "#252526"
+            color: treeBgColor
 
             ListView {
                 id: treeView
@@ -356,7 +420,7 @@ ApplicationWindow {
                 Text {
                     anchors.centerIn: parent
                     text: "未选择作品"
-                    color: "gray"
+                    color: textSecondaryColor
                     visible: treeModel.count === 0
                 }
 
@@ -365,7 +429,7 @@ ApplicationWindow {
                     height: 30
                     Rectangle {
                         anchors.fill: parent
-                        color: treeView.currentIndex === index ? "#37373d" : "transparent"
+                        color: treeView.currentIndex === index ? selectedBgColor : "transparent"
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
@@ -399,7 +463,7 @@ ApplicationWindow {
 
                             Text {
                                 text: model.title
-                                color: "white"
+                                color: textColor
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                                 clip: true
@@ -409,13 +473,6 @@ ApplicationWindow {
                                 visible: treeView.currentIndex === index
                                 text: "\u22EE"
                                 onClicked: contextMenu.open()
-                                contentItem: Text {
-                                    text: parent.text
-                                    color: "white"
-                                    font.pixelSize: 18
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                }
                                 background: Item {}
                                 padding: 0
                                 Layout.preferredWidth: 30
@@ -522,6 +579,9 @@ ApplicationWindow {
             id: editorPage
             SplitView.fillWidth: true
             backendRef: backend
+            bgColor: bgColor
+            textColor: textColor
+            placeholderColor: textSecondaryColor
             onContentChanged: {
                 backend.calculate_word_count(text)
                 if (backend.setting_auto_save_enabled) {
