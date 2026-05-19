@@ -14,7 +14,7 @@ class WriterEditText @JvmOverloads constructor(
     defStyleAttr: Int = android.R.attr.editTextStyle
 ) : AppCompatEditText(context, attrs, defStyleAttr) {
 
-    private var isUpdatingSpanWrapper = false
+    internal var isUpdatingSpanWrapper = false
     private var controllersReady = false
 
     private var typingAnimationController: TypingAnimationController? = null
@@ -82,9 +82,7 @@ class WriterEditText @JvmOverloads constructor(
                 if (isUpdatingSpanWrapper || autoIndentController?.isUpdatingSpan == true) return
                 val editable = s ?: return
 
-                typingAnimationController?.afterTextChanged(editable) { updating ->
-                    isUpdatingSpanWrapper = updating
-                }
+                typingAnimationController?.afterTextChanged(editable)
 
                 autoIndentController?.updateParagraphIndentSpans(editable, updateStartPos = selectionStart)
             }

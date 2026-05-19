@@ -8,13 +8,16 @@ import android.widget.EditText
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.sqrt
 
+import android.text.style.ForegroundColorSpan
+
 data class OverlayAnim(
     val insertedStart: Int,
     val insertedText: String,
     val startX: Float,
     val startY: Float,
     var progress: Float,
-    val animator: ValueAnimator
+    val animator: ValueAnimator,
+    val hiddenSpan: ForegroundColorSpan? = null
 ) {
     val codePoints: List<Int> = buildList {
         var i = 0
@@ -26,7 +29,7 @@ data class OverlayAnim(
     }
 }
 
-class TypingOverlayRenderer(private val editText: EditText) {
+class TypingOverlayRenderer(private val editText: WriterEditText) {
     private val DEBUG_ANIM = false
     private val TAG = "WriterEditorAnim"
     private val activeAnims = CopyOnWriteArrayList<OverlayAnim>()
@@ -40,12 +43,24 @@ class TypingOverlayRenderer(private val editText: EditText) {
         activeAnims.add(anim)
     }
 
+    private fun removeSpan(anim: OverlayAnim) {
+        val span = anim.hiddenSpan ?: return
+        val editable = editText.text ?: return
+        if (editable.getSpanStart(span) >= 0) {
+            editText.isUpdatingSpanWrapper = true
+            editable.removeSpan(span)
+            editText.isUpdatingSpanWrapper = false
+        }
+    }
+
     fun removeAnim(anim: OverlayAnim) {
+        removeSpan(anim)
         activeAnims.remove(anim)
     }
 
     fun clear() {
         for (anim in activeAnims) {
+            removeSpan(anim)
             anim.animator.cancel()
         }
         activeAnims.clear()
@@ -53,6 +68,30 @@ class TypingOverlayRenderer(private val editText: EditText) {
 
     fun onDraw(canvas: Canvas) {
         if (activeAnims.isEmpty()) return
+
+        val currentEditable = editText.text
+        if (currentEditable != null) {
+            val invalidAnims = activeAnims.filter { anim ->
+                val span = anim.hiddenSpan
+                if (span != null) {
+                    val start = currentEditable.getSpanStart(span)
+                    val end = currentEditable.getSpanEnd(span)
+                    start < 0 || end < 0 || (end - start) != anim.insertedText.length
+                } else {
+                    false
+                }
+            }
+            if (invalidAnims.isNotEmpty()) {
+                editText.post {
+                    for (invalid in invalidAnims) {
+                        invalid.animator.cancel()
+                    }
+                }
+                // Pre-emptively remove them from the drawing list to avoid drawing invalid ones this frame
+                activeAnims.removeAll(invalidAnims)
+            }
+        }
+
 
         val layout = editText.layout ?: return
         val paint = editText.paint
