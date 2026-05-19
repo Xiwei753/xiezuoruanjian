@@ -65,11 +65,11 @@ impl WriterCore {
 
         match action_id {
             "settings.editor.font_size.get" => {
-                let settings = self.load_local_settings()?;
+                let font_size = settings::get_effective_font_size(&self.workspace_path);
                 Ok(ActionResult {
                     success: true,
                     message: None,
-                    data: Some(serde_json::json!({ "fontSize": settings.editor_font_size })),
+                    data: Some(serde_json::json!({ "fontSize": font_size, "source": "syncable" })),
                     proposed_ui: None,
                     requires_confirmation: None,
                 })
@@ -85,13 +85,11 @@ impl WriterCore {
                             requires_confirmation: None,
                         });
                     }
-                    let mut settings = self.load_local_settings()?;
-                    settings.editor_font_size = font_size as f32;
-                    self.save_local_settings(&settings)?;
+                    settings::set_editor_font_size(&self.workspace_path, font_size)?;
                     Ok(ActionResult {
                         success: true,
                         message: Some("Font size updated".to_string()),
-                        data: None,
+                        data: Some(serde_json::json!({ "fontSize": font_size, "source": "syncable" })),
                         proposed_ui: None,
                         requires_confirmation: None,
                     })
@@ -742,6 +740,12 @@ mod tests {
         let loaded_syncable = core.load_syncable_settings().unwrap();
         assert_eq!(loaded_syncable.font_size, 18.0);
         assert_eq!(loaded_syncable.theme_mode, "system");
+
+        let get_result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+        assert!(get_result.success);
+        let data = get_result.data.unwrap();
+        assert_eq!(data.get("fontSize").unwrap().as_f64().unwrap(), 18.0);
+        assert_eq!(data.get("source").unwrap().as_str().unwrap(), "syncable");
     }
 
     #[test]

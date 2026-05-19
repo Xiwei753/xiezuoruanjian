@@ -235,8 +235,11 @@ mod tests {
 
         let get_result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
         assert!(get_result.success);
-        let val = get_result.data.unwrap().get("fontSize").unwrap().as_f64().unwrap();
+        let data = get_result.data.unwrap();
+        let val = data.get("fontSize").unwrap().as_f64().unwrap();
         assert_eq!(val, 20.0);
+        let source = data.get("source").unwrap().as_str().unwrap();
+        assert_eq!(source, "syncable");
 
         let fail_result = core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 100.0}"#, "").unwrap();
         assert!(!fail_result.success);
@@ -247,6 +250,87 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path());
         assert!(core.execute_action("unknown.action", "", "").is_err());
+    }
+
+    #[test]
+    fn test_font_size_reads_syncable_settings() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let mut syncable = core.load_syncable_settings().unwrap();
+        syncable.font_size = 24.0;
+        core.save_syncable_settings(&syncable).unwrap();
+
+        let result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+        assert!(result.success);
+        let data = result.data.unwrap();
+        assert_eq!(data.get("fontSize").unwrap().as_f64().unwrap(), 24.0);
+        assert_eq!(data.get("source").unwrap().as_str().unwrap(), "syncable");
+    }
+
+    #[test]
+    fn test_font_size_fallback_to_local_when_syncable_zero() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let mut local = core.load_local_settings().unwrap();
+        local.editor_font_size = 18.0;
+        core.save_local_settings(&local).unwrap();
+
+        let result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+        assert!(result.success);
+        let data = result.data.unwrap();
+        assert_eq!(data.get("fontSize").unwrap().as_f64().unwrap(), 18.0);
+        assert_eq!(data.get("source").unwrap().as_str().unwrap(), "syncable");
+    }
+
+    #[test]
+    fn test_font_size_set_writes_syncable_settings() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 22.0}"#, "").unwrap();
+
+        let syncable = core.load_syncable_settings().unwrap();
+        assert_eq!(syncable.font_size, 22.0);
+
+        let local = core.load_local_settings().unwrap();
+        assert_eq!(local.editor_font_size, 16.0);
+    }
+
+    #[test]
+    fn test_font_size_set_does_not_overwrite_local() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let mut local = core.load_local_settings().unwrap();
+        local.editor_font_size = 14.0;
+        core.save_local_settings(&local).unwrap();
+
+        core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 28.0}"#, "").unwrap();
+
+        let local_after = core.load_local_settings().unwrap();
+        assert_eq!(local_after.editor_font_size, 14.0);
+
+        let syncable = core.load_syncable_settings().unwrap();
+        assert_eq!(syncable.font_size, 28.0);
+    }
+
+    #[test]
+    fn test_font_size_set_returns_source_syncable() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let result = core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 16.0}"#, "").unwrap();
+        assert!(result.success);
+        let data = result.data.unwrap();
+        assert_eq!(data.get("source").unwrap().as_str().unwrap(), "syncable");
+        assert_eq!(data.get("fontSize").unwrap().as_f64().unwrap(), 16.0);
     }
 }
 

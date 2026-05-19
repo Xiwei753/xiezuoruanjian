@@ -3,6 +3,7 @@ package com.xiwei.writerapp.data
 import android.content.Context
 import com.xiwei.writerapp.model.*
 import com.xiwei.writerapp.model.LocalSettings
+import com.xiwei.writerapp.model.SyncableSettings
 
 class SettingsRepository(context: Context) {
     private val bridge = NativeCoreBridge(context)
@@ -27,6 +28,45 @@ class SettingsRepository(context: Context) {
             }
             NativeResult.NotLoaded -> false
         }
+    }
+
+    fun getSyncableSettings(): SyncableSettings {
+        return when (val result = bridge.getSyncableSettings()) {
+            is NativeResult.Success -> result.data ?: SyncableSettings()
+            is NativeResult.Error -> {
+                System.err.println("加载同步设置失败: ${result.message}")
+                SyncableSettings()
+            }
+            NativeResult.NotLoaded -> SyncableSettings()
+        }
+    }
+
+    fun saveSyncableSettings(settings: SyncableSettings): Boolean {
+        return when (val result = bridge.saveSyncableSettings(settings)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> {
+                System.err.println("保存同步设置失败: ${result.message}")
+                false
+            }
+            NativeResult.NotLoaded -> false
+        }
+    }
+
+    fun getEffectiveFontSize(): Float {
+        val syncable = getSyncableSettings()
+        if (syncable.fontSize > 0.0) {
+            return syncable.fontSize.toFloat()
+        }
+        val local = getLocalSettings()
+        if (local.editorFontSize > 0.0f) {
+            return local.editorFontSize
+        }
+        return 16f
+    }
+
+    fun setFontSize(fontSize: Float): Boolean {
+        val syncable = getSyncableSettings()
+        return saveSyncableSettings(syncable.copy(fontSize = fontSize.toDouble()))
     }
 
     fun loadSyncConfig(): SyncConfig {

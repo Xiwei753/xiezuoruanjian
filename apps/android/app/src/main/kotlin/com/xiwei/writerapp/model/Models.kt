@@ -27,6 +27,11 @@ data class LocalSettings(
     val editorSmoothCursorDurationMs: Int = 80
 )
 
+data class SyncableSettings(
+    @SerializedName("fontSize") val fontSize: Double = 0.0,
+    @SerializedName("themeMode") val themeMode: String = ""
+)
+
 data class Project(
     val id: String,
     val title: String,

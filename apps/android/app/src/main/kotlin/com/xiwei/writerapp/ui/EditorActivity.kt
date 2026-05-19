@@ -143,7 +143,7 @@ class EditorActivity : AppCompatActivity() {
 
         // Load Settings
         val settings = settingsRepository.getLocalSettings()
-        editorEditText.textSize = settings.editorFontSize
+        editorEditText.textSize = settingsRepository.getEffectiveFontSize()
         editorEditText.setLineSpacing(0f, settings.editorLineSpacingMultiplier)
         editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
         editorEditText.setTypingAnimationEnabled(settings.editorTypingAnimationEnabled, settings.editorTypingAnimationDurationMs.toLong())
@@ -299,7 +299,7 @@ class EditorActivity : AppCompatActivity() {
 
         ErrorUtil.safeRun(this) {
             val settings = settingsRepository.getLocalSettings()
-            editorEditText.textSize = settings.editorFontSize
+            editorEditText.textSize = settingsRepository.getEffectiveFontSize()
             editorEditText.setLineSpacing(0f, settings.editorLineSpacingMultiplier)
             editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
             editorEditText.setTypingAnimationEnabled(settings.editorTypingAnimationEnabled, settings.editorTypingAnimationDurationMs.toLong())

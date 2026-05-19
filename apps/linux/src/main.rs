@@ -274,11 +274,21 @@ impl AppBackend {
             if let Ok(sync_settings) = core.load_syncable_settings() {
                 self.current_setting_font_size = sync_settings.font_size as f32;
                 if self.current_setting_font_size <= 0.0 {
-                    self.current_setting_font_size = 16.0;
+                    if let Ok(local) = core.load_local_settings() {
+                        self.current_setting_font_size = local.editor_font_size;
+                    }
+                    if self.current_setting_font_size <= 0.0 {
+                        self.current_setting_font_size = 16.0;
+                    }
                 }
                 self.current_setting_theme_mode = sync_settings.theme_mode.clone();
             } else {
-                self.current_setting_font_size = 16.0;
+                if let Ok(local) = core.load_local_settings() {
+                    self.current_setting_font_size = local.editor_font_size;
+                }
+                if self.current_setting_font_size <= 0.0 {
+                    self.current_setting_font_size = 16.0;
+                }
                 self.current_setting_theme_mode = "system".to_string();
             }
 

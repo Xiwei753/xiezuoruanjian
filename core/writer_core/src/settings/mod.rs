@@ -116,3 +116,103 @@ pub fn save_syncable_settings(workspace_path: &Path, settings: &SyncableSettings
     let content = serde_json::to_string_pretty(settings)?;
     crate::storage::atomic_write_string(&path, &content)
 }
+
+/// Returns the effective editor font size.
+/// Primary source: SyncableSettings.font_size
+/// Fallback: LocalSettings.editor_font_size (when syncable <= 0)
+/// Final default: 16.0
+pub fn get_effective_font_size(workspace_path: &Path) -> f64 {
+    let syncable = load_syncable_settings(workspace_path);
+    if let Ok(s) = syncable {
+        if s.font_size > 0.0 {
+            return s.font_size;
+        }
+    }
+    let local = load_local_settings(workspace_path);
+    if let Ok(s) = local {
+        if s.editor_font_size > 0.0 {
+            return s.editor_font_size as f64;
+        }
+    }
+    16.0
+}
+
+/// Sets the editor font size in SyncableSettings.
+/// Does NOT modify LocalSettings.editor_font_size (preserved for backward compatibility).
+pub fn set_editor_font_size(workspace_path: &Path, font_size: f64) -> Result<()> {
+    let mut syncable = load_syncable_settings(workspace_path).unwrap_or_default();
+    syncable.font_size = font_size;
+    save_syncable_settings(workspace_path, &syncable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_get_effective_font_size_syncable_primary() {
+        let temp_dir = tempdir().unwrap();
+        let mut syncable = load_syncable_settings(temp_dir.path()).unwrap_or_default();
+        syncable.font_size = 20.0;
+        save_syncable_settings(temp_dir.path(), &syncable).unwrap();
+
+        let size = get_effective_font_size(temp_dir.path());
+        assert_eq!(size, 20.0);
+    }
+
+    #[test]
+    fn test_get_effective_font_size_fallback_to_local() {
+        let temp_dir = tempdir().unwrap();
+        let mut local = LocalSettings::default();
+        local.editor_font_size = 18.0;
+        save_local_settings(temp_dir.path(), &local).unwrap();
+
+        let size = get_effective_font_size(temp_dir.path());
+        assert_eq!(size, 18.0);
+    }
+
+    #[test]
+    fn test_get_effective_font_size_default() {
+        let temp_dir = tempdir().unwrap();
+        let size = get_effective_font_size(temp_dir.path());
+        assert_eq!(size, 16.0);
+    }
+
+    #[test]
+    fn test_get_effective_font_size_syncable_zero_uses_local() {
+        let temp_dir = tempdir().unwrap();
+        let mut syncable = SyncableSettings::default();
+        syncable.font_size = 0.0;
+        save_syncable_settings(temp_dir.path(), &syncable).unwrap();
+
+        let mut local = LocalSettings::default();
+        local.editor_font_size = 22.0;
+        save_local_settings(temp_dir.path(), &local).unwrap();
+
+        let size = get_effective_font_size(temp_dir.path());
+        assert_eq!(size, 22.0);
+    }
+
+    #[test]
+    fn test_set_editor_font_size_writes_syncable() {
+        let temp_dir = tempdir().unwrap();
+        set_editor_font_size(temp_dir.path(), 24.0).unwrap();
+
+        let syncable = load_syncable_settings(temp_dir.path()).unwrap();
+        assert_eq!(syncable.font_size, 24.0);
+    }
+
+    #[test]
+    fn test_set_editor_font_size_does_not_modify_local() {
+        let temp_dir = tempdir().unwrap();
+        let mut local = LocalSettings::default();
+        local.editor_font_size = 14.0;
+        save_local_settings(temp_dir.path(), &local).unwrap();
+
+        set_editor_font_size(temp_dir.path(), 30.0).unwrap();
+
+        let local_after = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(local_after.editor_font_size, 14.0);
+    }
+}

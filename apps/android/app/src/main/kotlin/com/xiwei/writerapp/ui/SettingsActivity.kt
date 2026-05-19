@@ -89,6 +89,14 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
+        val effectiveFontSize = ErrorUtil.safeRun(this, 16f) {
+            if (::settingsRepository.isInitialized) {
+                settingsRepository.getEffectiveFontSize()
+            } else {
+                16f
+            }
+        }
+
         loadSyncState()
 
         val toolbar: MaterialToolbar = findViewById(R.id.toolbar)
@@ -192,7 +200,7 @@ class SettingsActivity : AppCompatActivity() {
         spinnerTheme.adapter = adapter
 
         // Bind existing settings
-        sbFontSize.value = currentSettings.editorFontSize
+        sbFontSize.value = effectiveFontSize
         sbLineSpacing.value = currentSettings.editorLineSpacingMultiplier
         switchAutoSave.isChecked = currentSettings.autoSaveEnabled
         sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
@@ -206,7 +214,7 @@ class SettingsActivity : AppCompatActivity() {
         sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
 
         // Initial texts
-        tvFontSizeValue.text = "${currentSettings.editorFontSize.toInt()}sp"
+        tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
         tvAutoSaveDelayValue.text = "${(currentSettings.autoSaveDelayMs / 1000).toInt()}秒"
         tvAutoIndentWidthValue.text = "${currentSettings.autoIndentWidth}字符"
@@ -564,7 +572,6 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         val newSettings = currentSettings.copy(
-            editorFontSize = sbFontSize.value,
             editorLineSpacingMultiplier = sbLineSpacing.value,
             autoSaveEnabled = switchAutoSave.isChecked,
             autoSaveDelayMs = sbAutoSaveDelay.value.toLong() * 1000L,
@@ -580,6 +587,17 @@ class SettingsActivity : AppCompatActivity() {
         ErrorUtil.safeRun(this) {
             if (::settingsRepository.isInitialized) {
                 settingsRepository.saveLocalSettings(newSettings)
+            }
+        }
+
+        val currentSyncable = settingsRepository.getSyncableSettings()
+        val newSyncable = currentSyncable.copy(
+            fontSize = sbFontSize.value.toDouble(),
+            themeMode = themeStr
+        )
+        ErrorUtil.safeRun(this) {
+            if (::settingsRepository.isInitialized) {
+                settingsRepository.saveSyncableSettings(newSyncable)
             }
         }
 

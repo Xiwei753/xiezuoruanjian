@@ -58,6 +58,9 @@ class NativeCoreBridge(context: Context) {
     private external fun loadLocalSettings(workspacePath: String): String?
     private external fun saveLocalSettings(workspacePath: String, settingsJson: String): String?
 
+    private external fun loadSyncableSettings(workspacePath: String): String?
+    private external fun saveSyncableSettings(workspacePath: String, settingsJson: String): String?
+
     private external fun getRecentEdits(workspacePath: String): String?
     private external fun recordRecentEdit(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
     private external fun loadSyncConfig(workspacePath: String): String?
@@ -386,6 +389,48 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = saveLocalSettings(workspaceDir, gson.toJson(settings))
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(resultJson, type)
+            return if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getSyncableSettings(): NativeResult<SyncableSettings?> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = loadSyncableSettings(workspaceDir)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<SyncableSettings>>() {}.type
+            val response: RustResponse<SyncableSettings> = gson.fromJson(resultJson, type)
+            return if (response.success) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun saveSyncableSettings(settings: SyncableSettings): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = saveSyncableSettings(workspaceDir, gson.toJson(settings))
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<Any>>() {}.type
             val response: RustResponse<Any> = gson.fromJson(resultJson, type)
