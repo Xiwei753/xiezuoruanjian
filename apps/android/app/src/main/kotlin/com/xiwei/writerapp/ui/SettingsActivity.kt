@@ -444,6 +444,30 @@ class SettingsActivity : AppCompatActivity() {
                                 }
                             }
 
+                            // Android permission status
+                            msgBuilder.append("=== 权限状态 ===\n")
+                            msgBuilder.append("INTERNET 权限: ${if (diag.androidHasInternetPermission) "已授予" else "缺失"}\n")
+                            msgBuilder.append("网络状态权限: ${if (diag.androidHasAccessNetworkStatePermission) "已授予" else "缺失"}\n")
+                            msgBuilder.append("网络状态: ${
+                                when (diag.androidNetworkState) {
+                                    "permission_granted" -> "权限已授予，可检测网络"
+                                    "unknown_no_permission" -> "未知（缺少 ACCESS_NETWORK_STATE 权限）"
+                                    "failed_no_internet_permission" -> "无 INTERNET 权限，无法联网"
+                                    else -> diag.androidNetworkState
+                                }
+                            }\n\n")
+
+                            // If INTERNET permission is missing, stop here
+                            if (!diag.androidHasInternetPermission) {
+                                msgBuilder.append("\n${diag.userMessage}")
+                                AlertDialog.Builder(this@SettingsActivity)
+                                    .setTitle("诊断失败")
+                                    .setMessage(msgBuilder.toString())
+                                    .setPositiveButton(getString(R.string.action_ok), null)
+                                    .show()
+                                return@runOnUiThread
+                            }
+
                             val proxyType = diag.proxyType
                             if (diag.proxyUsed && proxyType != "none") {
                                 val protocol = if (proxyType == "socks5") "socks5h" else if (proxyType == "auto") "auto" else "http"

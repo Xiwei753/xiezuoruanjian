@@ -6,6 +6,8 @@ import com.google.gson.reflect.TypeToken
 import com.xiwei.writerapp.model.*
 import java.io.File
 import android.content.Context
+import android.content.pm.PackageManager
+import android.Manifest
 
 // Represents the result of a Native JNI call.
 sealed class NativeResult<out T> {
@@ -16,12 +18,21 @@ sealed class NativeResult<out T> {
 
 class NativeCoreBridge(context: Context) {
     private val workspaceDir = WorkspaceManager.getWorkspaceDir(context).absolutePath
+    private val appContext = context.applicationContext
     private val gson = GsonBuilder()
         .registerTypeAdapter(SyncStatus::class.java, SyncStatusDeserializer())
         .create()
 
     var isLoaded = false
         private set
+
+    // Cached permission states
+    val hasInternetPermission: Boolean by lazy {
+        appContext.checkSelfPermission(Manifest.permission.INTERNET) == PackageManager.PERMISSION_GRANTED
+    }
+    val hasAccessNetworkStatePermission: Boolean by lazy {
+        appContext.checkSelfPermission(Manifest.permission.ACCESS_NETWORK_STATE) == PackageManager.PERMISSION_GRANTED
+    }
 
     init {
         try {
@@ -539,7 +550,12 @@ class NativeCoreBridge(context: Context) {
     fun performSyncDiagnostics(config: SyncConfig): NativeResult<SyncDiagnosticsResult> {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
-            val resultJson = performSyncDiagnostics(workspaceDir, gson.toJson(config))
+            // Inject Android permission status into config before sending to Rust
+            val configWithPermissions = config.copy(
+                androidHasInternetPermission = hasInternetPermission,
+                androidHasAccessNetworkStatePermission = hasAccessNetworkStatePermission
+            )
+            val resultJson = performSyncDiagnostics(workspaceDir, gson.toJson(configWithPermissions))
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<SyncDiagnosticsResult>>() {}.type
             val response: RustResponse<SyncDiagnosticsResult> = try {

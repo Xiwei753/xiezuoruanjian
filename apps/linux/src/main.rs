@@ -433,6 +433,8 @@ impl AppBackend {
                     proxy_type: "none".to_string(),
                     proxy_host: "".to_string(),
                     proxy_port: 0,
+                    android_has_internet_permission: true,
+                    android_has_access_network_state_permission: true,
                 });
 
             c.enabled = self.current_sync_enabled;
@@ -533,6 +535,8 @@ impl AppBackend {
                         proxy_type: "none".to_string(),
                         proxy_host: "".to_string(),
                         proxy_port: 0,
+                        android_has_internet_permission: true,
+                        android_has_access_network_state_permission: true,
                     }
                 }
             };

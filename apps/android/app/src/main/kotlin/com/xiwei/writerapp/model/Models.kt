@@ -86,7 +86,9 @@ data class SyncConfig(
     @SerializedName("proxy_enabled") val proxyEnabled: Boolean? = false,
     @SerializedName("proxy_type") val proxyType: String? = "none",
     @SerializedName("proxy_host") val proxyHost: String? = "127.0.0.1",
-    @SerializedName("proxy_port") val proxyPort: Int? = 7890
+    @SerializedName("proxy_port") val proxyPort: Int? = 7890,
+    @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean? = null,
+    @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean? = null
 ) {
     fun normalize(): SyncConfig {
         return copy(
@@ -101,7 +103,9 @@ data class SyncConfig(
             proxyHost = if (proxyHost.isNullOrEmpty()) "127.0.0.1" else proxyHost,
             proxyPort = if (proxyPort == null || proxyPort <= 0) {
                 if (proxyType == "socks5") 7891 else 7890
-            } else proxyPort
+            } else proxyPort,
+            androidHasInternetPermission = androidHasInternetPermission ?: true,
+            androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission ?: true
         )
     }
 }
@@ -178,6 +182,9 @@ data class SyncResult(
 
 data class SyncDiagnosticsResult(
     val success: Boolean,
+    @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean,
+    @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean,
+    @SerializedName("android_network_state") val androidNetworkState: String,
     @SerializedName("tcp_probe_ok") val tcpProbeOk: Boolean,
     @SerializedName("tcp_probe_status") val tcpProbeStatus: String,
     @SerializedName("http_connect_probe_ok") val httpConnectProbeOk: Boolean,

@@ -37,7 +37,17 @@ pub struct SyncConfig {
     pub proxy_host: String,
     #[serde(default = "default_proxy_port")]
     pub proxy_port: u16,
+    /// Android-only: whether INTERNET permission is granted.
+    /// Linux always sets this to true.
+    #[serde(default = "default_true")]
+    pub android_has_internet_permission: bool,
+    /// Android-only: whether ACCESS_NETWORK_STATE permission is granted.
+    /// Linux always sets this to true.
+    #[serde(default = "default_true")]
+    pub android_has_access_network_state_permission: bool,
 }
+
+fn default_true() -> bool { true }
 
 fn default_proxy_type() -> String {
     "http".to_string()
@@ -103,6 +113,10 @@ pub struct SyncConflict {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDiagnosticsResult {
     pub success: bool,
+    /// Android permission check results
+    pub android_has_internet_permission: bool,
+    pub android_has_access_network_state_permission: bool,
+    pub android_network_state: String,
     pub tcp_probe_ok: bool,
     pub tcp_probe_status: String,
     pub http_connect_probe_ok: bool,
@@ -129,6 +143,9 @@ impl SyncDiagnosticsResult {
     pub fn new() -> Self {
         Self {
             success: false,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+            android_network_state: "unchecked".to_string(),
             tcp_probe_ok: false,
             tcp_probe_status: "unchecked".to_string(),
             http_connect_probe_ok: false,
@@ -889,6 +906,27 @@ impl SyncService {
         _backend: &dyn GitBackend,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
+
+        // Record Android permission status (Linux always has true from default)
+        result.android_has_internet_permission = config.android_has_internet_permission;
+        result.android_has_access_network_state_permission = config.android_has_access_network_state_permission;
+
+        // Early bail: INTERNET permission missing on Android
+        if !config.android_has_internet_permission {
+            result.user_message = "缺少 INTERNET 权限。Android 应用无法联网，请在 AndroidManifest.xml 中添加 android.permission.INTERNET。".to_string();
+            result.network_status = "failed_no_internet_permission".to_string();
+            result.auth_status = "skipped".to_string();
+            result.repo_status = "skipped".to_string();
+            result.branch_status = "skipped".to_string();
+            return Ok(result);
+        }
+
+        // Network state: if ACCESS_NETWORK_STATE is missing, mark as unknown but don't block
+        if !config.android_has_access_network_state_permission {
+            result.android_network_state = "unknown_no_permission".to_string();
+        } else {
+            result.android_network_state = "permission_granted".to_string();
+        }
 
         result.proxy_used = config.proxy_enabled;
         result.proxy_type = config.proxy_type.clone();
@@ -1934,6 +1972,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy_token".to_string()),
@@ -1986,6 +2026,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -2090,6 +2132,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let state = SyncState {
             remote_url: Some("url".to_string()),
@@ -2145,6 +2189,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let content = serde_json::to_string(&config).unwrap();
         // token might be there if some other struct is serialized, but we want to ensure
@@ -2249,6 +2295,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
 
         let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
@@ -2270,6 +2318,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
 
         // Create some whitelisted and blacklisted files
@@ -2301,6 +2351,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
 
         let secrets = SyncSecrets {
@@ -2331,6 +2383,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -2426,6 +2480,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -2512,6 +2568,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -2594,6 +2652,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -2676,6 +2736,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
@@ -2801,6 +2863,8 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
         };
         let secrets = SyncSecrets {
             token: Some("dummy".to_string()),
