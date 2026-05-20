@@ -1124,12 +1124,7 @@ impl SyncBackend for GitHubApiBackend {
         Ok(result)
     }
 
-    fn pull(
-        &self,
-        _workspace_path: &Path,
-        _config: &SyncConfig,
-        _secrets: &SyncSecrets,
-    ) -> crate::Result<SyncResult> {
+    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
         Ok(SyncResult::error(
             SyncStatus::Error("backend_not_implemented".to_string()),
             FirstSyncMode::NotAttempted,
@@ -1138,12 +1133,7 @@ impl SyncBackend for GitHubApiBackend {
         ))
     }
 
-    fn push(
-        &self,
-        _workspace_path: &Path,
-        _config: &SyncConfig,
-        _secrets: &SyncSecrets,
-    ) -> crate::Result<SyncResult> {
+    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
         Ok(SyncResult::error(
             SyncStatus::Error("backend_not_implemented".to_string()),
             FirstSyncMode::NotAttempted,
@@ -1152,12 +1142,7 @@ impl SyncBackend for GitHubApiBackend {
         ))
     }
 
-    fn sync(
-        &self,
-        _workspace_path: &Path,
-        _config: &SyncConfig,
-        _secrets: &SyncSecrets,
-    ) -> crate::Result<SyncResult> {
+    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
         Ok(SyncResult::error(
             SyncStatus::Error("backend_not_implemented".to_string()),
             FirstSyncMode::NotAttempted,
