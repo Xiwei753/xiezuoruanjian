@@ -37,6 +37,7 @@ struct AppBackend {
     clear_editor: qt_signal!(),
 
     sync_enabled: qt_property!(bool; READ sync_enabled WRITE set_sync_enabled NOTIFY sync_config_changed),
+    sync_backend_type: qt_property!(QString; READ sync_backend_type WRITE set_sync_backend_type NOTIFY sync_config_changed),
     sync_remote_url: qt_property!(QString; READ sync_remote_url WRITE set_sync_remote_url NOTIFY sync_config_changed),
     sync_branch: qt_property!(QString; READ sync_branch WRITE set_sync_branch NOTIFY sync_config_changed),
     sync_auto_sync: qt_property!(bool; READ sync_auto_sync WRITE set_sync_auto_sync NOTIFY sync_config_changed),
@@ -138,6 +139,7 @@ struct AppBackend {
     cached_tree: QJsonArray,
 
     current_sync_enabled: bool,
+    current_sync_backend_type: String,
     current_sync_remote_url: String,
     current_sync_branch: String,
     current_sync_auto_sync: bool,
@@ -167,6 +169,14 @@ impl AppBackend {
     }
     fn set_sync_enabled(&mut self, val: bool) {
         self.current_sync_enabled = val;
+        self.sync_config_changed();
+    }
+
+    fn sync_backend_type(&self) -> QString {
+        self.current_sync_backend_type.clone().into()
+    }
+    fn set_sync_backend_type(&mut self, val: QString) {
+        self.current_sync_backend_type = val.to_string();
         self.sync_config_changed();
     }
 
@@ -364,6 +374,7 @@ impl AppBackend {
                     Ok(result) => {
                         let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
 
+                        msg.push_str(&format!("\n后端类型: {}", result.backend_type));
                         msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
 
                         if !result.remote_url_sanitized.is_empty() {
@@ -424,6 +435,13 @@ impl AppBackend {
             let core = core_ref.borrow();
             if let Ok(config) = core.load_sync_config() {
                 self.current_sync_enabled = config.enabled;
+                self.current_sync_backend_type = match config.backend_type {
+                    writer_core::sync_service::BackendType::Git => "git".to_string(),
+                    writer_core::sync_service::BackendType::GithubApi => "github_api".to_string(),
+                    writer_core::sync_service::BackendType::WebDav => "webdav".to_string(),
+                    writer_core::sync_service::BackendType::S3 => "s3".to_string(),
+                    writer_core::sync_service::BackendType::LocalFolder => "local_folder".to_string(),
+                };
                 self.current_sync_remote_url = config.remote_url.clone();
                 self.current_sync_branch = config.branch.clone();
                 self.current_sync_auto_sync = config.auto_sync;
@@ -472,6 +490,13 @@ impl AppBackend {
             let parsed = writer_core::sync_service::sanitize_remote_url(&raw_url);
 
             c.enabled = self.current_sync_enabled;
+            c.backend_type = match self.current_sync_backend_type.as_str() {
+                "github_api" => writer_core::sync_service::BackendType::GithubApi,
+                "webdav" => writer_core::sync_service::BackendType::WebDav,
+                "s3" => writer_core::sync_service::BackendType::S3,
+                "local_folder" => writer_core::sync_service::BackendType::LocalFolder,
+                _ => writer_core::sync_service::BackendType::Git,
+            };
             c.remote_url = parsed.sanitized_url.clone();
             c.branch = self.current_sync_branch.clone();
             c.auto_sync = self.current_sync_auto_sync;

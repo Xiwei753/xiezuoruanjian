@@ -4,6 +4,22 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+pub enum BackendType {
+    Git,
+    GithubApi,
+    WebDav,
+    S3,
+    LocalFolder,
+}
+
+impl Default for BackendType {
+    fn default() -> Self {
+        BackendType::Git
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum SyncTransport {
     HttpsToken,
     SshDeployKey,
@@ -24,6 +40,8 @@ pub enum FirstSyncMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub backend_type: BackendType,
     pub remote_url: String,
     pub transport: SyncTransport,
     #[serde(default = "default_branch")]
@@ -214,6 +232,8 @@ pub struct SyncConflict {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDiagnosticsResult {
     pub success: bool,
+    /// Backend type: git/github_api/webdav/s3/local_folder
+    pub backend_type: String,
     /// Android permission check results
     pub android_has_internet_permission: bool,
     pub android_has_access_network_state_permission: bool,
@@ -252,6 +272,7 @@ impl SyncDiagnosticsResult {
     pub fn new() -> Self {
         Self {
             success: false,
+            backend_type: "git".to_string(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
             android_network_state: "unchecked".to_string(),
@@ -921,6 +942,383 @@ impl GitBackend for Git2Backend {
     }
 }
 
+pub trait SyncBackend {
+    fn diagnose(
+        &self,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult>;
+    fn pull(
+        &self,
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult>;
+    fn push(
+        &self,
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult>;
+    fn sync(
+        &self,
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult>;
+}
+
+pub struct GitSyncBackend;
+
+impl SyncBackend for GitSyncBackend {
+    fn diagnose(
+        &self,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        let backend = Git2Backend;
+        SyncService::perform_sync_diagnostics(config, secrets, &backend)
+    }
+    fn pull(
+        &self,
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        let backend = Git2Backend;
+        SyncService::perform_sync(workspace_path, config, secrets, &backend)
+    }
+    fn push(
+        &self,
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        let backend = Git2Backend;
+        SyncService::perform_sync(workspace_path, config, secrets, &backend)
+    }
+    fn sync(
+        &self,
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        let backend = Git2Backend;
+        SyncService::perform_sync(workspace_path, config, secrets, &backend)
+    }
+}
+
+pub struct GitHubApiBackend;
+
+impl GitHubApiBackend {
+    fn api_base_url(remote_url: &str) -> String {
+        let sanitized = sanitize_remote_url(remote_url).sanitized_url;
+        if let Some(path) = sanitized.strip_prefix("https://github.com/") {
+            let path = path.strip_suffix(".git").unwrap_or(path);
+            format!("https://api.github.com/repos/{}", path)
+        } else if let Some(path) = sanitized.strip_prefix("http://github.com/") {
+            let path = path.strip_suffix(".git").unwrap_or(path);
+            format!("https://api.github.com/repos/{}", path)
+        } else {
+            sanitized
+        }
+    }
+}
+
+impl SyncBackend for GitHubApiBackend {
+    fn diagnose(
+        &self,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        let mut result = SyncDiagnosticsResult::new();
+        result.remote_url_sanitized = sanitize_remote_url(&config.remote_url).sanitized_url.clone();
+        result.transport = "https".to_string();
+        result.app_proxy_status = if config.proxy_enabled { "已启用".to_string() } else { "未启用".to_string() };
+
+        if !config.android_has_internet_permission {
+            result.user_message = "缺少 INTERNET 权限。".to_string();
+            result.error_category = "missing_permission".to_string();
+            return Ok(result);
+        }
+
+        let token = secrets.token.clone().unwrap_or_default();
+        if token.is_empty() {
+            result.user_message = "缺少 GitHub Token。".to_string();
+            result.error_category = "token_missing".to_string();
+            return Ok(result);
+        }
+
+        let api_base = Self::api_base_url(&config.remote_url);
+        let _masked_url = mask_token_in_url(&api_base);
+
+        let client = build_http_client(Some(config))?;
+        let api_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
+
+        match client.get(&api_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send() {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let body = resp.text().unwrap_or_default();
+                if status == 200 {
+                    result.success = true;
+                    result.network_ok = true;
+                    result.network_status = "ok".to_string();
+                    result.auth_ok = true;
+                    result.auth_status = "ok".to_string();
+                    result.repo_ok = true;
+                    result.repo_status = "ok".to_string();
+                    result.branch_ok = true;
+                    result.branch_status = "ok".to_string();
+                    result.user_message = "诊断成功：GitHub API 可达，Token 有效，仓库和分支存在。".to_string();
+                } else if status == 401 || status == 403 {
+                    result.network_ok = true;
+                    result.network_status = "ok".to_string();
+                    result.auth_ok = false;
+                    result.auth_status = "failed".to_string();
+                    result.error_category = if status == 401 { "token_invalid" } else { "token_permission_denied" }.to_string();
+                    result.user_message = if status == 401 {
+                        "身份验证失败。Token 无效或已过期。".to_string()
+                    } else {
+                        "Token 权限不足。请确认 Token 具有 repo 权限范围。".to_string()
+                    };
+                    result.raw_error = Some(format!("HTTP {} (body truncated): {}", status, &body.chars().take(200).collect::<String>()));
+                } else if status == 404 {
+                    result.network_ok = true;
+                    result.network_status = "ok".to_string();
+                    result.auth_ok = true;
+                    result.auth_status = "ok".to_string();
+                    result.repo_ok = false;
+                    result.repo_status = "failed".to_string();
+                    result.error_category = "repo_not_found_or_no_permission".to_string();
+                    result.user_message = "找不到仓库或分支。请检查仓库地址和分支名称。".to_string();
+                    result.raw_error = Some(format!("HTTP {} (body truncated): {}", status, &body.chars().take(200).collect::<String>()));
+                } else {
+                    result.network_ok = false;
+                    result.network_status = "failed".to_string();
+                    result.error_category = "github_network_failed".to_string();
+                    result.user_message = format!("GitHub API 返回意外状态码: {}", status);
+                    result.raw_error = Some(format!("HTTP {} (body truncated): {}", status, &body.chars().take(200).collect::<String>()));
+                }
+            }
+            Err(e) => {
+                let err_msg = e.to_string().to_lowercase();
+                result.raw_error = Some(e.to_string());
+                if err_msg.contains("dns") || err_msg.contains("resolve") || err_msg.contains("name resolution") {
+                    result.error_category = "dns_failed".to_string();
+                    result.user_message = "无法解析 GitHub API 地址。请检查网络/DNS 设置。".to_string();
+                } else if err_msg.contains("ssl") || err_msg.contains("certificate") || err_msg.contains("tls") {
+                    result.error_category = "tls_failed".to_string();
+                    result.user_message = "SSL/TLS 连接失败。请检查网络环境或系统时间。".to_string();
+                } else if err_msg.contains("connection refused") || err_msg.contains("timeout") || err_msg.contains("network unreachable") {
+                    result.error_category = "github_network_failed".to_string();
+                    result.user_message = "网络连接失败或超时。请检查网络连接或代理设置。".to_string();
+                } else {
+                    result.error_category = "github_network_failed".to_string();
+                    result.user_message = format!("GitHub API 请求失败: {}", e);
+                }
+                result.network_ok = false;
+                result.network_status = "failed".to_string();
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn pull(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("GitHub API 后端的 pull 操作尚未实现。".to_string()),
+            "GitHub API pull not implemented".to_string(),
+        ))
+    }
+
+    fn push(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("GitHub API 后端的 push 操作尚未实现。".to_string()),
+            "GitHub API push not implemented".to_string(),
+        ))
+    }
+
+    fn sync(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("GitHub API 后端的 sync 操作尚未实现。".to_string()),
+            "GitHub API sync not implemented".to_string(),
+        ))
+    }
+}
+
+pub struct WebDavBackend;
+
+impl SyncBackend for WebDavBackend {
+    fn diagnose(
+        &self,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        let mut result = SyncDiagnosticsResult::new();
+        result.user_message = "WebDAV 后端尚未实现。".to_string();
+        result.error_category = "backend_not_implemented".to_string();
+        Ok(result)
+    }
+    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("WebDAV 后端的 pull 操作尚未实现。".to_string()),
+            "WebDAV pull not implemented".to_string(),
+        ))
+    }
+    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("WebDAV 后端的 push 操作尚未实现。".to_string()),
+            "WebDAV push not implemented".to_string(),
+        ))
+    }
+    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("WebDAV 后端的 sync 操作尚未实现。".to_string()),
+            "WebDAV sync not implemented".to_string(),
+        ))
+    }
+}
+
+pub struct LocalFolderBackend;
+
+impl SyncBackend for LocalFolderBackend {
+    fn diagnose(
+        &self,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        let mut result = SyncDiagnosticsResult::new();
+        result.user_message = "LocalFolder 后端尚未实现。此后端用于配合 Syncthing 等外部同步工具。".to_string();
+        result.error_category = "backend_not_implemented".to_string();
+        Ok(result)
+    }
+    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("LocalFolder 后端的 pull 操作尚未实现。".to_string()),
+            "LocalFolder pull not implemented".to_string(),
+        ))
+    }
+    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("LocalFolder 后端的 push 操作尚未实现。".to_string()),
+            "LocalFolder push not implemented".to_string(),
+        ))
+    }
+    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("LocalFolder 后端的 sync 操作尚未实现。".to_string()),
+            "LocalFolder sync not implemented".to_string(),
+        ))
+    }
+}
+
+pub struct S3Backend;
+
+impl SyncBackend for S3Backend {
+    fn diagnose(
+        &self,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        let mut result = SyncDiagnosticsResult::new();
+        result.user_message = "S3 后端尚未实现。".to_string();
+        result.error_category = "backend_not_implemented".to_string();
+        Ok(result)
+    }
+    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("S3 后端的 pull 操作尚未实现。".to_string()),
+            "S3 pull not implemented".to_string(),
+        ))
+    }
+    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("S3 后端的 push 操作尚未实现。".to_string()),
+            "S3 push not implemented".to_string(),
+        ))
+    }
+    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
+        Ok(SyncResult::error(
+            SyncStatus::Error("backend_not_implemented".to_string()),
+            FirstSyncMode::NotAttempted,
+            Some("S3 后端的 sync 操作尚未实现。".to_string()),
+            "S3 sync not implemented".to_string(),
+        ))
+    }
+}
+
+pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
+    match backend_type {
+        BackendType::Git => Box::new(GitSyncBackend),
+        BackendType::GithubApi => Box::new(GitHubApiBackend),
+        BackendType::WebDav => Box::new(WebDavBackend),
+        BackendType::S3 => Box::new(S3Backend),
+        BackendType::LocalFolder => Box::new(LocalFolderBackend),
+    }
+}
+
+fn build_http_client(config: Option<&SyncConfig>) -> crate::Result<reqwest::blocking::Client> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .user_agent("WriterApp/1.0")
+        .timeout(std::time::Duration::from_secs(15));
+
+    if let Some(cfg) = config {
+        if cfg.proxy_enabled && !cfg.proxy_host.is_empty() && cfg.proxy_port > 0 {
+            let proxy_url = match cfg.proxy_type.as_str() {
+                "http" => format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port),
+                "socks5" => format!("socks5h://{}:{}", cfg.proxy_host, cfg.proxy_port),
+                _ => format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port),
+            };
+            let proxy = reqwest::Proxy::all(&proxy_url).map_err(|e| {
+                crate::Error::Other(format!("Failed to configure proxy: {}", e))
+            })?;
+            builder = builder.proxy(proxy);
+        }
+    }
+
+    let client = builder.build().map_err(|e| {
+        crate::Error::Other(format!("Failed to build HTTP client: {}", e))
+    })?;
+    Ok(client)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPlan {
     pub files_to_upload: Vec<String>,
@@ -1077,6 +1475,13 @@ impl SyncService {
         _backend: &dyn GitBackend,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
+        result.backend_type = match config.backend_type {
+            BackendType::Git => "git".to_string(),
+            BackendType::GithubApi => "github_api".to_string(),
+            BackendType::WebDav => "webdav".to_string(),
+            BackendType::S3 => "s3".to_string(),
+            BackendType::LocalFolder => "local_folder".to_string(),
+        };
 
         result.android_has_internet_permission = config.android_has_internet_permission;
         result.android_has_access_network_state_permission = config.android_has_access_network_state_permission;
@@ -2259,6 +2664,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2314,6 +2720,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2421,6 +2828,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2479,6 +2887,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2586,6 +2995,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2610,6 +3020,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2644,6 +3055,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2677,6 +3089,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2775,6 +3188,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2864,6 +3278,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2949,6 +3364,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -3034,6 +3450,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -3162,6 +3579,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,

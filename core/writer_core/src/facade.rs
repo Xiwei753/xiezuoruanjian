@@ -611,13 +611,9 @@ impl WriterCore {
         &self,
         config: &crate::sync_service::SyncConfig,
     ) -> crate::error::Result<crate::sync_service::SyncDiagnosticsResult> {
-        let backend = crate::sync_service::Git2Backend;
         let secrets = self.load_sync_secrets().unwrap_or_default();
-        crate::sync_service::SyncService::perform_sync_diagnostics(
-            config,
-            &secrets,
-            &backend,
-        )
+        let backend = crate::sync_service::create_sync_backend(&config.backend_type);
+        backend.diagnose(config, &secrets)
     }
 
     pub fn perform_sync_dry_run(
@@ -631,14 +627,9 @@ impl WriterCore {
         &self,
         config: &crate::sync_service::SyncConfig,
     ) -> crate::error::Result<crate::sync_service::SyncResult> {
-        let backend = crate::sync_service::Git2Backend;
         let secrets = self.load_sync_secrets().unwrap_or_default();
-        crate::sync_service::SyncService::perform_sync(
-            &self.workspace_path,
-            config,
-            &secrets,
-            &backend,
-        )
+        let backend = crate::sync_service::create_sync_backend(&config.backend_type);
+        backend.sync(&self.workspace_path, config, &secrets)
     }
 
     pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync_service::SyncSecrets> {
@@ -686,6 +677,7 @@ impl WriterCore {
         if !config_path.exists() {
             return Ok(crate::sync_service::SyncConfig {
                 enabled: false,
+                backend_type: crate::sync_service::BackendType::Git,
                 remote_url: String::new(),
                 transport: crate::sync_service::SyncTransport::HttpsToken,
                 branch: "main".to_string(),

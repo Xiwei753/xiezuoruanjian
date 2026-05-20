@@ -76,8 +76,17 @@ enum class SyncTransport {
     @SerializedName("ssh_deploy_key") SshKey
 }
 
+enum class BackendType {
+    @SerializedName("git") Git,
+    @SerializedName("github_api") GithubApi,
+    @SerializedName("webdav") WebDav,
+    @SerializedName("s3") S3,
+    @SerializedName("local_folder") LocalFolder
+}
+
 data class SyncConfig(
     val enabled: Boolean? = false,
+    @SerializedName("backend_type") val backendType: BackendType? = BackendType.Git,
     @SerializedName("remote_url") val remoteUrl: String? = "",
     val transport: SyncTransport? = SyncTransport.HttpsToken,
     val branch: String? = "main",
@@ -94,6 +103,7 @@ data class SyncConfig(
     fun normalize(): SyncConfig {
         return copy(
             enabled = enabled ?: false,
+            backendType = backendType ?: BackendType.Git,
             remoteUrl = remoteUrl ?: "",
             transport = transport ?: SyncTransport.HttpsToken,
             branch = if (branch.isNullOrEmpty()) "main" else branch,
@@ -184,6 +194,7 @@ data class SyncResult(
 
 data class SyncDiagnosticsResult(
     val success: Boolean,
+    @SerializedName("backend_type") val backendType: String,
     @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean,
     @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean,
     @SerializedName("android_network_state") val androidNetworkState: String,
