@@ -447,7 +447,20 @@ class SettingsActivity : AppCompatActivity() {
                             msgBuilder.append("身份认证: ${mapStatus(diag.authStatus)}\n")
                             msgBuilder.append("仓库访问: ${mapStatus(diag.repoStatus)}\n")
                             msgBuilder.append("分支存在: ${mapStatus(diag.branchStatus)}\n")
-                            msgBuilder.append("代理配置: ${if (diag.proxyUsed) "${diag.proxyType}://${diag.proxyHost}:${diag.proxyPort}" else "未使用"}\n\n")
+
+                            val proxyType = diag.proxyType
+                            if (diag.proxyUsed && proxyType != "none") {
+                                val protocol = if (proxyType == "socks5") "socks5h" else if (proxyType == "auto") "auto" else "http"
+                                if (protocol == "auto") {
+                                    msgBuilder.append("代理配置: auto\n\n")
+                                } else {
+                                    msgBuilder.append("代理配置: ${protocol}://${diag.proxyHost}:${diag.proxyPort}\n\n")
+                                }
+                            } else {
+                                msgBuilder.append("代理配置: 未使用显式代理\n\n")
+                                msgBuilder.append("提示：当前同步底层没有使用显式代理。系统代理/TUN 是否接管取决于系统路由和 Clash，本应用不能保证 libgit2 自动读取。如果同步失败，建议启用 HTTP 代理 127.0.0.1:7890。\n\n")
+                            }
+
                             msgBuilder.append(diag.userMessage)
 
                             AlertDialog.Builder(this@SettingsActivity)

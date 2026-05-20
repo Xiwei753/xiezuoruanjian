@@ -254,6 +254,12 @@ impl Git2Backend {
         let mut proxy_opts = git2::ProxyOptions::new();
         if let Some(cfg) = config {
             if cfg.proxy_enabled {
+                if cfg.proxy_host.is_empty() {
+                    return Err(crate::Error::Other("Proxy host cannot be empty".to_string()));
+                }
+                if cfg.proxy_port == 0 {
+                    return Err(crate::Error::Other("Proxy port is invalid".to_string()));
+                }
                 match cfg.proxy_type.as_str() {
                     "auto" => {
                         proxy_opts.auto();
@@ -263,10 +269,13 @@ impl Git2Backend {
                         proxy_opts.url(&proxy_url);
                     }
                     "socks5" => {
-                        let proxy_url = format!("socks5://{}:{}", cfg.proxy_host, cfg.proxy_port);
+                        let proxy_url = format!("socks5h://{}:{}", cfg.proxy_host, cfg.proxy_port);
                         proxy_opts.url(&proxy_url);
                     }
-                    _ => {} // "none" or unknown
+                    "none" => {}
+                    _ => {
+                        return Err(crate::Error::Other("Invalid proxy type".to_string()));
+                    }
                 }
             }
         }
@@ -895,14 +904,14 @@ impl SyncService {
             git2::Cred::userpass_plaintext("oauth2", &token)
         });
 
-        let mut proxy_opts = git2::ProxyOptions::new();
-        if config.proxy_enabled && config.proxy_type != "none" {
-            let protocol = if config.proxy_type == "socks5" { "socks5h" } else { "http" };
-            let proxy_url = format!("{}://{}:{}", protocol, config.proxy_host, config.proxy_port);
-            let _ = proxy_opts.url(&proxy_url);
-        } else {
-            let _ = proxy_opts.auto();
-        }
+        let proxy_opts = match Git2Backend::build_proxy_options(Some(config)) {
+            Ok(opts) => opts,
+            Err(e) => {
+                result.user_message = format!("代理配置错误: {}", e);
+                result.success = false;
+                return Ok(result);
+            }
+        };
 
         let direction = git2::Direction::Fetch;
         let connection: git2::RemoteConnection = match remote.connect_auth(direction, Some(callbacks), Some(proxy_opts)) {
@@ -913,7 +922,17 @@ impl SyncService {
                 result.raw_error = Some(clean_msg.clone());
                 result.user_message = get_user_friendly_error(&clean_msg);
 
-                let is_network_error = clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") || clean_msg.contains("timeout") || clean_msg.contains("operation not permitted");
+                let is_network_error = clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") || clean_msg.contains("timeout") || clean_msg.contains("operation not permitted") || clean_msg.contains("proxy");
+
+                if clean_msg.contains("unsupported proxy protocol") || clean_msg.contains("代理协议不支持") {
+                    result.user_message = "代理协议不支持。请改用 Clash mixed-port HTTP 代理（推荐：http://127.0.0.1:7890）。".to_string();
+                    result.network_ok = false;
+                    result.network_status = "failed".to_string();
+                    result.auth_status = "skipped".to_string();
+                    result.repo_status = "skipped".to_string();
+                    result.branch_status = "skipped".to_string();
+                    return Ok(result);
+                }
 
                 if is_network_error {
                     result.network_ok = false;
