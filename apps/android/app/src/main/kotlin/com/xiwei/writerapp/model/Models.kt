@@ -178,6 +178,12 @@ data class SyncResult(
 
 data class SyncDiagnosticsResult(
     val success: Boolean,
+    @SerializedName("tcp_probe_ok") val tcpProbeOk: Boolean,
+    @SerializedName("tcp_probe_status") val tcpProbeStatus: String,
+    @SerializedName("http_connect_probe_ok") val httpConnectProbeOk: Boolean,
+    @SerializedName("http_connect_probe_status") val httpConnectProbeStatus: String,
+    @SerializedName("libgit2_probe_ok") val libgit2ProbeOk: Boolean,
+    @SerializedName("libgit2_probe_status") val libgit2ProbeStatus: String,
     @SerializedName("network_ok") val networkOk: Boolean,
     @SerializedName("auth_ok") val authOk: Boolean,
     @SerializedName("repo_ok") val repoOk: Boolean,

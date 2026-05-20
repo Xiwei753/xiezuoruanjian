@@ -440,28 +440,40 @@ class SettingsActivity : AppCompatActivity() {
                                     "ok" -> "正常"
                                     "failed" -> "失败"
                                     "skipped" -> "已跳过"
-                                    else -> "未检查"
+                                    else -> if (s.startsWith("failed")) "失败 ($s)" else "未检查 ($s)"
                                 }
                             }
-                            msgBuilder.append("网络连接: ${mapStatus(diag.networkStatus)}\n")
-                            msgBuilder.append("身份认证: ${mapStatus(diag.authStatus)}\n")
-                            msgBuilder.append("仓库访问: ${mapStatus(diag.repoStatus)}\n")
-                            msgBuilder.append("分支存在: ${mapStatus(diag.branchStatus)}\n")
 
                             val proxyType = diag.proxyType
                             if (diag.proxyUsed && proxyType != "none") {
                                 val protocol = if (proxyType == "socks5") "socks5h" else if (proxyType == "auto") "auto" else "http"
                                 if (protocol == "auto") {
-                                    msgBuilder.append("代理配置: auto\n\n")
+                                    msgBuilder.append("代理配置: auto\n")
                                 } else {
-                                    msgBuilder.append("代理配置: ${protocol}://${diag.proxyHost}:${diag.proxyPort}\n\n")
+                                    msgBuilder.append("代理配置: ${protocol}://${diag.proxyHost}:${diag.proxyPort}\n")
+                                    if (protocol == "http" || protocol == "socks5h") {
+                                        msgBuilder.append("  TCP 连通: ${if (diag.tcpProbeOk) "成功" else "失败"} (${diag.tcpProbeStatus})\n")
+                                        if (protocol == "http") {
+                                            msgBuilder.append("  HTTP CONNECT: ${if (diag.httpConnectProbeOk) "成功" else "失败"} (${diag.httpConnectProbeStatus})\n")
+                                        }
+                                    }
                                 }
+                                msgBuilder.append("  libgit2 访问: ${if (diag.libgit2ProbeOk) "成功" else "失败"} (${diag.libgit2ProbeStatus})\n\n")
                             } else {
                                 msgBuilder.append("代理配置: 未使用显式代理\n\n")
                                 msgBuilder.append("提示：当前同步底层没有使用显式代理。系统代理/TUN 是否接管取决于系统路由和 Clash，本应用不能保证 libgit2 自动读取。如果同步失败，建议启用 HTTP 代理 127.0.0.1:7890。\n\n")
                             }
 
+                            msgBuilder.append("网络连接: ${mapStatus(diag.networkStatus)}\n")
+                            msgBuilder.append("身份认证: ${mapStatus(diag.authStatus)}\n")
+                            msgBuilder.append("仓库访问: ${mapStatus(diag.repoStatus)}\n")
+                            msgBuilder.append("分支存在: ${mapStatus(diag.branchStatus)}\n\n")
+
                             msgBuilder.append(diag.userMessage)
+
+                            if (diag.rawError != null && diag.rawError.isNotEmpty()) {
+                                msgBuilder.append("\n\n原始错误:\n${diag.rawError}")
+                            }
 
                             AlertDialog.Builder(this@SettingsActivity)
                                 .setTitle(if (diag.success) "诊断成功" else "诊断失败")

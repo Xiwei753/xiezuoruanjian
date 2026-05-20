@@ -103,6 +103,12 @@ pub struct SyncConflict {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDiagnosticsResult {
     pub success: bool,
+    pub tcp_probe_ok: bool,
+    pub tcp_probe_status: String,
+    pub http_connect_probe_ok: bool,
+    pub http_connect_probe_status: String,
+    pub libgit2_probe_ok: bool,
+    pub libgit2_probe_status: String,
     pub network_ok: bool,
     pub auth_ok: bool,
     pub repo_ok: bool,
@@ -123,6 +129,12 @@ impl SyncDiagnosticsResult {
     pub fn new() -> Self {
         Self {
             success: false,
+            tcp_probe_ok: false,
+            tcp_probe_status: "unchecked".to_string(),
+            http_connect_probe_ok: false,
+            http_connect_probe_status: "unchecked".to_string(),
+            libgit2_probe_ok: false,
+            libgit2_probe_status: "unchecked".to_string(),
             network_ok: false,
             auth_ok: false,
             repo_ok: false,
@@ -904,6 +916,89 @@ impl SyncService {
             git2::Cred::userpass_plaintext("oauth2", &token)
         });
 
+        if config.proxy_enabled && (config.proxy_type == "http" || config.proxy_type == "socks5") && !config.proxy_host.is_empty() {
+            let addr = format!("{}:{}", config.proxy_host, config.proxy_port);
+
+            // Resolve host to IP address first using ToSocketAddrs
+            let addrs = std::net::ToSocketAddrs::to_socket_addrs(&addr);
+            let mut connect_result = Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Failed to resolve address"));
+
+            if let Ok(mut resolved_addrs) = addrs {
+                if let Some(socket_addr) = resolved_addrs.next() {
+                    connect_result = std::net::TcpStream::connect_timeout(
+                        &socket_addr,
+                        std::time::Duration::from_secs(5)
+                    );
+                }
+            }
+
+            match connect_result {
+                Ok(mut stream) => {
+                    result.tcp_probe_ok = true;
+                    result.tcp_probe_status = "ok".to_string();
+
+                    if config.proxy_type == "http" {
+                        let request = format!(
+                            "CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n"
+                        );
+                        if let Ok(_) = std::io::Write::write_all(&mut stream, request.as_bytes()) {
+                            let mut buffer = [0; 1024];
+                            if let Ok(bytes_read) = std::io::Read::read(&mut stream, &mut buffer) {
+                                let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+                                if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
+                                    result.http_connect_probe_ok = true;
+                                    result.http_connect_probe_status = "ok".to_string();
+                                } else if response.starts_with("HTTP/") {
+                                    result.http_connect_probe_ok = false;
+                                    let status_code = response.split_whitespace().nth(1).unwrap_or("unknown");
+                                    result.http_connect_probe_status = format!("failed_status_{}", status_code);
+
+                                    result.network_ok = false;
+                                    result.network_status = "failed".to_string();
+                                    result.user_message = format!("代理端口 HTTP CONNECT 失败: {}", result.http_connect_probe_status);
+                                    return Ok(result);
+                                } else {
+                                    result.http_connect_probe_ok = false;
+                                    result.http_connect_probe_status = "invalid_response".to_string();
+
+                                    result.network_ok = false;
+                                    result.network_status = "failed".to_string();
+                                    result.user_message = format!("代理端口 HTTP CONNECT 响应无效");
+                                    return Ok(result);
+                                }
+                            } else {
+                                result.http_connect_probe_ok = false;
+                                result.http_connect_probe_status = "read_timeout".to_string();
+
+                                result.network_ok = false;
+                                result.network_status = "failed".to_string();
+                                result.user_message = format!("代理端口 HTTP CONNECT 读取超时");
+                                return Ok(result);
+                            }
+                        } else {
+                            result.http_connect_probe_ok = false;
+                            result.http_connect_probe_status = "write_failed".to_string();
+
+                            result.network_ok = false;
+                            result.network_status = "failed".to_string();
+                            result.user_message = format!("代理端口 HTTP CONNECT 写入失败");
+                            return Ok(result);
+                        }
+                    } else {
+                        result.http_connect_probe_status = "skipped_socks5".to_string();
+                    }
+                }
+                Err(e) => {
+                    result.tcp_probe_ok = false;
+                    result.tcp_probe_status = format!("failed: {}", e);
+                    result.network_ok = false;
+                    result.network_status = "failed".to_string();
+                    result.user_message = format!("代理端口 {} 无法建立 TCP 连接: {}", addr, e);
+                    return Ok(result);
+                }
+            }
+        }
+
         let proxy_opts = match Git2Backend::build_proxy_options(Some(config)) {
             Ok(opts) => opts,
             Err(e) => {
@@ -915,12 +1010,19 @@ impl SyncService {
 
         let direction = git2::Direction::Fetch;
         let connection: git2::RemoteConnection = match remote.connect_auth(direction, Some(callbacks), Some(proxy_opts)) {
-            Ok(c) => c,
+            Ok(c) => {
+                result.libgit2_probe_ok = true;
+                result.libgit2_probe_status = "ok".to_string();
+                c
+            },
             Err(e) => {
                 let err_msg = e.to_string();
                 let clean_msg = err_msg.replace(&token, "***TOKEN***");
                 result.raw_error = Some(clean_msg.clone());
                 result.user_message = get_user_friendly_error(&clean_msg);
+
+                result.libgit2_probe_ok = false;
+                result.libgit2_probe_status = "failed".to_string();
 
                 let is_network_error = clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") || clean_msg.contains("timeout") || clean_msg.contains("operation not permitted") || clean_msg.contains("proxy");
 
@@ -935,6 +1037,9 @@ impl SyncService {
                 }
 
                 if is_network_error {
+                    if result.tcp_probe_ok {
+                        result.user_message = "代理端口可连接，但 libgit2 通过代理访问 GitHub 失败。问题可能在 libgit2 代理链路限制。".to_string();
+                    }
                     result.network_ok = false;
                     result.network_status = "failed".to_string();
                     result.auth_status = "skipped".to_string();
