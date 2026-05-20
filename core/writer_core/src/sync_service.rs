@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -957,83 +958,144 @@ impl SyncService {
         if config.proxy_enabled && (config.proxy_type == "http" || config.proxy_type == "socks5") && !config.proxy_host.is_empty() {
             let addr = format!("{}:{}", config.proxy_host, config.proxy_port);
 
-            // Resolve host to IP address first using ToSocketAddrs
+            // Resolve host to IP addresses and try ALL of them (not just the first)
             let addrs = std::net::ToSocketAddrs::to_socket_addrs(&addr);
-            let mut connect_result = Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Failed to resolve address"));
+            let mut tcp_connected = false;
+            let mut last_tcp_err = None;
+            let mut maybe_stream = None;
 
-            if let Ok(mut resolved_addrs) = addrs {
-                if let Some(socket_addr) = resolved_addrs.next() {
-                    connect_result = std::net::TcpStream::connect_timeout(
-                        &socket_addr,
-                        std::time::Duration::from_secs(5)
-                    );
-                }
-            }
-
-            match connect_result {
-                Ok(mut stream) => {
-                    result.tcp_probe_ok = true;
-                    result.tcp_probe_status = "ok".to_string();
-
-                    if config.proxy_type == "http" {
-                        let request = format!(
-                            "CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n"
-                        );
-                        if let Ok(_) = std::io::Write::write_all(&mut stream, request.as_bytes()) {
-                            let mut buffer = [0; 1024];
-                            if let Ok(bytes_read) = std::io::Read::read(&mut stream, &mut buffer) {
-                                let response = String::from_utf8_lossy(&buffer[..bytes_read]);
-                                if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
-                                    result.http_connect_probe_ok = true;
-                                    result.http_connect_probe_status = "ok".to_string();
-                                } else if response.starts_with("HTTP/") {
-                                    result.http_connect_probe_ok = false;
-                                    let status_code = response.split_whitespace().nth(1).unwrap_or("unknown");
-                                    result.http_connect_probe_status = format!("failed_status_{}", status_code);
-
-                                    result.network_ok = false;
-                                    result.network_status = "failed".to_string();
-                                    result.user_message = format!("代理端口 HTTP CONNECT 失败: {}", result.http_connect_probe_status);
-                                    return Ok(result);
-                                } else {
-                                    result.http_connect_probe_ok = false;
-                                    result.http_connect_probe_status = "invalid_response".to_string();
-
-                                    result.network_ok = false;
-                                    result.network_status = "failed".to_string();
-                                    result.user_message = format!("代理端口 HTTP CONNECT 响应无效");
-                                    return Ok(result);
-                                }
-                            } else {
-                                result.http_connect_probe_ok = false;
-                                result.http_connect_probe_status = "read_timeout".to_string();
-
-                                result.network_ok = false;
-                                result.network_status = "failed".to_string();
-                                result.user_message = format!("代理端口 HTTP CONNECT 读取超时");
-                                return Ok(result);
+            if let Ok(resolved_addrs) = addrs {
+                let addr_list: Vec<_> = resolved_addrs.collect();
+                if addr_list.is_empty() {
+                    last_tcp_err = Some(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "DNS resolved to zero addresses",
+                    ));
+                } else {
+                    for socket_addr in &addr_list {
+                        match std::net::TcpStream::connect_timeout(
+                            socket_addr,
+                            std::time::Duration::from_secs(5),
+                        ) {
+                            Ok(stream) => {
+                                tcp_connected = true;
+                                maybe_stream = Some(stream);
+                                break;
                             }
-                        } else {
-                            result.http_connect_probe_ok = false;
-                            result.http_connect_probe_status = "write_failed".to_string();
-
-                            result.network_ok = false;
-                            result.network_status = "failed".to_string();
-                            result.user_message = format!("代理端口 HTTP CONNECT 写入失败");
-                            return Ok(result);
+                            Err(e) => {
+                                last_tcp_err = Some(e);
+                            }
                         }
-                    } else {
-                        result.http_connect_probe_status = "skipped_socks5".to_string();
                     }
                 }
-                Err(e) => {
-                    result.tcp_probe_ok = false;
-                    result.tcp_probe_status = format!("failed: {}", e);
-                    result.network_ok = false;
-                    result.network_status = "failed".to_string();
-                    result.user_message = format!("代理端口 {} 无法建立 TCP 连接: {}", addr, e);
-                    return Ok(result);
+            } else {
+                last_tcp_err = addrs.err();
+            }
+
+            if tcp_connected {
+                let mut stream = maybe_stream.unwrap();
+                result.tcp_probe_ok = true;
+                result.tcp_probe_status = "ok".to_string();
+
+                // Set read/write timeouts to prevent indefinite blocking during CONNECT probe
+                let timeout = std::time::Duration::from_secs(5);
+                let _ = stream.set_read_timeout(Some(timeout));
+                let _ = stream.set_write_timeout(Some(timeout));
+
+                if config.proxy_type == "http" {
+                    let request = format!(
+                        "CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n"
+                    );
+                    match std::io::Write::write_all(&mut stream, request.as_bytes()) {
+                        Ok(_) => {
+                            let mut buffer = [0u8; 1024];
+                            match stream.read(&mut buffer) {
+                                Ok(bytes_read) if bytes_read > 0 => {
+                                    let response = String::from_utf8_lossy(&buffer[..bytes_read]);
+                                    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
+                                        result.http_connect_probe_ok = true;
+                                        result.http_connect_probe_status = "ok".to_string();
+                                    } else if response.starts_with("HTTP/") {
+                                        let status_code = response.split_whitespace().nth(1).unwrap_or("unknown");
+                                        if status_code == "407" {
+                                            result.http_connect_probe_ok = false;
+                                            result.http_connect_probe_status = "proxy_auth_required".to_string();
+                                            result.network_ok = false;
+                                            result.network_status = "failed".to_string();
+                                            result.user_message = "代理需要认证 (HTTP 407)。请检查代理配置。".to_string();
+                                            return Ok(result);
+                                        }
+                                        result.http_connect_probe_ok = false;
+                                        result.http_connect_probe_status = format!("failed_status_{}", status_code);
+                                        result.network_ok = false;
+                                        result.network_status = "failed".to_string();
+                                        result.user_message = format!("代理端口 HTTP CONNECT 失败: {}", result.http_connect_probe_status);
+                                        return Ok(result);
+                                    } else {
+                                        result.http_connect_probe_ok = false;
+                                        result.http_connect_probe_status = "invalid_response".to_string();
+                                        result.network_ok = false;
+                                        result.network_status = "failed".to_string();
+                                        result.user_message = "代理端口 HTTP CONNECT 返回无效响应（非 HTTP）".to_string();
+                                        return Ok(result);
+                                    }
+                                }
+                                Ok(_) => {
+                                    result.http_connect_probe_ok = false;
+                                    result.http_connect_probe_status = "read_timeout".to_string();
+                                    result.network_ok = false;
+                                    result.network_status = "failed".to_string();
+                                    result.user_message = "代理端口 HTTP CONNECT 读取超时（代理未响应）".to_string();
+                                    return Ok(result);
+                                }
+                                Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
+                                    result.http_connect_probe_ok = false;
+                                    result.http_connect_probe_status = "read_timeout".to_string();
+                                    result.network_ok = false;
+                                    result.network_status = "failed".to_string();
+                                    result.user_message = "代理端口 HTTP CONNECT 读取超时（代理未响应）".to_string();
+                                    return Ok(result);
+                                }
+                                Err(e) => {
+                                    result.http_connect_probe_ok = false;
+                                    result.http_connect_probe_status = format!("read_error: {}", e);
+                                    result.network_ok = false;
+                                    result.network_status = "failed".to_string();
+                                    result.user_message = format!("代理端口 HTTP CONNECT 读取错误: {}", e);
+                                    return Ok(result);
+                                }
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
+                            result.http_connect_probe_ok = false;
+                            result.http_connect_probe_status = "write_timeout".to_string();
+                            result.network_ok = false;
+                            result.network_status = "failed".to_string();
+                            result.user_message = "代理端口 HTTP CONNECT 写入超时".to_string();
+                            return Ok(result);
+                        }
+                        Err(e) => {
+                            result.http_connect_probe_ok = false;
+                            result.http_connect_probe_status = "write_failed".to_string();
+                            result.network_ok = false;
+                            result.network_status = "failed".to_string();
+                            result.user_message = format!("代理端口 HTTP CONNECT 写入失败: {}", e);
+                            return Ok(result);
+                        }
+                    }
+                } else {
+                    result.http_connect_probe_status = "skipped_socks5".to_string();
                 }
+            } else {
+                let err_msg = last_tcp_err
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                result.tcp_probe_ok = false;
+                result.tcp_probe_status = format!("tcp_probe_failed: {}", err_msg);
+                result.network_ok = false;
+                result.network_status = "failed".to_string();
+                result.user_message = format!("代理端口 {} 无法建立 TCP 连接（尝试所有解析地址均失败）: {}", addr, err_msg);
+                return Ok(result);
             }
         }
 
