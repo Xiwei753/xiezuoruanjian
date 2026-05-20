@@ -342,24 +342,32 @@ impl AppBackend {
             if let Ok(config) = core.load_sync_config() {
                 match core.perform_sync_diagnostics(&config) {
                     Ok(result) => {
-                        let mut msg = format!("诊断结果: {}\n网络连接: {}\n身份认证: {}\n仓库访问: {}\n分支存在: {}",
-                            if result.success { "成功" } else { "失败" },
-                            if result.network_ok { "正常" } else { "异常" },
-                            if result.auth_ok { "正常" } else { "异常" },
-                            if result.repo_ok { "正常" } else { "异常" },
-                            if result.branch_ok { "正常" } else { "异常" },
-                        );
+                        let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
+
                         if result.proxy_used && result.proxy_type != "none" {
                             if result.proxy_type == "auto" {
-                                msg.push_str("\n已使用代理: auto");
+                                msg.push_str("\n代理配置: auto");
                             } else {
                                 let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
-                                msg.push_str(&format!("\n已使用代理: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
+                                msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
+                                if protocol == "http" || protocol == "socks5h" {
+                                    msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
+                                    if protocol == "http" {
+                                        msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
+                                    }
+                                }
                             }
+                            msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
                         } else {
-                            msg.push_str("\n已使用代理: 未使用显式代理");
-                            msg.push_str("\n\n提示：当前同步底层没有使用显式代理。系统代理/TUN 是否接管取决于系统路由和 Clash，本应用不能保证 libgit2 自动读取。如果同步失败，建议启用 HTTP 代理 127.0.0.1:7890。");
+                            msg.push_str("\n代理配置: 未使用显式代理");
+                            msg.push_str("\n提示：当前同步底层没有使用显式代理。系统代理/TUN 是否接管取决于系统路由和 Clash，本应用不能保证 libgit2 自动读取。如果同步失败，建议启用 HTTP 代理 127.0.0.1:7890。\n");
                         }
+
+                        msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
+                        msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
+                        msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
+                        msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
+
                         if !result.user_message.is_empty() {
                             msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
                         }
