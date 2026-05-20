@@ -3,6 +3,8 @@ package com.xiwei.writerapp.data
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.xiwei.writerapp.model.SyncConfig
+import com.xiwei.writerapp.model.SyncSecrets
 
 class AutoSyncScheduler(context: Context) {
     private val settingsRepository = SettingsRepository(context)
