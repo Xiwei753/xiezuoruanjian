@@ -179,6 +179,14 @@ data class SyncConflict(
     val description: String? = null
 )
 
+data class NetworkProbeResult(
+    val mode: String,
+    val success: Boolean,
+    val status: String,
+    val message: String,
+    @SerializedName("raw_error") val rawError: String? = null
+)
+
 data class SyncResult(
     val status: SyncStatus,
     @SerializedName("uploaded_files") val uploadedFiles: List<String> = emptyList(),
@@ -188,7 +196,9 @@ data class SyncResult(
     @SerializedName("commit_hash") val commitHash: String? = null,
     val error: String? = null,
     @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
-    @SerializedName("user_message") val userMessage: String? = null
+    @SerializedName("user_message") val userMessage: String? = null,
+    @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
+    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
 )
 
 
@@ -221,7 +231,9 @@ data class SyncDiagnosticsResult(
     @SerializedName("app_proxy_status") val appProxyStatus: String,
     @SerializedName("error_category") val errorCategory: String,
     @SerializedName("user_message") val userMessage: String,
-    @SerializedName("raw_error") val rawError: String?
+    @SerializedName("raw_error") val rawError: String?,
+    @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
+    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
 )
 
 data class SyncPlan(
