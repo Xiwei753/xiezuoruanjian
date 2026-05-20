@@ -127,6 +127,15 @@ data class SyncSecrets(
     @SerializedName("ssh_private_key") val sshPrivateKey: String? = null
 )
 
+data class SyncState(
+    @SerializedName("remote_url") val remoteUrl: String? = null,
+    val transport: String? = null,
+    @SerializedName("last_synced_commit") val lastSyncedCommit: String? = null,
+    @SerializedName("last_sync_time") val lastSyncTime: Long? = null,
+    @SerializedName("last_error") val lastError: String? = null,
+    @SerializedName("last_successful_network_mode") val lastSuccessfulNetworkMode: String? = null
+)
+
 enum class SyncStatus {
     @SerializedName("idle") Idle,
     @SerializedName("syncing") Syncing,

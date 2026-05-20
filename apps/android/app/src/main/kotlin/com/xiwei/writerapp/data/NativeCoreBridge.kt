@@ -78,6 +78,7 @@ class NativeCoreBridge(context: Context) {
     private external fun saveSyncConfig(workspacePath: String, configJson: String): String?
     private external fun loadSyncSecrets(workspacePath: String): String?
     private external fun saveSyncSecrets(workspacePath: String, secretsJson: String): String?
+    private external fun loadSyncState(workspacePath: String): String?
     private external fun performSyncDiagnostics(workspacePath: String, configJson: String): String?
     private external fun performSyncDryRun(workspacePath: String, configJson: String): String?
     private external fun performSync(workspacePath: String, configJson: String): String?
@@ -455,6 +456,29 @@ class NativeCoreBridge(context: Context) {
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun loadSyncState(): NativeResult<SyncState> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = loadSyncState(workspaceDir)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<SyncState>>() {}.type
+            val response: RustResponse<SyncState> = try {
+                gson.fromJson(resultJson, type)
+            } catch (e: Exception) {
+                return NativeResult.Error("Failed to parse SyncState JSON: ${e.message}")
+            }
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
             return NativeResult.Error(e.message ?: "Exception occurred")
         }
     }

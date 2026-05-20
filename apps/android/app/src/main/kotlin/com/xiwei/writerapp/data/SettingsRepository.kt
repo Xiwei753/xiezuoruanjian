@@ -69,6 +69,17 @@ class SettingsRepository(context: Context) {
         return saveSyncableSettings(syncable.copy(fontSize = fontSize.toDouble()))
     }
 
+    fun loadSyncState(): SyncState {
+        return when (val result = bridge.loadSyncState()) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> {
+                System.err.println("加载同步状态失败: ${result.message}")
+                SyncState()
+            }
+            NativeResult.NotLoaded -> SyncState()
+        }
+    }
+
     fun loadSyncConfig(): SyncConfig {
         return when (val result = bridge.loadSyncConfig()) {
             is NativeResult.Success -> result.data.normalize()

@@ -1037,6 +1037,18 @@ struct ProbedClient {
 }
 
 impl GitHubApiBackend {
+    fn save_sync_attempt_state(workspace_path: &Path, result: &SyncResult) {
+        let mut state = SyncService::load_sync_state(workspace_path).unwrap_or_default();
+        state.last_sync_time = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        );
+        state.last_error = result.error.clone();
+        let _ = SyncService::save_sync_state(workspace_path, &state);
+    }
+
     fn classify_reqwest_error(e: &reqwest::Error) -> (String, String) {
         let msg = e.to_string().to_lowercase();
         if msg.contains("dns") || msg.contains("resolve") || msg.contains("name resolution") {
@@ -1340,7 +1352,12 @@ impl SyncBackend for GitHubApiBackend {
         let probed_res = Self::build_auto_client(config, secrets, Some(workspace_path));
         let (client, mode, probe_summary) = match probed_res {
             Ok((p, summary)) => (p.client, p.mode, summary),
-            Err(e) => return Ok(SyncResult::error(SyncStatus::Error("network_probe_failed".to_string()), FirstSyncMode::NotAttempted, Some(format!("网络探测失败: {}", e)), e.to_string())),
+            Err(e) => {
+                result.error = Some(e.to_string());
+                result.user_message = Some(format!("网络探测失败: {}", e));
+                Self::save_sync_attempt_state(workspace_path, &result);
+                return Ok(result);
+            },
         };
 
         result.chosen_network_mode = Some(mode.clone());
@@ -1355,6 +1372,7 @@ impl SyncBackend for GitHubApiBackend {
         let plan = SyncService::build_sync_plan_from_workspace(workspace_path)?;
         if plan.files_to_upload.is_empty() {
             result.status = SyncStatus::Success;
+            Self::save_sync_attempt_state(workspace_path, &result);
             return Ok(result);
         }
 
@@ -1394,7 +1412,10 @@ impl SyncBackend for GitHubApiBackend {
             let content = match std::fs::read_to_string(&full_path) {
                 Ok(c) => c,
                 Err(_) => {
-                    return Ok(SyncResult::error(SyncStatus::Error("file_read_failed".to_string()), FirstSyncMode::NotAttempted, Some(format!("读取文件失败: {}", file_path)), "file read failed".to_string()));
+                    result.error = Some(format!("读取文件失败: {}", file_path));
+                    result.user_message = Some(format!("读取文件失败: {}", file_path));
+                    Self::save_sync_attempt_state(workspace_path, &result);
+                    return Ok(result);
                 }
             };
 
@@ -1423,7 +1444,10 @@ impl SyncBackend for GitHubApiBackend {
         let tree_url = format!("{}/git/trees", api_base);
         let resp = client.post(&tree_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&tree_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
         if resp.status().as_u16() != 201 {
-            return Ok(SyncResult::error(SyncStatus::Error("create_tree_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步创建 Tree 失败。".to_string()), "create tree failed".to_string()));
+            result.error = Some("create tree failed".to_string());
+            result.user_message = Some("GitHub API 同步创建 Tree 失败。".to_string());
+            Self::save_sync_attempt_state(workspace_path, &result);
+            return Ok(result);
         }
         let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
         let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
@@ -1440,7 +1464,10 @@ impl SyncBackend for GitHubApiBackend {
 
         let resp = client.post(&commit_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&commit_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
         if resp.status().as_u16() != 201 {
-            return Ok(SyncResult::error(SyncStatus::Error("create_commit_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步创建 Commit 失败。".to_string()), "create commit failed".to_string()));
+            result.error = Some("create commit failed".to_string());
+            result.user_message = Some("GitHub API 同步创建 Commit 失败。".to_string());
+            Self::save_sync_attempt_state(workspace_path, &result);
+            return Ok(result);
         }
         let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
         let new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
@@ -1454,10 +1481,16 @@ impl SyncBackend for GitHubApiBackend {
             });
             let resp = client.patch(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
             if resp.status().as_u16() == 422 { // Unprocessable Entity typically means fast-forward failed
-                 return Ok(SyncResult::error(SyncStatus::Error("update_ref_failed_conflict".to_string()), FirstSyncMode::NotAttempted, Some("远端存在新提交，无法推送（冲突）。请先同步或手动处理。".to_string()), "conflict: fast-forward failed".to_string()));
+                 result.error = Some("conflict: fast-forward failed".to_string());
+                 result.user_message = Some("远端存在新提交，无法推送（冲突）。请先同步或手动处理。".to_string());
+                 Self::save_sync_attempt_state(workspace_path, &result);
+                 return Ok(result);
             }
             if resp.status().as_u16() != 200 {
-                return Ok(SyncResult::error(SyncStatus::Error("update_ref_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步更新引用失败。".to_string()), "update ref failed".to_string()));
+                result.error = Some("update ref failed".to_string());
+                result.user_message = Some("GitHub API 同步更新引用失败。".to_string());
+                Self::save_sync_attempt_state(workspace_path, &result);
+                return Ok(result);
             }
         } else {
             let ref_url = format!("{}/git/refs", api_base);
@@ -1467,12 +1500,16 @@ impl SyncBackend for GitHubApiBackend {
             });
             let resp = client.post(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
             if resp.status().as_u16() != 201 {
-                return Ok(SyncResult::error(SyncStatus::Error("create_ref_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步创建引用失败。".to_string()), "create ref failed".to_string()));
+                result.error = Some("create ref failed".to_string());
+                result.user_message = Some("GitHub API 同步创建引用失败。".to_string());
+                Self::save_sync_attempt_state(workspace_path, &result);
+                return Ok(result);
             }
         }
 
         result.status = SyncStatus::Success;
         result.user_message = Some(format!("单向上传同步成功 (GitHub API)。使用网络模式: {}", mode));
+        Self::save_sync_attempt_state(workspace_path, &result);
         Ok(result)
     }
 }

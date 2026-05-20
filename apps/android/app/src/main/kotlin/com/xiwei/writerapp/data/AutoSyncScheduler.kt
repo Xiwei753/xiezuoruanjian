@@ -3,7 +3,6 @@ package com.xiwei.writerapp.data
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import com.xiwei.writerapp.model.SyncConfig
 
 class AutoSyncScheduler(context: Context) {
     private val settingsRepository = SettingsRepository(context)
@@ -47,6 +46,25 @@ class AutoSyncScheduler(context: Context) {
         }
 
         if (!shouldSync(config, secrets)) return
+
+        val state = try {
+            settingsRepository.loadSyncState()
+        } catch (_: Exception) {
+            return
+        }
+
+        val elapsed = if (state.lastSyncTime != null && state.lastSyncTime > 0) {
+            (System.currentTimeMillis() / 1000) - state.lastSyncTime
+        } else {
+            null
+        }
+
+        val interval = when {
+            config.syncIntervalSeconds != null && config.syncIntervalSeconds > 0 -> config.syncIntervalSeconds.toLong()
+            else -> 300L
+        }
+
+        if (elapsed != null && elapsed < interval) return
 
         if (!SyncSession.lock.compareAndSet(false, true)) return
 
