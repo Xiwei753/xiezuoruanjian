@@ -349,8 +349,16 @@ impl AppBackend {
                             if result.repo_ok { "正常" } else { "异常" },
                             if result.branch_ok { "正常" } else { "异常" },
                         );
-                        if result.proxy_used {
-                            msg.push_str(&format!("\n已使用代理: {}://{}:{}", result.proxy_type, result.proxy_host, result.proxy_port));
+                        if result.proxy_used && result.proxy_type != "none" {
+                            if result.proxy_type == "auto" {
+                                msg.push_str("\n已使用代理: auto");
+                            } else {
+                                let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
+                                msg.push_str(&format!("\n已使用代理: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
+                            }
+                        } else {
+                            msg.push_str("\n已使用代理: 未使用显式代理");
+                            msg.push_str("\n\n提示：当前同步底层没有使用显式代理。系统代理/TUN 是否接管取决于系统路由和 Clash，本应用不能保证 libgit2 自动读取。如果同步失败，建议启用 HTTP 代理 127.0.0.1:7890。");
                         }
                         if !result.user_message.is_empty() {
                             msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
