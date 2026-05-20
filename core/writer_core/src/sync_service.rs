@@ -1142,13 +1142,138 @@ impl SyncBackend for GitHubApiBackend {
         ))
     }
 
-    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("GitHub API 后端的 sync 操作尚未实现。".to_string()),
-            "GitHub API sync not implemented".to_string(),
-        ))
+    fn sync(&self, workspace_path: &Path, config: &SyncConfig, secrets: &SyncSecrets) -> crate::Result<SyncResult> {
+        let mut result = SyncResult::success();
+        result.status = SyncStatus::Idle;
+        let token = secrets.token.clone().unwrap_or_default();
+        if token.is_empty() {
+            return Ok(SyncResult::error(SyncStatus::Error("token_missing".to_string()), FirstSyncMode::NotAttempted, Some("缺少 GitHub Token。".to_string()), "token missing".to_string()));
+        }
+        let api_base = Self::api_base_url(&config.remote_url);
+        let client = build_http_client(Some(config))?;
+
+        let plan = SyncService::build_sync_plan_from_workspace(workspace_path)?;
+        if plan.files_to_upload.is_empty() {
+            result.status = SyncStatus::Success;
+            return Ok(result);
+        }
+
+        // Check if branch exists
+        let branch_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
+        let resp = client.get(&branch_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
+
+        let mut latest_commit_sha = String::new();
+        let mut base_tree_sha = String::new();
+
+        if resp.status().as_u16() == 200 {
+            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+            latest_commit_sha = json["object"]["sha"].as_str().unwrap_or_default().to_string();
+
+            // get commit
+            let commit_url = format!("{}/git/commits/{}", api_base, latest_commit_sha);
+            let resp = client.get(&commit_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() == 200 {
+                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                base_tree_sha = json["tree"]["sha"].as_str().unwrap_or_default().to_string();
+            }
+        }
+
+        let mut tree_payload = serde_json::json!({
+            "tree": []
+        });
+        if !base_tree_sha.is_empty() {
+            tree_payload["base_tree"] = serde_json::json!(base_tree_sha);
+        }
+
+        let mut tree_nodes = vec![];
+
+        for file_path in &plan.files_to_upload {
+            let full_path = workspace_path.join(file_path);
+            if !full_path.exists() { continue; }
+
+            let content = match std::fs::read_to_string(&full_path) {
+                Ok(c) => c,
+                Err(_) => {
+                    return Ok(SyncResult::error(SyncStatus::Error("file_read_failed".to_string()), FirstSyncMode::NotAttempted, Some(format!("读取文件失败: {}", file_path)), "file read failed".to_string()));
+                }
+            };
+
+            // upload blob
+            let blob_url = format!("{}/git/blobs", api_base);
+            let blob_payload = serde_json::json!({
+                "content": content,
+                "encoding": "utf-8"
+            });
+            let resp = client.post(&blob_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&blob_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() == 201 {
+                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                let sha = json["sha"].as_str().unwrap_or_default().to_string();
+                tree_nodes.push(serde_json::json!({
+                    "path": file_path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": sha
+                }));
+            }
+        }
+
+        tree_payload["tree"] = serde_json::json!(tree_nodes);
+
+        // create tree
+        let tree_url = format!("{}/git/trees", api_base);
+        let resp = client.post(&tree_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&tree_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+        if resp.status().as_u16() != 201 {
+            return Ok(SyncResult::error(SyncStatus::Error("create_tree_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步创建 Tree 失败。".to_string()), "create tree failed".to_string()));
+        }
+        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+        let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
+
+        // create commit
+        let commit_url = format!("{}/git/commits", api_base);
+        let mut commit_payload = serde_json::json!({
+            "message": format!("WriterApp Sync via GitHub API: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
+            "tree": new_tree_sha
+        });
+        if !latest_commit_sha.is_empty() {
+            commit_payload["parents"] = serde_json::json!(vec![latest_commit_sha.clone()]);
+        }
+
+        let resp = client.post(&commit_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&commit_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+        if resp.status().as_u16() != 201 {
+            return Ok(SyncResult::error(SyncStatus::Error("create_commit_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步创建 Commit 失败。".to_string()), "create commit failed".to_string()));
+        }
+        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+        let new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
+
+        // update ref
+        if !latest_commit_sha.is_empty() {
+            let ref_url = format!("{}/git/refs/heads/{}", api_base, config.branch);
+            let ref_payload = serde_json::json!({
+                "sha": new_commit_sha,
+                "force": false
+            });
+            let resp = client.patch(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() == 422 { // Unprocessable Entity typically means fast-forward failed
+                 return Ok(SyncResult::error(SyncStatus::Error("update_ref_failed_conflict".to_string()), FirstSyncMode::NotAttempted, Some("远端存在新提交，无法推送（冲突）。请先同步或手动处理。".to_string()), "conflict: fast-forward failed".to_string()));
+            }
+            if resp.status().as_u16() != 200 {
+                return Ok(SyncResult::error(SyncStatus::Error("update_ref_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步更新引用失败。".to_string()), "update ref failed".to_string()));
+            }
+        } else {
+            let ref_url = format!("{}/git/refs", api_base);
+            let ref_payload = serde_json::json!({
+                "ref": format!("refs/heads/{}", config.branch),
+                "sha": new_commit_sha
+            });
+            let resp = client.post(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() != 201 {
+                return Ok(SyncResult::error(SyncStatus::Error("create_ref_failed".to_string()), FirstSyncMode::NotAttempted, Some("GitHub API 同步创建引用失败。".to_string()), "create ref failed".to_string()));
+            }
+        }
+
+        result.status = SyncStatus::Success;
+        result.user_message = Some("单向上传同步成功 (GitHub API)。".to_string());
+        Ok(result)
     }
 }
 
@@ -1736,6 +1861,20 @@ impl SyncService {
                 result.libgit2_probe_status = "failed".to_string();
 
                 let is_network_error = clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") || clean_msg.contains("timeout") || clean_msg.contains("operation not permitted") || clean_msg.contains("proxy");
+                let is_tls_error = clean_msg.contains("SSL certificate is invalid") || clean_msg.contains("Certificate (-17)") || clean_msg.contains("Bad file descriptor; class=Net");
+
+                if is_tls_error {
+                    result.error_category = "tls_failed".to_string();
+                    // Extract some diagnostic info (since it's a hardcoded string or error, we just include the clean_msg)
+                    result.user_message = "Android native libgit2 TLS certificate validation failed; GitHub API fallback is available".to_string();
+                    result.raw_error = Some(format!("TLS Error details: {}", clean_msg));
+                    result.network_ok = false;
+                    result.network_status = "failed".to_string();
+                    result.auth_status = "skipped".to_string();
+                    result.repo_status = "skipped".to_string();
+                    result.branch_status = "skipped".to_string();
+                    return Ok(result);
+                }
 
                 if clean_msg.contains("unsupported proxy protocol") || clean_msg.contains("代理协议不支持") {
                     result.user_message = "代理协议不支持。请改用 Clash mixed-port HTTP 代理（推荐：http://127.0.0.1:7890）。".to_string();

@@ -86,7 +86,7 @@ enum class BackendType {
 
 data class SyncConfig(
     val enabled: Boolean? = false,
-    @SerializedName("backend_type") val backendType: BackendType? = BackendType.Git,
+    @SerializedName("backend_type") val backendType: BackendType? = BackendType.GithubApi,
     @SerializedName("remote_url") val remoteUrl: String? = "",
     val transport: SyncTransport? = SyncTransport.HttpsToken,
     val branch: String? = "main",

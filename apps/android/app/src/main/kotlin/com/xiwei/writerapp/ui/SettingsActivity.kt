@@ -331,7 +331,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun getUIConfig(): SyncConfig {
         return currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
-            backendType = com.xiwei.writerapp.model.BackendType.Git,
+            backendType = com.xiwei.writerapp.model.BackendType.GithubApi,
             remoteUrl = etGithubRepo.text?.toString() ?: "",
             transport = currentSyncConfig.transport ?: SyncTransport.HttpsToken,
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
@@ -714,7 +714,7 @@ class SettingsActivity : AppCompatActivity() {
         // Save Sync Config
         val newSyncConfig = currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
-            backendType = com.xiwei.writerapp.model.BackendType.Git,
+            backendType = com.xiwei.writerapp.model.BackendType.GithubApi,
             remoteUrl = etGithubRepo.text?.toString() ?: "",
             transport = currentSyncConfig.transport ?: SyncTransport.HttpsToken,
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
