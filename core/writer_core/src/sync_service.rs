@@ -38,6 +38,10 @@ pub struct SyncConfig {
     pub proxy_host: String,
     #[serde(default = "default_proxy_port")]
     pub proxy_port: u16,
+    /// GitHub username for HTTPS credential callback.
+    /// Defaults to "x-access-token" when empty.
+    #[serde(default)]
+    pub username: String,
     /// Android-only: whether INTERNET permission is granted.
     /// Linux always sets this to true.
     #[serde(default = "default_true")]
@@ -70,6 +74,102 @@ fn default_branch() -> String {
 pub struct SyncSecrets {
     pub token: Option<String>,
     pub ssh_private_key: Option<String>,
+}
+
+pub struct ParsedRemoteUrl {
+    pub sanitized_url: String,
+    pub extracted_username: Option<String>,
+    pub extracted_token: Option<String>,
+}
+
+pub fn sanitize_remote_url(url: &str) -> ParsedRemoteUrl {
+    if url.contains("://") && url.contains('@') {
+        if let Some(after_scheme) = url.split_once("://") {
+            let scheme = after_scheme.0;
+            let rest = after_scheme.1;
+            if let Some(at_pos) = rest.find('@') {
+                let userinfo = &rest[..at_pos];
+                let host_and_path = &rest[at_pos + 1..];
+                let sanitized = format!("{}://{}", scheme, host_and_path);
+                let (username, token) = if let Some(colon_pos) = userinfo.find(':') {
+                    (
+                        Some(url_decode(userinfo[..colon_pos].to_string())),
+                        Some(url_decode(userinfo[colon_pos + 1..].to_string())),
+                    )
+                } else {
+                    (Some(url_decode(userinfo.to_string())), None)
+                };
+                return ParsedRemoteUrl {
+                    sanitized_url: sanitized,
+                    extracted_username: username,
+                    extracted_token: token,
+                };
+            }
+        }
+    }
+    ParsedRemoteUrl {
+        sanitized_url: url.to_string(),
+        extracted_username: None,
+        extracted_token: None,
+    }
+}
+
+fn url_decode(s: String) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", h1, h2), 16) {
+                    result.push(byte as char);
+                } else {
+                    result.push('%');
+                    result.push(h1);
+                    result.push(h2);
+                }
+            }
+        } else if c == '+' {
+            result.push(' ');
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+pub fn detect_transport(remote_url: &str) -> SyncTransport {
+    let lower = remote_url.to_lowercase();
+    if lower.starts_with("git@") || lower.starts_with("ssh://") {
+        SyncTransport::SshDeployKey
+    } else if lower.starts_with("https://") || lower.starts_with("http://") {
+        SyncTransport::HttpsToken
+    } else {
+        SyncTransport::HttpsToken
+    }
+}
+
+pub fn mask_token_in_url(url: &str) -> String {
+    if url.contains('@') {
+        if let Some(after_scheme) = url.split_once("://") {
+            let scheme = after_scheme.0;
+            let rest = after_scheme.1;
+            if let Some(at_pos) = rest.find('@') {
+                return format!("{}://***@{}", scheme, &rest[at_pos + 1..]);
+            }
+        }
+    }
+    url.to_string()
+}
+
+pub fn mask_token(s: &str) -> String {
+    if s.len() <= 8 {
+        return "***".to_string();
+    }
+    let prefix = &s[..4];
+    let suffix = &s[s.len() - 4..];
+    format!("{}***{}", prefix, suffix)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -136,6 +236,14 @@ pub struct SyncDiagnosticsResult {
     pub proxy_type: String,
     pub proxy_host: String,
     pub proxy_port: u16,
+    /// Sanitized remote URL (no credentials)
+    pub remote_url_sanitized: String,
+    /// Transport type: https/ssh/unknown
+    pub transport: String,
+    /// App-level proxy status: "未启用"/"已启用"
+    pub app_proxy_status: String,
+    /// Error category for proxy_enabled=false failures
+    pub error_category: String,
     pub user_message: String,
     pub raw_error: Option<String>,
 }
@@ -165,6 +273,10 @@ impl SyncDiagnosticsResult {
             proxy_type: "none".to_string(),
             proxy_host: "".to_string(),
             proxy_port: 0,
+            remote_url_sanitized: "".to_string(),
+            transport: "unknown".to_string(),
+            app_proxy_status: "未启用".to_string(),
+            error_category: "none".to_string(),
             user_message: "".to_string(),
             raw_error: None,
         }
@@ -312,12 +424,14 @@ impl Git2Backend {
         Ok(proxy_opts)
     }
 
-    fn build_callbacks<'a>(auth: Option<&'a GitAuth>) -> git2::RemoteCallbacks<'a> {
+    fn build_callbacks<'a>(auth: Option<&'a GitAuth>, username_override: Option<&'a str>) -> git2::RemoteCallbacks<'a> {
         let mut callbacks = git2::RemoteCallbacks::new();
         if let Some(auth) = auth {
             callbacks.credentials(move |_url, username_from_url, _allowed_types| match auth {
                 GitAuth::HttpsToken { username, token } => {
-                    let user = username_from_url.unwrap_or(username);
+                    let user = username_override
+                        .or_else(|| username_from_url)
+                        .unwrap_or(username);
                     git2::Cred::userpass_plaintext(user, token)
                 }
                 GitAuth::SshDeployKey => {
@@ -399,7 +513,8 @@ impl GitBackend for Git2Backend {
         proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let mut fetch_options = git2::FetchOptions::new();
-        let callbacks = Self::build_callbacks(auth);
+        let username_override = proxy_config.and_then(|c| if c.username.is_empty() { None } else { Some(c.username.as_str()) });
+        let callbacks = Self::build_callbacks(auth, username_override);
         fetch_options.remote_callbacks(callbacks);
         let proxy_opts = Self::build_proxy_options(proxy_config)?;
         fetch_options.proxy_options(proxy_opts);
@@ -449,7 +564,8 @@ impl GitBackend for Git2Backend {
         })?;
 
         let mut fetch_options = git2::FetchOptions::new();
-        fetch_options.remote_callbacks(Self::build_callbacks(auth));
+        let username_override = proxy_config.and_then(|c| if c.username.is_empty() { None } else { Some(c.username.as_str()) });
+        fetch_options.remote_callbacks(Self::build_callbacks(auth, username_override));
         fetch_options.proxy_options(Self::build_proxy_options(proxy_config)?);
 
         remote
@@ -746,7 +862,8 @@ impl GitBackend for Git2Backend {
         })?;
 
         let mut push_options = git2::PushOptions::new();
-        push_options.remote_callbacks(Self::build_callbacks(auth));
+        let username_override = proxy_config.and_then(|c| if c.username.is_empty() { None } else { Some(c.username.as_str()) });
+        push_options.remote_callbacks(Self::build_callbacks(auth, username_override));
         push_options.proxy_options(Self::build_proxy_options(proxy_config)?);
 
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
@@ -899,6 +1016,59 @@ fn get_user_friendly_error(err: &str) -> String {
     format!("同步失败，请检查网络重试。({})", err)
 }
 
+fn classify_error_without_proxy(err_msg: &str) -> String {
+    let e = err_msg.to_lowercase();
+    if e.contains("failed to resolve address")
+        || e.contains("no address associated with hostname")
+        || e.contains("could not resolve host")
+        || e.contains("name resolution")
+    {
+        return "dns_failed".to_string();
+    }
+    if e.contains("ssl") || e.contains("certificate") {
+        return "tls_failed".to_string();
+    }
+    if e.contains("authentication failed") || e.contains("invalid credentials") || e.contains("401") {
+        return "auth_failed".to_string();
+    }
+    if e.contains("token") && (e.contains("missing") || e.contains("empty") || e.contains("not provided")) {
+        return "token_missing".to_string();
+    }
+    if e.contains("permission denied") || e.contains("403") {
+        return "token_permission_denied".to_string();
+    }
+    if e.contains("repository not found") || e.contains("not found") || e.contains("404") {
+        return "repo_not_found_or_no_permission".to_string();
+    }
+    if e.contains("ref not found") || e.contains("couldn't find remote ref") || e.contains("branch") && e.contains("not found") {
+        return "branch_not_found".to_string();
+    }
+    if e.contains("timeout") || e.contains("connection refused") || e.contains("network unreachable") {
+        return "github_network_failed".to_string();
+    }
+    "github_network_failed".to_string()
+}
+
+fn classify_error_with_proxy(err_msg: &str, result: &SyncDiagnosticsResult) -> String {
+    let e = err_msg.to_lowercase();
+    if e.contains("unsupported proxy protocol") {
+        return "proxy_protocol_unsupported".to_string();
+    }
+    if !result.tcp_probe_ok {
+        return "proxy_tcp_failed".to_string();
+    }
+    if result.tcp_probe_ok && !result.http_connect_probe_ok && result.proxy_type == "http" {
+        return "proxy_connect_failed".to_string();
+    }
+    if e.contains("authentication failed") || e.contains("invalid credentials") || e.contains("401") {
+        return "auth_failed".to_string();
+    }
+    if e.contains("repository not found") || e.contains("not found") || e.contains("404") {
+        return "repo_not_found_or_no_permission".to_string();
+    }
+    "proxy_connect_failed".to_string()
+}
+
 impl SyncService {
 
     pub fn perform_sync_diagnostics(
@@ -908,25 +1078,43 @@ impl SyncService {
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
 
-        // Record Android permission status (Linux always has true from default)
         result.android_has_internet_permission = config.android_has_internet_permission;
         result.android_has_access_network_state_permission = config.android_has_access_network_state_permission;
 
-        // Early bail: INTERNET permission missing on Android
         if !config.android_has_internet_permission {
             result.user_message = "缺少 INTERNET 权限。Android 应用无法联网，请在 AndroidManifest.xml 中添加 android.permission.INTERNET。".to_string();
             result.network_status = "failed_no_internet_permission".to_string();
             result.auth_status = "skipped".to_string();
             result.repo_status = "skipped".to_string();
             result.branch_status = "skipped".to_string();
+            result.error_category = "missing_permission".to_string();
             return Ok(result);
         }
 
-        // Network state: if ACCESS_NETWORK_STATE is missing, mark as unknown but don't block
         if !config.android_has_access_network_state_permission {
             result.android_network_state = "unknown_no_permission".to_string();
         } else {
             result.android_network_state = "permission_granted".to_string();
+        }
+
+        let parsed = sanitize_remote_url(&config.remote_url);
+        let sanitized_url = parsed.sanitized_url;
+        result.remote_url_sanitized = sanitized_url.clone();
+
+        let transport = detect_transport(&sanitized_url);
+        result.transport = match transport {
+            SyncTransport::HttpsToken => "https".to_string(),
+            SyncTransport::SshDeployKey => "ssh".to_string(),
+        };
+
+        if transport == SyncTransport::SshDeployKey {
+            result.user_message = "检测到 SSH remote。在移动端/受限网络下 SSH 不推荐，建议改用 HTTPS remote (https://github.com/owner/repo.git)。".to_string();
+            result.error_category = "ssh_not_recommended".to_string();
+            result.network_status = "skipped_ssh".to_string();
+            result.auth_status = "skipped".to_string();
+            result.repo_status = "skipped".to_string();
+            result.branch_status = "skipped".to_string();
+            return Ok(result);
         }
 
         result.proxy_used = config.proxy_enabled;
@@ -934,31 +1122,59 @@ impl SyncService {
         result.proxy_host = config.proxy_host.clone();
         result.proxy_port = config.proxy_port;
 
-        if config.remote_url.is_empty() {
+        if config.proxy_enabled {
+            result.app_proxy_status = "已启用".to_string();
+        } else {
+            result.app_proxy_status = "未启用".to_string();
+        }
+
+        if sanitized_url.is_empty() {
             result.user_message = "远程仓库地址为空。".to_string();
+            result.error_category = "empty_url".to_string();
             return Ok(result);
         }
 
-        let token = secrets.token.clone().unwrap_or_default();
+        let token_from_parsed = parsed.extracted_token;
+        let token = secrets.token.clone().or(token_from_parsed).unwrap_or_default();
         if token.is_empty() {
             result.user_message = "缺少 GitHub Token。".to_string();
+            result.error_category = "token_missing".to_string();
             return Ok(result);
         }
+
+        let username_for_cred = if !config.username.is_empty() {
+            config.username.clone()
+        } else if let Some(ref extracted_user) = parsed.extracted_username {
+            extracted_user.clone()
+        } else {
+            "x-access-token".to_string()
+        };
 
         let temp_dir = tempfile::tempdir().map_err(|e| crate::Error::Io(e))?;
         let repo = git2::Repository::init(temp_dir.path()).map_err(|e: git2::Error| crate::Error::Other(e.to_string()))?;
 
-        let mut remote = repo.remote_anonymous(&config.remote_url).map_err(|e: git2::Error| crate::Error::Other(e.to_string()))?;
+        let mut remote = repo.remote_anonymous(&sanitized_url).map_err(|e: git2::Error| crate::Error::Other(e.to_string()))?;
 
         let mut callbacks = git2::RemoteCallbacks::new();
-        callbacks.credentials(|_user, _user_from_url, _cred| {
-            git2::Cred::userpass_plaintext("oauth2", &token)
+        let token_clone = token.clone();
+        let username_clone = username_for_cred.clone();
+        callbacks.credentials(move |_user, _user_from_url, _cred| {
+            git2::Cred::userpass_plaintext(&username_clone, &token_clone)
         });
+
+        let proxy_opts = match Git2Backend::build_proxy_options(Some(config)) {
+            Ok(opts) => opts,
+            Err(e) => {
+                result.user_message = format!("代理配置错误: {}", e);
+                result.success = false;
+                result.error_category = "proxy_config_error".to_string();
+                return Ok(result);
+            }
+        };
 
         if config.proxy_enabled && (config.proxy_type == "http" || config.proxy_type == "socks5") && !config.proxy_host.is_empty() {
             let addr = format!("{}:{}", config.proxy_host, config.proxy_port);
 
-            // Resolve host to IP addresses and try ALL of them (not just the first)
             let addrs = std::net::ToSocketAddrs::to_socket_addrs(&addr);
             let mut tcp_connected = false;
             let mut last_tcp_err = None;
@@ -997,7 +1213,6 @@ impl SyncService {
                 result.tcp_probe_ok = true;
                 result.tcp_probe_status = "ok".to_string();
 
-                // Set read/write timeouts to prevent indefinite blocking during CONNECT probe
                 let timeout = std::time::Duration::from_secs(5);
                 let _ = stream.set_read_timeout(Some(timeout));
                 let _ = stream.set_write_timeout(Some(timeout));
@@ -1023,6 +1238,7 @@ impl SyncService {
                                             result.network_ok = false;
                                             result.network_status = "failed".to_string();
                                             result.user_message = "代理需要认证 (HTTP 407)。请检查代理配置。".to_string();
+                                            result.error_category = "proxy_auth_required".to_string();
                                             return Ok(result);
                                         }
                                         result.http_connect_probe_ok = false;
@@ -1030,6 +1246,7 @@ impl SyncService {
                                         result.network_ok = false;
                                         result.network_status = "failed".to_string();
                                         result.user_message = format!("代理端口 HTTP CONNECT 失败: {}", result.http_connect_probe_status);
+                                        result.error_category = "proxy_connect_failed".to_string();
                                         return Ok(result);
                                     } else {
                                         result.http_connect_probe_ok = false;
@@ -1037,6 +1254,7 @@ impl SyncService {
                                         result.network_ok = false;
                                         result.network_status = "failed".to_string();
                                         result.user_message = "代理端口 HTTP CONNECT 返回无效响应（非 HTTP）".to_string();
+                                        result.error_category = "proxy_connect_failed".to_string();
                                         return Ok(result);
                                     }
                                 }
@@ -1046,6 +1264,7 @@ impl SyncService {
                                     result.network_ok = false;
                                     result.network_status = "failed".to_string();
                                     result.user_message = "代理端口 HTTP CONNECT 读取超时（代理未响应）".to_string();
+                                    result.error_category = "proxy_connect_failed".to_string();
                                     return Ok(result);
                                 }
                                 Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1054,6 +1273,7 @@ impl SyncService {
                                     result.network_ok = false;
                                     result.network_status = "failed".to_string();
                                     result.user_message = "代理端口 HTTP CONNECT 读取超时（代理未响应）".to_string();
+                                    result.error_category = "proxy_connect_failed".to_string();
                                     return Ok(result);
                                 }
                                 Err(e) => {
@@ -1062,6 +1282,7 @@ impl SyncService {
                                     result.network_ok = false;
                                     result.network_status = "failed".to_string();
                                     result.user_message = format!("代理端口 HTTP CONNECT 读取错误: {}", e);
+                                    result.error_category = "proxy_connect_failed".to_string();
                                     return Ok(result);
                                 }
                             }
@@ -1072,6 +1293,7 @@ impl SyncService {
                             result.network_ok = false;
                             result.network_status = "failed".to_string();
                             result.user_message = "代理端口 HTTP CONNECT 写入超时".to_string();
+                            result.error_category = "proxy_connect_failed".to_string();
                             return Ok(result);
                         }
                         Err(e) => {
@@ -1080,6 +1302,7 @@ impl SyncService {
                             result.network_ok = false;
                             result.network_status = "failed".to_string();
                             result.user_message = format!("代理端口 HTTP CONNECT 写入失败: {}", e);
+                            result.error_category = "proxy_connect_failed".to_string();
                             return Ok(result);
                         }
                     }
@@ -1095,18 +1318,10 @@ impl SyncService {
                 result.network_ok = false;
                 result.network_status = "failed".to_string();
                 result.user_message = format!("代理端口 {} 无法建立 TCP 连接（尝试所有解析地址均失败）: {}", addr, err_msg);
+                result.error_category = "proxy_tcp_failed".to_string();
                 return Ok(result);
             }
         }
-
-        let proxy_opts = match Git2Backend::build_proxy_options(Some(config)) {
-            Ok(opts) => opts,
-            Err(e) => {
-                result.user_message = format!("代理配置错误: {}", e);
-                result.success = false;
-                return Ok(result);
-            }
-        };
 
         let direction = git2::Direction::Fetch;
         let connection: git2::RemoteConnection = match remote.connect_auth(direction, Some(callbacks), Some(proxy_opts)) {
@@ -1119,6 +1334,12 @@ impl SyncService {
                 let err_msg = e.to_string();
                 let clean_msg = err_msg.replace(&token, "***TOKEN***");
                 result.raw_error = Some(clean_msg.clone());
+
+                if config.proxy_enabled {
+                    result.error_category = classify_error_with_proxy(&clean_msg, &result);
+                } else {
+                    result.error_category = classify_error_without_proxy(&clean_msg);
+                }
                 result.user_message = get_user_friendly_error(&clean_msg);
 
                 result.libgit2_probe_ok = false;
@@ -1137,7 +1358,7 @@ impl SyncService {
                 }
 
                 if is_network_error {
-                    if result.tcp_probe_ok {
+                    if config.proxy_enabled && result.tcp_probe_ok {
                         result.user_message = "代理端口可连接，但 libgit2 通过代理访问 GitHub 失败。问题可能在 libgit2 代理链路限制。".to_string();
                     }
                     result.network_ok = false;
@@ -1155,14 +1376,12 @@ impl SyncService {
                         result.repo_status = "skipped".to_string();
                         result.branch_status = "skipped".to_string();
                     } else if clean_msg.contains("not found") || clean_msg.contains("404") {
-                        // Might happen here depending on git provider response
                         result.auth_ok = true;
                         result.auth_status = "ok".to_string();
                         result.repo_ok = false;
                         result.repo_status = "failed".to_string();
                         result.branch_status = "skipped".to_string();
                     } else {
-                        // Unknown error
                         result.auth_ok = false;
                         result.auth_status = "failed".to_string();
                         result.repo_status = "skipped".to_string();
@@ -1194,9 +1413,11 @@ impl SyncService {
                 if clean_msg.contains("not found") || clean_msg.contains("404") {
                     result.repo_ok = false;
                     result.repo_status = "failed".to_string();
+                    result.error_category = "repo_not_found_or_no_permission".to_string();
                 } else {
                     result.repo_ok = false;
                     result.repo_status = "failed".to_string();
+                    result.error_category = "repo_access_failed".to_string();
                 }
                 result.branch_status = "skipped".to_string();
                 return Ok(result);
@@ -1222,6 +1443,7 @@ impl SyncService {
             result.branch_status = "missing".to_string();
             result.success = true;
             result.user_message = format!("仓库可访问，分支 {} 不存在。首次同步将创建该分支。", config.branch);
+            result.error_category = "branch_not_found".to_string();
         }
 
         Ok(result)
@@ -1260,6 +1482,9 @@ impl SyncService {
             ));
         }
 
+        let parsed = sanitize_remote_url(&config.remote_url);
+        let sanitized_url = parsed.sanitized_url;
+
         let map_git_error = |e: crate::Error| -> crate::Error {
             if let crate::Error::Io(io_err) = &e {
                 let msg = io_err.to_string();
@@ -1276,29 +1501,31 @@ impl SyncService {
             e
         };
 
+        let token_from_parsed = parsed.extracted_token;
+        let token = secrets.token.clone().or(token_from_parsed).unwrap_or_default();
+        if token.is_empty() {
+            return Ok(SyncResult::error(
+                SyncStatus::Error("No token provided".to_string()),
+                FirstSyncMode::NotAttempted,
+                Some("缺少 GitHub Token。".to_string()),
+                "No token provided".to_string(),
+            ));
+        }
+
+        let username_for_cred = if !config.username.is_empty() {
+            config.username.clone()
+        } else if let Some(ref extracted_user) = parsed.extracted_username {
+            extracted_user.clone()
+        } else {
+            "x-access-token".to_string()
+        };
+
         let auth = match &config.transport {
             SyncTransport::HttpsToken => {
-                if let Some(token) = &secrets.token {
-                    if token.is_empty() {
-                        return Ok(SyncResult::error(
-                            SyncStatus::Error("No token provided".to_string()),
-                            FirstSyncMode::NotAttempted,
-                            Some("缺少 GitHub Token。".to_string()),
-                            "No token provided".to_string(),
-                        ));
-                    }
-                    Some(GitAuth::HttpsToken {
-                        username: "sync_user".to_string(), // In GitHub, token is the password, username can be anything, but usually we use token as password or username
-                        token: token.clone(),
-                    })
-                } else {
-                    return Ok(SyncResult::error(
-                        SyncStatus::Error("No token provided".to_string()),
-                        FirstSyncMode::NotAttempted,
-                        Some("缺少 GitHub Token。".to_string()),
-                        "No token provided".to_string(),
-                    ));
-                }
+                Some(GitAuth::HttpsToken {
+                    username: username_for_cred.clone(),
+                    token: token.clone(),
+                })
             }
             SyncTransport::SshDeployKey => {
                 return Ok(SyncResult::error(
@@ -1325,12 +1552,11 @@ impl SyncService {
             };
 
             if is_empty_or_git_only {
-                // Clone
                 result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
                 result.user_message = Some("已克隆远端仓库到空工作区。".to_string());
                 if let Err(e) = backend
                     .clone_repo(
-                        &config.remote_url,
+                        &sanitized_url,
                         workspace_path,
                         auth.as_ref(),
                         Some(config),
@@ -1345,7 +1571,6 @@ impl SyncService {
                     ));
                 }
             } else {
-                // Init in existing workspace
                 result.first_sync_mode = FirstSyncMode::InitExistingWorkspace;
                 result.user_message =
                     Some("本地已有作品，已初始化为 Git 仓库并准备同步。".to_string());
@@ -1354,7 +1579,7 @@ impl SyncService {
                     result.error = Some(e.to_string());
                     return Ok(result);
                 }
-                if let Err(e) = backend.ensure_remote(workspace_path, &config.remote_url) {
+                if let Err(e) = backend.ensure_remote(workspace_path, &sanitized_url) {
                     result.status = SyncStatus::Error(e.to_string());
                     result.error = Some(e.to_string());
                     return Ok(result);
@@ -1368,7 +1593,7 @@ impl SyncService {
                 result.error = Some(e.to_string());
                 return Ok(result);
             }
-            if let Err(e) = backend.ensure_remote(workspace_path, &config.remote_url) {
+            if let Err(e) = backend.ensure_remote(workspace_path, &sanitized_url) {
                 result.status = SyncStatus::Error(e.to_string());
                 result.error = Some(e.to_string());
                 return Ok(result);
@@ -2034,6 +2259,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2088,6 +2314,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2194,6 +2421,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2251,6 +2479,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2357,6 +2586,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2380,6 +2610,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2413,6 +2644,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2445,6 +2677,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2542,6 +2775,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2630,6 +2864,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2714,6 +2949,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2798,6 +3034,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };
@@ -2925,6 +3162,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
+            username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
         };

@@ -41,9 +41,11 @@ struct AppBackend {
     sync_branch: qt_property!(QString; READ sync_branch WRITE set_sync_branch NOTIFY sync_config_changed),
     sync_auto_sync: qt_property!(bool; READ sync_auto_sync WRITE set_sync_auto_sync NOTIFY sync_config_changed),
     sync_interval: qt_property!(u32; READ sync_interval WRITE set_sync_interval NOTIFY sync_config_changed),
+    sync_proxy_enabled: qt_property!(bool; READ sync_proxy_enabled WRITE set_sync_proxy_enabled NOTIFY sync_config_changed),
     sync_proxy_type: qt_property!(QString; READ sync_proxy_type WRITE set_sync_proxy_type NOTIFY sync_config_changed),
     sync_proxy_host: qt_property!(QString; READ sync_proxy_host WRITE set_sync_proxy_host NOTIFY sync_config_changed),
     sync_proxy_port: qt_property!(u16; READ sync_proxy_port WRITE set_sync_proxy_port NOTIFY sync_config_changed),
+    sync_username: qt_property!(QString; READ sync_username WRITE set_sync_username NOTIFY sync_config_changed),
     sync_token: qt_property!(QString; READ sync_token WRITE set_sync_token NOTIFY sync_config_changed),
 
     sync_config_changed: qt_signal!(),
@@ -140,9 +142,11 @@ struct AppBackend {
     current_sync_branch: String,
     current_sync_auto_sync: bool,
     current_sync_interval: u32,
+    current_sync_proxy_enabled: bool,
     current_sync_proxy_type: String,
     current_sync_proxy_host: String,
     current_sync_proxy_port: u16,
+    current_sync_username: String,
     current_sync_token: String,
     current_sync_action_result: String,
 
@@ -219,6 +223,22 @@ impl AppBackend {
     }
     fn set_sync_proxy_port(&mut self, val: u16) {
         self.current_sync_proxy_port = val;
+        self.sync_config_changed();
+    }
+
+    fn sync_proxy_enabled(&self) -> bool {
+        self.current_sync_proxy_enabled
+    }
+    fn set_sync_proxy_enabled(&mut self, val: bool) {
+        self.current_sync_proxy_enabled = val;
+        self.sync_config_changed();
+    }
+
+    fn sync_username(&self) -> QString {
+        self.current_sync_username.clone().into()
+    }
+    fn set_sync_username(&mut self, val: QString) {
+        self.current_sync_username = val.to_string();
         self.sync_config_changed();
     }
 
@@ -344,9 +364,16 @@ impl AppBackend {
                     Ok(result) => {
                         let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
 
+                        msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
+
+                        if !result.remote_url_sanitized.is_empty() {
+                            msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
+                        }
+                        msg.push_str(&format!("\nTransport: {}", result.transport));
+
                         if result.proxy_used && result.proxy_type != "none" {
                             if result.proxy_type == "auto" {
-                                msg.push_str("\n代理配置: auto");
+                                msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
                             } else {
                                 let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
                                 msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
@@ -358,15 +385,16 @@ impl AppBackend {
                                 }
                             }
                             msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
-                        } else {
-                            msg.push_str("\n代理配置: 未使用显式代理");
-                            msg.push_str("\n提示：当前同步底层没有使用显式代理。系统代理/TUN 是否接管取决于系统路由和 Clash，本应用不能保证 libgit2 自动读取。如果同步失败，建议启用 HTTP 代理 127.0.0.1:7890。\n");
                         }
 
                         msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
                         msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
                         msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
                         msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
+
+                        if !result.error_category.is_empty() && result.error_category != "none" {
+                            msg.push_str(&format!("\n错误分类: {}", result.error_category));
+                        }
 
                         if !result.user_message.is_empty() {
                             msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
@@ -400,9 +428,11 @@ impl AppBackend {
                 self.current_sync_branch = config.branch.clone();
                 self.current_sync_auto_sync = config.auto_sync;
                 self.current_sync_interval = config.sync_interval_seconds;
+                self.current_sync_proxy_enabled = config.proxy_enabled;
                 self.current_sync_proxy_type = config.proxy_type.clone();
                 self.current_sync_proxy_host = config.proxy_host.clone();
                 self.current_sync_proxy_port = config.proxy_port;
+                self.current_sync_username = config.username.clone();
             }
             if let Ok(secrets) = core.load_sync_secrets() {
                 if let Some(t) = secrets.token {
@@ -433,30 +463,39 @@ impl AppBackend {
                     proxy_type: "none".to_string(),
                     proxy_host: "".to_string(),
                     proxy_port: 0,
+                    username: "".to_string(),
                     android_has_internet_permission: true,
                     android_has_access_network_state_permission: true,
                 });
 
+            let raw_url = self.current_sync_remote_url.clone();
+            let parsed = writer_core::sync_service::sanitize_remote_url(&raw_url);
+
             c.enabled = self.current_sync_enabled;
-            c.remote_url = self.current_sync_remote_url.clone();
+            c.remote_url = parsed.sanitized_url.clone();
             c.branch = self.current_sync_branch.clone();
             c.auto_sync = self.current_sync_auto_sync;
             c.sync_interval_seconds = self.current_sync_interval;
+            c.proxy_enabled = self.current_sync_proxy_enabled;
             c.proxy_type = self.current_sync_proxy_type.clone();
-            if c.proxy_type != "none" {
-                c.proxy_enabled = true;
-            } else {
-                c.proxy_enabled = false;
-            }
             c.proxy_host = self.current_sync_proxy_host.clone();
             c.proxy_port = self.current_sync_proxy_port;
+            c.username = self.current_sync_username.clone();
+
+            if let Some(ref extracted_user) = parsed.extracted_username {
+                if c.username.is_empty() {
+                    c.username = extracted_user.clone();
+                }
+            }
 
             let mut s = core.load_sync_secrets().unwrap_or_default();
-            s.token = if self.current_sync_token.is_empty() {
-                None
+            if let Some(ref extracted_token) = parsed.extracted_token {
+                s.token = Some(extracted_token.clone());
+            } else if self.current_sync_token.is_empty() {
+                s.token = None;
             } else {
-                Some(self.current_sync_token.clone())
-            };
+                s.token = Some(self.current_sync_token.clone());
+            }
 
             if let Err(e) = core.save_sync_config(&c) {
                 error_msg = Some(format!("保存同步配置失败: {}", e));
@@ -535,6 +574,7 @@ impl AppBackend {
                         proxy_type: "none".to_string(),
                         proxy_host: "".to_string(),
                         proxy_port: 0,
+                        username: "".to_string(),
                         android_has_internet_permission: true,
                         android_has_access_network_state_permission: true,
                     }

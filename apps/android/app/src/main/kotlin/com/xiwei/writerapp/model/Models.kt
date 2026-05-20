@@ -87,6 +87,7 @@ data class SyncConfig(
     @SerializedName("proxy_type") val proxyType: String? = "none",
     @SerializedName("proxy_host") val proxyHost: String? = "127.0.0.1",
     @SerializedName("proxy_port") val proxyPort: Int? = 7890,
+    val username: String? = "",
     @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean? = null,
     @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean? = null
 ) {
@@ -104,6 +105,7 @@ data class SyncConfig(
             proxyPort = if (proxyPort == null || proxyPort <= 0) {
                 if (proxyType == "socks5") 7891 else 7890
             } else proxyPort,
+            username = username ?: "",
             androidHasInternetPermission = androidHasInternetPermission ?: true,
             androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission ?: true
         )
@@ -203,6 +205,10 @@ data class SyncDiagnosticsResult(
     @SerializedName("proxy_type") val proxyType: String,
     @SerializedName("proxy_host") val proxyHost: String,
     @SerializedName("proxy_port") val proxyPort: Int,
+    @SerializedName("remote_url_sanitized") val remoteUrlSanitized: String,
+    val transport: String,
+    @SerializedName("app_proxy_status") val appProxyStatus: String,
+    @SerializedName("error_category") val errorCategory: String,
     @SerializedName("user_message") val userMessage: String,
     @SerializedName("raw_error") val rawError: String?
 )

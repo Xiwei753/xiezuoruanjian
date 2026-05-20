@@ -27,9 +27,11 @@ Popup {
         root.backendRef.sync_branch = branchInput.text
         root.backendRef.sync_auto_sync = autoSyncCheck.checked
         root.backendRef.sync_interval = parseInt(syncIntervalInput.text) || 300
+        root.backendRef.sync_proxy_enabled = proxyEnabledCheck.checked
         root.backendRef.sync_proxy_type = proxyTypeCombo.currentText
         root.backendRef.sync_proxy_host = proxyHostInput.text
         root.backendRef.sync_proxy_port = parseInt(proxyPortInput.text) || 0
+        root.backendRef.sync_username = usernameInput.text
         if (tokenInput.text.length > 0) {
             root.backendRef.sync_token = tokenInput.text
         }
@@ -68,10 +70,12 @@ Popup {
         branchInput.text = root.backendRef.sync_branch
         autoSyncCheck.checked = root.backendRef.sync_auto_sync
         syncIntervalInput.text = root.backendRef.sync_interval.toString()
+        proxyEnabledCheck.checked = root.backendRef.sync_proxy_enabled
         proxyTypeCombo.currentIndex = proxyTypeCombo.indexOfText(root.backendRef.sync_proxy_type)
         if (proxyTypeCombo.currentIndex === -1) proxyTypeCombo.currentIndex = 0
         proxyHostInput.text = root.backendRef.sync_proxy_host
         proxyPortInput.text = root.backendRef.sync_proxy_port.toString()
+        usernameInput.text = root.backendRef.sync_username
         root.hasExistingToken = (root.backendRef.sync_token.length > 0)
         tokenInput.text = ""
         tokenInput.placeholderText = root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
@@ -227,6 +231,11 @@ Popup {
                         validator: IntValidator { bottom: 60 }
                     }
 
+                    CheckBox {
+                        id: proxyEnabledCheck
+                        text: "启用应用内代理（可选兜底，默认关闭）"
+                    }
+
                     Label { text: "代理类型:" }
                     ComboBox {
                         id: proxyTypeCombo
@@ -253,6 +262,13 @@ Popup {
                         id: proxyPortInput
                         Layout.fillWidth: true
                         validator: IntValidator { bottom: 0; top: 65535 }
+                    }
+
+                    Label { text: "GitHub 用户名（可选，默认 x-access-token）:" }
+                    TextField {
+                        id: usernameInput
+                        Layout.fillWidth: true
+                        placeholderText: "留空则使用 x-access-token"
                     }
 
                     Label { text: "Token (Personal Access Token):" }

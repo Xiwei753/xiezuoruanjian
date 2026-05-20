@@ -695,6 +695,7 @@ impl WriterCore {
                 proxy_type: "http".to_string(),
                 proxy_host: "127.0.0.1".to_string(),
                 proxy_port: 7890,
+                username: String::new(),
                 android_has_internet_permission: true,
                 android_has_access_network_state_permission: true,
             });
