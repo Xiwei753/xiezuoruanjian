@@ -684,7 +684,7 @@ impl WriterCore {
                 auto_sync: false,
                 sync_interval_seconds: 300,
                 proxy_enabled: false,
-                proxy_type: "http".to_string(),
+                proxy_type: "auto".to_string(),
                 proxy_host: "127.0.0.1".to_string(),
                 proxy_port: 7890,
                 username: String::new(),

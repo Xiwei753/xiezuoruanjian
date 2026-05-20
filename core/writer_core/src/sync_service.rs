@@ -73,7 +73,7 @@ pub struct SyncConfig {
 fn default_true() -> bool { true }
 
 fn default_proxy_type() -> String {
-    "http".to_string()
+    "auto".to_string()
 }
 
 fn default_proxy_host() -> String {
@@ -1054,40 +1054,43 @@ impl GitHubApiBackend {
 
     fn build_auto_client(config: &SyncConfig, secrets: &SyncSecrets, workspace_path: Option<&Path>) -> crate::Result<(ProbedClient, Vec<NetworkProbeResult>)> {
         let mut probe_summary = Vec::new();
-
-        let proxy_type = if config.proxy_enabled {
-            if config.proxy_type.is_empty() { "auto" } else { config.proxy_type.as_str() }
-        } else {
-            "none"
-        };
-
         let token = secrets.token.clone().unwrap_or_default();
         let api_base = Self::api_base_url(&config.remote_url);
         let test_url = format!("{}/rate_limit", if api_base.starts_with("https://api.github.com/repos/") { "https://api.github.com" } else { &api_base });
 
-        if proxy_type == "none" || proxy_type == "http" || proxy_type == "socks5" {
-            let client = build_http_client(Some(config))?;
-            probe_summary.push(NetworkProbeResult {
-                mode: proxy_type.to_string(),
-                success: true,
-                status: "ok".to_string(),
-                message: "使用指定手动代理配置".to_string(),
-                raw_error: None,
-            });
-            return Ok((ProbedClient { client, mode: proxy_type.to_string() }, probe_summary));
-        }
+        let mut candidates = match config.proxy_type.as_str() {
+            "auto" | "" => vec![
+                ("direct".to_string(), "none".to_string(), "".to_string(), 0u16),
+                ("http_local_7890".to_string(), "http".to_string(), "127.0.0.1".to_string(), 7890u16),
+                ("socks5_local_7891".to_string(), "socks5".to_string(), "127.0.0.1".to_string(), 7891u16),
+            ],
+            "none" => vec![
+                ("direct".to_string(), "none".to_string(), "".to_string(), 0u16),
+            ],
+            "http" => {
+                let host = if config.proxy_host.is_empty() { "127.0.0.1" } else { &config.proxy_host };
+                let port = if config.proxy_port > 0 { config.proxy_port } else { 7890 };
+                vec![
+                    (format!("http_{}:{}", host, port), "http".to_string(), host.to_string(), port),
+                ]
+            },
+            "socks5" => {
+                let host = if config.proxy_host.is_empty() { "127.0.0.1" } else { &config.proxy_host };
+                let port = if config.proxy_port > 0 { config.proxy_port } else { 7891 };
+                vec![
+                    (format!("socks5_{}:{}", host, port), "socks5".to_string(), host.to_string(), port),
+                ]
+            },
+            _ => vec![
+                ("direct".to_string(), "none".to_string(), "".to_string(), 0u16),
+                ("http_local_7890".to_string(), "http".to_string(), "127.0.0.1".to_string(), 7890u16),
+                ("socks5_local_7891".to_string(), "socks5".to_string(), "127.0.0.1".to_string(), 7891u16),
+            ],
+        };
 
-        let mut candidates = vec![
-            ("direct".to_string(), "none".to_string(), "".to_string(), 0),
-            ("http_local_7890".to_string(), "http".to_string(), "127.0.0.1".to_string(), 7890),
-            ("socks5_local_7891".to_string(), "socks5".to_string(), "127.0.0.1".to_string(), 7891),
-        ];
-
-        let mut last_success = None;
         if let Some(wp) = workspace_path {
             if let Ok(state) = SyncService::load_sync_state(wp) {
                 if let Some(last_mode) = state.last_successful_network_mode {
-                    last_success = Some(last_mode.clone());
                     if let Some(pos) = candidates.iter().position(|c| c.0 == last_mode) {
                         let c = candidates.remove(pos);
                         candidates.insert(0, c);
@@ -1096,22 +1099,16 @@ impl GitHubApiBackend {
             }
         }
 
-        for (mode_name, p_type, p_host, p_port) in candidates {
-            let mut test_config = config.clone();
-            test_config.proxy_enabled = p_type != "none";
-            test_config.proxy_type = p_type.clone();
-            test_config.proxy_host = p_host;
-            test_config.proxy_port = p_port;
-
+        for (mode_name, p_type, p_host, p_port) in &candidates {
             let mut builder = reqwest::blocking::Client::builder()
                 .user_agent("WriterApp/1.0")
                 .timeout(std::time::Duration::from_secs(3));
 
-            if test_config.proxy_enabled && !test_config.proxy_host.is_empty() && test_config.proxy_port > 0 {
-                let proxy_url = match test_config.proxy_type.as_str() {
-                    "http" => format!("http://{}:{}", test_config.proxy_host, test_config.proxy_port),
-                    "socks5" => format!("socks5h://{}:{}", test_config.proxy_host, test_config.proxy_port),
-                    _ => format!("http://{}:{}", test_config.proxy_host, test_config.proxy_port),
+            if *p_type != "none" && !p_host.is_empty() && *p_port > 0 {
+                let proxy_url = match p_type.as_str() {
+                    "http" => format!("http://{}:{}", p_host, p_port),
+                    "socks5" => format!("socks5h://{}:{}", p_host, p_port),
+                    _ => format!("http://{}:{}", p_host, p_port),
                 };
                 if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
                     builder = builder.proxy(proxy);
@@ -1128,7 +1125,6 @@ impl GitHubApiBackend {
 
                     match req.send() {
                         Ok(resp) => {
-                            // Any HTTP response means the network path works.
                             let status = resp.status().as_u16();
                             let msg = if status == 200 {
                                 "网络连通测试成功".to_string()
@@ -1143,18 +1139,29 @@ impl GitHubApiBackend {
                                 raw_error: None,
                             });
 
-                            // Return a regular timeout client (not 3s) for the actual sync
-                            let final_client = build_http_client(Some(&test_config))?;
-                            return Ok((ProbedClient { client: final_client, mode: mode_name }, probe_summary));
+                            let mut working_config = config.clone();
+                            working_config.proxy_type = p_type.clone();
+                            working_config.proxy_host = p_host.clone();
+                            working_config.proxy_port = *p_port;
+                            working_config.proxy_enabled = *p_type != "none";
+                            let final_client = build_http_client(Some(&working_config))?;
+                            return Ok((ProbedClient { client: final_client, mode: mode_name.clone() }, probe_summary));
                         }
                         Err(e) => {
+                            let raw = e.to_string();
+                            let sanitized = if !token.is_empty() { raw.replace(&token, "***TOKEN***") } else { raw.clone() };
+                            let truncated = if sanitized.len() > 200 {
+                                format!("{}...[truncated {} bytes]", &sanitized[..200], sanitized.len() - 200)
+                            } else {
+                                sanitized
+                            };
                             let (status_code, msg) = Self::classify_reqwest_error(&e);
                             probe_summary.push(NetworkProbeResult {
                                 mode: mode_name.clone(),
                                 success: false,
                                 status: status_code,
                                 message: msg,
-                                raw_error: Some(e.to_string()),
+                                raw_error: Some(truncated),
                             });
                         }
                     }
@@ -1171,8 +1178,11 @@ impl GitHubApiBackend {
             }
         }
 
-        let client = build_http_client(Some(config))?;
-        Ok((ProbedClient { client, mode: "fallback_default".to_string() }, probe_summary))
+        let error_detail = probe_summary.iter().map(|p| {
+            let err_suffix = p.raw_error.as_ref().map(|e| format!(" ({})", e)).unwrap_or_default();
+            format!("  [{}] {}: {}{}", if p.success { "OK" } else { "FAIL" }, p.mode, p.message, err_suffix)
+        }).collect::<Vec<_>>().join("\n");
+        Err(crate::Error::Other(format!("network_probe_failed: 所有网络路径探测均失败:\n{}", error_detail)))
     }
 
     fn api_base_url(remote_url: &str) -> String {

@@ -472,6 +472,7 @@ impl AppBackend {
                 .load_sync_config()
                 .unwrap_or(writer_core::sync_service::SyncConfig {
                     enabled: false,
+                    backend_type: writer_core::sync_service::BackendType::Git,
                     remote_url: "".to_string(),
                     transport: writer_core::sync_service::SyncTransport::HttpsToken,
                     branch: "main".to_string(),
@@ -590,6 +591,7 @@ impl AppBackend {
                     error_msg = Some(format!("无法读取同步配置: {}", e));
                     writer_core::sync_service::SyncConfig {
                         enabled: false,
+                        backend_type: writer_core::sync_service::BackendType::Git,
                         remote_url: "".to_string(),
                         transport: writer_core::sync_service::SyncTransport::HttpsToken,
                         branch: "main".to_string(),

@@ -24,6 +24,7 @@ import com.xiwei.writerapp.model.SyncTransport
 import com.xiwei.writerapp.model.SyncSecrets
 import com.xiwei.writerapp.data.NativeResult
 import com.xiwei.writerapp.model.FirstSyncMode
+import com.xiwei.writerapp.data.SyncSession
 
 
 class SettingsActivity : AppCompatActivity() {
@@ -310,10 +311,10 @@ class SettingsActivity : AppCompatActivity() {
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
         tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds ?: 300}秒"
 
-        val proxyType = currentSyncConfig.proxyType ?: "none"
+        val proxyType = currentSyncConfig.proxyType ?: "auto"
         spinnerProxyType.setSelection(when (proxyType) {
-            "none" -> 0
-            "auto" -> 1
+            "auto" -> 0
+            "none" -> 1
             "http" -> 2
             "socks5" -> 3
             else -> 0
@@ -329,6 +330,14 @@ class SettingsActivity : AppCompatActivity() {
 
 
     private fun getUIConfig(): SyncConfig {
+        val sel = spinnerProxyType.selectedItemPosition
+        val pType = when (sel) {
+            0 -> "auto"
+            1 -> "none"
+            2 -> "http"
+            3 -> "socks5"
+            else -> "auto"
+        }
         return currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             backendType = com.xiwei.writerapp.model.BackendType.GithubApi,
@@ -337,16 +346,10 @@ class SettingsActivity : AppCompatActivity() {
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt(),
-            proxyEnabled = spinnerProxyType.selectedItemPosition >= 1,
-            proxyType = when (spinnerProxyType.selectedItemPosition) {
-                0 -> "none"
-                1 -> "auto"
-                2 -> "http"
-                3 -> "socks5"
-                else -> "none"
-            },
+            proxyEnabled = sel != 1,
+            proxyType = pType,
             proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 3) 7891 else 7890
+            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (sel == 3) 7891 else 7890
         )
     }
 
@@ -369,8 +372,8 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun handleDryRun() {
-        if (isDryRunning || isSyncing || isTesting) return
-        isDryRunning = true
+        if (!SyncSession.lock.compareAndSet(false, true)) return
+        val taskId = SyncSession.currentTaskId.incrementAndGet()
         btnDryRun.text = "检查中..."
         btnDryRun.isEnabled = false
         btnPerformSync.isEnabled = false
@@ -381,9 +384,16 @@ class SettingsActivity : AppCompatActivity() {
             val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during dry run")) {
                 settingsRepository.performSyncDryRun(currentSyncConfig)
             }
-            if (isDestroyed || isFinishing) return@Thread
+            if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
+                SyncSession.lock.set(false)
+                return@Thread
+            }
             runOnUiThread {
-                isDryRunning = false
+                if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
+                    SyncSession.lock.set(false)
+                    return@runOnUiThread
+                }
+                SyncSession.lock.set(false)
                 btnDryRun.text = "检查同步计划"
                 btnDryRun.isEnabled = true
                 btnPerformSync.isEnabled = true
@@ -408,29 +418,33 @@ class SettingsActivity : AppCompatActivity() {
     }
 
 
-    private var isTesting = false
     private fun handleTestConnection() {
-        if (isTesting || isDryRunning || isSyncing) return
-        isTesting = true
+        if (!SyncSession.lock.compareAndSet(false, true)) return
+        val taskId = SyncSession.currentTaskId.incrementAndGet()
         btnTestConnection.text = "检查中..."
         btnTestConnection.isEnabled = false
         btnDryRun.isEnabled = false
         btnPerformSync.isEnabled = false
-        btnTestConnection.isEnabled = false
         saveCurrentState()
 
         Thread {
             val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during diagnostic run")) {
                 settingsRepository.performSyncDiagnostics(currentSyncConfig)
             }
-            if (isDestroyed || isFinishing) return@Thread
+            if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
+                SyncSession.lock.set(false)
+                return@Thread
+            }
             runOnUiThread {
-                isTesting = false
+                if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
+                    SyncSession.lock.set(false)
+                    return@runOnUiThread
+                }
+                SyncSession.lock.set(false)
                 btnTestConnection.text = getString(R.string.btn_test_connection)
                 btnTestConnection.isEnabled = true
                 btnDryRun.isEnabled = true
                 btnPerformSync.isEnabled = true
-                btnTestConnection.isEnabled = true
                 when (result) {
                     is NativeResult.Success -> {
                         val diag = result.data
@@ -445,7 +459,6 @@ class SettingsActivity : AppCompatActivity() {
                                 }
                             }
 
-                            // Android permission status
                             msgBuilder.append("=== 权限状态 ===\n")
                             msgBuilder.append("INTERNET 权限: ${if (diag.androidHasInternetPermission) "已授予" else "缺失"}\n")
                             msgBuilder.append("网络状态权限: ${if (diag.androidHasAccessNetworkStatePermission) "已授予" else "缺失"}\n")
@@ -458,7 +471,6 @@ class SettingsActivity : AppCompatActivity() {
                                 }
                             }\n\n")
 
-                            // If INTERNET permission is missing, stop here
                             if (!diag.androidHasInternetPermission) {
                                 msgBuilder.append("\n${diag.userMessage}")
                                 AlertDialog.Builder(this@SettingsActivity)
@@ -528,12 +540,9 @@ class SettingsActivity : AppCompatActivity() {
         }.start()
     }
 
-    private var isSyncing = false
-    private var isDryRunning = false
-
     private fun handlePerformSync() {
-        if (isSyncing || isDryRunning || isTesting) return
-        isSyncing = true
+        if (!SyncSession.lock.compareAndSet(false, true)) return
+        val taskId = SyncSession.currentTaskId.incrementAndGet()
         btnPerformSync.text = "同步中..."
         btnPerformSync.isEnabled = false
         btnDryRun.isEnabled = false
@@ -541,7 +550,7 @@ class SettingsActivity : AppCompatActivity() {
         saveCurrentState()
 
         if (currentSyncSecrets.token.isNullOrEmpty()) {
-            isSyncing = false
+            SyncSession.lock.set(false)
             btnPerformSync.text = "立即同步"
             btnPerformSync.isEnabled = true
             btnDryRun.isEnabled = true
@@ -554,9 +563,16 @@ class SettingsActivity : AppCompatActivity() {
             val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during sync")) {
                 settingsRepository.performSync(currentSyncConfig)
             }
-            if (isDestroyed || isFinishing) return@Thread
+            if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
+                SyncSession.lock.set(false)
+                return@Thread
+            }
             runOnUiThread {
-                isSyncing = false
+                if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
+                    SyncSession.lock.set(false)
+                    return@runOnUiThread
+                }
+                SyncSession.lock.set(false)
                 btnPerformSync.text = "立即同步"
                 btnPerformSync.isEnabled = true
                 btnDryRun.isEnabled = true
@@ -722,6 +738,14 @@ class SettingsActivity : AppCompatActivity() {
 
 
         // Save Sync Config
+        val sel = spinnerProxyType.selectedItemPosition
+        val pType = when (sel) {
+            0 -> "auto"
+            1 -> "none"
+            2 -> "http"
+            3 -> "socks5"
+            else -> "auto"
+        }
         val newSyncConfig = currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             backendType = com.xiwei.writerapp.model.BackendType.GithubApi,
@@ -730,16 +754,10 @@ class SettingsActivity : AppCompatActivity() {
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
             syncIntervalSeconds = sbSyncInterval.value.toInt(),
-            proxyEnabled = spinnerProxyType.selectedItemPosition >= 1,
-            proxyType = when (spinnerProxyType.selectedItemPosition) {
-                0 -> "none"
-                1 -> "auto"
-                2 -> "http"
-                3 -> "socks5"
-                else -> "none"
-            },
+            proxyEnabled = sel != 1,
+            proxyType = pType,
             proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (spinnerProxyType.selectedItemPosition == 3) 7891 else 7890
+            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (sel == 3) 7891 else 7890
         )
 
         val tokenInput = etHttpsToken.text?.toString() ?: ""

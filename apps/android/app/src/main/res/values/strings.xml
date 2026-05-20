@@ -90,7 +90,7 @@
     <string name="pref_proxy_type">代理类型</string>
     <string name="pref_proxy_host">代理主机</string>
     <string name="pref_proxy_port">代理端口</string>
-    <string name="pref_proxy_hint">提示: 如果手机已经用 Clash/VPN 全局代理，通常先选择“不使用手动代理”测试。127.0.0.1 指手机本机，不是电脑。HTTP 代理端口必须由代理 App 在手机本机开放。</string>
+    <string name="pref_proxy_hint">推荐自动检测，软件会先尝试系统网络/VPN/TUN，再尝试手机本机 Clash 常用端口（7890/7891）。若自动检测无结果会显示完整探测摘要。</string>
     <string name="sync_error_proxy_unavailable">代理不可用或端口不通，请检查配置。</string>
     <string name="token_configured">Token 已配置</string>
     <string name="token_input_active">Token 已输入，保存/测试时会使用</string>
@@ -124,8 +124,8 @@
     <string name="action_more_chapter">章节更多操作</string>
 
     <string-array name="proxy_types">
-        <item>关闭</item>
-        <item>自动</item>
+        <item>自动检测（推荐）</item>
+        <item>关闭 / 强制直连</item>
         <item>HTTP</item>
         <item>SOCKS5（实验）</item>
     </string-array>
