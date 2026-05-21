@@ -14,7 +14,7 @@ ApplicationWindow {
     title: "Writer"
     color: theme.bg
 
-    // ── Design System ──────────────────────────────────────────────
+    // ── Design System ──────────────────────────────────────────
 
     QtObject {
         id: theme
@@ -78,7 +78,7 @@ ApplicationWindow {
         }
     }
 
-    // ── Backend ────────────────────────────────────────────────────
+    // ── Backend ───────────────────────────────────────────────
 
     AppBackend {
         id: backend
@@ -100,17 +100,16 @@ ApplicationWindow {
 
     Connections {
         target: backend
-        function onSettings_changed() {
-            theme.apply(backend.setting_theme_mode)
-        }
+        function onSettings_changed() { theme.apply(backend.setting_theme_mode) }
     }
 
-    // ── State ──────────────────────────────────────────────────────
+    // ── State ─────────────────────────────────────────────────
 
     property bool loadingChapter: false
     property int sidebarWidth: 260
+    property string navSection: "tree"
 
-    // ── Functions ──────────────────────────────────────────────────
+    // ── Functions ─────────────────────────────────────────────
 
     function saveCurrentIfNeeded() {
         if (backend.save_status === "未保存" && backend.has_selected_chapter() && backend.selected_chapter_exists()) {
@@ -126,8 +125,7 @@ ApplicationWindow {
         for (let i = 0; i < items.length; i++) {
             let item = items[i]
             treeModel.append({
-                "title": item.title,
-                "id": item.id,
+                "title": item.title, "id": item.id,
                 "projectId": item.projectId || "",
                 "volumeId": item.volumeId || "",
                 "type": item.type
@@ -156,71 +154,39 @@ ApplicationWindow {
         return true
     }
 
-    // ── Dialogs ────────────────────────────────────────────────────
+    // ── Dialogs ───────────────────────────────────────────────
 
     Popup {
         id: inputDialog
         property string actionType: ""
         property var contextData: ({})
-
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: 340
-        height: 160
-        modal: true
-        focus: true
+        width: 340; height: 160
+        modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: theme.surface; radius: theme.radiusMd; border.color: theme.border; border.width: 1 }
 
-        onOpened: {
-            inputField.text = contextData.initialText || ""
-            inputField.forceActiveFocus()
-        }
+        onOpened: { inputField.text = contextData.initialText || ""; inputField.forceActiveFocus() }
 
         ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: theme.sp16
-            spacing: theme.sp12
-
-            Label {
-                text: "请输入名称"
-                font.pixelSize: theme.fontLg
-                font.weight: Font.DemiBold
-                color: theme.text
-            }
-
+            anchors.fill: parent; anchors.margins: theme.sp16; spacing: theme.sp12
+            Label { text: "请输入名称"; font.pixelSize: theme.fontLg; font.weight: Font.DemiBold; color: theme.text }
             TextField {
-                id: inputField
-                Layout.fillWidth: true
-                color: theme.text
+                id: inputField; Layout.fillWidth: true; color: theme.text
                 background: Rectangle {
-                    color: theme.surfaceAlt
-                    border.color: inputField.activeFocus ? theme.borderFocus : theme.border
-                    border.width: 1
-                    radius: theme.radiusSm
+                    color: theme.surfaceAlt; border.color: inputField.activeFocus ? theme.borderFocus : theme.border
+                    border.width: 1; radius: theme.radiusSm
                 }
-                font.pixelSize: theme.fontMd
-                leftPadding: theme.sp8
-                topPadding: theme.sp8
-                bottomPadding: theme.sp8
+                font.pixelSize: theme.fontMd; leftPadding: theme.sp8; topPadding: theme.sp8; bottomPadding: theme.sp8
             }
-
             RowLayout {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignRight
-                spacing: theme.sp8
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: theme.sp8
                 Item { Layout.fillWidth: true }
                 Button {
-                    text: "取消"
-                    flat: true
-                    onClicked: inputDialog.close()
-                    contentItem: Text {
-                        text: parent.text; color: theme.textDim; font.pixelSize: theme.fontMd
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm
-                    }
+                    text: "取消"; flat: true; onClicked: inputDialog.close()
+                    contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
                 Button {
@@ -234,13 +200,8 @@ ApplicationWindow {
                         else if (actionType === "rename_chapter") backend.rename_chapter(contextData.projectId, contextData.volumeId, contextData.id, inputField.text)
                         inputDialog.close()
                     }
-                    contentItem: Text {
-                        text: parent.text; color: theme.primaryText; font.pixelSize: theme.fontMd
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
-                    background: Rectangle {
-                        color: parent.hovered ? theme.primaryHover : theme.primary; radius: theme.radiusSm
-                    }
+                    contentItem: Text { text: parent.text; color: theme.primaryText; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? theme.primaryHover : theme.primary; radius: theme.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
             }
@@ -251,41 +212,18 @@ ApplicationWindow {
         id: errorDialog
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: 420
-        height: 180
-        modal: true
-        focus: true
+        width: 420; height: 180
+        modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: theme.surface; radius: theme.radiusMd; border.color: theme.border; border.width: 1 }
-
         ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: theme.sp16
-            spacing: theme.sp12
-
-            Label {
-                text: "错误"
-                font.pixelSize: theme.fontXl
-                font.weight: Font.DemiBold
-                color: theme.danger
-            }
-            Label {
-                text: backend.error_message
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                wrapMode: Text.Wrap
-                color: theme.text
-                font.pixelSize: theme.fontMd
-            }
+            anchors.fill: parent; anchors.margins: theme.sp16; spacing: theme.sp12
+            Label { text: "错误"; font.pixelSize: theme.fontXl; font.weight: Font.DemiBold; color: theme.danger }
+            Label { text: backend.error_message; Layout.fillWidth: true; Layout.fillHeight: true; wrapMode: Text.Wrap; color: theme.text; font.pixelSize: theme.fontMd }
             Button {
-                text: "确定"
-                Layout.alignment: Qt.AlignRight
-                onClicked: errorDialog.close()
-                contentItem: Text {
-                    text: parent.text; color: theme.primaryText; font.pixelSize: theme.fontMd
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle { color: theme.primary; radius: theme.radiusSm; }
+                text: "确定"; Layout.alignment: Qt.AlignRight; onClicked: errorDialog.close()
+                contentItem: Text { text: parent.text; color: theme.primaryText; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                background: Rectangle { color: theme.primary; radius: theme.radiusSm }
                 implicitWidth: 64; implicitHeight: 32
             }
         }
@@ -295,44 +233,22 @@ ApplicationWindow {
         id: confirmDialog
         property string actionType: ""
         property var contextData: ({})
-
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: 340
-        height: 160
-        modal: true
-        focus: true
+        width: 340; height: 160
+        modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: theme.surface; radius: theme.radiusMd; border.color: theme.border; border.width: 1 }
-
         ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: theme.sp16
-            spacing: theme.sp12
-
-            Label {
-                text: "确认删除"
-                font.pixelSize: theme.fontXl
-                font.weight: Font.DemiBold
-                color: theme.danger
-            }
-            Label {
-                text: "您确定要删除此项目吗？此操作不可撤销。"
-                color: theme.text; font.pixelSize: theme.fontMd; wrapMode: Text.Wrap
-            }
+            anchors.fill: parent; anchors.margins: theme.sp16; spacing: theme.sp12
+            Label { text: "确认删除"; font.pixelSize: theme.fontXl; font.weight: Font.DemiBold; color: theme.danger }
+            Label { text: "您确定要删除此项目吗？此操作不可撤销。"; color: theme.text; font.pixelSize: theme.fontMd; wrapMode: Text.Wrap }
             RowLayout {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignRight
-                spacing: theme.sp8
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: theme.sp8
                 Item { Layout.fillWidth: true }
                 Button {
-                    text: "取消"
-                    flat: true
-                    onClicked: confirmDialog.close()
-                    contentItem: Text {
-                        text: parent.text; color: theme.textDim; font.pixelSize: theme.fontMd
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
+                    text: "取消"; flat: true; onClicked: confirmDialog.close()
+                    contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
@@ -344,18 +260,13 @@ ApplicationWindow {
                         else if (actionType === "delete_chapter") backend.delete_chapter(contextData.projectId, contextData.volumeId, contextData.id)
                         confirmDialog.close()
                     }
-                    contentItem: Text {
-                        text: parent.text; color: "#ffffff"; font.pixelSize: theme.fontMd
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                    }
+                    contentItem: Text { text: parent.text; color: "#ffffff"; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     background: Rectangle { color: parent.hovered ? theme.dangerHover : theme.danger; radius: theme.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
             }
         }
     }
-
-    // ── Settings Dialog ────────────────────────────────────────────
 
     SettingsDialog {
         id: settingsDialog
@@ -364,13 +275,13 @@ ApplicationWindow {
         theme: theme
     }
 
-    // ── Models ─────────────────────────────────────────────────────
+    // ── Models ────────────────────────────────────────────────
 
     ListModel { id: treeModel }
 
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
     //  TOP BAR
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
 
     header: Rectangle {
         height: 48
@@ -382,41 +293,28 @@ ApplicationWindow {
             anchors.rightMargin: theme.sp8
             spacing: theme.sp4
 
-            // Brand + project name
             Label {
                 text: "Writer"
-                font.pixelSize: theme.fontXl
-                font.weight: Font.Bold
-                color: theme.primary
+                font.pixelSize: theme.fontXl; font.weight: Font.Bold; color: theme.primary
                 Layout.preferredWidth: 80
             }
 
-            Rectangle {
-                width: 1; height: 24; color: theme.divider
-                Layout.leftMargin: theme.sp4; Layout.rightMargin: theme.sp4
-            }
+            Rectangle { width: 1; height: 24; color: theme.divider; Layout.leftMargin: 4; Layout.rightMargin: 4 }
 
             Label {
                 text: {
                     let ws = backend.workspace_path
-                    if (ws.length > 0) {
-                        let parts = ws.split("/")
-                        return parts[parts.length - 1]
-                    }
+                    if (ws.length > 0) { let parts = ws.split("/"); return parts[parts.length - 1] }
                     return "未打开工作区"
                 }
-                font.pixelSize: theme.fontMd
-                color: theme.textDim
-                Layout.fillWidth: true
-                elide: Text.ElideRight
+                font.pixelSize: theme.fontMd; color: theme.textDim
+                Layout.fillWidth: true; elide: Text.ElideRight
             }
 
-            // Action buttons
             Item { Layout.fillWidth: true }
 
-            PrimaryActionButton {
-                text: "新建作品"
-                tooltip: "创建新作品"
+            AppButton {
+                text: "新建作品"; theme: theme
                 onClicked: {
                     inputDialog.actionType = "create_project"
                     inputDialog.contextData = { initialText: "新作品" }
@@ -424,45 +322,23 @@ ApplicationWindow {
                 }
             }
 
-            PrimaryActionButton {
-                text: "保存"
-                tooltip: "保存当前章节 (Ctrl+S)"
+            AppButton {
+                text: "保存"; theme: theme
                 enabled: backend.has_selected_chapter_prop
                 onClicked: backend.save_current_chapter(editorPage.text)
             }
 
-            HeaderButton {
-                text: "设置"
-                tooltip: "打开设置"
-                onClicked: settingsDialog.open()
-            }
+            ToolbarButton { text: "设置"; theme: theme; onClicked: settingsDialog.open() }
+            ToolbarButton { text: "同步"; theme: theme; onClicked: { settingsDialog.switchToCategory(2); settingsDialog.open() } }
+            ToolbarButton { text: "调试"; theme: theme; onClicked: { settingsDialog.switchToCategory(4); settingsDialog.open() } }
 
-            HeaderButton {
-                text: "同步"
-                tooltip: "同步设置"
-                onClicked: {
-                    settingsDialog.switchToCategory(2)
-                    settingsDialog.open()
-                }
-            }
-
-            HeaderButton {
-                text: "调试"
-                tooltip: "Action 调试"
-                onClicked: {
-                    settingsDialog.switchToCategory(4)
-                    settingsDialog.open()
-                }
-            }
-
-            // Window controls placeholder (for Qt decoration)
             Item { width: theme.sp8 }
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
     //  CONTENT
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
 
     RowLayout {
         anchors.top: window.header.bottom
@@ -471,7 +347,7 @@ ApplicationWindow {
         anchors.right: parent.right
         spacing: 0
 
-        // ── Left Sidebar ───────────────────────────────────────────
+        // ── Left Sidebar ────────────────────────────────────────
 
         Rectangle {
             id: sidebar
@@ -489,107 +365,64 @@ ApplicationWindow {
                 anchors.fill: parent
                 spacing: 0
 
-                // Sidebar header
                 Rectangle {
-                    Layout.fillWidth: true
-                    height: 40
-                    color: theme.sidebarAlt
-
+                    Layout.fillWidth: true; height: 40; color: theme.sidebarAlt
                     RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: theme.sp12
-                        anchors.rightMargin: theme.sp8
-                        spacing: theme.sp4
-
+                        anchors.fill: parent; anchors.leftMargin: theme.sp12; anchors.rightMargin: theme.sp8; spacing: theme.sp4
                         Label {
-                            text: "导航"
-                            font.pixelSize: theme.fontSm
-                            font.weight: Font.DemiBold
-                            color: theme.textDim
+                            text: "导航"; font.pixelSize: theme.fontSm; font.weight: Font.DemiBold; color: theme.textDim
                             Layout.fillWidth: true
                         }
-
                         Button {
-                            text: "☰"
-                            implicitWidth: 28; implicitHeight: 28
+                            text: "☰"; implicitWidth: 28; implicitHeight: 28
                             onClicked: sidebarVisible = !sidebarVisible
-                            contentItem: Text {
-                                text: parent.text; color: theme.textDim; font.pixelSize: theme.fontLg
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                            }
+                            contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontLg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
                         }
                     }
                 }
 
-                // Nav tabs
-                SidebarNavItem { text: "作品"; icon: "📁"; active: navSection === "tree"; onClicked: navSection = "tree" }
-                SidebarNavItem { text: "设置"; icon: "⚙"; active: navSection === "settings"; onClicked: { navSection = "settings"; settingsDialog.open() } }
-                SidebarNavItem { text: "同步"; icon: "🔄"; active: navSection === "sync"; onClicked: { navSection = "sync"; settingsDialog.switchToCategory(2); settingsDialog.open() } }
-                SidebarNavItem { text: "调试"; icon: "🐛"; active: navSection === "debug"; onClicked: { navSection = "debug"; settingsDialog.switchToCategory(4); settingsDialog.open() } }
+                SidebarItem { text: "作品"; icon: "📁"; active: navSection === "tree"; onClicked: navSection = "tree"; theme: theme }
+                SidebarItem { text: "设置"; icon: "⚙"; active: navSection === "settings"; onClicked: { navSection = "settings"; settingsDialog.open() }; theme: theme }
+                SidebarItem { text: "同步"; icon: "🔄"; active: navSection === "sync"; onClicked: { navSection = "sync"; settingsDialog.switchToCategory(2); settingsDialog.open() }; theme: theme }
+                SidebarItem { text: "调试"; icon: "🐛"; active: navSection === "debug"; onClicked: { navSection = "debug"; settingsDialog.switchToCategory(4); settingsDialog.open() }; theme: theme }
 
                 Rectangle { height: 1; color: theme.divider; Layout.fillWidth: true; Layout.leftMargin: theme.sp12; Layout.rightMargin: theme.sp12 }
 
-                // Tree view
                 Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: "transparent"
-
+                    Layout.fillWidth: true; Layout.fillHeight: true; color: "transparent"
                     ListView {
                         id: treeView
-                        anchors.fill: parent
-                        anchors.topMargin: theme.sp4
-                        model: treeModel
-                        clip: true
-                        ScrollBar.vertical: ScrollBar {
-                            parent: treeView.parent
-                            anchors.top: treeView.top
-                            anchors.bottom: treeView.bottom
-                            anchors.right: treeView.right
-                        }
+                        anchors.fill: parent; anchors.topMargin: theme.sp4
+                        model: treeModel; clip: true
+                        ScrollBar.vertical: ScrollBar { parent: treeView.parent; anchors.top: treeView.top; anchors.bottom: treeView.bottom; anchors.right: treeView.right }
 
                         Text {
                             anchors.centerIn: parent
-                            text: "未选择作品"
-                            color: theme.textDim
-                            font.pixelSize: theme.fontMd
+                            text: "未选择作品"; color: theme.textDim; font.pixelSize: theme.fontMd
                             visible: treeModel.count === 0
                         }
 
                         delegate: Item {
-                            width: ListView.view.width
-                            height: 32
-
+                            width: ListView.view.width; height: 32
                             Rectangle {
-                                anchors.fill: parent
-                                anchors.leftMargin: theme.sp4
-                                anchors.rightMargin: theme.sp4
-                                radius: theme.radiusSm
-                                color: treeView.currentIndex === index ? theme.selected : "transparent"
+                                anchors.fill: parent; anchors.leftMargin: theme.sp4; anchors.rightMargin: theme.sp4
+                                radius: theme.radiusSm; color: treeView.currentIndex === index ? theme.selected : "transparent"
 
                                 MouseArea {
                                     anchors.fill: parent
                                     onClicked: {
                                         treeView.currentIndex = index
                                         let node = treeModel.get(index)
-                                        saveCurrentIfNeeded()
-                                        loadingChapter = true
+                                        saveCurrentIfNeeded(); loadingChapter = true
                                         if (node.type === "project") {
-                                            backend.select_project(node.id)
-                                            editorPage.clearText()
-                                            backend.save_status = "已保存"
+                                            backend.select_project(node.id); editorPage.clearText(); backend.save_status = "已保存"
                                         } else if (node.type === "volume") {
-                                            backend.select_volume(node.projectId, node.id)
-                                            editorPage.clearText()
-                                            backend.save_status = "已保存"
+                                            backend.select_volume(node.projectId, node.id); editorPage.clearText(); backend.save_status = "已保存"
                                         } else if (node.type === "chapter") {
                                             backend.select_chapter(node.projectId, node.volumeId, node.id)
-                                            editorPage.loadContent(
-                                                backend.get_chapter_content(node.projectId, node.volumeId, node.id)
-                                            )
-                                            backend.save_status = "已保存"
-                                            editorPage.forceEditorFocus()
+                                            editorPage.loadContent(backend.get_chapter_content(node.projectId, node.volumeId, node.id))
+                                            backend.save_status = "已保存"; editorPage.forceEditorFocus()
                                         }
                                         loadingChapter = false
                                     }
@@ -598,38 +431,23 @@ ApplicationWindow {
                                 RowLayout {
                                     anchors.fill: parent
                                     anchors.leftMargin: model.type === "project" ? theme.sp8 : model.type === "volume" ? theme.sp24 : theme.sp40
-                                    anchors.rightMargin: theme.sp4
-                                    spacing: theme.sp4
+                                    anchors.rightMargin: theme.sp4; spacing: theme.sp4
 
                                     Text {
-                                        text: {
-                                            if (model.type === "project") return "📁"
-                                            if (model.type === "volume") return "📂"
-                                            return "📄"
-                                        }
+                                        text: model.type === "project" ? "📁" : model.type === "volume" ? "📂" : "📄"
                                         font.pixelSize: theme.fontSm
                                     }
-
                                     Text {
                                         text: model.title
                                         color: treeView.currentIndex === index ? theme.selectedText : theme.text
-                                        font.pixelSize: theme.fontMd
-                                        Layout.fillWidth: true
-                                        elide: Text.ElideRight
-                                        clip: true
+                                        font.pixelSize: theme.fontMd; Layout.fillWidth: true; elide: Text.ElideRight; clip: true
                                     }
-
                                     Button {
                                         visible: treeView.currentIndex === index
-                                        text: "⋮"
-                                        implicitWidth: 24; implicitHeight: 24
+                                        text: "⋮"; implicitWidth: 24; implicitHeight: 24
                                         onClicked: contextMenu.open()
-                                        contentItem: Text {
-                                            text: parent.text; color: theme.textDim; font.pixelSize: theme.fontLg
-                                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                                        }
+                                        contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontLg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                         background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
-
                                         Menu {
                                             id: contextMenu
                                             MenuItem {
@@ -647,41 +465,19 @@ ApplicationWindow {
                                                     }
                                                 }
                                             }
+                                            MenuItem { text: "重命名"; onTriggered: { inputDialog.actionType = "rename_" + model.type; inputDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId, initialText: model.title.trim() }; inputDialog.open() } }
+                                            MenuItem { text: "删除"; onTriggered: { confirmDialog.actionType = "delete_" + model.type; confirmDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId }; confirmDialog.open() } }
                                             MenuItem {
-                                                text: "重命名"
-                                                onTriggered: {
-                                                    inputDialog.actionType = "rename_" + model.type
-                                                    inputDialog.contextData = {
-                                                        id: model.id, projectId: model.projectId,
-                                                        volumeId: model.volumeId, initialText: model.title.trim()
-                                                    }
-                                                    inputDialog.open()
-                                                }
-                                            }
-                                            MenuItem {
-                                                text: "删除"
-                                                onTriggered: {
-                                                    confirmDialog.actionType = "delete_" + model.type
-                                                    confirmDialog.contextData = {
-                                                        id: model.id, projectId: model.projectId, volumeId: model.volumeId
-                                                    }
-                                                    confirmDialog.open()
-                                                }
-                                            }
-                                            MenuItem {
-                                                text: "上移"
-                                                visible: !isFirstSibling(index)
+                                                text: "上移"; visible: !isFirstSibling(index)
                                                 onTriggered: {
                                                     let ids = []; let my_pos = -1
                                                     for (let i = 0; i < treeModel.count; i++) {
                                                         let n = treeModel.get(i)
                                                         if (n.type === model.type && n.projectId === model.projectId && n.volumeId === model.volumeId) {
-                                                            if (n.id === model.id) my_pos = ids.length
-                                                            ids.push(n.id)
+                                                            if (n.id === model.id) my_pos = ids.length; ids.push(n.id)
                                                         }
                                                     }
-                                                    if (my_pos > 0) {
-                                                        let t = ids[my_pos]; ids[my_pos] = ids[my_pos - 1]; ids[my_pos - 1] = t
+                                                    if (my_pos > 0) { let t = ids[my_pos]; ids[my_pos] = ids[my_pos - 1]; ids[my_pos - 1] = t
                                                         if (model.type === "project") backend.reorder_projects(ids.join(","))
                                                         else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","))
                                                         else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","))
@@ -689,19 +485,16 @@ ApplicationWindow {
                                                 }
                                             }
                                             MenuItem {
-                                                text: "下移"
-                                                visible: !isLastSibling(index)
+                                                text: "下移"; visible: !isLastSibling(index)
                                                 onTriggered: {
                                                     let ids = []; let my_pos = -1
                                                     for (let i = 0; i < treeModel.count; i++) {
                                                         let n = treeModel.get(i)
                                                         if (n.type === model.type && n.projectId === model.projectId && n.volumeId === model.volumeId) {
-                                                            if (n.id === model.id) my_pos = ids.length
-                                                            ids.push(n.id)
+                                                            if (n.id === model.id) my_pos = ids.length; ids.push(n.id)
                                                         }
                                                     }
-                                                    if (my_pos < ids.length - 1) {
-                                                        let t = ids[my_pos]; ids[my_pos] = ids[my_pos + 1]; ids[my_pos + 1] = t
+                                                    if (my_pos < ids.length - 1) { let t = ids[my_pos]; ids[my_pos] = ids[my_pos + 1]; ids[my_pos + 1] = t
                                                         if (model.type === "project") backend.reorder_projects(ids.join(","))
                                                         else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","))
                                                         else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","))
@@ -718,215 +511,69 @@ ApplicationWindow {
             }
         }
 
-        // Sidebar collapse handle
+        // Sidebar resize handle
         Rectangle {
             id: sidebarHandle
-            Layout.preferredWidth: 4
-            Layout.fillHeight: true
-            color: theme.divider
-            cursorShape: Qt.SizeHorCursor
-
+            Layout.preferredWidth: 4; Layout.fillHeight: true
+            color: theme.divider; cursorShape: Qt.SizeHorCursor
             MouseArea {
-                anchors.fill: parent
-                anchors.leftMargin: -2
-                anchors.rightMargin: -2
-                cursorShape: Qt.SizeHorCursor
+                anchors.fill: parent; anchors.leftMargin: -2; anchors.rightMargin: -2; cursorShape: Qt.SizeHorCursor
                 onPressed: { sidebarDrag.startX = mouseX; sidebarDrag.origWidth = sidebarWidth }
-                onPositionChanged: {
-                    if (pressed) {
-                        let delta = mouseX - sidebarDrag.startX
-                        let newWidth = sidebarDrag.origWidth + delta
-                        sidebarWidth = Math.max(160, Math.min(400, newWidth))
-                    }
-                }
-                property real startX: 0
-                property int origWidth: 260
+                onPositionChanged: { if (pressed) { let delta = mouseX - sidebarDrag.startX; sidebarWidth = Math.max(160, Math.min(400, sidebarDrag.origWidth + delta)) } }
+                property real startX: 0; property int origWidth: 260
             }
         }
 
-        // ── Editor Area ────────────────────────────────────────────
+        // ── Editor Area ─────────────────────────────────────────
 
         EditorPage {
             id: editorPage
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            backendRef: backend
-            theme: theme
+            Layout.fillWidth: true; Layout.fillHeight: true
+            backendRef: backend; theme: theme
             onContentChanged: {
                 backend.calculate_word_count(text)
                 if (backend.setting_auto_save_enabled) {
                     autoSaveTimer.interval = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500
                     autoSaveTimer.restart()
                 }
-                if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存") {
+                if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存")
                     backend.save_status = "未保存"
-                }
-                if (!loadingChapter && backend.has_selected_chapter_prop) {
+                if (!loadingChapter && backend.has_selected_chapter_prop)
                     autoSaveTimer.restart()
-                }
             }
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
     //  FOOTER
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
 
     footer: Rectangle {
-        height: 28
-        color: theme.footerBg
-
+        height: 28; color: theme.footerBg
         RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: theme.sp12
-            anchors.rightMargin: theme.sp12
-            spacing: theme.sp16
+            anchors.fill: parent; anchors.leftMargin: theme.sp12; anchors.rightMargin: theme.sp12; spacing: theme.sp16
 
-            Rectangle {
-                width: 8; height: 8; radius: 4
-                color: backend.save_status === "已保存" || backend.save_status === "未选择章节" ? theme.success : theme.warning
+            StatusPill {
+                theme: theme
+                pillColor: backend.save_status === "已保存" || backend.save_status === "未选择章节" ? (theme ? theme.success : "#22c55e") : (theme ? theme.warning : "#f59e0b")
             }
 
-            Label {
-                text: backend.save_status
-                color: theme.textDim
-                font.pixelSize: theme.fontXs
-            }
-
+            Label { text: backend.save_status; color: theme.textDim; font.pixelSize: theme.fontXs }
             Rectangle { width: 1; height: 14; color: theme.divider }
-
-            Label {
-                text: "字数: " + backend.word_count
-                color: theme.textDim
-                font.pixelSize: theme.fontXs
-            }
-
+            Label { text: "字数: " + backend.word_count; color: theme.textDim; font.pixelSize: theme.fontXs }
             Item { Layout.fillWidth: true }
-
-            Label {
-                text: backend.chapter_path
-                color: theme.textDim
-                font.pixelSize: theme.fontXs
-                elide: Text.ElideRight
-                Layout.maximumWidth: 300
-                clip: true
-            }
-
-            Label {
-                text: backend.workspace_path
-                color: theme.textDim
-                font.pixelSize: theme.fontXs
-                elide: Text.ElideRight
-                Layout.maximumWidth: 250
-                clip: true
-            }
+            Label { text: backend.chapter_path; color: theme.textDim; font.pixelSize: theme.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 300; clip: true }
+            Label { text: backend.workspace_path; color: theme.textDim; font.pixelSize: theme.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 250; clip: true }
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
     //  Auto-save Timer
-    // ═════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════
 
     Timer {
         id: autoSaveTimer
-        interval: 1500
-        repeat: false
-        onTriggered: {
-            if (backend.save_status === "未保存") {
-                backend.save_current_chapter(editorPage.text)
-            }
-        }
-    }
-
-    // ── State ──────────────────────────────────────────────────────
-
-    property string navSection: "tree"
-
-    // ── Reusable Components (inline) ──────────────────────────────
-
-    component PrimaryActionButton: Button {
-        id: paBtn
-        implicitHeight: 32
-        implicitWidth: Math.max(textMetrics.width + 24, 56)
-        TextMetrics { id: textMetrics; text: paBtn.text; font.pixelSize: theme.fontSm }
-
-        contentItem: Text {
-            text: paBtn.text; color: theme.primaryText; font.pixelSize: theme.fontSm
-            font.weight: Font.Medium
-            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            color: paBtn.enabled ? (paBtn.hovered ? theme.primaryHover : theme.primary) : theme.border
-            radius: theme.radiusSm
-        }
-        ToolTip.visible: ma.containsMouse
-        ToolTip.text: tooltip
-        ToolTip.delay: 600
-        MouseArea { id: ma; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; acceptedButtons: Qt.NoButton }
-    }
-
-    component HeaderButton: Button {
-        id: hbBtn
-        flat: true
-        implicitHeight: 32
-        implicitWidth: Math.max(textMetrics2.width + 20, 48)
-        TextMetrics { id: textMetrics2; text: hbBtn.text; font.pixelSize: theme.fontSm }
-
-        contentItem: Text {
-            text: hbBtn.text; color: hbBtn.hovered ? theme.primary : theme.textDim; font.pixelSize: theme.fontSm
-            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            color: hbBtn.hovered ? theme.hover : "transparent"
-            radius: theme.radiusSm
-        }
-        ToolTip.visible: ma2.containsMouse
-        ToolTip.text: tooltip
-        ToolTip.delay: 600
-        MouseArea { id: ma2; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; acceptedButtons: Qt.NoButton }
-    }
-
-    component SidebarNavItem: Item {
-        id: sbnItem
-        property string text: ""
-        property string icon: ""
-        property bool active: false
-        signal clicked()
-
-        height: 36
-        Layout.fillWidth: true
-
-        Rectangle {
-            anchors.fill: parent
-            anchors.leftMargin: theme.sp8
-            anchors.rightMargin: theme.sp8
-            radius: theme.radiusSm
-            color: sbnItem.active ? theme.selected : (ma3.containsMouse ? theme.hover : "transparent")
-        }
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: theme.sp12
-            anchors.rightMargin: theme.sp8
-            spacing: theme.sp8
-
-            Text {
-                text: sbnItem.icon; font.pixelSize: theme.fontMd
-                Layout.preferredWidth: 20; horizontalAlignment: Text.AlignHCenter
-            }
-            Text {
-                text: sbnItem.text; color: sbnItem.active ? theme.selectedText : theme.text
-                font.pixelSize: theme.fontMd; font.weight: sbnItem.active ? Font.Medium : Font.Normal
-                Layout.fillWidth: true; elide: Text.ElideRight
-            }
-        }
-
-        MouseArea {
-            id: ma3
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: sbnItem.clicked()
-        }
+        interval: 1500; repeat: false
+        onTriggered: { if (backend.save_status === "未保存") backend.save_current_chapter(editorPage.text) }
     }
 }

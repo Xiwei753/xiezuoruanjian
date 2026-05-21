@@ -8,10 +8,21 @@ use std::rc::Rc;
 use writer_core::facade::WriterCore;
 
 qmetaobject::qrc!(qml_resources, "/" {
+    // Pages
     "qml/main.qml" as "main.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
     "qml/EditorPage.qml" as "EditorPage.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
+    "qml/SyncPage.qml" as "SyncPage.qml",
+    // Components
+    "qml/AppButton.qml" as "AppButton.qml",
+    "qml/AppCard.qml" as "AppCard.qml",
+    "qml/AppTextField.qml" as "AppTextField.qml",
+    "qml/SectionHeader.qml" as "SectionHeader.qml",
+    "qml/SettingsRow.qml" as "SettingsRow.qml",
+    "qml/SidebarItem.qml" as "SidebarItem.qml",
+    "qml/StatusPill.qml" as "StatusPill.qml",
+    "qml/ToolbarButton.qml" as "ToolbarButton.qml",
 });
 
 #[allow(dead_code)]
