@@ -1,7 +1,7 @@
-import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
-import QtQuick.Window
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+import QtQuick.Window 2.15
 import WriterApp 1.0
 
 ApplicationWindow {
@@ -133,7 +133,7 @@ ApplicationWindow {
                 theme: theme
                 selectedId: ""
                 
-                onItemActivated: (type, projectId, volumeId, chapterId) => {
+                onItemActivated: function(type, projectId, volumeId, chapterId) {
                     var stateStr = backend.select_tree_item_json(type, projectId, volumeId, chapterId);
                     var res = JSON.parse(stateStr);
                     if (res.success) {
@@ -141,14 +141,14 @@ ApplicationWindow {
                     }
                 }
                 
-                onCreateVolume: (projectId) => {
+                onCreateVolume: function(projectId) {
                     inputDialog.actionType = "volume";
                     inputDialog.projectId = projectId;
                     inputDialog.title = "新建卷";
                     inputDialog.open();
                 }
                 
-                onCreateChapter: (projectId, volumeId) => {
+                onCreateChapter: function(projectId, volumeId) {
                     inputDialog.actionType = "chapter";
                     inputDialog.projectId = projectId;
                     inputDialog.volumeId = volumeId;
@@ -248,7 +248,7 @@ ApplicationWindow {
     CreateProjectDialog {
         id: createProjectDialog
         theme: theme
-        onAccepted: (title) => {
+        onAccepted: function(title) {
             var stateStr = backend.create_project_json(title);
             var res = JSON.parse(stateStr);
             if (res.success) {

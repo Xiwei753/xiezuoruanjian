@@ -1,6 +1,6 @@
-import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
 
 Rectangle {
     id: root
@@ -110,7 +110,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
-                    onClicked: (mouse) => {
+                    onClicked: function(mouse) {
                         if (mouse.button === Qt.LeftButton) {
                             root.itemActivated(delegateRect.itemData.type, delegateRect.itemData.projectIdForAction, delegateRect.itemData.volumeIdForAction, delegateRect.itemData.chapterIdForAction);
                         } else if (mouse.button === Qt.RightButton) {
