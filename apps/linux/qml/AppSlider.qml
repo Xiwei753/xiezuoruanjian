@@ -1,12 +1,12 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
 
 Slider {
     id: control
     property var theme: null
 
-    Layout.fillWidth: true
-    Layout.preferredHeight: 28
+    implicitHeight: 28
 
     background: Rectangle {
         x: control.leftPadding

@@ -93,7 +93,7 @@ ScrollView {
     Component.onCompleted: loadForm()
 
     ColumnLayout {
-        width: 560
+        width: Math.min(560, parent ? parent.width - 8 : 540)
         spacing: root.appTheme ? root.appTheme.sp16 : 16
 
         // GitHub Init section
@@ -343,22 +343,12 @@ ScrollView {
                     color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                     font.weight: Font.Medium
                 }
-                TextField {
+                AppTextField {
                     id: tokenInput
-                    Layout.fillWidth: true; implicitHeight: 32
+                    theme: root.appTheme; Layout.fillWidth: true
+                    label: ""
+                    placeholder: root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
                     echoMode: TextInput.Password
-                    placeholderText: root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
-                    color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
-                    background: Rectangle {
-                        color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
-                        border.color: parent.activeFocus
-                            ? (root.appTheme ? root.appTheme.borderFocus : "#3b82f6")
-                            : (root.appTheme ? root.appTheme.border : "#e2e8f0")
-                        border.width: 1
-                        radius: root.appTheme ? root.appTheme.radiusSm : 6
-                    }
-                    font.pixelSize: root.appTheme ? root.appTheme.fontMd : 13
-                    leftPadding: 8; topPadding: 6; bottomPadding: 6
                 }
                 Label {
                     text: root.hasExistingToken ? "Token 已配置" : "Token 未配置，同步将无法进行"
@@ -405,6 +395,7 @@ ScrollView {
                         }
                         font.pixelSize: root.appTheme ? root.appTheme.fontMd : 13
                         leftPadding: 8; topPadding: 6; bottomPadding: 6
+                        implicitWidth: 100
                     }
                 }
             }
@@ -456,7 +447,7 @@ ScrollView {
                     }
                     TextField {
                         id: proxyHostInput
-                        Layout.preferredWidth: 120; implicitHeight: 28
+                        Layout.preferredWidth: 120
                         placeholderText: "127.0.0.1"
                         color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                         background: Rectangle {
@@ -469,6 +460,7 @@ ScrollView {
                         }
                         font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                         leftPadding: 6; topPadding: 4; bottomPadding: 4
+                        implicitHeight: 28; implicitWidth: 120
                     }
                     Label {
                         text: "Port:"
@@ -477,7 +469,7 @@ ScrollView {
                     }
                     TextField {
                         id: proxyPortInput
-                        Layout.preferredWidth: 80; implicitHeight: 28
+                        Layout.preferredWidth: 80
                         validator: IntValidator { bottom: 0; top: 65535 }
                         color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                         background: Rectangle {
@@ -490,6 +482,7 @@ ScrollView {
                         }
                         font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                         leftPadding: 6; topPadding: 4; bottomPadding: 4
+                        implicitHeight: 28; implicitWidth: 80
                     }
                 }
             }

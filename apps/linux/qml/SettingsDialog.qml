@@ -66,10 +66,11 @@ Popup {
 
                 // Tab 0: Editor
                 ScrollView {
+                    id: editorScroll
                     clip: true
                     ColumnLayout {
-                        width: 560; spacing: root.appTheme ? root.appTheme.sp16 : 16
-                        Layout.alignment: Qt.AlignTop
+                        width: Math.min(560, parent ? parent.width - 8 : 540)
+                        spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "编辑" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true
                             SettingsRow {
@@ -109,11 +110,11 @@ Popup {
                                         font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                                         color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                                     }
-                                    Slider {
+                                    AppSlider {
                                         id: autoIndentWidthSlider
                                         from: 0; to: 800; value: backendRef && backendRef.setting_auto_indent_width > 0 ? backendRef.setting_auto_indent_width * 100 : 200; stepSize: 50
+                                        theme: root.appTheme
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 28
                                     }
                                     Label {
                                         text: (autoIndentWidthSlider.value / 100).toFixed(1) + " 字符"
@@ -145,11 +146,11 @@ Popup {
                                         font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                                         color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                                     }
-                                    Slider {
+                                    AppSlider {
                                         id: autoSaveDelaySlider
                                         from: 500; to: 60000; value: backendRef && backendRef.setting_auto_save_delay_ms > 0 ? backendRef.setting_auto_save_delay_ms : 1500; stepSize: 500
+                                        theme: root.appTheme
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 28
                                     }
                                     Label {
                                         text: autoSaveDelaySlider.value.toFixed(0) + " ms"
@@ -208,8 +209,8 @@ Popup {
                 ScrollView {
                     clip: true
                     ColumnLayout {
-                        width: 560; spacing: root.appTheme ? root.appTheme.sp16 : 16
-                        Layout.alignment: Qt.AlignTop
+                        width: Math.min(560, parent ? parent.width - 8 : 540)
+                        spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "界面" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true
                             SettingsRow {
@@ -254,8 +255,8 @@ Popup {
                 ScrollView {
                     clip: true
                     ColumnLayout {
-                        width: 560; spacing: root.appTheme ? root.appTheme.sp16 : 16
-                        Layout.alignment: Qt.AlignTop
+                        width: Math.min(560, parent ? parent.width - 8 : 540)
+                        spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "输入动效" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true
                             SettingsRow {

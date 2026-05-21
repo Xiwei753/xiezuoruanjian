@@ -237,11 +237,12 @@ ApplicationWindow {
         property string actionType: ""
         property var contextData: ({})
         property string dialogErrorMessage: ""
+        property string dialogDiagnosticsJson: ""
         property bool dialogProcessing: false
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: 380
-        implicitHeight: 220
+        width: 420
+        implicitHeight: 280
         modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
@@ -249,9 +250,103 @@ ApplicationWindow {
         onOpened: {
             inputField.text = contextData.initialText || ""
             inputDialog.dialogErrorMessage = ""
+            inputDialog.dialogDiagnosticsJson = ""
             inputDialog.dialogProcessing = false
             inputField.forceActiveFocus()
         }
+
+        ColumnLayout {
+            id: contentCol
+            anchors.fill: parent; anchors.margins: tokens.sp16; spacing: tokens.sp12
+            Label { text: "请输入名称"; font.pixelSize: tokens.fontLg; font.weight: Font.DemiBold; color: tokens.textPrimary }
+            TextField {
+                id: inputField; Layout.fillWidth: true; color: tokens.textPrimary
+                background: Rectangle {
+                    color: tokens.surfaceAlt; border.color: inputField.activeFocus ? tokens.borderFocus : tokens.border
+                    border.width: 1; radius: tokens.radiusSm
+                }
+                font.pixelSize: tokens.fontMd; leftPadding: tokens.sp8; topPadding: tokens.sp8; bottomPadding: tokens.sp8
+                onAccepted: confirmButton.clicked()
+            }
+            Label {
+                text: inputDialog.dialogErrorMessage
+                visible: inputDialog.dialogErrorMessage.length > 0
+                color: tokens.danger
+                font.pixelSize: tokens.fontSm
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            RowLayout {
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: tokens.sp8
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "复制诊断"
+                    visible: inputDialog.dialogDiagnosticsJson.length > 0
+                    flat: true
+                    onClicked: {
+                        try {
+                            var pretty = JSON.stringify(JSON.parse(inputDialog.dialogDiagnosticsJson), null, 2)
+                            Qt.clipboard.setText(pretty)
+                        } catch(e) {
+                            Qt.clipboard.setText(inputDialog.dialogDiagnosticsJson)
+                        }
+                    }
+                    contentItem: Text { text: parent.text; color: tokens.primary; font.pixelSize: tokens.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
+                    implicitWidth: 64; implicitHeight: 28
+                }
+                Button {
+                    text: "取消"; flat: true; enabled: !inputDialog.dialogProcessing
+                    onClicked: inputDialog.close()
+                    contentItem: Text { text: parent.text; color: tokens.textSecondary; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
+                    implicitWidth: 64; implicitHeight: 32
+                }
+                Button {
+                    id: confirmButton
+                    text: inputDialog.dialogProcessing ? "处理中..." : "确定"
+                    enabled: !inputDialog.dialogProcessing && inputField.text.trim().length > 0
+                    onClicked: {
+                        if (actionType === "create_project") {
+                            var result = backend.create_new_project(inputField.text.trim())
+                            try {
+                                var r = JSON.parse(result)
+                                console.log("[create_project] result:", r.success, r.projectId, r.message)
+                                if (r.success) {
+                                    inputDialog.dialogErrorMessage = ""
+                                    inputDialog.dialogDiagnosticsJson = ""
+                                    inputDialog.close()
+                                } else {
+                                    inputDialog.dialogErrorMessage = r.message || "创建失败"
+                                    inputDialog.dialogDiagnosticsJson = result
+                                }
+                            } catch(e) {
+                                inputDialog.dialogErrorMessage = "解析返回结果失败: " + e
+                            }
+                        } else if (actionType === "create_volume") {
+                            backend.create_new_volume(contextData.projectId, inputField.text.trim())
+                            inputDialog.close()
+                        } else if (actionType === "create_chapter") {
+                            backend.create_new_chapter(contextData.projectId, contextData.volumeId, inputField.text.trim())
+                            inputDialog.close()
+                        } else if (actionType === "rename_project") {
+                            backend.rename_project(contextData.id, inputField.text.trim())
+                            inputDialog.close()
+                        } else if (actionType === "rename_volume") {
+                            backend.rename_volume(contextData.projectId, contextData.id, inputField.text.trim())
+                            inputDialog.close()
+                        } else if (actionType === "rename_chapter") {
+                            backend.rename_chapter(contextData.projectId, contextData.volumeId, contextData.id, inputField.text.trim())
+                            inputDialog.close()
+                        }
+                    }
+                    contentItem: Text { text: parent.text; color: tokens.primaryText; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.primaryHover : tokens.primary; radius: tokens.radiusSm }
+                    implicitWidth: 64; implicitHeight: 32
+                }
+            }
+        }
+    }
 
         ColumnLayout {
             id: contentCol
@@ -806,6 +901,29 @@ ApplicationWindow {
             }
 
             Item { Layout.fillWidth: true }
+            Button {
+                text: "诊断"
+                visible: backend.has_workspace
+                flat: true
+                implicitHeight: 22; implicitWidth: 40
+                font.pixelSize: tokens.fontXs
+                onClicked: {
+                    var diag = backend.get_workspace_diagnostics()
+                    Qt.clipboard.setText(diag)
+                    backend.save_status = "诊断已复制"
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: tokens.primary
+                    font.pixelSize: tokens.fontXs
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    color: parent.hovered ? tokens.hover : "transparent"
+                    radius: tokens.radiusSm
+                }
+            }
             Label { text: backend.chapter_path; color: tokens.textSecondary; font.pixelSize: tokens.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 300; clip: true }
             Label { text: backend.workspace_path; color: tokens.textSecondary; font.pixelSize: tokens.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 250; clip: true }
         }

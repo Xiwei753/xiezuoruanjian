@@ -19,7 +19,7 @@ Item {
     property string valueLabel: ""
 
     implicitWidth: 200
-    implicitHeight: switchLayout.implicitHeight + (control.theme ? control.theme.sp8 : 8)
+    implicitHeight: (control.isSwitch ? switchLayout.implicitHeight : sliderLayout.implicitHeight) + (control.theme ? control.theme.sp8 : 8)
 
     RowLayout {
         id: switchLayout
@@ -98,24 +98,16 @@ Item {
             }
         }
 
-        Slider {
+        AppSlider {
             id: sliderCtrl
             from: control.sliderFrom
             to: control.sliderTo
             value: control.sliderValue
             stepSize: control.sliderStep
+            theme: control.theme
             Layout.fillWidth: true
-            Layout.preferredHeight: 28
             Layout.bottomMargin: 2
             onValueChanged: control.sliderValue = value
-        }
-    }
-
-    onIsSwitchChanged: {
-        if (isSwitch) {
-            control.implicitHeight = switchLayout.implicitHeight + (control.theme ? control.theme.sp8 : 8)
-        } else {
-            control.implicitHeight = sliderLayout.implicitHeight + (control.theme ? control.theme.sp8 : 8)
         }
     }
 }

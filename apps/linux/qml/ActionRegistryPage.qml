@@ -18,7 +18,7 @@ ScrollView {
     property bool smoothCursorCheckChecked: false
 
     ColumnLayout {
-        width: parent ? parent.width : 500
+        width: Math.min(560, parent ? parent.width - 8 : 500)
         spacing: root.appTheme ? root.appTheme.sp12 : 10
 
         // Header
@@ -273,5 +273,89 @@ ScrollView {
                 placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
             }
         }
+
+        // Workspace diagnostics
+        SectionHeader { theme: root.appTheme; text: "工作区诊断" }
+        AppCard { theme: root.appTheme; Layout.fillWidth: true
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: root.appTheme ? root.appTheme.sp8 : 8
+                Label {
+                    text: "获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。"
+                    font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                    color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: root.appTheme ? root.appTheme.sp8 : 8
+                    Button {
+                        text: "获取工作区诊断"
+                        implicitHeight: 32; implicitWidth: 130
+                        onClicked: {
+                            var diag = root.backendRef.get_workspace_diagnostics()
+                            try {
+                                var obj = JSON.parse(diag)
+                                workspaceDiagText.text = JSON.stringify(obj, null, 2)
+                            } catch(e) {
+                                workspaceDiagText.text = "解析诊断失败: " + e
+                            }
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
+                            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa") : (root.appTheme ? root.appTheme.primary : "#3b82f6")
+                            radius: root.appTheme ? root.appTheme.radiusSm : 6
+                        }
+                    }
+                    Button {
+                        text: "复制诊断"
+                        implicitHeight: 32; flat: true
+                        onClicked: {
+                            if (workspaceDiagText.text.length > 0) {
+                                Qt.clipboard.setText(workspaceDiagText.text)
+                            }
+                        }
+                        contentItem: Text {
+                            text: parent.text
+                            color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle {
+                            color: parent.hovered ? (root.appTheme ? root.appTheme.hover : "#f1f5f9") : "transparent"
+                            radius: root.appTheme ? root.appTheme.radiusSm : 6
+                        }
+                    }
+                }
+                TextArea {
+                    id: workspaceDiagText
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 150
+                    readOnly: true
+                    wrapMode: Text.Wrap
+                    font.family: "monospace"
+                    font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
+                    color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
+                    background: Rectangle {
+                        color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
+                        radius: root.appTheme ? root.appTheme.radiusSm : 6
+                        border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                        border.width: 1
+                    }
+                    leftPadding: 8; topPadding: 8; rightPadding: 8; bottomPadding: 8
+                    placeholderText: "点击「获取工作区诊断」查看详情..."
+                    placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                }
+            }
+        }
+        Item { height: root.appTheme ? root.appTheme.sp16 : 16 }
     }
 }
