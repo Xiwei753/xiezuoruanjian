@@ -469,7 +469,7 @@ ScrollView {
                 onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync_diagnostics(); startPollTimer() } else { root.actionInProgress = false } }
             }
             AppButton { theme: root.theme; small: true; text: "同步计划"; enabled: !root.actionInProgress
-                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync_dry_run() } else { root.actionInProgress = false } }
+                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync_dry_run(); startPollTimer() } else { root.actionInProgress = false } }
             }
             AppButton { theme: root.theme; small: true; text: "立即同步"; enabled: !root.actionInProgress
                 onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync(); startPollTimer() } else { root.actionInProgress = false } }

@@ -10,6 +10,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use writer_core::facade::WriterCore;
+use writer_core::sync_service::{SyncConfig, SyncSecrets};
 
 qmetaobject::qrc!(qml_resources, "/" {
     // Pages
@@ -42,15 +43,57 @@ fn mask_sync_error(msg: &str) -> String {
 
 fn sync_error_category(msg: &str) -> String {
     let lower = msg.to_lowercase();
-    if lower.contains("authentication") || lower.contains("auth") || lower.contains("401") || lower.contains("403") || lower.contains("credentials") {
-        "auth_failed".to_string()
-    } else if lower.contains("resolve") || lower.contains("timeout") || lower.contains("connection refused") || lower.contains("dns") || lower.contains("network") || lower.contains("proxy") || lower.contains("eof") {
-        "network_failed".to_string()
-    } else if lower.contains("conflict") || lower.contains("merge") || lower.contains("unrelated") {
-        "conflict".to_string()
-    } else {
-        "error".to_string()
+    // Token missing / not provided
+    if lower.contains("token") && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided")) {
+        return "configured_untested".to_string();
     }
+    // Repository not found or no permission
+    if lower.contains("repository not found") || (lower.contains("not found") && lower.contains("repo")) || lower.contains("404") ||
+       lower.contains("permission denied") || lower.contains("403") {
+        return "auth_failed".to_string();
+    }
+    // Branch not found
+    if lower.contains("ref not found") || lower.contains("couldn't find remote ref") ||
+       (lower.contains("branch") && lower.contains("not found")) {
+        return "configured_untested".to_string();
+    }
+    // Conflict / merge / unrelated histories
+    if lower.contains("conflict") || lower.contains("merge") || lower.contains("unrelated") {
+        return "conflict".to_string();
+    }
+    // Authentication errors
+    if lower.contains("authentication") || lower.contains("auth") || lower.contains("401") ||
+       lower.contains("credentials") || lower.contains("token") {
+        return "auth_failed".to_string();
+    }
+    // Network errors
+    if lower.contains("resolve") || lower.contains("timeout") || lower.contains("connection refused") ||
+       lower.contains("dns") || lower.contains("network") || lower.contains("proxy") ||
+       lower.contains("eof") || lower.contains("tls") || lower.contains("ssl") ||
+       lower.contains("certificate") || lower.contains("unreachable") {
+        return "network_failed".to_string();
+    }
+    "error".to_string()
+}
+
+fn save_sync_configs(path: &str, config: &SyncConfig, secrets: &SyncSecrets) -> Result<(), String> {
+    let core = WriterCore::new(path);
+    core.save_sync_config(config).map_err(|e| format!("保存同步配置失败: {}", e))?;
+    core.save_sync_secrets(secrets).map_err(|e| format!("保存同步凭证失败: {}", e))?;
+    Ok(())
+}
+
+fn try_kreadconfig(cmd: &str) -> Option<String> {
+    let output = std::process::Command::new(cmd)
+        .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
+        .output().ok()?;
+    if output.status.success() {
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+        if value.contains("dark") {
+            return Some("dark".to_string());
+        }
+    }
+    None
 }
 
 #[allow(dead_code)]
@@ -239,6 +282,22 @@ impl AppBackend {
         self.sync_status_changed();
     }
 
+    fn refresh_sync_status_from_config(&mut self) {
+        if !self.current_has_workspace {
+            self.current_sync_status = "not_configured".to_string();
+            self.sync_status_changed();
+            return;
+        }
+        let has_remote = !self.current_sync_remote_url.is_empty();
+        if !has_remote || !self.current_sync_enabled {
+            self.current_sync_status = "not_configured".to_string();
+        } else {
+            // remote_url exists — configured_untested regardless of token state
+            self.current_sync_status = "configured_untested".to_string();
+        }
+        self.sync_status_changed();
+    }
+
     fn system_color_scheme(&self) -> QString {
         self.current_system_color_scheme.clone().into()
     }
@@ -258,45 +317,41 @@ impl AppBackend {
     }
 
     fn detect_system_theme_from_platform() -> String {
-        // Try GNOME gsettings (most common on Linux desktops)
+        // Priority: KDE6 kreadconfig6 > KDE5 kreadconfig5 > GNOME gsettings > GTK_THEME env >
+        //           gsettings gtk-theme > light fallback
+        // Do NOT return "light" early from KDE detection — continue checking other signals first.
+
+        // 1. Try KDE kreadconfig6 (Plasma 6)
+        if let Some("dark") = try_kreadconfig("kreadconfig6").as_deref() {
+            return "dark".to_string();
+        }
+
+        // 2. Try KDE kreadconfig5 (Plasma 5)
+        if let Some("dark") = try_kreadconfig("kreadconfig5").as_deref() {
+            return "dark".to_string();
+        }
+
+        // 3. Try GNOME gsettings color-scheme
         if let Ok(output) = std::process::Command::new("gsettings")
             .args(["get", "org.gnome.desktop.interface", "color-scheme"])
             .output()
         {
             if output.status.success() {
                 let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
-                if value.contains("dark") || value.contains("'prefer-dark'") {
+                if value.contains("dark") {
                     return "dark".to_string();
-                }
-                if value.contains("light") || value.contains("'default'") || value.contains("'prefer-light'") {
-                    return "light".to_string();
                 }
             }
         }
 
-        // Try KDE kreadconfig5
-        if let Ok(output) = std::process::Command::new("kreadconfig5")
-            .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
-            .output()
-        {
-            if output.status.success() {
-                let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
-                if value.contains("dark") || value.contains("breeze dark") {
-                    return "dark".to_string();
-                }
-                // KDE also stores "styleName" which might be "Breeze Dark"
-                return "light".to_string();
-            }
-        }
-
-        // Try reading GTK_THEME env var
+        // 4. Try reading GTK_THEME env var
         if let Ok(theme) = std::env::var("GTK_THEME") {
             if theme.to_lowercase().contains("dark") || theme.to_lowercase().contains("-dark") {
                 return "dark".to_string();
             }
         }
 
-        // Try XDG desktop portal settings
+        // 5. Try gsettings gtk-theme
         if let Ok(output) = std::process::Command::new("gsettings")
             .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
             .output()
@@ -309,7 +364,7 @@ impl AppBackend {
             }
         }
 
-        // Fallback to light
+        // 6. Fallback to light
         "light".to_string()
     }
 
@@ -453,6 +508,7 @@ impl AppBackend {
                     self.current_save_status = "已保存".to_string();
                     self.save_status_changed();
                     self.reload_tree();
+                    self.load_sync_config();
                     self.workspace_opened();
                     self.workspace_state_changed();
                     return;
@@ -460,6 +516,8 @@ impl AppBackend {
             }
         }
         self.current_has_workspace = false;
+        self.current_sync_status = "not_configured".to_string();
+        self.sync_status_changed();
         self.workspace_state_changed();
     }
 
@@ -497,6 +555,7 @@ impl AppBackend {
         self.current_save_status = "已保存".to_string();
         self.save_status_changed();
         self.reload_tree();
+        self.load_sync_config();
         self.workspace_opened();
         self.workspace_state_changed();
 
@@ -623,11 +682,8 @@ impl AppBackend {
             ssh_private_key: None,
         };
 
-        let save_configs = |p: &str, cfg: &SyncConfig, sec: &SyncSecrets| {
-            let core = WriterCore::new(p);
-            let _ = core.save_sync_config(cfg);
-            let _ = core.save_sync_secrets(sec);
-        };
+        let cfg_ref = &config;
+        let sec_ref = &secrets;
 
         if !has_content() {
             // Empty directory - clone remote first
@@ -646,32 +702,56 @@ impl AppBackend {
                             }
                             // Push the newly created workspace files
                             let push_backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
-                            match push_backend.sync(path_obj, &config, &secrets) {
-                                Ok(push_result) => {
-                                    if push_result.status != writer_core::sync_service::SyncStatus::Success {
-                                        let err = push_result.error.unwrap_or_default();
-                                        // Config saved locally, push failed
-                                        save_configs(path, &config, &secrets);
+                            let push_result = push_backend.sync(path_obj, &config, &secrets);
+                            let save_first = match &push_result {
+                                Ok(r) if r.status != writer_core::sync_service::SyncStatus::Success => true,
+                                Err(_) => true,
+                                _ => false,
+                            };
+                            if save_first {
+                                let save_outcome = match save_sync_configs(path, cfg_ref, sec_ref) {
+                                    Ok(()) => None,
+                                    Err(e) => Some(e),
+                                };
+                                match push_result {
+                                    Ok(push_res) => {
+                                        let err = push_res.error.unwrap_or_default();
+                                        if let Some(se) = save_outcome {
+                                            return SyncTaskOutcome {
+                                                sync_status: "error".to_string(),
+                                                action_result: format!("工作区已创建，但推送到远端失败: {}，且同步配置保存失败: {}. 请检查权限/磁盘。", mask_sync_error(&err), se),
+                                            };
+                                        }
                                         return SyncTaskOutcome {
                                             sync_status: sync_error_category(&err),
                                             action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&err)),
                                         };
                                     }
-                                }
-                                Err(e) => {
-                                    save_configs(path, &config, &secrets);
-                                    return SyncTaskOutcome {
-                                        sync_status: sync_error_category(&e.to_string()),
-                                        action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&e.to_string())),
-                                    };
+                                    Err(e) => {
+                                        if let Some(se) = save_outcome {
+                                            return SyncTaskOutcome {
+                                                sync_status: "error".to_string(),
+                                                action_result: format!("工作区已创建，但推送到远端失败: {}，且同步配置保存失败: {}. 请检查权限/磁盘。", mask_sync_error(&e.to_string()), se),
+                                            };
+                                        }
+                                        return SyncTaskOutcome {
+                                            sync_status: sync_error_category(&e.to_string()),
+                                            action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&e.to_string())),
+                                        };
+                                    }
                                 }
                             }
                         }
                         // Save config + secrets to disk
-                        save_configs(path, &config, &secrets);
-                        SyncTaskOutcome {
-                            sync_status: "success".to_string(),
-                            action_result: "克隆并初始化工作区成功".to_string(),
+                        match save_sync_configs(path, cfg_ref, sec_ref) {
+                            Ok(()) => SyncTaskOutcome {
+                                sync_status: "success".to_string(),
+                                action_result: "克隆并初始化工作区成功".to_string(),
+                            },
+                            Err(e) => SyncTaskOutcome {
+                                sync_status: "error".to_string(),
+                                action_result: format!("工作区已创建/同步可能完成，但同步配置保存失败: {}. 请检查权限/磁盘，不要继续同步。", e),
+                            },
                         }
                     } else {
                         let err = result.error.unwrap_or_default();
@@ -692,10 +772,15 @@ impl AppBackend {
             match backend.sync(path_obj, &config, &secrets) {
                 Ok(result) => {
                     if result.status == writer_core::sync_service::SyncStatus::Success {
-                        save_configs(path, &config, &secrets);
-                        SyncTaskOutcome {
-                            sync_status: "success".to_string(),
-                            action_result: "远程仓库已配置并同步成功".to_string(),
+                        match save_sync_configs(path, cfg_ref, sec_ref) {
+                            Ok(()) => SyncTaskOutcome {
+                                sync_status: "success".to_string(),
+                                action_result: "远程仓库已配置并同步成功".to_string(),
+                            },
+                            Err(e) => SyncTaskOutcome {
+                                sync_status: "error".to_string(),
+                                action_result: format!("同步成功但配置保存失败: {}. 请检查权限/磁盘，不要继续同步。", e),
+                            },
                         }
                     } else if result.status == writer_core::sync_service::SyncStatus::Conflict {
                         SyncTaskOutcome {
@@ -907,9 +992,17 @@ impl AppBackend {
 
 
     fn load_sync_config(&mut self) {
-        if let Some(core_ref) = &self.core {
-            let core = core_ref.borrow();
-            if let Ok(config) = core.load_sync_config() {
+        if self.core.is_some() {
+            // Extract config data without holding Ref borrow, then update self
+            let (config_opt, token_opt) = {
+                let core_ref = self.core.as_ref().unwrap();
+                let core = core_ref.borrow();
+                let cfg = core.load_sync_config().ok();
+                let sec = core.load_sync_secrets().ok();
+                let t = sec.and_then(|s| s.token);
+                (cfg, t)
+            };
+            if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
                 self.current_sync_backend_type = match config.backend_type {
                     writer_core::sync_service::BackendType::Git => "git".to_string(),
@@ -927,14 +1020,17 @@ impl AppBackend {
                 self.current_sync_proxy_host = config.proxy_host.clone();
                 self.current_sync_proxy_port = config.proxy_port;
                 self.current_sync_username = config.username.clone();
+            } else {
+                self.current_sync_enabled = false;
+                self.current_sync_remote_url = "".to_string();
+                self.current_sync_token = "".to_string();
             }
-            if let Ok(secrets) = core.load_sync_secrets() {
-                if let Some(t) = secrets.token {
-                    self.current_sync_token = t;
-                } else {
-                    self.current_sync_token = "".to_string();
-                }
+            if let Some(t) = token_opt {
+                self.current_sync_token = t;
+            } else {
+                self.current_sync_token = "".to_string();
             }
+            self.refresh_sync_status_from_config();
             self.sync_config_changed();
         }
     }
@@ -1013,46 +1109,71 @@ impl AppBackend {
             return false;
         }
 
+        self.refresh_sync_status_from_config();
         self.current_sync_action_result = "配置保存成功".to_string();
         self.sync_action_completed();
         true
     }
 
     fn perform_sync_dry_run(&mut self) {
-        if let Some(core_ref) = &self.core {
-            let core = core_ref.borrow();
-            if let Ok(config) = core.load_sync_config() {
-                match core.perform_sync_dry_run(&config) {
-                    Ok(plan) => {
-                        let mut msg = String::new();
-                        msg.push_str("同步计划检查完成\n");
-                        msg.push_str(&format!("需要上传的文件数: {}\n", plan.files_to_upload.len()));
-                        msg.push_str(&format!("需要下载的文件数: {}\n", plan.files_to_download.len()));
-                        msg.push_str(&format!("本地待删除的文件数: {}\n", plan.files_to_delete_local.len()));
-                        msg.push_str(&format!("远程待删除的文件数: {}\n", plan.files_to_delete_remote.len()));
-
-                        if !plan.files_to_upload.is_empty() {
-                            msg.push_str("\n将要上传的文件:\n");
-                            for f in plan.files_to_upload.iter().take(10) {
-                                msg.push_str(&format!("  - {}\n", f));
-                            }
-                            if plan.files_to_upload.len() > 10 {
-                                msg.push_str("  ... 更多文件省略\n");
-                            }
-                        }
-                        self.current_sync_action_result = msg;
-                        self.sync_action_completed();
-                    }
-                    Err(e) => {
-                        self.current_sync_action_result = format!("检查同步计划失败: {}", e);
-                        self.sync_action_completed();
-                    }
-                }
-            } else {
-                self.current_sync_action_result = "无法加载同步配置，请先保存配置。".to_string();
-                self.sync_action_completed();
-            }
+        let workspace_path = self.current_workspace.clone();
+        if workspace_path.is_empty() {
+            self.current_sync_action_result = "请先打开工作区".to_string();
+            self.sync_action_completed();
+            return;
         }
+
+        self.current_sync_status = "syncing".to_string();
+        self.sync_status_changed();
+        self.current_sync_action_result = "正在检查同步计划...".to_string();
+
+        let (tx, rx) = mpsc::channel();
+        self.sync_task_rx = Some(rx);
+
+        thread::spawn(move || {
+            let core = WriterCore::new(&workspace_path);
+            let config = match core.load_sync_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    tx.send(SyncTaskOutcome {
+                        sync_status: "configured_untested".to_string(),
+                        action_result: format!("无法加载同步配置: {}", e),
+                    }).ok();
+                    return;
+                }
+            };
+
+            match core.perform_sync_dry_run(&config) {
+                Ok(plan) => {
+                    let mut msg = String::new();
+                    msg.push_str("同步计划检查完成\n");
+                    msg.push_str(&format!("需要上传的文件数: {}\n", plan.files_to_upload.len()));
+                    msg.push_str(&format!("需要下载的文件数: {}\n", plan.files_to_download.len()));
+                    msg.push_str(&format!("本地待删除的文件数: {}\n", plan.files_to_delete_local.len()));
+                    msg.push_str(&format!("远程待删除的文件数: {}\n", plan.files_to_delete_remote.len()));
+
+                    if !plan.files_to_upload.is_empty() {
+                        msg.push_str("\n将要上传的文件:\n");
+                        for f in plan.files_to_upload.iter().take(10) {
+                            msg.push_str(&format!("  - {}\n", f));
+                        }
+                        if plan.files_to_upload.len() > 10 {
+                            msg.push_str("  ... 更多文件省略\n");
+                        }
+                    }
+                    tx.send(SyncTaskOutcome {
+                        sync_status: "configured_untested".to_string(),
+                        action_result: msg,
+                    }).ok();
+                }
+                Err(e) => {
+                    tx.send(SyncTaskOutcome {
+                        sync_status: "configured_untested".to_string(),
+                        action_result: format!("检查同步计划失败: {}", mask_sync_error(&e.to_string())),
+                    }).ok();
+                }
+            }
+        });
     }
 
     fn perform_sync(&mut self) {
