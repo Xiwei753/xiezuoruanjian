@@ -87,10 +87,21 @@ ApplicationWindow {
         }
 
         function applySystemTheme() {
-            var scheme = Qt.styleHints ? Qt.styleHints.colorScheme : undefined
-            if (scheme === Qt.styleHints.ColorScheme.Light) mode = "light"
-            else if (scheme === Qt.styleHints.ColorScheme.Dark) mode = "dark"
-            else mode = "dark"
+            var sh = Qt.styleHints
+            if (sh !== undefined && sh.colorScheme !== undefined) {
+                try {
+                    if (sh.colorScheme === Qt.styleHints.ColorScheme.Dark) {
+                        mode = "dark"
+                        return
+                    }
+                } catch(e) {}
+            }
+            var sysColorScheme = backend ? backend.system_color_scheme : ""
+            if (sysColorScheme === "dark") {
+                mode = "dark"
+            } else {
+                mode = "light"
+            }
         }
     }
 
@@ -315,9 +326,11 @@ ApplicationWindow {
     header: Rectangle {
         height: 48
         color: tokens.topbarBg
-        border.color: tokens.border
-        border.width: 1
-        border.bottom: false
+
+        Rectangle {
+            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+            height: 1; color: tokens.border
+        }
 
         RowLayout {
             anchors.fill: parent
@@ -387,7 +400,12 @@ ApplicationWindow {
             backendRef: backend
             onCreateWorkspace: backend.create_new_workspace()
             onOpenWorkspace: backend.open_existing_workspace()
-            onInitFromGithub: backend.init_workspace_from_github()
+            onInitFromGithub: {
+                // Open sync settings so user can configure remote/branch/token/proxy
+                // and see the "初始化/克隆" button
+                settingsDialog.switchToCategory(2)
+                settingsDialog.open()
+            }
         }
 
         // Page 1: Main Workspace View
@@ -402,9 +420,6 @@ ApplicationWindow {
                 Layout.maximumWidth: sidebarVisible ? sidebarWidth : 0
                 Layout.minimumWidth: sidebarVisible ? sidebarWidth : 0
                 color: tokens.sidebarBg
-                border.color: tokens.border
-                border.width: 1
-                border.right: false
                 clip: true
 
                 Behavior on Layout.preferredWidth { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
@@ -660,9 +675,12 @@ ApplicationWindow {
 
     footer: Rectangle {
         height: 28; color: tokens.footerBg
-        border.color: tokens.border
-        border.width: 1
-        border.top: false
+
+        Rectangle {
+            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+            height: 1; color: tokens.border
+        }
+
         RowLayout {
             anchors.fill: parent; anchors.leftMargin: tokens.sp12; anchors.rightMargin: tokens.sp12; spacing: tokens.sp16
 

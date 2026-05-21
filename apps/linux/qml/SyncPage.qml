@@ -42,34 +42,49 @@ ScrollView {
         tokenInput.text = ""
         tokenInput.placeholderText = root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
         syncResultLabel.text = root.backendRef.sync_action_result
-        updateSyncStatus()
     }
 
-    function updateSyncStatus() {
-        var config = {
-            enabled: syncEnabledCheck.checked,
-            remoteUrl: remoteUrlInput.text,
-            branch: branchInput.text,
-            hasToken: root.hasExistingToken
-        }
-
-        if (!config.enabled) {
-            root.backendRef.sync_status = "not_configured"
-        } else if (!config.remoteUrl) {
-            root.backendRef.sync_status = "not_configured"
-        } else if (!config.hasToken) {
-            root.backendRef.sync_status = "configured_untested"
-        } else {
-            root.backendRef.sync_status = "configured_untested"
-        }
+    function startPollTimer() {
+        pollTimer.start()
     }
 
     Connections {
         target: root.backendRef
         function onSync_action_completed() {
             syncResultLabel.text = root.backendRef.sync_action_result
-            root.actionInProgress = false
+            if (!pollTimer.running) {
+                root.actionInProgress = false
+            }
         }
+        function onSync_status_changed() {
+            // Keep the status card updated
+        }
+    }
+
+    Timer {
+        id: pollTimer
+        interval: 300
+        repeat: true
+        onTriggered: {
+            if (root.backendRef) {
+                root.backendRef.poll_sync_result()
+                syncResultLabel.text = root.backendRef.sync_action_result
+                if (root.backendRef.sync_status !== "syncing") {
+                    pollTimer.stop()
+                    root.actionInProgress = false
+                }
+            }
+        }
+    }
+
+    property bool githubInitMode: false
+    property string githubInitPath: ""
+
+    function startGithubInit() {
+        // Called from EmptyWorkspace - prepare for init flow
+        root.githubInitMode = true
+        root.githubInitPath = ""
+        // User selects directory
     }
 
     Component.onCompleted: loadForm()
@@ -77,6 +92,118 @@ ScrollView {
     ColumnLayout {
         width: Math.min(parent.width, 560)
         spacing: root.theme ? root.theme.sp16 : 16
+
+        // GitHub Init section (visible when no workspace open)
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: root.theme ? root.theme.sp12 : 12
+            visible: !root.backendRef || !root.backendRef.has_workspace
+
+            AppCard {
+                theme: root.theme; Layout.fillWidth: true
+                ColumnLayout {
+                    Layout.fillWidth: true; spacing: root.theme ? root.theme.sp8 : 8
+                    Label {
+                        text: "从 GitHub 初始化工作区"
+                        font.pixelSize: root.theme ? root.theme.fontXl : 18
+                        font.weight: Font.Bold; color: root.theme ? root.theme.text : "#e2e8f0"
+                    }
+                    Label {
+                        text: "选择本地空目录，配置远程仓库地址后克隆或初始化。"
+                        font.pixelSize: root.theme ? root.theme.fontSm : 12
+                        color: root.theme ? root.theme.textDim : "#94a3b8"
+                        wrapMode: Text.Wrap; Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: root.theme ? root.theme.sp8 : 8
+                        Label {
+                            text: "目录:"
+                            font.pixelSize: root.theme ? root.theme.fontMd : 13
+                            color: root.theme ? root.theme.text : "#e2e8f0"
+                        }
+                        Label {
+                            text: root.backendRef && root.backendRef.pending_github_init_path
+                                  ? root.backendRef.pending_github_init_path
+                                  : "未选择"
+                            font.pixelSize: root.theme ? root.theme.fontMd : 13
+                            color: root.backendRef && root.backendRef.pending_github_init_path
+                                   ? (root.theme ? root.theme.text : "#e2e8f0")
+                                   : (root.theme ? root.theme.textDim : "#94a3b8")
+                            Layout.fillWidth: true; elide: Text.ElideRight
+                        }
+                    }
+                    AppButton {
+                        theme: root.theme; small: true; text: "选择目录"
+                        onClicked: {
+                            root.backendRef.init_workspace_from_github()
+                        }
+                    }
+
+                    AppTextField {
+                        theme: root.theme; Layout.fillWidth: true
+                        label: "远程仓库地址"
+                        placeholder: "https://github.com/user/repo.git"
+                        id: initUrlInput
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: root.theme ? root.theme.sp8 : 8
+                        AppTextField {
+                            theme: root.theme; Layout.fillWidth: true
+                            label: "分支"
+                            placeholder: "main"
+                            id: initBranchInput
+                        }
+                        AppTextField {
+                            theme: root.theme; Layout.fillWidth: true
+                            label: "Token (GitHub PAT)"
+                            placeholder: "输入 Token"
+                            id: initTokenInput
+                            echoMode: TextInput.Password
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; spacing: root.theme ? root.theme.sp8 : 8
+                        AppTextField {
+                            theme: root.theme; Layout.fillWidth: true
+                            label: "代理主机 (可选)"
+                            placeholder: "127.0.0.1"
+                            id: initProxyHostInput
+                        }
+                        AppTextField {
+                            theme: root.theme; Layout.preferredWidth: 100
+                            label: "端口"
+                            placeholder: "7890"
+                            id: initProxyPortInput
+                            validator: IntValidator { bottom: 0; top: 65535 }
+                        }
+                    }
+
+                    AppButton {
+                        theme: root.theme; text: "初始化/克隆"
+                        enabled: !root.actionInProgress && root.backendRef && root.backendRef.pending_github_init_path.length > 0
+                        onClicked: {
+                            root.actionInProgress = true
+                            root.backendRef.execute_github_init(
+                                root.backendRef.pending_github_init_path,
+                                initUrlInput.text,
+                                initBranchInput.text,
+                                initTokenInput.text,
+                                initProxyHostInput.text.length > 0 ? "http" : "none",
+                                initProxyHostInput.text,
+                                parseInt(initProxyPortInput.text) || 0
+                            )
+                            startPollTimer()
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true; height: 1
+                color: root.theme ? root.theme.divider : "#334155"
+            }
+        }
 
         // Sync status card
         AppCard {
@@ -336,16 +463,16 @@ ScrollView {
             Layout.fillWidth: true
             spacing: root.theme ? root.theme.sp8 : 8
             AppButton { theme: root.theme; small: true; text: "保存配置"; enabled: !root.actionInProgress
-                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; updateSyncStatus(); if (!root.backendRef.save_sync_config()) { root.actionInProgress = false } }
+                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (!root.backendRef.save_sync_config()) { root.actionInProgress = false } }
             }
             AppButton { theme: root.theme; small: true; text: "测试连接"; enabled: !root.actionInProgress
-                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync_diagnostics() } else { root.actionInProgress = false } }
+                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync_diagnostics(); startPollTimer() } else { root.actionInProgress = false } }
             }
             AppButton { theme: root.theme; small: true; text: "同步计划"; enabled: !root.actionInProgress
                 onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync_dry_run() } else { root.actionInProgress = false } }
             }
             AppButton { theme: root.theme; small: true; text: "立即同步"; enabled: !root.actionInProgress
-                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync() } else { root.actionInProgress = false } }
+                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync(); startPollTimer() } else { root.actionInProgress = false } }
             }
         }
 

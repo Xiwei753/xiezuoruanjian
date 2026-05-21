@@ -6,6 +6,8 @@ use std::cell::RefCell;
 use std::ffi::CStr;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
 use writer_core::facade::WriterCore;
 
@@ -28,6 +30,28 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StatusPill.qml" as "StatusPill.qml",
     "qml/ToolbarButton.qml" as "ToolbarButton.qml",
 });
+
+struct SyncTaskOutcome {
+    sync_status: String,
+    action_result: String,
+}
+
+fn mask_sync_error(msg: &str) -> String {
+    writer_core::sync_service::mask_token(msg)
+}
+
+fn sync_error_category(msg: &str) -> String {
+    let lower = msg.to_lowercase();
+    if lower.contains("authentication") || lower.contains("auth") || lower.contains("401") || lower.contains("403") || lower.contains("credentials") {
+        "auth_failed".to_string()
+    } else if lower.contains("resolve") || lower.contains("timeout") || lower.contains("connection refused") || lower.contains("dns") || lower.contains("network") || lower.contains("proxy") || lower.contains("eof") {
+        "network_failed".to_string()
+    } else if lower.contains("conflict") || lower.contains("merge") || lower.contains("unrelated") {
+        "conflict".to_string()
+    } else {
+        "error".to_string()
+    }
+}
 
 #[allow(dead_code)]
 #[derive(QObject, Default)]
@@ -85,6 +109,9 @@ struct AppBackend {
 
     settings_changed: qt_signal!(),
 
+    system_color_scheme: qt_property!(QString; READ system_color_scheme NOTIFY system_color_scheme_changed),
+    system_color_scheme_changed: qt_signal!(),
+
     load_local_settings: qt_method!(fn(&mut self)),
     save_local_settings: qt_method!(fn(&mut self) -> bool),
     perform_sync_diagnostics: qt_method!(fn(&mut self)),
@@ -98,6 +125,11 @@ struct AppBackend {
     create_new_workspace: qt_method!(fn(&mut self)),
     open_existing_workspace: qt_method!(fn(&mut self)),
     init_workspace_from_github: qt_method!(fn(&mut self)),
+    pending_github_init_path: qt_property!(QString; READ pending_github_init_path NOTIFY pending_github_init_path_changed),
+    pending_github_init_path_changed: qt_signal!(),
+    execute_github_init: qt_method!(fn(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16)),
+    poll_sync_result: qt_method!(fn(&mut self)),
+    query_system_color_scheme: qt_method!(fn(&mut self)),
 
     create_new_project: qt_method!(fn(&mut self, title: QString)),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
@@ -177,6 +209,10 @@ struct AppBackend {
     current_sync_action_result: String,
     current_sync_status: String,
 
+    current_system_color_scheme: String,
+    current_pending_github_init_path: String,
+    sync_task_rx: Option<Receiver<SyncTaskOutcome>>,
+
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
     current_setting_auto_save_enabled: bool,
@@ -200,6 +236,22 @@ impl AppBackend {
     fn set_sync_status(&mut self, val: QString) {
         self.current_sync_status = val.to_string();
         self.sync_status_changed();
+    }
+
+    fn system_color_scheme(&self) -> QString {
+        self.current_system_color_scheme.clone().into()
+    }
+
+    fn pending_github_init_path(&self) -> QString {
+        self.current_pending_github_init_path.clone().into()
+    }
+
+    fn query_system_color_scheme(&mut self) {
+        // QML-side handles detection via Qt.styleHints.colorScheme when available
+        // (Qt 6.5+). On Qt 5 / early Qt 6, styleHints is unavailable and we mark
+        // it unknown so QML defaults to light mode.
+        self.current_system_color_scheme = "unknown".to_string();
+        self.system_color_scheme_changed();
     }
 
     fn sync_enabled(&self) -> bool {
@@ -406,7 +458,204 @@ impl AppBackend {
 
     fn init_workspace_from_github(&mut self) {
         if let Some(path) = FileDialog::new().pick_folder() {
-            self.internal_open_workspace(&path.to_string_lossy(), true);
+            self.current_pending_github_init_path = path.to_string_lossy().to_string();
+            self.pending_github_init_path_changed();
+        }
+    }
+
+    fn execute_github_init(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16) {
+        let path_str = path.to_string();
+        let path_obj = std::path::Path::new(&path_str);
+        if !path_obj.exists() || !path_obj.is_dir() {
+            self.set_error("所选目录不存在或不是目录");
+            self.current_sync_action_result = "所选目录不存在或不是目录".to_string();
+            self.sync_action_completed();
+            return;
+        }
+
+        let remote_url_str = remote_url.to_string();
+        if remote_url_str.is_empty() {
+            self.set_error("远程仓库地址不能为空");
+            self.current_sync_action_result = "远程仓库地址不能为空".to_string();
+            self.sync_action_completed();
+            return;
+        }
+
+        let branch_str = if branch.to_string().is_empty() { "main".to_string() } else { branch.to_string() };
+        let token_str = token.to_string();
+        let proxy_type_str = proxy_type.to_string();
+        let proxy_host_str = proxy_host.to_string();
+        let proxy_port_val = proxy_port;
+
+        self.current_sync_status = "syncing".to_string();
+        self.sync_status_changed();
+        self.current_sync_action_result = "正在初始化...".to_string();
+
+        let (tx, rx) = mpsc::channel();
+        self.sync_task_rx = Some(rx);
+
+        thread::spawn(move || {
+            let result = Self::do_github_init(
+                &path_str, &remote_url_str, &branch_str, &token_str,
+                &proxy_type_str, &proxy_host_str, proxy_port_val,
+            );
+            tx.send(result).ok();
+        });
+    }
+
+    fn do_github_init(
+        path: &str,
+        remote_url: &str,
+        branch: &str,
+        token: &str,
+        proxy_type: &str,
+        proxy_host: &str,
+        proxy_port: u16,
+    ) -> SyncTaskOutcome {
+        use writer_core::sync_service::{sanitize_remote_url, SyncConfig, BackendType, SyncSecrets};
+
+        let parsed = sanitize_remote_url(remote_url);
+        let sanitized_url = parsed.sanitized_url;
+
+        let path_obj = std::path::Path::new(path);
+
+        let has_content = || -> bool {
+            if let Ok(mut entries) = std::fs::read_dir(path_obj) {
+                entries.next().is_some()
+            } else {
+                false
+            }
+        };
+
+        let has_workspace = || -> bool {
+            let core = WriterCore::new(path);
+            core.validate_workspace().unwrap_or(false)
+        };
+
+        let is_git_repo = || -> bool {
+            path_obj.join(".git").exists()
+        };
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::Git,
+            remote_url: sanitized_url.clone(),
+            transport: writer_core::sync_service::SyncTransport::HttpsToken,
+            branch: branch.to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            proxy_enabled: !proxy_type.is_empty() && proxy_type != "none" && !proxy_host.is_empty() && proxy_port > 0,
+            proxy_type: proxy_type.to_string(),
+            proxy_host: proxy_host.to_string(),
+            proxy_port,
+            username: parsed.extracted_username.clone().unwrap_or_default(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let secrets = SyncSecrets {
+            token: if token.is_empty() { parsed.extracted_token.clone() } else { Some(token.to_string()) },
+            ssh_private_key: None,
+        };
+
+        if !has_content() {
+            // Empty directory - use perform_sync which handles clone for empty dirs
+            let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
+            match backend.sync(path_obj, &config, &secrets) {
+                Ok(result) => {
+                    if result.status == writer_core::sync_service::SyncStatus::Success {
+                        // Make sure workspace is valid
+                        let core = WriterCore::new(path);
+                        if !core.validate_workspace().unwrap_or(false) {
+                            if let Err(e) = core.create_workspace() {
+                                return SyncTaskOutcome {
+                                    sync_status: "error".to_string(),
+                                    action_result: format!("克隆成功但工作区初始化失败: {}", e),
+                                };
+                            }
+                        }
+                        SyncTaskOutcome {
+                            sync_status: "success".to_string(),
+                            action_result: "克隆并初始化工作区成功".to_string(),
+                        }
+                    } else {
+                        let err = result.error.unwrap_or_default();
+                        SyncTaskOutcome {
+                            sync_status: sync_error_category(&err),
+                            action_result: format!("克隆失败: {}", mask_sync_error(&err)),
+                        }
+                    }
+                }
+                Err(e) => SyncTaskOutcome {
+                    sync_status: sync_error_category(&e.to_string()),
+                    action_result: format!("克隆失败: {}", mask_sync_error(&e.to_string())),
+                },
+            }
+        } else if !has_workspace() && !is_git_repo() {
+            // Non-empty, no workspace, no git
+            let core = WriterCore::new(path);
+            if let Err(e) = core.create_workspace() {
+                return SyncTaskOutcome {
+                    sync_status: "error".to_string(),
+                    action_result: format!("创建工作区失败: {}", e),
+                };
+            }
+
+            // Use perform_sync which handles init + commit + push
+            let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
+            match backend.sync(path_obj, &config, &secrets) {
+                Ok(result) => {
+                    if result.status == writer_core::sync_service::SyncStatus::Success {
+                        SyncTaskOutcome {
+                            sync_status: "success".to_string(),
+                            action_result: "初始化工作区并推送到远程成功".to_string(),
+                        }
+                    } else {
+                        let err = result.error.unwrap_or_default();
+                        SyncTaskOutcome {
+                            sync_status: sync_error_category(&err),
+                            action_result: format!("初始化并推送失败: {}", mask_sync_error(&err)),
+                        }
+                    }
+                }
+                Err(e) => SyncTaskOutcome {
+                    sync_status: sync_error_category(&e.to_string()),
+                    action_result: format!("初始化失败: {}", mask_sync_error(&e.to_string())),
+                },
+            }
+        } else if has_workspace() {
+            // Existing workspace with git repo
+            let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
+            match backend.sync(path_obj, &config, &secrets) {
+                Ok(result) => {
+                    if result.status == writer_core::sync_service::SyncStatus::Success {
+                        SyncTaskOutcome {
+                            sync_status: "success".to_string(),
+                            action_result: "远程仓库已配置并同步成功".to_string(),
+                        }
+                    } else if result.status == writer_core::sync_service::SyncStatus::Conflict {
+                        SyncTaskOutcome {
+                            sync_status: "conflict".to_string(),
+                            action_result: "同步冲突，需要手动处理".to_string(),
+                        }
+                    } else {
+                        let err = result.error.unwrap_or_default();
+                        SyncTaskOutcome {
+                            sync_status: sync_error_category(&err),
+                            action_result: format!("同步失败: {}", mask_sync_error(&err)),
+                        }
+                    }
+                }
+                Err(e) => SyncTaskOutcome {
+                    sync_status: sync_error_category(&e.to_string()),
+                    action_result: format!("同步失败: {}", mask_sync_error(&e.to_string())),
+                },
+            }
+        } else {
+            SyncTaskOutcome {
+                sync_status: "error".to_string(),
+                action_result: "目录非空且不是有效工作区。请选择空目录或已有工作区目录。".to_string(),
+            }
         }
     }
 
@@ -485,65 +734,103 @@ impl AppBackend {
     }
 
     fn perform_sync_diagnostics(&mut self) {
-        if let Some(core_ref) = &self.core {
-            let core = core_ref.borrow();
-            if let Ok(config) = core.load_sync_config() {
-                match core.perform_sync_diagnostics(&config) {
-                    Ok(result) => {
-                        let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
+        let workspace_path = self.current_workspace.clone();
+        if workspace_path.is_empty() {
+            self.current_sync_action_result = "请先打开工作区".to_string();
+            self.sync_action_completed();
+            return;
+        }
 
-                        msg.push_str(&format!("\n后端类型: {}", result.backend_type));
-                        msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
+        self.current_sync_status = "syncing".to_string();
+        self.sync_status_changed();
+        self.current_sync_action_result = "正在诊断...".to_string();
 
-                        if !result.remote_url_sanitized.is_empty() {
-                            msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
+        let (tx, rx) = mpsc::channel();
+        self.sync_task_rx = Some(rx);
+
+        thread::spawn(move || {
+            let core = WriterCore::new(&workspace_path);
+            let config = match core.load_sync_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    tx.send(SyncTaskOutcome {
+                        sync_status: "error".to_string(),
+                        action_result: format!("无法加载同步配置: {}", e),
+                    }).ok();
+                    return;
+                }
+            };
+
+            match core.perform_sync_diagnostics(&config) {
+                Ok(result) => {
+                    let status = if !result.success {
+                        match result.error_category.as_str() {
+                            "token_missing" => "configured_untested",
+                            "empty_url" => "not_configured",
+                            cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
+                            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => "network_failed",
+                            "repo_not_found_or_no_permission" => "auth_failed",
+                            _ => "error",
                         }
-                        msg.push_str(&format!("\nTransport: {}", result.transport));
+                    } else {
+                        "configured_untested"
+                    };
 
-                        if result.proxy_used && result.proxy_type != "none" {
-                            if result.proxy_type == "auto" {
-                                msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
-                            } else {
-                                let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
-                                msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
-                                if protocol == "http" || protocol == "socks5h" {
-                                    msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
-                                    if protocol == "http" {
-                                        msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
-                                    }
+                    let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
+
+                    msg.push_str(&format!("\n后端类型: {}", result.backend_type));
+                    msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
+
+                    if !result.remote_url_sanitized.is_empty() {
+                        msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
+                    }
+                    msg.push_str(&format!("\nTransport: {}", result.transport));
+
+                    if result.proxy_used && result.proxy_type != "none" {
+                        if result.proxy_type == "auto" {
+                            msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
+                        } else {
+                            let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
+                            msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
+                            if protocol == "http" || protocol == "socks5h" {
+                                msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
+                                if protocol == "http" {
+                                    msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
                                 }
                             }
-                            msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
                         }
-
-                        msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
-                        msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
-                        msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
-                        msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
-
-                        if !result.error_category.is_empty() && result.error_category != "none" {
-                            msg.push_str(&format!("\n错误分类: {}", result.error_category));
-                        }
-
-                        if !result.user_message.is_empty() {
-                            msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
-                        }
-                        if let Some(err) = result.raw_error {
-                            msg.push_str(&format!("\n\n错误详情:\n{}", err));
-                        }
-                        self.current_sync_action_result = msg;
-                        self.sync_action_completed();
+                        msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
                     }
-                    Err(e) => {
-                        self.current_sync_action_result = format!("诊断过程发生错误:\n{}", e);
-                        self.sync_action_completed();
+
+                    msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
+                    msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
+                    msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
+                    msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
+
+                    if !result.error_category.is_empty() && result.error_category != "none" {
+                        msg.push_str(&format!("\n错误分类: {}", result.error_category));
                     }
+
+                    if !result.user_message.is_empty() {
+                        msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
+                    }
+                    if let Some(err) = result.raw_error {
+                        msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(&err)));
+                    }
+
+                    tx.send(SyncTaskOutcome {
+                        sync_status: status.to_string(),
+                        action_result: msg,
+                    }).ok();
                 }
-            } else {
-                self.current_sync_action_result = "无法加载同步配置，请先保存配置。".to_string();
-                self.sync_action_completed();
+                Err(e) => {
+                    tx.send(SyncTaskOutcome {
+                        sync_status: sync_error_category(&e.to_string()),
+                        action_result: format!("诊断过程发生错误:\n{}", mask_sync_error(&e.to_string())),
+                    }).ok();
+                }
             }
-        }
+        });
     }
 
 
@@ -698,73 +985,102 @@ impl AppBackend {
     }
 
     fn perform_sync(&mut self) {
-        let mut error_msg: Option<String> = None;
-        let mut result_msg: Option<String> = None;
+        let workspace_path = self.current_workspace.clone();
+        if workspace_path.is_empty() {
+            self.current_sync_action_result = "请先打开工作区".to_string();
+            self.sync_action_completed();
+            return;
+        }
 
-        if let Some(core_ref) = &self.core {
-            let core = core_ref.borrow();
+        self.current_sync_status = "syncing".to_string();
+        self.sync_status_changed();
+        self.current_sync_action_result = "正在同步...".to_string();
+
+        let (tx, rx) = mpsc::channel();
+        self.sync_task_rx = Some(rx);
+
+        thread::spawn(move || {
+            let core = WriterCore::new(&workspace_path);
             let config = match core.load_sync_config() {
                 Ok(c) => c,
                 Err(e) => {
-                    error_msg = Some(format!("无法读取同步配置: {}", e));
-                    writer_core::sync_service::SyncConfig {
-                        enabled: false,
-                        backend_type: writer_core::sync_service::BackendType::Git,
-                        remote_url: "".to_string(),
-                        transport: writer_core::sync_service::SyncTransport::HttpsToken,
-                        branch: "main".to_string(),
-                        auto_sync: false,
-                        sync_interval_seconds: 300,
-                        proxy_enabled: false,
-                        proxy_type: "none".to_string(),
-                        proxy_host: "".to_string(),
-                        proxy_port: 0,
-                        username: "".to_string(),
-                        android_has_internet_permission: true,
-                        android_has_access_network_state_permission: true,
-                    }
+                    tx.send(SyncTaskOutcome {
+                        sync_status: "error".to_string(),
+                        action_result: format!("无法读取同步配置: {}", e),
+                    }).ok();
+                    return;
                 }
             };
 
-            if error_msg.is_none() {
-                match core.perform_sync(&config) {
-                    Ok(result) => {
-                        let status_str = match result.status {
-                            writer_core::sync_service::SyncStatus::Success => "同步成功",
-                            writer_core::sync_service::SyncStatus::Error(ref e) => {
-                                error_msg = Some(format!("同步失败:\n{}", e));
-                                ""
-                            }
-                            writer_core::sync_service::SyncStatus::Conflict => "同步冲突",
-                            _ => "同步未知状态",
-                        };
-
-                        if error_msg.is_none() {
-                            result_msg = Some(format!(
-                                "{}\n上传: {} 个文件\n下载: {} 个文件",
-                                status_str,
+            match core.perform_sync(&config) {
+                Ok(result) => {
+                    let (status, msg) = match result.status {
+                        writer_core::sync_service::SyncStatus::Success => {
+                            let m = format!(
+                                "同步成功\n上传: {} 个文件\n下载: {} 个文件",
                                 result.uploaded_files.len(),
                                 result.downloaded_files.len()
-                            ));
+                            );
+                            ("success".to_string(), m)
                         }
-                    }
-                    Err(e) => {
-                        error_msg = Some(format!("同步操作失败:\n{}", e));
-                    }
+                        writer_core::sync_service::SyncStatus::Conflict => {
+                            let m = format!(
+                                "同步冲突\n冲突文件: {}",
+                                result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>().join(", ")
+                            );
+                            ("conflict".to_string(), m)
+                        }
+                        writer_core::sync_service::SyncStatus::Error(ref e) => {
+                            let cat = sync_error_category(e);
+                            let m = format!("同步失败:\n{}", mask_sync_error(e));
+                            (cat, m)
+                        }
+                        writer_core::sync_service::SyncStatus::Idle => {
+                            ("configured_untested".to_string(), "同步未执行".to_string())
+                        }
+                        _ => {
+                            ("error".to_string(), format!("同步状态: {:?}", result.status))
+                        }
+                    };
+
+                    tx.send(SyncTaskOutcome {
+                        sync_status: status.to_string(),
+                        action_result: msg,
+                    }).ok();
+                }
+                Err(e) => {
+                    tx.send(SyncTaskOutcome {
+                        sync_status: sync_error_category(&e.to_string()),
+                        action_result: format!("同步操作失败:\n{}", mask_sync_error(&e.to_string())),
+                    }).ok();
+                }
+            }
+        });
+    }
+
+    fn poll_sync_result(&mut self) {
+        if let Some(rx) = &self.sync_task_rx {
+            if let Ok(outcome) = rx.try_recv() {
+                self.current_sync_status = outcome.sync_status;
+                self.current_sync_action_result = outcome.action_result;
+                self.sync_status_changed();
+                self.sync_action_completed();
+                self.sync_task_rx = None;
+
+                if self.current_sync_status == "success" && self.has_workspace() {
+                    self.reload_tree();
+                    self.projects_reloaded();
+                }
+
+                if self.current_sync_status == "success" && !self.current_pending_github_init_path.is_empty() {
+                    // GitHub init successful - open the workspace
+                    let path = self.current_pending_github_init_path.clone();
+                    self.current_pending_github_init_path.clear();
+                    self.pending_github_init_path_changed();
+                    self.internal_open_workspace(&path, false);
                 }
             }
         }
-
-        if let Some(msg) = error_msg {
-            self.current_sync_action_result = msg.clone();
-            self.set_error(&msg);
-        } else if let Some(msg) = result_msg {
-            self.current_sync_action_result = msg;
-            self.reload_tree();
-            self.projects_reloaded();
-        }
-
-        self.sync_action_completed();
     }
 
     fn workspace_path(&self) -> QString {

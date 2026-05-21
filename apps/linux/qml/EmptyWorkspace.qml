@@ -91,7 +91,11 @@ Item {
                 flat: true
                 text: "从 GitHub 同步仓库初始化"
                 implicitHeight: 36
-                onClicked: root.initFromGithub()
+                onClicked: {
+                    // Open sync settings page where user can fill in remote/branch/token/proxy
+                    // and click a real "初始化/克隆" button that does the actual clone/init
+                    root.initFromGithub()
+                }
 
                 contentItem: Text {
                     text: parent.text
@@ -106,6 +110,15 @@ Item {
                     color: parent.hovered ? (root.theme ? root.theme.hover : "#f1f5f9") : "transparent"
                     radius: root.theme ? root.theme.radiusSm : 4
                 }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "点击后会进入同步页面：配置远端仓库地址、分支、Token，然后点击「选择目录并初始化/克隆」。"
+                font.pixelSize: root.theme ? root.theme.fontXs : 11
+                color: root.theme ? root.theme.textDim : "#94a3b8"
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
             }
         }
     }
