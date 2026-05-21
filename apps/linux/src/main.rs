@@ -1,9 +1,11 @@
+use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
-use qmetaobject::{QJsonArray, QJsonObject, QJsonValue};
+use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
 use std::cell::RefCell;
 use std::ffi::CStr;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use writer_core::facade::WriterCore;
 
@@ -1241,6 +1243,28 @@ impl AppBackend {
     }
 }
 
+static QML_LOAD_FAILED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn qml_load_error_handler(
+    msg_type: QtMsgType,
+    _context: &QMessageLogContext,
+    msg: &QString,
+) {
+    let s = format!("{}", msg);
+    if matches!(msg_type, QtMsgType::QtWarningMsg | QtMsgType::QtCriticalMsg) {
+        eprintln!("[Qt {}] {}", match msg_type {
+            QtMsgType::QtWarningMsg => "WARNING",
+            QtMsgType::QtCriticalMsg => "CRITICAL",
+            _ => "INFO",
+        }, s);
+        if s.contains("qrc:/main.qml") {
+            QML_LOAD_FAILED.store(true, Ordering::SeqCst);
+        }
+    } else {
+        eprintln!("[Qt DEBUG] {}", s);
+    }
+}
+
 fn main() {
     qml_resources();
     qmetaobject::qml_register_type::<AppBackend>(
@@ -1253,8 +1277,15 @@ fn main() {
     let qml_path = "qrc:/main.qml";
     eprintln!("[Linux] Loading QML entry: {}", qml_path);
 
+    let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
     engine.load_file(qml_path.into());
+    install_message_handler(prev_handler);
+
+    if QML_LOAD_FAILED.load(Ordering::SeqCst) {
+        eprintln!("[Linux] ERROR: QQmlApplicationEngine failed to load {}", qml_path);
+        std::process::exit(1);
+    }
 
     eprintln!("[Linux] QML engine started, entering event loop");
     engine.exec();

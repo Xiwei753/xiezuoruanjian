@@ -10,7 +10,7 @@ Item {
     property string label: ""
     property string description: ""
     property bool isSwitch: true
-    property alias checked: switchCtrl.checked
+    property bool checked: false
 
     // Slider mode
     property real sliderValue: 50

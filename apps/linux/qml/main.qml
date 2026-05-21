@@ -382,10 +382,47 @@ ApplicationWindow {
                     }
                 }
 
-                SidebarItem { text: "作品"; icon: "📁"; active: navSection === "tree"; onClicked: navSection = "tree"; theme: theme }
-                SidebarItem { text: "设置"; icon: "⚙"; active: navSection === "settings"; onClicked: { navSection = "settings"; settingsDialog.open() }; theme: theme }
-                SidebarItem { text: "同步"; icon: "🔄"; active: navSection === "sync"; onClicked: { navSection = "sync"; settingsDialog.switchToCategory(2); settingsDialog.open() }; theme: theme }
-                SidebarItem { text: "调试"; icon: "🐛"; active: navSection === "debug"; onClicked: { navSection = "debug"; settingsDialog.switchToCategory(4); settingsDialog.open() }; theme: theme }
+                SidebarItem {
+                    text: "作品"
+                    icon: "📁"
+                    active: navSection === "tree"
+                    theme: theme
+                    onClicked: {
+                        navSection = "tree"
+                    }
+                }
+                SidebarItem {
+                    text: "设置"
+                    icon: "⚙"
+                    active: navSection === "settings"
+                    theme: theme
+                    onClicked: {
+                        navSection = "settings"
+                        settingsDialog.open()
+                    }
+                }
+                SidebarItem {
+                    text: "同步"
+                    icon: "🔄"
+                    active: navSection === "sync"
+                    theme: theme
+                    onClicked: {
+                        navSection = "sync"
+                        settingsDialog.switchToCategory(2)
+                        settingsDialog.open()
+                    }
+                }
+                SidebarItem {
+                    text: "调试"
+                    icon: "🐛"
+                    active: navSection === "debug"
+                    theme: theme
+                    onClicked: {
+                        navSection = "debug"
+                        settingsDialog.switchToCategory(4)
+                        settingsDialog.open()
+                    }
+                }
 
                 Rectangle { height: 1; color: theme.divider; Layout.fillWidth: true; Layout.leftMargin: theme.sp12; Layout.rightMargin: theme.sp12 }
 
@@ -515,7 +552,7 @@ ApplicationWindow {
         Rectangle {
             id: sidebarHandle
             Layout.preferredWidth: 4; Layout.fillHeight: true
-            color: theme.divider; cursorShape: Qt.SizeHorCursor
+            color: theme.divider
             MouseArea {
                 anchors.fill: parent; anchors.leftMargin: -2; anchors.rightMargin: -2; cursorShape: Qt.SizeHorCursor
                 onPressed: { sidebarDrag.startX = mouseX; sidebarDrag.origWidth = sidebarWidth }

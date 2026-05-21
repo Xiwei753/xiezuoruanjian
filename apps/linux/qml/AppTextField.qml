@@ -10,7 +10,7 @@ Item {
     property alias text: inputField.text
     property alias echoMode: inputField.echoMode
     property alias validator: inputField.validator
-    property alias activeFocusOnTab: inputField.activeFocusOnTab
+    property bool fieldTabFocus: true
 
     implicitHeight: inputField.height + 22
     implicitWidth: 200
@@ -35,7 +35,7 @@ Item {
             color: control.theme ? control.theme.text : "#e2e8f0"
             echoMode: control.echoMode
             validator: control.validator
-            activeFocusOnTab: control.activeFocusOnTab
+            activeFocusOnTab: control.fieldTabFocus
             background: Rectangle {
                 color: control.theme ? control.theme.surface : "#1a1a2e"
                 border.color: inputField.activeFocus ? (control.theme ? control.theme.borderFocus : "#0ea5e9") : (control.theme ? control.theme.border : "#334155")
