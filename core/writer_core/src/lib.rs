@@ -1,5 +1,6 @@
 pub mod action_registry;
 pub mod ai_service;
+pub mod app_config;
 pub mod graph_service;
 pub mod proofreading_service;
 pub mod settings_registry;

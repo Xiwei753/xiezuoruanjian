@@ -15,7 +15,7 @@ Popup {
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
     x: Math.round((parent.width - width) / 2)
     y: Math.round((parent.height - height) / 2)
-    background: Rectangle { color: theme.surface; radius: theme.radiusLg }
+    background: Rectangle { color: theme.surface; radius: theme.radiusLg; border.color: theme.border; border.width: 1 }
 
     function switchToCategory(index) { currentCategory = index }
 
@@ -31,7 +31,7 @@ Popup {
 
         Rectangle {
             Layout.preferredWidth: 160; Layout.fillHeight: true
-            color: theme.surfaceAlt; radius: theme.radiusLg
+            color: theme.surfaceAlt
 
             ColumnLayout {
                 anchors.fill: parent; anchors.topMargin: theme.sp16; spacing: theme.sp2
@@ -40,12 +40,12 @@ Popup {
                     Layout.leftMargin: theme.sp16; Layout.bottomMargin: theme.sp12
                 }
 
-                SidebarItem { text: "编辑器"; icon: "✏️"; active: currentCategory === 0; onClicked: currentCategory = 0; theme: theme }
+                SidebarItem { text: "编辑器"; icon: "✏"; active: currentCategory === 0; onClicked: currentCategory = 0; theme: theme }
                 SidebarItem { text: "外观";   icon: "🎨"; active: currentCategory === 1; onClicked: currentCategory = 1; theme: theme }
                 SidebarItem { text: "同步";   icon: "🔄"; active: currentCategory === 2; onClicked: currentCategory = 2; theme: theme }
                 SidebarItem { text: "动效";   icon: "✨"; active: currentCategory === 3; onClicked: currentCategory = 3; theme: theme }
                 SidebarItem { text: "调试";   icon: "🐛"; active: currentCategory === 4; onClicked: currentCategory = 4; theme: theme }
-                SidebarItem { text: "关于";   icon: "ℹ️"; active: currentCategory === 5; onClicked: currentCategory = 5; theme: theme }
+                SidebarItem { text: "关于";   icon: "ℹ"; active: currentCategory === 5; onClicked: currentCategory = 5; theme: theme }
 
                 Item { Layout.fillHeight: true }
             }
@@ -66,7 +66,8 @@ Popup {
                 ScrollView {
                     clip: true
                     ColumnLayout {
-                        width: parent.width; spacing: theme.sp16
+                        width: Math.min(parent.width, 560); spacing: theme.sp16
+                        Layout.alignment: Qt.AlignTop
                         SectionHeader { theme: theme; text: "编辑" }
                         AppCard { theme: theme; Layout.fillWidth: true
                             SettingsRow {
@@ -87,41 +88,55 @@ Popup {
                             }
                         }
                         AppCard { theme: theme; Layout.fillWidth: true
-                            SettingsRow {
-                                theme: theme; isSwitch: true; label: "自动缩进"; description: "自动在换行时添加缩进"
-                                id: autoIndentCheck
-                                checked: backendRef.setting_auto_indent_enabled
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true; Layout.leftMargin: 24; spacing: theme.sp8
-                                visible: autoIndentCheck.checked
-                                Label { text: "缩进宽度:"; font.pixelSize: theme.fontSm; color: theme.textDim }
-                                Slider {
-                                    id: autoIndentWidthSlider
-                                    from: 0; to: 800; value: backendRef.setting_auto_indent_width > 0 ? backendRef.setting_auto_indent_width * 100 : 200; stepSize: 50
-                                    Layout.fillWidth: true; Layout.preferredHeight: 24
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+                                SettingsRow {
+                                    theme: theme; isSwitch: true; label: "自动缩进"; description: "自动在换行时添加缩进"
+                                    id: autoIndentCheck
+                                    checked: backendRef.setting_auto_indent_enabled
                                 }
-                                Label { text: (autoIndentWidthSlider.value / 100).toFixed(1) + " 字符"; font.pixelSize: theme.fontSm; color: theme.textDim }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.leftMargin: 44
+                                    Layout.rightMargin: theme.sp12
+                                    spacing: theme.sp4
+                                    visible: autoIndentCheck.checked
+                                    Label { text: "缩进宽度:"; font.pixelSize: theme.fontSm; color: theme.textDim }
+                                    Slider {
+                                        id: autoIndentWidthSlider
+                                        from: 0; to: 800; value: backendRef.setting_auto_indent_width > 0 ? backendRef.setting_auto_indent_width * 100 : 200; stepSize: 50
+                                        Layout.fillWidth: true; Layout.preferredHeight: 24
+                                    }
+                                    Label { text: (autoIndentWidthSlider.value / 100).toFixed(1) + " 字符"; font.pixelSize: theme.fontSm; color: theme.textDim }
+                                }
                             }
                         }
 
                         SectionHeader { theme: theme; text: "保存" }
                         AppCard { theme: theme; Layout.fillWidth: true
-                            SettingsRow {
-                                theme: theme; isSwitch: true; label: "自动保存"; description: "在编辑内容变化时自动保存到磁盘"
-                                id: autoSaveCheck
-                                checked: backendRef.setting_auto_save_enabled
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true; Layout.leftMargin: 24; spacing: theme.sp8
-                                visible: autoSaveCheck.checked
-                                Label { text: "延迟:"; font.pixelSize: theme.fontSm; color: theme.textDim }
-                                Slider {
-                                    id: autoSaveDelaySlider
-                                    from: 500; to: 60000; value: backendRef.setting_auto_save_delay_ms > 0 ? backendRef.setting_auto_save_delay_ms : 1500; stepSize: 500
-                                    Layout.fillWidth: true; Layout.preferredHeight: 24
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 0
+                                SettingsRow {
+                                    theme: theme; isSwitch: true; label: "自动保存"; description: "在编辑内容变化时自动保存到磁盘"
+                                    id: autoSaveCheck
+                                    checked: backendRef.setting_auto_save_enabled
                                 }
-                                Label { text: autoSaveDelaySlider.value.toFixed(0) + " ms"; font.pixelSize: theme.fontSm; color: theme.textDim; Layout.preferredWidth: 60 }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.leftMargin: 44
+                                    Layout.rightMargin: theme.sp12
+                                    spacing: theme.sp4
+                                    visible: autoSaveCheck.checked
+                                    Label { text: "延迟:"; font.pixelSize: theme.fontSm; color: theme.textDim }
+                                    Slider {
+                                        id: autoSaveDelaySlider
+                                        from: 500; to: 60000; value: backendRef.setting_auto_save_delay_ms > 0 ? backendRef.setting_auto_save_delay_ms : 1500; stepSize: 500
+                                        Layout.fillWidth: true; Layout.preferredHeight: 24
+                                    }
+                                    Label { text: autoSaveDelaySlider.value.toFixed(0) + " ms"; font.pixelSize: theme.fontSm; color: theme.textDim; Layout.preferredWidth: 60 }
+                                }
                             }
                         }
 
@@ -173,7 +188,8 @@ Popup {
                 // Tab 1: Appearance
                 ScrollView {
                     clip: true
-                    ColumnLayout { width: parent.width; spacing: theme.sp16
+                    ColumnLayout { width: Math.min(parent.width, 560); spacing: theme.sp16
+                        Layout.alignment: Qt.AlignTop
                         SectionHeader { theme: theme; text: "界面" }
                         AppCard { theme: theme; Layout.fillWidth: true
                             SettingsRow { theme: theme; isSwitch: true; label: "自动保存时显示保存状态"; description: "在底部状态栏显示当前保存状态指示"; checked: true; enabled: false }
@@ -197,7 +213,8 @@ Popup {
                 // Tab 3: Animations
                 ScrollView {
                     clip: true
-                    ColumnLayout { width: parent.width; spacing: theme.sp16
+                    ColumnLayout { width: Math.min(parent.width, 560); spacing: theme.sp16
+                        Layout.alignment: Qt.AlignTop
                         SectionHeader { theme: theme; text: "输入动效" }
                         AppCard { theme: theme; Layout.fillWidth: true
                             SettingsRow { theme: theme; isSwitch: true; label: "输入动画"; description: "启用逐字输入动画效果"; id: typingAnimCheck; checked: backendRef.setting_typing_animation_enabled }

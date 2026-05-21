@@ -12,25 +12,28 @@ ApplicationWindow {
     minimumWidth: 680
     minimumHeight: 500
     title: "Writer"
-    color: theme.bg
+    color: tokens.bg
 
-    // ── Design System ──────────────────────────────────────────
+    // ── Design Tokens (semantic colors) ──────────────────────
 
     QtObject {
-        id: theme
+        id: tokens
         property string mode: "dark"
 
-        property color bg:           mode === "light" ? "#f5f5f5" : "#1a1a2e"
-        property color surface:      mode === "light" ? "#ffffff" : "#16213e"
-        property color surfaceAlt:   mode === "light" ? "#fafafa" : "#1a1a2e"
-        property color sidebarBg:    mode === "light" ? "#ffffff" : "#0f3460"
-        property color sidebarAlt:   mode === "light" ? "#f0f0f0" : "#16213e"
-        property color topbarBg:     mode === "light" ? "#ffffff" : "#0f3460"
-        property color footerBg:     mode === "light" ? "#fafafa" : "#0f3460"
-        property color editorBg:     mode === "light" ? "#ffffff" : "#1a1a2e"
+        // Backgrounds
+        property color bg:           mode === "light" ? "#f8fafc" : "#0f172a"
+        property color surface:      mode === "light" ? "#ffffff" : "#1e293b"
+        property color surfaceAlt:   mode === "light" ? "#f1f5f9" : "#162032"
+        property color sidebarBg:    mode === "light" ? "#ffffff" : "#1e293b"
+        property color sidebarAlt:   mode === "light" ? "#f1f5f9" : "#162032"
+        property color topbarBg:     mode === "light" ? "#ffffff" : "#1e293b"
+        property color footerBg:     mode === "light" ? "#f1f5f9" : "#162032"
+        property color editorBg:     mode === "light" ? "#ffffff" : "#0f172a"
+        property color overlay:      mode === "light" ? "#00000033" : "#00000066"
 
-        property color primary:      "#0ea5e9"
-        property color primaryHover: "#38bdf8"
+        // Semantic
+        property color primary:      "#3b82f6"
+        property color primaryHover: "#60a5fa"
         property color primaryText:  "#ffffff"
         property color secondary:    mode === "light" ? "#64748b" : "#94a3b8"
         property color danger:       "#ef4444"
@@ -38,32 +41,38 @@ ApplicationWindow {
         property color success:      "#22c55e"
         property color warning:      "#f59e0b"
 
+        // Text
         property color text:         mode === "light" ? "#0f172a" : "#e2e8f0"
         property color textDim:      mode === "light" ? "#64748b" : "#94a3b8"
         property color textInverse:  mode === "light" ? "#ffffff" : "#0f172a"
         property color border:       mode === "light" ? "#e2e8f0" : "#334155"
-        property color borderFocus:  "#0ea5e9"
+        property color borderFocus:  "#3b82f6"
         property color divider:      mode === "light" ? "#e2e8f0" : "#1e293b"
 
+        // Interaction
         property color hover:        mode === "light" ? "#f1f5f9" : "#1e293b"
-        property color selected:     mode === "light" ? "#e0f2fe" : "#0c4a6e"
+        property color selected:     mode === "light" ? "#dbeafe" : "#1e3a5f"
         property color selectedText: mode === "light" ? "#0f172a" : "#e2e8f0"
 
+        // Scrollbar
         property color scrollbarBg:  mode === "light" ? "#e2e8f0" : "#334155"
         property color scrollbarFg:  mode === "light" ? "#94a3b8" : "#64748b"
 
+        // Spacing
         property int sp2:  2
         property int sp4:  4
+        property int sp6:  6
         property int sp8:  8
         property int sp12: 12
         property int sp16: 16
         property int sp24: 24
         property int sp32: 32
         property int sp48: 48
-        property int radiusSm: 4
+        property int radiusSm: 6
         property int radiusMd: 8
         property int radiusLg: 12
 
+        // Font sizes
         property real fontXs:  11
         property real fontSm:  12
         property real fontMd:  13
@@ -74,6 +83,13 @@ ApplicationWindow {
         function apply(modeStr) {
             if (modeStr === "light") mode = "light"
             else if (modeStr === "dark") mode = "dark"
+            else mode = "dark"
+        }
+
+        function applySystemTheme() {
+            var scheme = Qt.styleHints ? Qt.styleHints.colorScheme : undefined
+            if (scheme === Qt.styleHints.ColorScheme.Light) mode = "light"
+            else if (scheme === Qt.styleHints.ColorScheme.Dark) mode = "dark"
             else mode = "dark"
         }
     }
@@ -94,13 +110,26 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
-        theme.apply(backend.setting_theme_mode)
+        backend.try_restore_last_workspace()
+        var themeMode = backend.setting_theme_mode
+        if (themeMode === "system") {
+            tokens.applySystemTheme()
+        } else {
+            tokens.apply(themeMode)
+        }
         reloadTree()
     }
 
     Connections {
         target: backend
-        function onSettings_changed() { theme.apply(backend.setting_theme_mode) }
+        function onSettings_changed() {
+            var mode = backend.setting_theme_mode
+            if (mode === "system") {
+                tokens.applySystemTheme()
+            } else {
+                tokens.apply(mode)
+            }
+        }
     }
 
     // ── State ─────────────────────────────────────────────────
@@ -165,28 +194,28 @@ ApplicationWindow {
         width: 340; height: 160
         modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: theme.surface; radius: theme.radiusMd; border.color: theme.border; border.width: 1 }
+        background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
 
         onOpened: { inputField.text = contextData.initialText || ""; inputField.forceActiveFocus() }
 
         ColumnLayout {
-            anchors.fill: parent; anchors.margins: theme.sp16; spacing: theme.sp12
-            Label { text: "请输入名称"; font.pixelSize: theme.fontLg; font.weight: Font.DemiBold; color: theme.text }
+            anchors.fill: parent; anchors.margins: tokens.sp16; spacing: tokens.sp12
+            Label { text: "请输入名称"; font.pixelSize: tokens.fontLg; font.weight: Font.DemiBold; color: tokens.text }
             TextField {
-                id: inputField; Layout.fillWidth: true; color: theme.text
+                id: inputField; Layout.fillWidth: true; color: tokens.text
                 background: Rectangle {
-                    color: theme.surfaceAlt; border.color: inputField.activeFocus ? theme.borderFocus : theme.border
-                    border.width: 1; radius: theme.radiusSm
+                    color: tokens.surfaceAlt; border.color: inputField.activeFocus ? tokens.borderFocus : tokens.border
+                    border.width: 1; radius: tokens.radiusSm
                 }
-                font.pixelSize: theme.fontMd; leftPadding: theme.sp8; topPadding: theme.sp8; bottomPadding: theme.sp8
+                font.pixelSize: tokens.fontMd; leftPadding: tokens.sp8; topPadding: tokens.sp8; bottomPadding: tokens.sp8
             }
             RowLayout {
-                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: theme.sp8
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: tokens.sp8
                 Item { Layout.fillWidth: true }
                 Button {
                     text: "取消"; flat: true; onClicked: inputDialog.close()
-                    contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
+                    contentItem: Text { text: parent.text; color: tokens.textDim; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
                 Button {
@@ -200,8 +229,8 @@ ApplicationWindow {
                         else if (actionType === "rename_chapter") backend.rename_chapter(contextData.projectId, contextData.volumeId, contextData.id, inputField.text)
                         inputDialog.close()
                     }
-                    contentItem: Text { text: parent.text; color: theme.primaryText; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { color: parent.hovered ? theme.primaryHover : theme.primary; radius: theme.radiusSm }
+                    contentItem: Text { text: parent.text; color: tokens.primaryText; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.primaryHover : tokens.primary; radius: tokens.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
             }
@@ -215,15 +244,15 @@ ApplicationWindow {
         width: 420; height: 180
         modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: theme.surface; radius: theme.radiusMd; border.color: theme.border; border.width: 1 }
+        background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
         ColumnLayout {
-            anchors.fill: parent; anchors.margins: theme.sp16; spacing: theme.sp12
-            Label { text: "错误"; font.pixelSize: theme.fontXl; font.weight: Font.DemiBold; color: theme.danger }
-            Label { text: backend.error_message; Layout.fillWidth: true; Layout.fillHeight: true; wrapMode: Text.Wrap; color: theme.text; font.pixelSize: theme.fontMd }
+            anchors.fill: parent; anchors.margins: tokens.sp16; spacing: tokens.sp12
+            Label { text: "错误"; font.pixelSize: tokens.fontXl; font.weight: Font.DemiBold; color: tokens.danger }
+            Label { text: backend.error_message; Layout.fillWidth: true; Layout.fillHeight: true; wrapMode: Text.Wrap; color: tokens.text; font.pixelSize: tokens.fontMd }
             Button {
                 text: "确定"; Layout.alignment: Qt.AlignRight; onClicked: errorDialog.close()
-                contentItem: Text { text: parent.text; color: theme.primaryText; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                background: Rectangle { color: theme.primary; radius: theme.radiusSm }
+                contentItem: Text { text: parent.text; color: tokens.primaryText; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                background: Rectangle { color: tokens.primary; radius: tokens.radiusSm }
                 implicitWidth: 64; implicitHeight: 32
             }
         }
@@ -238,18 +267,18 @@ ApplicationWindow {
         width: 340; height: 160
         modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: theme.surface; radius: theme.radiusMd; border.color: theme.border; border.width: 1 }
+        background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
         ColumnLayout {
-            anchors.fill: parent; anchors.margins: theme.sp16; spacing: theme.sp12
-            Label { text: "确认删除"; font.pixelSize: theme.fontXl; font.weight: Font.DemiBold; color: theme.danger }
-            Label { text: "您确定要删除此项目吗？此操作不可撤销。"; color: theme.text; font.pixelSize: theme.fontMd; wrapMode: Text.Wrap }
+            anchors.fill: parent; anchors.margins: tokens.sp16; spacing: tokens.sp12
+            Label { text: "确认删除"; font.pixelSize: tokens.fontXl; font.weight: Font.DemiBold; color: tokens.danger }
+            Label { text: "您确定要删除此项目吗？此操作不可撤销。"; color: tokens.text; font.pixelSize: tokens.fontMd; wrapMode: Text.Wrap }
             RowLayout {
-                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: theme.sp8
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: tokens.sp8
                 Item { Layout.fillWidth: true }
                 Button {
                     text: "取消"; flat: true; onClicked: confirmDialog.close()
-                    contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
+                    contentItem: Text { text: parent.text; color: tokens.textDim; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
                 Button {
@@ -260,8 +289,8 @@ ApplicationWindow {
                         else if (actionType === "delete_chapter") backend.delete_chapter(contextData.projectId, contextData.volumeId, contextData.id)
                         confirmDialog.close()
                     }
-                    contentItem: Text { text: parent.text; color: "#ffffff"; font.pixelSize: theme.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { color: parent.hovered ? theme.dangerHover : theme.danger; radius: theme.radiusSm }
+                    contentItem: Text { text: parent.text; color: "#ffffff"; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.dangerHover : tokens.danger; radius: tokens.radiusSm }
                     implicitWidth: 64; implicitHeight: 32
                 }
             }
@@ -272,7 +301,7 @@ ApplicationWindow {
         id: settingsDialog
         backendRef: backend
         editorPageRef: editorPage
-        theme: theme
+        theme: tokens
     }
 
     // ── Models ────────────────────────────────────────────────
@@ -285,21 +314,24 @@ ApplicationWindow {
 
     header: Rectangle {
         height: 48
-        color: theme.topbarBg
+        color: tokens.topbarBg
+        border.color: tokens.border
+        border.width: 1
+        border.bottom: false
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: theme.sp16
-            anchors.rightMargin: theme.sp8
-            spacing: theme.sp4
+            anchors.leftMargin: tokens.sp16
+            anchors.rightMargin: tokens.sp8
+            spacing: tokens.sp4
 
             Label {
                 text: "Writer"
-                font.pixelSize: theme.fontXl; font.weight: Font.Bold; color: theme.primary
+                font.pixelSize: tokens.fontXl; font.weight: Font.Bold; color: tokens.primary
                 Layout.preferredWidth: 80
             }
 
-            Rectangle { width: 1; height: 24; color: theme.divider; Layout.leftMargin: 4; Layout.rightMargin: 4 }
+            Rectangle { width: 1; height: 24; color: tokens.divider; Layout.leftMargin: 4; Layout.rightMargin: 4 }
 
             Label {
                 text: {
@@ -307,14 +339,15 @@ ApplicationWindow {
                     if (ws.length > 0) { let parts = ws.split("/"); return parts[parts.length - 1] }
                     return "未打开工作区"
                 }
-                font.pixelSize: theme.fontMd; color: theme.textDim
+                font.pixelSize: tokens.fontMd; color: tokens.textDim
                 Layout.fillWidth: true; elide: Text.ElideRight
             }
 
             Item { Layout.fillWidth: true }
 
             AppButton {
-                text: "新建作品"; theme: theme
+                text: "新建作品"; theme: tokens
+                visible: backend.has_workspace
                 onClicked: {
                     inputDialog.actionType = "create_project"
                     inputDialog.contextData = { initialText: "新作品" }
@@ -323,16 +356,17 @@ ApplicationWindow {
             }
 
             AppButton {
-                text: "保存"; theme: theme
+                text: "保存"; theme: tokens
+                visible: backend.has_workspace
                 enabled: backend.has_selected_chapter_prop
                 onClicked: backend.save_current_chapter(editorPage.text)
             }
 
-            ToolbarButton { text: "设置"; theme: theme; onClicked: settingsDialog.open() }
-            ToolbarButton { text: "同步"; theme: theme; onClicked: { settingsDialog.switchToCategory(2); settingsDialog.open() } }
-            ToolbarButton { text: "调试"; theme: theme; onClicked: { settingsDialog.switchToCategory(4); settingsDialog.open() } }
+            ToolbarButton { text: "设置"; theme: tokens; onClicked: settingsDialog.open() }
+            ToolbarButton { text: "同步"; theme: tokens; onClicked: { settingsDialog.switchToCategory(2); settingsDialog.open() } }
+            ToolbarButton { text: "调试"; theme: tokens; onClicked: { settingsDialog.switchToCategory(4); settingsDialog.open() } }
 
-            Item { width: theme.sp8 }
+            Item { width: tokens.sp8 }
         }
     }
 
@@ -340,201 +374,240 @@ ApplicationWindow {
     //  CONTENT
     // ══════════════════════════════════════════════════════════
 
-    RowLayout {
+    StackLayout {
         anchors.top: window.header.bottom
         anchors.bottom: window.footer.top
         anchors.left: parent.left
         anchors.right: parent.right
-        spacing: 0
+        currentIndex: backend.has_workspace ? 1 : 0
 
-        // ── Left Sidebar ────────────────────────────────────────
+        // Page 0: Empty Workspace
+        EmptyWorkspace {
+            theme: tokens
+            backendRef: backend
+            onCreateWorkspace: backend.create_new_workspace()
+            onOpenWorkspace: backend.open_existing_workspace()
+            onInitFromGithub: backend.init_workspace_from_github()
+        }
 
-        Rectangle {
-            id: sidebar
-            Layout.preferredWidth: sidebarVisible ? sidebarWidth : 0
-            Layout.maximumWidth: sidebarVisible ? sidebarWidth : 0
-            Layout.minimumWidth: sidebarVisible ? sidebarWidth : 0
-            color: theme.sidebarBg
-            clip: true
+        // Page 1: Main Workspace View
+        RowLayout {
+            spacing: 0
 
-            Behavior on Layout.preferredWidth { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+            // ── Left Sidebar ────────────────────────────────────────
 
-            property bool sidebarVisible: true
+            Rectangle {
+                id: sidebar
+                Layout.preferredWidth: sidebarVisible ? sidebarWidth : 0
+                Layout.maximumWidth: sidebarVisible ? sidebarWidth : 0
+                Layout.minimumWidth: sidebarVisible ? sidebarWidth : 0
+                color: tokens.sidebarBg
+                border.color: tokens.border
+                border.width: 1
+                border.right: false
+                clip: true
 
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 0
+                Behavior on Layout.preferredWidth { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
-                Rectangle {
-                    Layout.fillWidth: true; height: 40; color: theme.sidebarAlt
-                    RowLayout {
-                        anchors.fill: parent; anchors.leftMargin: theme.sp12; anchors.rightMargin: theme.sp8; spacing: theme.sp4
-                        Label {
-                            text: "导航"; font.pixelSize: theme.fontSm; font.weight: Font.DemiBold; color: theme.textDim
-                            Layout.fillWidth: true
+                property bool sidebarVisible: true
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
+
+                    // Sidebar header
+                    Rectangle {
+                        Layout.fillWidth: true; height: 40; color: tokens.sidebarAlt
+                        RowLayout {
+                            anchors.fill: parent; anchors.leftMargin: tokens.sp12; anchors.rightMargin: tokens.sp8; spacing: tokens.sp4
+                            Label {
+                                text: "导航"; font.pixelSize: tokens.fontSm; font.weight: Font.DemiBold; color: tokens.textDim
+                                Layout.fillWidth: true
+                            }
+                            Button {
+                                text: "☰"; implicitWidth: 28; implicitHeight: 28
+                                onClicked: sidebar.sidebarVisible = !sidebar.sidebarVisible
+                                contentItem: Text { text: parent.text; color: tokens.textDim; font.pixelSize: tokens.fontLg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
+                            }
                         }
-                        Button {
-                            text: "☰"; implicitWidth: 28; implicitHeight: 28
-                            onClicked: sidebarVisible = !sidebarVisible
-                            contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontLg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
+                    }
+
+                    SidebarItem {
+                        text: "作品"
+                        icon: "📁"
+                        active: navSection === "tree"
+                        theme: tokens
+                        onClicked: navSection = "tree"
+                    }
+                    SidebarItem {
+                        text: "设置"
+                        icon: "⚙"
+                        active: navSection === "settings"
+                        theme: tokens
+                        onClicked: {
+                            navSection = "settings"
+                            settingsDialog.open()
                         }
                     }
-                }
-
-                SidebarItem {
-                    text: "作品"
-                    icon: "📁"
-                    active: navSection === "tree"
-                    theme: theme
-                    onClicked: {
-                        navSection = "tree"
-                    }
-                }
-                SidebarItem {
-                    text: "设置"
-                    icon: "⚙"
-                    active: navSection === "settings"
-                    theme: theme
-                    onClicked: {
-                        navSection = "settings"
-                        settingsDialog.open()
-                    }
-                }
-                SidebarItem {
-                    text: "同步"
-                    icon: "🔄"
-                    active: navSection === "sync"
-                    theme: theme
-                    onClicked: {
-                        navSection = "sync"
-                        settingsDialog.switchToCategory(2)
-                        settingsDialog.open()
-                    }
-                }
-                SidebarItem {
-                    text: "调试"
-                    icon: "🐛"
-                    active: navSection === "debug"
-                    theme: theme
-                    onClicked: {
-                        navSection = "debug"
-                        settingsDialog.switchToCategory(4)
-                        settingsDialog.open()
-                    }
-                }
-
-                Rectangle { height: 1; color: theme.divider; Layout.fillWidth: true; Layout.leftMargin: theme.sp12; Layout.rightMargin: theme.sp12 }
-
-                Rectangle {
-                    Layout.fillWidth: true; Layout.fillHeight: true; color: "transparent"
-                    ListView {
-                        id: treeView
-                        anchors.fill: parent; anchors.topMargin: theme.sp4
-                        model: treeModel; clip: true
-                        ScrollBar.vertical: ScrollBar { parent: treeView.parent; anchors.top: treeView.top; anchors.bottom: treeView.bottom; anchors.right: treeView.right }
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "未选择作品"; color: theme.textDim; font.pixelSize: theme.fontMd
-                            visible: treeModel.count === 0
+                    SidebarItem {
+                        text: "同步"
+                        icon: "🔄"
+                        active: navSection === "sync"
+                        theme: tokens
+                        onClicked: {
+                            navSection = "sync"
+                            settingsDialog.switchToCategory(2)
+                            settingsDialog.open()
                         }
+                    }
+                    SidebarItem {
+                        text: "调试"
+                        icon: "🐛"
+                        active: navSection === "debug"
+                        theme: tokens
+                        onClicked: {
+                            navSection = "debug"
+                            settingsDialog.switchToCategory(4)
+                            settingsDialog.open()
+                        }
+                    }
 
-                        delegate: Item {
-                            width: ListView.view.width; height: 32
-                            Rectangle {
-                                anchors.fill: parent; anchors.leftMargin: theme.sp4; anchors.rightMargin: theme.sp4
-                                radius: theme.radiusSm; color: treeView.currentIndex === index ? theme.selected : "transparent"
+                    Rectangle { height: 1; color: tokens.divider; Layout.fillWidth: true; Layout.leftMargin: tokens.sp12; Layout.rightMargin: tokens.sp12 }
 
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: {
-                                        treeView.currentIndex = index
-                                        let node = treeModel.get(index)
-                                        saveCurrentIfNeeded(); loadingChapter = true
-                                        if (node.type === "project") {
-                                            backend.select_project(node.id); editorPage.clearText(); backend.save_status = "已保存"
-                                        } else if (node.type === "volume") {
-                                            backend.select_volume(node.projectId, node.id); editorPage.clearText(); backend.save_status = "已保存"
-                                        } else if (node.type === "chapter") {
-                                            backend.select_chapter(node.projectId, node.volumeId, node.id)
-                                            editorPage.loadContent(backend.get_chapter_content(node.projectId, node.volumeId, node.id))
-                                            backend.save_status = "已保存"; editorPage.forceEditorFocus()
-                                        }
-                                        loadingChapter = false
-                                    }
+                    // Tree view
+                    Rectangle {
+                        Layout.fillWidth: true; Layout.fillHeight: true; color: "transparent"
+                        ListView {
+                            id: treeView
+                            anchors.fill: parent; anchors.topMargin: tokens.sp4
+                            model: treeModel; clip: true
+                            ScrollBar.vertical: ScrollBar { parent: treeView.parent; anchors.top: treeView.top; anchors.bottom: treeView.bottom; anchors.right: treeView.right }
+
+                            // Empty state for tree
+                            ColumnLayout {
+                                anchors.centerIn: parent
+                                spacing: tokens.sp8
+                                visible: treeModel.count === 0
+                                width: parent.width - tokens.sp24
+
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "暂无作品"
+                                    color: tokens.textDim
+                                    font.pixelSize: tokens.fontMd
                                 }
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "点击上方「新建作品」开始创作"
+                                    color: tokens.textDim
+                                    font.pixelSize: tokens.fontSm
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.Wrap
+                                    Layout.fillWidth: true
+                                }
+                            }
 
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: model.type === "project" ? theme.sp8 : model.type === "volume" ? theme.sp24 : theme.sp40
-                                    anchors.rightMargin: theme.sp4; spacing: theme.sp4
+                            delegate: Item {
+                                width: ListView.view.width; height: 32
+                                Rectangle {
+                                    anchors.fill: parent; anchors.leftMargin: tokens.sp4; anchors.rightMargin: tokens.sp4
+                                    radius: tokens.radiusSm; color: treeView.currentIndex === index ? tokens.selected : "transparent"
 
-                                    Text {
-                                        text: model.type === "project" ? "📁" : model.type === "volume" ? "📂" : "📄"
-                                        font.pixelSize: theme.fontSm
+                                    Behavior on color {
+                                        ColorAnimation { duration: 100 }
                                     }
-                                    Text {
-                                        text: model.title
-                                        color: treeView.currentIndex === index ? theme.selectedText : theme.text
-                                        font.pixelSize: theme.fontMd; Layout.fillWidth: true; elide: Text.ElideRight; clip: true
-                                    }
-                                    Button {
-                                        visible: treeView.currentIndex === index
-                                        text: "⋮"; implicitWidth: 24; implicitHeight: 24
-                                        onClicked: contextMenu.open()
-                                        contentItem: Text { text: parent.text; color: theme.textDim; font.pixelSize: theme.fontLg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                        background: Rectangle { color: parent.hovered ? theme.hover : "transparent"; radius: theme.radiusSm }
-                                        Menu {
-                                            id: contextMenu
-                                            MenuItem {
-                                                text: model.type === "project" ? "新建分卷" : "新建章节"
-                                                visible: model.type !== "chapter"
-                                                onTriggered: {
-                                                    if (model.type === "project") {
-                                                        inputDialog.actionType = "create_volume"
-                                                        inputDialog.contextData = { projectId: model.id, initialText: "新分卷" }
-                                                        inputDialog.open()
-                                                    } else if (model.type === "volume") {
-                                                        inputDialog.actionType = "create_chapter"
-                                                        inputDialog.contextData = { projectId: model.projectId, volumeId: model.id, initialText: "新章节" }
-                                                        inputDialog.open()
-                                                    }
-                                                }
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: {
+                                            treeView.currentIndex = index
+                                            let node = treeModel.get(index)
+                                            saveCurrentIfNeeded(); loadingChapter = true
+                                            if (node.type === "project") {
+                                                backend.select_project(node.id); editorPage.clearText(); backend.save_status = "已保存"
+                                            } else if (node.type === "volume") {
+                                                backend.select_volume(node.projectId, node.id); editorPage.clearText(); backend.save_status = "已保存"
+                                            } else if (node.type === "chapter") {
+                                                backend.select_chapter(node.projectId, node.volumeId, node.id)
+                                                editorPage.loadContent(backend.get_chapter_content(node.projectId, node.volumeId, node.id))
+                                                backend.save_status = "已保存"; editorPage.forceEditorFocus()
                                             }
-                                            MenuItem { text: "重命名"; onTriggered: { inputDialog.actionType = "rename_" + model.type; inputDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId, initialText: model.title.trim() }; inputDialog.open() } }
-                                            MenuItem { text: "删除"; onTriggered: { confirmDialog.actionType = "delete_" + model.type; confirmDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId }; confirmDialog.open() } }
-                                            MenuItem {
-                                                text: "上移"; visible: !isFirstSibling(index)
-                                                onTriggered: {
-                                                    let ids = []; let my_pos = -1
-                                                    for (let i = 0; i < treeModel.count; i++) {
-                                                        let n = treeModel.get(i)
-                                                        if (n.type === model.type && n.projectId === model.projectId && n.volumeId === model.volumeId) {
-                                                            if (n.id === model.id) my_pos = ids.length; ids.push(n.id)
+                                            loadingChapter = false
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: model.type === "project" ? tokens.sp8 : model.type === "volume" ? tokens.sp24 : tokens.sp40
+                                        anchors.rightMargin: tokens.sp4; spacing: tokens.sp4
+
+                                        Text {
+                                            text: model.type === "project" ? "📁" : model.type === "volume" ? "📂" : "📄"
+                                            font.pixelSize: tokens.fontSm
+                                        }
+                                        Text {
+                                            text: model.title
+                                            color: treeView.currentIndex === index ? tokens.selectedText : tokens.text
+                                            font.pixelSize: tokens.fontMd; Layout.fillWidth: true; elide: Text.ElideRight; clip: true
+                                        }
+                                        Button {
+                                            visible: treeView.currentIndex === index
+                                            text: "⋮"; implicitWidth: 24; implicitHeight: 24
+                                            onClicked: contextMenu.open()
+                                            contentItem: Text { text: parent.text; color: tokens.textDim; font.pixelSize: tokens.fontLg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                            background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
+                                            Menu {
+                                                id: contextMenu
+                                                MenuItem {
+                                                    text: model.type === "project" ? "新建分卷" : "新建章节"
+                                                    visible: model.type !== "chapter"
+                                                    onTriggered: {
+                                                        if (model.type === "project") {
+                                                            inputDialog.actionType = "create_volume"
+                                                            inputDialog.contextData = { projectId: model.id, initialText: "新分卷" }
+                                                            inputDialog.open()
+                                                        } else if (model.type === "volume") {
+                                                            inputDialog.actionType = "create_chapter"
+                                                            inputDialog.contextData = { projectId: model.projectId, volumeId: model.id, initialText: "新章节" }
+                                                            inputDialog.open()
                                                         }
                                                     }
-                                                    if (my_pos > 0) { let t = ids[my_pos]; ids[my_pos] = ids[my_pos - 1]; ids[my_pos - 1] = t
-                                                        if (model.type === "project") backend.reorder_projects(ids.join(","))
-                                                        else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","))
-                                                        else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","))
-                                                    }
                                                 }
-                                            }
-                                            MenuItem {
-                                                text: "下移"; visible: !isLastSibling(index)
-                                                onTriggered: {
-                                                    let ids = []; let my_pos = -1
-                                                    for (let i = 0; i < treeModel.count; i++) {
-                                                        let n = treeModel.get(i)
-                                                        if (n.type === model.type && n.projectId === model.projectId && n.volumeId === model.volumeId) {
-                                                            if (n.id === model.id) my_pos = ids.length; ids.push(n.id)
+                                                MenuItem { text: "重命名"; onTriggered: { inputDialog.actionType = "rename_" + model.type; inputDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId, initialText: model.title.trim() }; inputDialog.open() } }
+                                                MenuItem { text: "删除"; onTriggered: { confirmDialog.actionType = "delete_" + model.type; confirmDialog.contextData = { id: model.id, projectId: model.projectId, volumeId: model.volumeId }; confirmDialog.open() } }
+                                                MenuItem {
+                                                    text: "上移"; visible: !isFirstSibling(index)
+                                                    onTriggered: {
+                                                        let ids = []; let my_pos = -1
+                                                        for (let i = 0; i < treeModel.count; i++) {
+                                                            let n = treeModel.get(i)
+                                                            if (n.type === model.type && n.projectId === model.projectId && n.volumeId === model.volumeId) {
+                                                                if (n.id === model.id) my_pos = ids.length; ids.push(n.id)
+                                                            }
+                                                        }
+                                                        if (my_pos > 0) { let t = ids[my_pos]; ids[my_pos] = ids[my_pos - 1]; ids[my_pos - 1] = t
+                                                            if (model.type === "project") backend.reorder_projects(ids.join(","))
+                                                            else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","))
+                                                            else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","))
                                                         }
                                                     }
-                                                    if (my_pos < ids.length - 1) { let t = ids[my_pos]; ids[my_pos] = ids[my_pos + 1]; ids[my_pos + 1] = t
-                                                        if (model.type === "project") backend.reorder_projects(ids.join(","))
-                                                        else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","))
-                                                        else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","))
+                                                }
+                                                MenuItem {
+                                                    text: "下移"; visible: !isLastSibling(index)
+                                                    onTriggered: {
+                                                        let ids = []; let my_pos = -1
+                                                        for (let i = 0; i < treeModel.count; i++) {
+                                                            let n = treeModel.get(i)
+                                                            if (n.type === model.type && n.projectId === model.projectId && n.volumeId === model.volumeId) {
+                                                                if (n.id === model.id) my_pos = ids.length; ids.push(n.id)
+                                                            }
+                                                        }
+                                                        if (my_pos < ids.length - 1) { let t = ids[my_pos]; ids[my_pos] = ids[my_pos + 1]; ids[my_pos + 1] = t
+                                                            if (model.type === "project") backend.reorder_projects(ids.join(","))
+                                                            else if (model.type === "volume") backend.reorder_volumes(model.projectId, ids.join(","))
+                                                            else if (model.type === "chapter") backend.reorder_chapters(model.projectId, model.volumeId, ids.join(","))
+                                                        }
                                                     }
                                                 }
                                             }
@@ -546,37 +619,37 @@ ApplicationWindow {
                     }
                 }
             }
-        }
 
-        // Sidebar resize handle
-        Rectangle {
-            id: sidebarHandle
-            Layout.preferredWidth: 4; Layout.fillHeight: true
-            color: theme.divider
-            MouseArea {
-                anchors.fill: parent; anchors.leftMargin: -2; anchors.rightMargin: -2; cursorShape: Qt.SizeHorCursor
-                onPressed: { sidebarDrag.startX = mouseX; sidebarDrag.origWidth = sidebarWidth }
-                onPositionChanged: { if (pressed) { let delta = mouseX - sidebarDrag.startX; sidebarWidth = Math.max(160, Math.min(400, sidebarDrag.origWidth + delta)) } }
-                property real startX: 0; property int origWidth: 260
-            }
-        }
-
-        // ── Editor Area ─────────────────────────────────────────
-
-        EditorPage {
-            id: editorPage
-            Layout.fillWidth: true; Layout.fillHeight: true
-            backendRef: backend; theme: theme
-            onContentChanged: {
-                backend.calculate_word_count(text)
-                if (backend.setting_auto_save_enabled) {
-                    autoSaveTimer.interval = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500
-                    autoSaveTimer.restart()
+            // Sidebar resize handle
+            Rectangle {
+                id: sidebarHandle
+                Layout.preferredWidth: 4; Layout.fillHeight: true
+                color: tokens.divider
+                MouseArea {
+                    anchors.fill: parent; anchors.leftMargin: -2; anchors.rightMargin: -2; cursorShape: Qt.SizeHorCursor
+                    onPressed: { sidebarDrag.startX = mouseX; sidebarDrag.origWidth = sidebarWidth }
+                    onPositionChanged: { if (pressed) { let delta = mouseX - sidebarDrag.startX; sidebarWidth = Math.max(160, Math.min(400, sidebarDrag.origWidth + delta)) } }
+                    property real startX: 0; property int origWidth: 260
                 }
-                if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存")
-                    backend.save_status = "未保存"
-                if (!loadingChapter && backend.has_selected_chapter_prop)
-                    autoSaveTimer.restart()
+            }
+
+            // ── Editor Area ─────────────────────────────────────────
+
+            EditorPage {
+                id: editorPage
+                Layout.fillWidth: true; Layout.fillHeight: true
+                backendRef: backend; theme: tokens
+                onContentChanged: {
+                    backend.calculate_word_count(text)
+                    if (backend.setting_auto_save_enabled) {
+                        autoSaveTimer.interval = backend.setting_auto_save_delay_ms > 0 ? backend.setting_auto_save_delay_ms : 1500
+                        autoSaveTimer.restart()
+                    }
+                    if (!loadingChapter && backend.has_selected_chapter_prop && backend.save_status !== "未保存")
+                        backend.save_status = "未保存"
+                    if (!loadingChapter && backend.has_selected_chapter_prop)
+                        autoSaveTimer.restart()
+                }
             }
         }
     }
@@ -586,21 +659,45 @@ ApplicationWindow {
     // ══════════════════════════════════════════════════════════
 
     footer: Rectangle {
-        height: 28; color: theme.footerBg
+        height: 28; color: tokens.footerBg
+        border.color: tokens.border
+        border.width: 1
+        border.top: false
         RowLayout {
-            anchors.fill: parent; anchors.leftMargin: theme.sp12; anchors.rightMargin: theme.sp12; spacing: theme.sp16
+            anchors.fill: parent; anchors.leftMargin: tokens.sp12; anchors.rightMargin: tokens.sp12; spacing: tokens.sp16
 
             StatusPill {
-                theme: theme
-                pillColor: backend.save_status === "已保存" || backend.save_status === "未选择章节" ? (theme ? theme.success : "#22c55e") : (theme ? theme.warning : "#f59e0b")
+                theme: tokens
+                pillColor: backend.save_status === "已保存" || backend.save_status === "未选择章节" ? tokens.success : tokens.warning
             }
 
-            Label { text: backend.save_status; color: theme.textDim; font.pixelSize: theme.fontXs }
-            Rectangle { width: 1; height: 14; color: theme.divider }
-            Label { text: "字数: " + backend.word_count; color: theme.textDim; font.pixelSize: theme.fontXs }
+            Label { text: backend.save_status; color: tokens.textDim; font.pixelSize: tokens.fontXs }
+            Rectangle { width: 1; height: 14; color: tokens.divider }
+            Label { text: "字数: " + backend.word_count; color: tokens.textDim; font.pixelSize: tokens.fontXs }
+            Rectangle { width: 1; height: 14; color: tokens.divider }
+
+            // Sync status indicator
+            RowLayout {
+                spacing: tokens.sp4
+                visible: backend.has_workspace
+                Rectangle {
+                    width: 6; height: 6; radius: 3
+                    color: {
+                        var ss = backend.sync_status
+                        if (ss === "success") return tokens.success
+                        if (ss === "syncing") return tokens.warning
+                        if (ss === "auth_failed") return tokens.danger
+                        if (ss === "network_failed") return tokens.danger
+                        if (ss === "conflict") return tokens.danger
+                        return tokens.textDim
+                    }
+                }
+                Label { text: "同步"; color: tokens.textDim; font.pixelSize: tokens.fontXs }
+            }
+
             Item { Layout.fillWidth: true }
-            Label { text: backend.chapter_path; color: theme.textDim; font.pixelSize: theme.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 300; clip: true }
-            Label { text: backend.workspace_path; color: theme.textDim; font.pixelSize: theme.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 250; clip: true }
+            Label { text: backend.chapter_path; color: tokens.textDim; font.pixelSize: tokens.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 300; clip: true }
+            Label { text: backend.workspace_path; color: tokens.textDim; font.pixelSize: tokens.fontXs; elide: Text.ElideRight; Layout.maximumWidth: 250; clip: true }
         }
     }
 

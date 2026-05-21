@@ -16,10 +16,12 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/EditorPage.qml" as "EditorPage.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
     "qml/SyncPage.qml" as "SyncPage.qml",
+    "qml/EmptyWorkspace.qml" as "EmptyWorkspace.qml",
     // Components
     "qml/AppButton.qml" as "AppButton.qml",
     "qml/AppCard.qml" as "AppCard.qml",
     "qml/AppTextField.qml" as "AppTextField.qml",
+    "qml/AppSwitch.qml" as "AppSwitch.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
     "qml/SettingsRow.qml" as "SettingsRow.qml",
     "qml/SidebarItem.qml" as "SidebarItem.qml",
@@ -33,6 +35,7 @@ struct AppBackend {
     base: qt_base_class!(trait QObject),
 
     workspace_path: qt_property!(QString; READ workspace_path NOTIFY workspace_opened),
+    has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
     save_status: qt_property!(QString; READ save_status WRITE set_save_status NOTIFY save_status_changed),
     word_count: qt_property!(i32; READ word_count WRITE set_word_count NOTIFY word_count_changed),
     error_message: qt_property!(QString; READ error_message NOTIFY error_occurred),
@@ -41,6 +44,7 @@ struct AppBackend {
     chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
 
     workspace_opened: qt_signal!(),
+    workspace_state_changed: qt_signal!(),
     projects_reloaded: qt_signal!(),
     save_status_changed: qt_signal!(),
     word_count_changed: qt_signal!(),
@@ -65,6 +69,8 @@ struct AppBackend {
     sync_config_changed: qt_signal!(),
     sync_action_result: qt_property!(QString; READ sync_action_result NOTIFY sync_action_completed),
     sync_action_completed: qt_signal!(),
+    sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
+    sync_status_changed: qt_signal!(),
 
     setting_font_size: qt_property!(f32; READ setting_font_size WRITE set_setting_font_size NOTIFY settings_changed),
     setting_line_spacing: qt_property!(f32; READ setting_line_spacing WRITE set_setting_line_spacing NOTIFY settings_changed),
@@ -88,7 +94,11 @@ struct AppBackend {
     perform_sync_dry_run: qt_method!(fn(&mut self)),
     perform_sync: qt_method!(fn(&mut self)),
 
-    open_workspace_dialog: qt_method!(fn(&mut self)),
+    try_restore_last_workspace: qt_method!(fn(&mut self)),
+    create_new_workspace: qt_method!(fn(&mut self)),
+    open_existing_workspace: qt_method!(fn(&mut self)),
+    init_workspace_from_github: qt_method!(fn(&mut self)),
+
     create_new_project: qt_method!(fn(&mut self, title: QString)),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
     create_new_chapter:
@@ -141,6 +151,7 @@ struct AppBackend {
 
     core: Option<Rc<RefCell<WriterCore>>>,
     current_workspace: String,
+    current_has_workspace: bool,
     current_save_status: String,
     current_word_count: i32,
     current_error_message: String,
@@ -164,6 +175,7 @@ struct AppBackend {
     current_sync_username: String,
     current_sync_token: String,
     current_sync_action_result: String,
+    current_sync_status: String,
 
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
@@ -177,6 +189,19 @@ struct AppBackend {
 }
 
 impl AppBackend {
+    fn has_workspace(&self) -> bool {
+        self.current_has_workspace
+    }
+
+    fn sync_status(&self) -> QString {
+        self.current_sync_status.clone().into()
+    }
+
+    fn set_sync_status(&mut self, val: QString) {
+        self.current_sync_status = val.to_string();
+        self.sync_status_changed();
+    }
+
     fn sync_enabled(&self) -> bool {
         self.current_sync_enabled
     }
@@ -304,6 +329,86 @@ impl AppBackend {
 
     fn setting_smooth_cursor_enabled(&self) -> bool { self.current_setting_smooth_cursor_enabled }
     fn set_setting_smooth_cursor_enabled(&mut self, val: bool) { self.current_setting_smooth_cursor_enabled = val; self.settings_changed(); }
+
+    fn try_restore_last_workspace(&mut self) {
+        if let Some(path) = writer_core::app_config::get_last_workspace_path() {
+            let path_obj = std::path::Path::new(&path);
+            if path_obj.exists() && path_obj.is_dir() {
+                let core = WriterCore::new(&path);
+                if core.validate_workspace().unwrap_or(false) {
+                    self.core = Some(Rc::new(RefCell::new(core)));
+                    self.current_workspace = path.clone();
+                    self.current_has_workspace = true;
+                    self.current_save_status = "已保存".to_string();
+                    self.save_status_changed();
+                    self.reload_tree();
+                    self.workspace_opened();
+                    self.workspace_state_changed();
+                    return;
+                }
+            }
+        }
+        self.current_has_workspace = false;
+        self.workspace_state_changed();
+    }
+
+    fn internal_open_workspace(&mut self, path: &str, initialize: bool) {
+        let path_obj = std::path::Path::new(path);
+        if !path_obj.exists() || !path_obj.is_dir() {
+            self.set_error(&format!("路径不存在或不是目录: {}", path));
+            return;
+        }
+
+        let core = WriterCore::new(path);
+        let is_valid = core.validate_workspace().unwrap_or(false);
+
+        if !is_valid && !initialize {
+            self.set_error("不是有效工作区。请选择其他目录，或使用「新建工作区」初始化该目录。");
+            return;
+        }
+
+        if !is_valid && initialize {
+            if let Err(e) = core.create_workspace() {
+                self.set_error(&format!("无法创建工作区: {}", e));
+                return;
+            }
+        }
+
+        let core = WriterCore::new(path);
+        if !core.validate_workspace().unwrap_or(false) {
+            self.set_error("工作区验证失败");
+            return;
+        }
+
+        self.core = Some(Rc::new(RefCell::new(core)));
+        self.current_workspace = path.to_string();
+        self.current_has_workspace = true;
+        self.current_save_status = "已保存".to_string();
+        self.save_status_changed();
+        self.reload_tree();
+        self.workspace_opened();
+        self.workspace_state_changed();
+
+        let _ = writer_core::app_config::set_last_workspace_path(path);
+    }
+
+    fn create_new_workspace(&mut self) {
+        if let Some(path) = FileDialog::new().pick_folder() {
+            self.internal_open_workspace(&path.to_string_lossy(), true);
+        }
+    }
+
+    fn open_existing_workspace(&mut self) {
+        if let Some(path) = FileDialog::new().pick_folder() {
+            self.internal_open_workspace(&path.to_string_lossy(), false);
+        }
+    }
+
+    fn init_workspace_from_github(&mut self) {
+        if let Some(path) = FileDialog::new().pick_folder() {
+            self.internal_open_workspace(&path.to_string_lossy(), true);
+        }
+    }
 
     fn load_local_settings(&mut self) {
         if let Some(core_ref) = &self.core {
@@ -812,30 +917,6 @@ impl AppBackend {
         let text_str = text.to_string();
         let count = text_str.chars().filter(|c| !c.is_whitespace()).count() as i32;
         self.set_word_count(count);
-    }
-
-    fn open_workspace_dialog(&mut self) {
-        if let Some(path) = FileDialog::new().pick_folder() {
-            let core = WriterCore::new(&path);
-
-            if !core.validate_workspace().unwrap_or(false) {
-                if let Err(e) = core.create_workspace() {
-                    self.set_error(&format!("无法创建工作区: {}", e));
-                    return;
-                }
-                if !core.validate_workspace().unwrap_or(false) {
-                    self.set_error("创建后工作区依然无效");
-                    return;
-                }
-            }
-
-            self.core = Some(Rc::new(RefCell::new(core)));
-            self.current_workspace = path.to_string_lossy().to_string();
-            self.current_save_status = "已保存".to_string();
-            self.save_status_changed();
-            self.reload_tree();
-            self.workspace_opened();
-        }
     }
 
     fn reload_tree(&mut self) {

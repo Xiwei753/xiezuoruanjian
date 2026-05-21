@@ -11,6 +11,7 @@ Item {
     property string description: ""
     property bool isSwitch: true
     property bool checked: false
+    property bool enabled: true
 
     // Slider mode
     property real sliderValue: 50
@@ -19,7 +20,7 @@ Item {
     property real sliderStep: 1
     property string valueLabel: ""
 
-    implicitHeight: isSwitch ? 44 : 40
+    implicitHeight: isSwitch ? 48 : 40
     implicitWidth: 200
 
     Loader {
@@ -32,33 +33,24 @@ Item {
         RowLayout {
             spacing: control.theme ? control.theme.sp12 : 12
             anchors.fill: parent
+            anchors.leftMargin: control.theme ? control.theme.sp4 : 4
+            anchors.rightMargin: control.theme ? control.theme.sp4 : 4
 
-            Switch {
+            AppSwitch {
                 id: switchCtrl
                 checked: control.checked
+                enabled: control.enabled
+                theme: control.theme
                 onCheckedChanged: control.checked = checked
-                indicator: Rectangle {
-                    implicitWidth: 40; implicitHeight: 22
-                    x: parent.leftPadding; y: parent.height / 2 - height / 2
-                    radius: 11
-                    color: parent.checked ? (control.theme ? control.theme.primary : "#0ea5e9") : (control.theme ? control.theme.border : "#334155")
-                    Behavior on color { ColorAnimation { duration: 150 } }
-                    Rectangle {
-                        x: parent.checked ? 20 : 2; y: 2
-                        width: 18; height: 18; radius: 9
-                        color: "#ffffff"
-                        Behavior on x { NumberAnimation { duration: 150 } }
-                    }
-                }
-                background: Item {}
             }
 
             ColumnLayout {
                 spacing: 2
+                Layout.fillWidth: true
                 Label {
                     text: control.label
                     font.pixelSize: control.theme ? control.theme.fontMd : 13
-                    color: control.theme ? control.theme.text : "#e2e8f0"
+                    color: control.enabled ? (control.theme ? control.theme.text : "#e2e8f0") : (control.theme ? control.theme.textDim : "#94a3b8")
                 }
                 Label {
                     text: control.description
@@ -76,6 +68,8 @@ Item {
         id: sliderComponent
         RowLayout {
             anchors.fill: parent
+            anchors.leftMargin: control.theme ? control.theme.sp4 : 4
+            anchors.rightMargin: control.theme ? control.theme.sp4 : 4
             spacing: control.theme ? control.theme.sp12 : 12
 
             Label {

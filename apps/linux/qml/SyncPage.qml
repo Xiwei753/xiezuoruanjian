@@ -42,6 +42,26 @@ ScrollView {
         tokenInput.text = ""
         tokenInput.placeholderText = root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
         syncResultLabel.text = root.backendRef.sync_action_result
+        updateSyncStatus()
+    }
+
+    function updateSyncStatus() {
+        var config = {
+            enabled: syncEnabledCheck.checked,
+            remoteUrl: remoteUrlInput.text,
+            branch: branchInput.text,
+            hasToken: root.hasExistingToken
+        }
+
+        if (!config.enabled) {
+            root.backendRef.sync_status = "not_configured"
+        } else if (!config.remoteUrl) {
+            root.backendRef.sync_status = "not_configured"
+        } else if (!config.hasToken) {
+            root.backendRef.sync_status = "configured_untested"
+        } else {
+            root.backendRef.sync_status = "configured_untested"
+        }
     }
 
     Connections {
@@ -55,8 +75,63 @@ ScrollView {
     Component.onCompleted: loadForm()
 
     ColumnLayout {
-        width: parent.width
+        width: Math.min(parent.width, 560)
         spacing: root.theme ? root.theme.sp16 : 16
+
+        // Sync status card
+        AppCard {
+            theme: root.theme; Layout.fillWidth: true
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: root.theme ? root.theme.sp12 : 12
+
+                Rectangle {
+                    width: 10; height: 10; radius: 5
+                    color: {
+                        var ss = root.backendRef ? root.backendRef.sync_status : "not_configured"
+                        if (ss === "success") return root.theme ? root.theme.success : "#22c55e"
+                        if (ss === "syncing") return root.theme ? root.theme.warning : "#f59e0b"
+                        if (ss === "auth_failed") return root.theme ? root.theme.danger : "#ef4444"
+                        if (ss === "network_failed") return root.theme ? root.theme.danger : "#ef4444"
+                        if (ss === "conflict") return root.theme ? root.theme.danger : "#ef4444"
+                        if (ss === "configured_untested") return root.theme ? root.theme.warning : "#f59e0b"
+                        return root.theme ? root.theme.textDim : "#94a3b8"
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: {
+                            var ss = root.backendRef ? root.backendRef.sync_status : "not_configured"
+                            if (ss === "not_configured") return "未配置"
+                            if (ss === "configured_untested") return "已配置，未测试"
+                            if (ss === "syncing") return "正在同步"
+                            if (ss === "success") return "同步成功"
+                            if (ss === "auth_failed") return "认证失败"
+                            if (ss === "network_failed") return "网络/代理失败"
+                            if (ss === "conflict") return "冲突需要处理"
+                            return "未知状态"
+                        }
+                        font.pixelSize: root.theme ? root.theme.fontMd : 13
+                        font.weight: Font.Medium
+                        color: root.theme ? root.theme.text : "#e2e8f0"
+                    }
+                    Label {
+                        text: {
+                            var ss = root.backendRef ? root.backendRef.sync_status : "not_configured"
+                            if (ss === "not_configured") return "请先配置同步后启用"
+                            if (ss === "configured_untested") return "配置已保存，点击「测试连接」验证"
+                            return ""
+                        }
+                        font.pixelSize: root.theme ? root.theme.fontSm : 12
+                        color: root.theme ? root.theme.textDim : "#94a3b8"
+                        visible: text.length > 0
+                    }
+                }
+            }
+        }
 
         SectionHeader { theme: root.theme; text: "同步设置" }
 
@@ -143,7 +218,7 @@ ScrollView {
                     leftPadding: 8; topPadding: 6; bottomPadding: 6
                 }
                 Label {
-                    text: root.hasExistingToken ? "✓ Token 已配置" : "⚠ Token 未配置，同步将无法进行"
+                    text: root.hasExistingToken ? "Token 已配置" : "Token 未配置，同步将无法进行"
                     font.pixelSize: root.theme ? root.theme.fontXs : 11
                     color: root.hasExistingToken ? (root.theme ? root.theme.success : "#22c55e") : (root.theme ? root.theme.warning : "#f59e0b")
                 }
@@ -261,7 +336,7 @@ ScrollView {
             Layout.fillWidth: true
             spacing: root.theme ? root.theme.sp8 : 8
             AppButton { theme: root.theme; small: true; text: "保存配置"; enabled: !root.actionInProgress
-                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (!root.backendRef.save_sync_config()) { root.actionInProgress = false } }
+                onClicked: { applySyncFormToBackend(); root.actionInProgress = true; updateSyncStatus(); if (!root.backendRef.save_sync_config()) { root.actionInProgress = false } }
             }
             AppButton { theme: root.theme; small: true; text: "测试连接"; enabled: !root.actionInProgress
                 onClicked: { applySyncFormToBackend(); root.actionInProgress = true; if (root.backendRef.save_sync_config()) { root.backendRef.perform_sync_diagnostics() } else { root.actionInProgress = false } }
