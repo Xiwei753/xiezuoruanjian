@@ -221,6 +221,8 @@ ScrollView {
                         if (ss === "auth_failed") return root.theme ? root.theme.danger : "#ef4444"
                         if (ss === "network_failed") return root.theme ? root.theme.danger : "#ef4444"
                         if (ss === "conflict") return root.theme ? root.theme.danger : "#ef4444"
+                        if (ss === "branch_missing") return root.theme ? root.theme.warning : "#f59e0b"
+                        if (ss === "non_fast_forward") return root.theme ? root.theme.danger : "#ef4444"
                         if (ss === "configured_untested") return root.theme ? root.theme.warning : "#f59e0b"
                         return root.theme ? root.theme.textDim : "#94a3b8"
                     }
@@ -239,6 +241,8 @@ ScrollView {
                             if (ss === "auth_failed") return "认证失败"
                             if (ss === "network_failed") return "网络/代理失败"
                             if (ss === "conflict") return "冲突需要处理"
+                            if (ss === "branch_missing") return "远程分支不存在"
+                            if (ss === "non_fast_forward") return "推送被拒绝（非快进）"
                             return "未知状态"
                         }
                         font.pixelSize: root.theme ? root.theme.fontMd : 13
@@ -250,6 +254,8 @@ ScrollView {
                             var ss = root.backendRef ? root.backendRef.sync_status : "not_configured"
                             if (ss === "not_configured") return "请先配置同步后启用"
                             if (ss === "configured_untested") return "配置已保存，点击「测试连接」验证"
+                            if (ss === "branch_missing") return "首次同步会自动创建分支"
+                            if (ss === "non_fast_forward") return "远程有更新，请先拉取再推送"
                             return ""
                         }
                         font.pixelSize: root.theme ? root.theme.fontSm : 12

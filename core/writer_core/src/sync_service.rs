@@ -181,13 +181,76 @@ pub fn mask_token_in_url(url: &str) -> String {
     url.to_string()
 }
 
-pub fn mask_token(s: &str) -> String {
-    if s.len() <= 8 {
-        return "***".to_string();
+/// Redact known secrets (token, password) from a diagnostic/error message.
+/// This is a SAFE replacement for `mask_token` which was destroying the entire error.
+/// Strategy:
+/// 1. Redact URL userinfo (https://user:token@host/path -> https://***@host/path)
+/// 2. If a known token string is provided, redact every occurrence of it.
+/// 3. Does NOT touch ordinary error text, git return codes, or libgit2 messages.
+pub fn redact_secrets_from_message(msg: &str, known_token: Option<&str>, remote_url: Option<&str>) -> String {
+    let mut result = msg.to_string();
+
+    // 1. Always redact URL userinfo
+    if let Some(url) = remote_url {
+        if url.contains('@') {
+            if let Some(prefix) = url.split("://").next() {
+                result = result.replace(url, &format!("{}://***@...", prefix));
+            }
+        }
+    } else {
+        // Generic URL userinfo redaction if no specific URL given
+        result = mask_token_in_url(&result);
     }
-    let prefix = &s[..4];
-    let suffix = &s[s.len() - 4..];
-    format!("{}***{}", prefix, suffix)
+
+    // 2. Redact known token if provided
+    if let Some(token) = known_token {
+        if !token.is_empty() && token.len() >= 4 {
+            result = result.replace(token, "***REDACTED***");
+        }
+    }
+
+    // 3. Redact any remaining embedded URLs with userinfo
+    // Pattern: https://something@...
+    let mut found = true;
+    while found {
+        found = false;
+        if let Some(start) = result.find("://") {
+            let before = &result[..start];
+            // Look backwards for start of scheme
+            let scheme_start = before.rfind(|c: char| !c.is_alphanumeric() && c != '+' && c != '-' && c != '.')
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            let scheme = &result[scheme_start..start];
+            if scheme == "http" || scheme == "https" || scheme == "ssh" || scheme == "git" || scheme == "socks5" || scheme == "socks5h" {
+                let rest = &result[start + 3..];
+                if let Some(at_pos) = rest.find('@') {
+                    let before_at = &rest[..at_pos];
+                    if before_at.contains(':') || before_at.contains('%') {
+                        // Has userinfo (contains colon or percent-encoded chars)
+                        let redacted = format!("{}://***@", scheme);
+                        let after_at = &rest[at_pos + 1..];
+                        // Find end (space, newline, comma, end-of-string)
+                        let end = after_at.find(|c: char| c.is_whitespace() || c == ',' || c == ')' || c == ']')
+                            .unwrap_or(after_at.len());
+                        let full = format!("{}://{}{}", scheme, before_at, &after_at[..end]);
+                        let replacement = format!("{}***@{}", redacted, &after_at[..end]);
+                        if let Some(pos) = result.find(&full) {
+                            result.replace_range(pos..pos + full.len(), &replacement);
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Legacy token masking function - now just an alias for redact_secrets_from_message
+/// without known secrets. This prevents the old behavior of masking the entire error message.
+pub fn mask_token(s: &str) -> String {
+    redact_secrets_from_message(s, None, None)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -9,7 +9,7 @@ Rectangle {
     implicitWidth: 200
     implicitHeight: col.implicitHeight + 24
     radius: control.theme ? control.theme.radiusMd : 8
-    color: control.theme ? control.theme.surfaceAlt : "#16213e"
+    color: control.theme ? control.theme.surface : "#1e293b"
     border.color: control.theme ? control.theme.border : "#334155"
     border.width: 1
 

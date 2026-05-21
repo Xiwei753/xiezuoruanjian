@@ -38,7 +38,7 @@ struct SyncTaskOutcome {
 }
 
 fn mask_sync_error(msg: &str) -> String {
-    writer_core::sync_service::mask_token(msg)
+    writer_core::sync_service::redact_secrets_from_message(msg, None, None)
 }
 
 fn sync_error_category(msg: &str) -> String {
@@ -52,25 +52,34 @@ fn sync_error_category(msg: &str) -> String {
        lower.contains("permission denied") || lower.contains("403") {
         return "auth_failed".to_string();
     }
-    // Branch not found
+    // Branch not found — was previously classified as configured_untested, now properly as its own category
     if lower.contains("ref not found") || lower.contains("couldn't find remote ref") ||
+       lower.contains("remote branch not found") ||
        (lower.contains("branch") && lower.contains("not found")) {
-        return "configured_untested".to_string();
+        // If this is the first sync, we can create the branch; but the error itself says branch doesn't exist
+        return "branch_missing".to_string();
+    }
+    // non-fast-forward
+    if lower.contains("non-fast-forward") || lower.contains("non fast forward") || lower.contains("nonfastforward") ||
+       (lower.contains("fetch first") && lower.contains("push")) {
+        return "non_fast_forward".to_string();
     }
     // Conflict / merge / unrelated histories
-    if lower.contains("conflict") || lower.contains("merge") || lower.contains("unrelated") {
+    if lower.contains("conflict") || lower.contains("merge conflict") || lower.contains("unrelated") {
         return "conflict".to_string();
     }
-    // Authentication errors
-    if lower.contains("authentication") || lower.contains("auth") || lower.contains("401") ||
-       lower.contains("credentials") || lower.contains("token") {
+    // Authentication errors (separate from token-missing since token may be present but wrong)
+    if lower.contains("authentication") || lower.contains("auth failed") || lower.contains("401") ||
+       lower.contains("credentials") || lower.contains("could not authenticate") ||
+       lower.contains("bad credentials") {
         return "auth_failed".to_string();
     }
     // Network errors
     if lower.contains("resolve") || lower.contains("timeout") || lower.contains("connection refused") ||
        lower.contains("dns") || lower.contains("network") || lower.contains("proxy") ||
        lower.contains("eof") || lower.contains("tls") || lower.contains("ssl") ||
-       lower.contains("certificate") || lower.contains("unreachable") {
+       lower.contains("certificate") || lower.contains("unreachable") ||
+       lower.contains("connection reset") || lower.contains("no route to host") {
         return "network_failed".to_string();
     }
     "error".to_string()
@@ -509,6 +518,7 @@ impl AppBackend {
                     self.save_status_changed();
                     self.reload_tree();
                     self.load_sync_config();
+                    self.load_local_settings();  // Load theme mode immediately
                     self.workspace_opened();
                     self.workspace_state_changed();
                     return;
@@ -1499,6 +1509,35 @@ impl AppBackend {
     }
 
     fn create_new_project(&mut self, title: QString) {
+        if !self.current_has_workspace {
+            self.set_error("未打开工作区，无法创建作品。请先新建或打开一个工作区。");
+            return;
+        }
+        if self.current_workspace.is_empty() {
+            self.set_error("工作区路径为空，无法创建作品。");
+            return;
+        }
+        let ws_path = std::path::Path::new(&self.current_workspace);
+        if !ws_path.exists() || !ws_path.is_dir() {
+            self.set_error(&format!("工作区目录不存在: {}", self.current_workspace));
+            return;
+        }
+        let core_check = WriterCore::new(&self.current_workspace);
+        if !core_check.validate_workspace().unwrap_or(false) {
+            self.set_error(&format!("工作区验证失败，不是有效 Writer 工作区: {}", self.current_workspace));
+            return;
+        }
+
+        if self.core.is_none() {
+            // Re-initialize core if it was dropped
+            let new_core = WriterCore::new(&self.current_workspace);
+            if !new_core.validate_workspace().unwrap_or(false) {
+                self.set_error(&format!("无法重新打开工作区: {}", self.current_workspace));
+                return;
+            }
+            self.core = Some(Rc::new(RefCell::new(new_core)));
+        }
+
         if let Some(core_ref) = &self.core {
             let result = {
                 let core = core_ref.borrow();
@@ -1513,7 +1552,10 @@ impl AppBackend {
                     self.reload_tree();
                     self.projects_reloaded();
                 }
-                Err(e) => self.set_error(&format!("创建作品失败: {}", e)),
+                Err(e) => {
+                    let msg = format!("创建作品失败: {} (工作区: {})", e, self.current_workspace);
+                    self.set_error(&msg);
+                }
             }
         }
     }

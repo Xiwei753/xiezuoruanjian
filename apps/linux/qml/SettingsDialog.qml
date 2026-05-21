@@ -106,9 +106,10 @@ Popup {
                                     Slider {
                                         id: autoIndentWidthSlider
                                         from: 0; to: 800; value: backendRef.setting_auto_indent_width > 0 ? backendRef.setting_auto_indent_width * 100 : 200; stepSize: 50
-                                        Layout.fillWidth: true; Layout.preferredHeight: 24
+                                        Layout.fillWidth: true; Layout.preferredHeight: 28
+                                        Layout.bottomMargin: 4
                                     }
-                                    Label { text: (autoIndentWidthSlider.value / 100).toFixed(1) + " 字符"; font.pixelSize: theme.fontSm; color: theme.textDim }
+                                    Label { text: (autoIndentWidthSlider.value / 100).toFixed(1) + " 字符"; font.pixelSize: theme.fontSm; color: theme.textDim; Layout.bottomMargin: 4 }
                                 }
                             }
                         }
@@ -133,9 +134,10 @@ Popup {
                                     Slider {
                                         id: autoSaveDelaySlider
                                         from: 500; to: 60000; value: backendRef.setting_auto_save_delay_ms > 0 ? backendRef.setting_auto_save_delay_ms : 1500; stepSize: 500
-                                        Layout.fillWidth: true; Layout.preferredHeight: 24
+                                        Layout.fillWidth: true; Layout.preferredHeight: 28
+                                        Layout.bottomMargin: 4
                                     }
-                                    Label { text: autoSaveDelaySlider.value.toFixed(0) + " ms"; font.pixelSize: theme.fontSm; color: theme.textDim; Layout.preferredWidth: 60 }
+                                    Label { text: autoSaveDelaySlider.value.toFixed(0) + " ms"; font.pixelSize: theme.fontSm; color: theme.textDim; Layout.bottomMargin: 4 }
                                 }
                             }
                         }

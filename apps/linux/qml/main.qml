@@ -83,7 +83,7 @@ ApplicationWindow {
         function apply(modeStr) {
             if (modeStr === "light") mode = "light"
             else if (modeStr === "dark") mode = "dark"
-            else mode = "dark"
+            else applySystemTheme()
         }
 
         function applySystemTheme() {
@@ -131,6 +131,7 @@ ApplicationWindow {
         } else {
             tokens.apply(themeMode)
         }
+        effectiveTheme = tokens.mode
         reloadTree()
     }
 
@@ -143,12 +144,19 @@ ApplicationWindow {
             } else {
                 tokens.apply(mode)
             }
+            effectiveTheme = tokens.mode
         }
         function onSystem_color_scheme_changed() {
             if (backend.setting_theme_mode === "system") {
                 tokens.applySystemTheme()
+                effectiveTheme = tokens.mode
             }
         }
+    }
+
+    onEffectiveThemeChanged: {
+        // Ensure token mode stays in sync
+        tokens.mode = effectiveTheme
     }
 
     // ── State ─────────────────────────────────────────────────
@@ -156,6 +164,7 @@ ApplicationWindow {
     property bool loadingChapter: false
     property int sidebarWidth: 260
     property string navSection: "tree"
+    property string effectiveTheme: tokens.mode
 
     // ── Functions ─────────────────────────────────────────────
 
@@ -715,6 +724,8 @@ ApplicationWindow {
                         if (ss === "auth_failed") return tokens.danger
                         if (ss === "network_failed") return tokens.danger
                         if (ss === "conflict") return tokens.danger
+                        if (ss === "branch_missing") return tokens.warning
+                        if (ss === "non_fast_forward") return tokens.danger
                         return tokens.textDim
                     }
                 }
