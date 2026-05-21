@@ -173,9 +173,8 @@ ApplicationWindow {
                     confirmDialog.open();
                 }
                 onRenameItem: function(type, projectId, volumeId, chapterId, currentTitle) {
-                    // For now, redirect rename to delete for simplicity or show not implemented
-                    // The user said "重命名后续再做，但不要让菜单点了没反应"
-                    // We will just show a toast or nothing. Let's just open a dialog for rename placeholder.
+                    errorDialog.message = "重命名功能尚未实现";
+                    errorDialog.open();
                 }
             }
         }
@@ -384,14 +383,29 @@ ApplicationWindow {
     Dialog {
         id: syncPageDialog
         modal: true
-        width: Math.min(window.width - 80, 720)
-        height: Math.min(window.height - 120, 560)
+        title: "同步设置"
+        width: Math.max(360, Math.min(window.width - 80, 720))
+        height: Math.max(420, Math.min(window.height - 120, 560))
         anchors.centerIn: Overlay.overlay
         background: Rectangle { color: theme.bgDark; border.color: theme.border; radius: 8; border.width: 1 }
-        contentItem: Item {
-            anchors.fill: parent
+        
+        header: null
+
+        contentItem: ScrollView {
+            id: syncDialogScroll
+            clip: true
+            topPadding: 16
+            bottomPadding: 16
+            leftPadding: 16
+            rightPadding: 16
+            
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ScrollBar.vertical.policy: ScrollBar.AsNeeded
+
             SyncPage {
-                anchors.fill: parent
+                id: syncPage
+                width: syncDialogScroll.availableWidth
+                height: Math.max(syncDialogScroll.availableHeight, implicitHeight)
                 theme: theme
                 backendRef: backend
                 onSettingsChanged: {

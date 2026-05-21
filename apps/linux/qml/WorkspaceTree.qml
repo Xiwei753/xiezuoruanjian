@@ -162,7 +162,7 @@ Rectangle {
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
-                    if (!data || !data.id) { root.showError("删除失败：缺失节点 ID"); return; }
+                    if (!data || !data.id) { root.showError("重命名失败：缺失节点 ID"); return; }
                     root.renameItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }

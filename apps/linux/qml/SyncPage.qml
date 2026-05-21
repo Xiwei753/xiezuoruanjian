@@ -1,9 +1,11 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Window 2.15
 
 Rectangle {
     id: root
+    implicitHeight: mainCol.implicitHeight + 32
     Connections {
         target: root.backendRef
         function onSync_action_completed() {
@@ -25,15 +27,17 @@ Rectangle {
     color: theme ? theme.bgDark : "#1E1E1E"
 
     ScrollView {
+        id: syncScroll
         anchors.fill: parent
-        anchors.margins: 24
-        contentWidth: width
-        contentHeight: mainCol.height
+        anchors.margins: 16
+        contentWidth: availableWidth
+        contentHeight: mainCol.implicitHeight
+        clip: true
 
         Column {
             id: mainCol
-            width: Math.min(parent.width, 600)
-            spacing: 24
+            width: syncScroll.availableWidth
+            spacing: 20
 
             Text {
                 text: "同步设置"
@@ -133,17 +137,19 @@ Rectangle {
 
             Rectangle {
                 width: parent.width
-                height: 200
+                height: Math.max(120, Math.min(200, (Window.window ? Window.window.height : 768) - 500))
                 color: theme ? theme.bgDarker : "#121212"
                 border.color: theme ? theme.border : "#333333"
                 radius: 4
                 clip: true
 
                 ScrollView {
+                    id: logScroll
                     anchors.fill: parent
                     anchors.margins: 8
                     TextArea {
                         id: syncResultArea
+                        width: logScroll.availableWidth
                         text: root.backendRef ? root.backendRef.sync_action_result : ''
                         color: theme ? theme.textDim : "#A0A0A0"
                         font.family: "monospace"
