@@ -402,7 +402,7 @@ class SettingsActivity : AppCompatActivity() {
                     is NativeResult.Success -> {
                         val plan = result.data
                         if (plan != null) {
-                            val msg = "同步计划检查完成: " + getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.ignoredFiles.size)
+                            val msg = "同步计划检查完成: " + getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.filesToDeleteRemote.size, plan.filesToDeleteLocal.size, plan.ignoredFiles.size)
                             Toast.makeText(this@SettingsActivity, msg, Toast.LENGTH_LONG).show()
                         }
                     }

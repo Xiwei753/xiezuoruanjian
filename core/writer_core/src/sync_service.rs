@@ -1369,19 +1369,13 @@ impl SyncBackend for GitHubApiBackend {
             let _ = SyncService::save_sync_state(workspace_path, &state);
         }
 
-        let plan = SyncService::build_sync_plan_from_workspace(workspace_path)?;
-        if plan.files_to_upload.is_empty() {
-            result.status = SyncStatus::Success;
-            Self::save_sync_attempt_state(workspace_path, &result);
-            return Ok(result);
-        }
-
         // Check if branch exists
         let branch_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
         let resp = client.get(&branch_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
 
         let mut latest_commit_sha = String::new();
         let mut base_tree_sha = String::new();
+        let mut remote_tree_files = std::collections::HashMap::new();
 
         if resp.status().as_u16() == 200 {
             let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
@@ -1394,6 +1388,146 @@ impl SyncBackend for GitHubApiBackend {
                 let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
                 base_tree_sha = json["tree"]["sha"].as_str().unwrap_or_default().to_string();
             }
+
+            // get tree recursively
+            if !base_tree_sha.is_empty() {
+                let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, base_tree_sha);
+                let resp = client.get(&tree_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
+                if resp.status().as_u16() == 200 {
+                    let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                    if let Some(tree) = json["tree"].as_array() {
+                        for item in tree {
+                            if item["type"].as_str() == Some("blob") {
+                                if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
+                                    remote_tree_files.insert(path.to_string(), sha.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut state = SyncService::load_sync_state(workspace_path).unwrap_or_default();
+
+        let mut to_upload = vec![];
+        let mut to_download = vec![];
+        let mut to_delete_local = vec![];
+        let mut to_delete_remote = vec![];
+        let mut conflicts = vec![];
+        let mut ignored = vec![];
+
+        let local_entries = SyncService::scan_workspace_for_sync(workspace_path)?;
+        let mut local_files_git_hash: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut local_files_md5_hash: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        for entry in &local_entries {
+            if entry.sync_kind == SyncKind::Upload {
+                let full_path = workspace_path.join(&entry.relative_path);
+                if let Ok(content) = std::fs::read(&full_path) {
+                    let git_hash = SyncService::compute_git_hash(&content);
+                    local_files_git_hash.insert(entry.relative_path.clone(), git_hash);
+                    local_files_md5_hash.insert(entry.relative_path.clone(), entry.file_hash.clone());
+                }
+            } else {
+                ignored.push(entry.relative_path.clone());
+            }
+        }
+
+        let is_first_sync = state.known_files.is_empty();
+
+        for (local_path, local_git_hash) in &local_files_git_hash {
+            let remote_hash = remote_tree_files.get(local_path);
+            let known_hash_opt = state.known_files.get(local_path);
+
+            if is_first_sync {
+                if let Some(rh) = remote_hash {
+                    if local_git_hash != rh {
+                        conflicts.push(local_path.clone());
+                    }
+                } else {
+                    to_upload.push(local_path.clone());
+                }
+                continue;
+            }
+
+            match (remote_hash, known_hash_opt) {
+                (Some(rh), Some(kh)) => {
+                    let local_changed = local_git_hash != kh;
+                    let remote_changed = rh != kh;
+
+                    if local_changed && remote_changed {
+                        conflicts.push(local_path.clone());
+                    } else if local_changed && !remote_changed {
+                        to_upload.push(local_path.clone());
+                    } else if !local_changed && remote_changed {
+                        to_download.push(local_path.clone());
+                    }
+                }
+                (Some(_rh), None) => {
+                    // Local added, remote added -> conflict if different, else ignore
+                    if Some(local_git_hash) != remote_hash {
+                        conflicts.push(local_path.clone());
+                    }
+                }
+                (None, Some(kh)) => {
+                    // Deleted remotely
+                    let local_changed = local_git_hash != kh;
+                    if local_changed {
+                        conflicts.push(local_path.clone());
+                    } else {
+                        to_delete_local.push(local_path.clone());
+                    }
+                }
+                (None, None) => {
+                    // Local added, remote not present
+                    to_upload.push(local_path.clone());
+                }
+            }
+        }
+
+        for (remote_path, remote_hash) in &remote_tree_files {
+            if !local_files_git_hash.contains_key(remote_path) {
+                let known_hash_opt = state.known_files.get(remote_path);
+                if is_first_sync {
+                    to_download.push(remote_path.clone());
+                    continue;
+                }
+                match known_hash_opt {
+                    Some(kh) => {
+                        let remote_changed = remote_hash != kh;
+                        if remote_changed {
+                            conflicts.push(remote_path.clone());
+                        } else {
+                            to_delete_remote.push(remote_path.clone());
+                        }
+                    }
+                    None => {
+                        to_download.push(remote_path.clone());
+                    }
+                }
+            }
+        }
+
+        if !conflicts.is_empty() {
+             result.error = Some("conflict detected".to_string());
+             result.status = SyncStatus::Conflict;
+             let mut conflict_objects = vec![];
+             for c in &conflicts {
+                 conflict_objects.push(SyncConflict {
+                     local_path: c.clone(),
+                     remote_path: c.clone(),
+                     local_hash: local_files_git_hash.get(c).cloned().unwrap_or_default(),
+                     remote_hash: remote_tree_files.get(c).cloned().unwrap_or_default(),
+                     base_hash: state.known_files.get(c).cloned().unwrap_or_default(),
+                     created_at: chrono::Utc::now().timestamp(),
+                     description: "文件在本地和远端都发生了修改或存在删除冲突".to_string(),
+                 });
+             }
+             result.conflicts = conflict_objects;
+             result.user_message = Some(format!("发现 {} 个冲突文件，请先手动解决。", conflicts.len()));
+             Self::save_sync_attempt_state(workspace_path, &result);
+             return Ok(result);
         }
 
         let mut tree_payload = serde_json::json!({
@@ -1403,9 +1537,61 @@ impl SyncBackend for GitHubApiBackend {
             tree_payload["base_tree"] = serde_json::json!(base_tree_sha);
         }
 
+        // 1. Download files
+        for dl in &to_download {
+            let api_content_url = format!("{}/contents/{}?ref={}", api_base, dl, config.branch);
+            let dl_resp = client.get(&api_content_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            if dl_resp.status().is_success() {
+                let json: serde_json::Value = dl_resp.json().unwrap_or_default();
+                if let Some(content_b64) = json["content"].as_str() {
+                    let content_b64 = content_b64.replace("\n", "");
+                    use base64::Engine;
+                    if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
+                        let full_path = workspace_path.join(dl);
+                        if let Some(parent) = full_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+
+                        let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                        if std::fs::write(&tmp_path, content).is_ok() {
+                            let _ = std::fs::rename(tmp_path, &full_path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Delete local files (from remote deletion)
+        for del in &to_delete_local {
+            let full_path = workspace_path.join::<&String>(del);
+            if full_path.exists() {
+                // Move to trash
+                let filename = full_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let trash_dir = workspace_path.join("app-meta/sync/trash");
+                let _ = std::fs::create_dir_all(&trash_dir);
+                let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), filename));
+
+                let _ = std::fs::rename(&full_path, &trash_path);
+
+                let rel_trash_path = trash_path.strip_prefix(workspace_path).unwrap_or(&trash_path).to_string_lossy().replace("\\", "/");
+
+                let tombstone = Tombstone {
+                    original_path: del.clone(),
+                    trash_path: rel_trash_path,
+                    deleted_at: chrono::Utc::now().timestamp(),
+                    purge_after: chrono::Utc::now().timestamp() + 30 * 24 * 3600,
+                    deleted_by: "remote".to_string(),
+                    original_hash: state.known_files.get(del).cloned().unwrap_or_default(),
+                    kind: "remote_delete".to_string(),
+                };
+                state.tombstones.push(tombstone);
+            }
+        }
+
+        // 3. Prepare Uploads
         let mut tree_nodes = vec![];
 
-        for file_path in &plan.files_to_upload {
+        for file_path in &to_upload {
             let full_path = workspace_path.join(file_path);
             if !full_path.exists() { continue; }
 
@@ -1438,78 +1624,263 @@ impl SyncBackend for GitHubApiBackend {
             }
         }
 
-        tree_payload["tree"] = serde_json::json!(tree_nodes);
-
-        // create tree
-        let tree_url = format!("{}/git/trees", api_base);
-        let resp = client.post(&tree_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&tree_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-        if resp.status().as_u16() != 201 {
-            result.error = Some("create tree failed".to_string());
-            result.user_message = Some("GitHub API 同步创建 Tree 失败。".to_string());
-            Self::save_sync_attempt_state(workspace_path, &result);
-            return Ok(result);
-        }
-        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-        let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
-
-        // create commit
-        let commit_url = format!("{}/git/commits", api_base);
-        let mut commit_payload = serde_json::json!({
-            "message": format!("WriterApp Sync via GitHub API: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
-            "tree": new_tree_sha
-        });
-        if !latest_commit_sha.is_empty() {
-            commit_payload["parents"] = serde_json::json!(vec![latest_commit_sha.clone()]);
+        // 4. Remote deletions via tree (from local deletion)
+        for file_path in &to_delete_remote {
+            tree_nodes.push(serde_json::json!({
+                "path": file_path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": serde_json::Value::Null
+            }));
         }
 
-        let resp = client.post(&commit_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&commit_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-        if resp.status().as_u16() != 201 {
-            result.error = Some("create commit failed".to_string());
-            result.user_message = Some("GitHub API 同步创建 Commit 失败。".to_string());
-            Self::save_sync_attempt_state(workspace_path, &result);
-            return Ok(result);
-        }
-        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-        let new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
-
-        // update ref
-        if !latest_commit_sha.is_empty() {
-            let ref_url = format!("{}/git/refs/heads/{}", api_base, config.branch);
-            let ref_payload = serde_json::json!({
-                "sha": new_commit_sha,
-                "force": false
-            });
-            let resp = client.patch(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() == 422 { // Unprocessable Entity typically means fast-forward failed
-                 result.error = Some("conflict: fast-forward failed".to_string());
-                 result.user_message = Some("远端存在新提交，无法推送（冲突）。请先同步或手动处理。".to_string());
-                 Self::save_sync_attempt_state(workspace_path, &result);
-                 return Ok(result);
+        // Clean up expired tombstones
+        let now = chrono::Utc::now().timestamp();
+        state.tombstones.retain(|t| {
+            if t.purge_after <= now {
+                let full_trash_path = workspace_path.join(&t.trash_path);
+                let _ = std::fs::remove_file(&full_trash_path);
+                // Also issue remote delete via tree if it was previously uploaded to trash
+                tree_nodes.push(serde_json::json!({
+                    "path": t.trash_path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": serde_json::Value::Null
+                }));
+                false // removed
+            } else {
+                true // kept
             }
-            if resp.status().as_u16() != 200 {
-                result.error = Some("update ref failed".to_string());
-                result.user_message = Some("GitHub API 同步更新引用失败。".to_string());
-                Self::save_sync_attempt_state(workspace_path, &result);
-                return Ok(result);
+        });
+
+        // Sync tombstones.json
+        // First merge with remote tombstones.json if it exists and hasn't been downloaded yet
+        if let Some(_remote_tombstone_hash) = remote_tree_files.get("app-meta/sync/tombstones.json") {
+             if !to_download.contains(&"app-meta/sync/tombstones.json".to_string()) {
+                 let api_content_url = format!("{}/contents/{}?ref={}", api_base, "app-meta/sync/tombstones.json", config.branch);
+                 if let Ok(dl_resp) = client.get(&api_content_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send() {
+                     if dl_resp.status().is_success() {
+                         let json: serde_json::Value = dl_resp.json().unwrap_or_default();
+                         if let Some(content_b64) = json["content"].as_str() {
+                             let content_b64 = content_b64.replace("\n", "");
+                             use base64::Engine;
+                             if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
+                                 if let Ok(remote_tombstones) = serde_json::from_slice::<Vec<Tombstone>>(&content) {
+                                     let mut merged_tombstones = remote_tombstones;
+                                     // merge local tombstones
+                                     for t in &state.tombstones {
+                                         if !merged_tombstones.iter().any(|rt| rt.original_path == t.original_path && rt.trash_path == t.trash_path) {
+                                             merged_tombstones.push(t.clone());
+                                         }
+                                     }
+                                     state.tombstones = merged_tombstones;
+                                 }
+                             }
+                         }
+                     }
+                 }
+             } else {
+                 // it was downloaded, so we can read it directly from disk and merge
+                 if let Ok(content) = std::fs::read(workspace_path.join("app-meta/sync/tombstones.json")) {
+                     if let Ok(remote_tombstones) = serde_json::from_slice::<Vec<Tombstone>>(&content) {
+                         let mut merged_tombstones = remote_tombstones;
+                         for t in &state.tombstones {
+                             if !merged_tombstones.iter().any(|rt| rt.original_path == t.original_path && rt.trash_path == t.trash_path) {
+                                 merged_tombstones.push(t.clone());
+                             }
+                         }
+                         state.tombstones = merged_tombstones;
+                     }
+                 }
+             }
+        }
+
+        if !state.tombstones.is_empty() {
+            let tombstones_json = serde_json::to_string_pretty(&state.tombstones).unwrap_or_default();
+            let tombstones_path = "app-meta/sync/tombstones.json";
+
+            if let Some(parent) = workspace_path.join(tombstones_path).parent() {
+                 let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(workspace_path.join(tombstones_path), &tombstones_json);
+
+            let blob_url = format!("{}/git/blobs", api_base);
+            let blob_payload = serde_json::json!({
+                "content": tombstones_json,
+                "encoding": "utf-8"
+            });
+            let resp = client.post(&blob_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&blob_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() == 201 {
+                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                let sha = json["sha"].as_str().unwrap_or_default().to_string();
+                tree_nodes.push(serde_json::json!({
+                    "path": tombstones_path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": sha
+                }));
             }
         } else {
-            let ref_url = format!("{}/git/refs", api_base);
-            let ref_payload = serde_json::json!({
-                "ref": format!("refs/heads/{}", config.branch),
-                "sha": new_commit_sha
-            });
-            let resp = client.post(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            // delete tombstones.json from remote if empty
+            if remote_tree_files.contains_key("app-meta/sync/tombstones.json") {
+                tree_nodes.push(serde_json::json!({
+                    "path": "app-meta/sync/tombstones.json",
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": serde_json::Value::Null
+                }));
+            }
+            let tombstones_path = "app-meta/sync/tombstones.json";
+            let _ = std::fs::remove_file(workspace_path.join(tombstones_path));
+        }
+
+        // 5. Create new tree & commit if there are changes
+        let mut new_commit_sha = latest_commit_sha.clone();
+
+        if !tree_nodes.is_empty() {
+            tree_payload["tree"] = serde_json::json!(tree_nodes);
+
+            // create tree
+            let tree_url = format!("{}/git/trees", api_base);
+            let resp = client.post(&tree_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&tree_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
             if resp.status().as_u16() != 201 {
-                result.error = Some("create ref failed".to_string());
-                result.user_message = Some("GitHub API 同步创建引用失败。".to_string());
+                let status = resp.status().as_u16();
+                let err_text = resp.text().unwrap_or_default();
+                let clean_err = err_text.replace(&token, "***TOKEN***");
+
+                result.error = Some(format!("create tree failed: {} {}", status, clean_err));
+                result.user_message = Some(format!("GitHub API 同步创建 Tree 失败: {} {}", status, clean_err));
+
                 Self::save_sync_attempt_state(workspace_path, &result);
                 return Ok(result);
             }
+            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+            let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
+
+            // create commit
+            let commit_url = format!("{}/git/commits", api_base);
+            let mut commit_payload = serde_json::json!({
+                "message": format!("WriterApp Sync via GitHub API: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
+                "tree": new_tree_sha
+            });
+            if !latest_commit_sha.is_empty() {
+                commit_payload["parents"] = serde_json::json!(vec![latest_commit_sha.clone()]);
+            }
+
+            let resp = client.post(&commit_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&commit_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() != 201 {
+                let status = resp.status().as_u16();
+                let err_text = resp.text().unwrap_or_default();
+                let clean_err = err_text.replace(&token, "***TOKEN***");
+
+                result.error = Some(format!("create commit failed: {} {}", status, clean_err));
+                result.user_message = Some(format!("GitHub API 同步创建 Commit 失败: {} {}", status, clean_err));
+
+                Self::save_sync_attempt_state(workspace_path, &result);
+                return Ok(result);
+            }
+            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+            new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
+
+            // update ref
+            if !latest_commit_sha.is_empty() {
+                let ref_url = format!("{}/git/refs/heads/{}", api_base, config.branch);
+                let ref_payload = serde_json::json!({
+                    "sha": new_commit_sha,
+                    "force": false
+                });
+                let resp = client.patch(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+                if resp.status().as_u16() == 422 { // Unprocessable Entity typically means fast-forward failed
+                     result.error = Some("conflict: fast-forward failed".to_string());
+                     result.user_message = Some("远端存在新提交，无法推送（冲突）。请先同步或手动处理。".to_string());
+                     Self::save_sync_attempt_state(workspace_path, &result);
+                     return Ok(result);
+                }
+                if resp.status().as_u16() != 200 {
+                    let status = resp.status().as_u16();
+                    let err_text = resp.text().unwrap_or_default();
+                    let clean_err = err_text.replace(&token, "***TOKEN***");
+                    result.error = Some(format!("update ref failed: {} {}", status, clean_err));
+                    result.user_message = Some(format!("GitHub API 同步更新引用失败: {} {}", status, clean_err));
+                    Self::save_sync_attempt_state(workspace_path, &result);
+                    return Ok(result);
+                }
+            } else {
+                let ref_url = format!("{}/git/refs", api_base);
+                let ref_payload = serde_json::json!({
+                    "ref": format!("refs/heads/{}", config.branch),
+                    "sha": new_commit_sha
+                });
+                let resp = client.post(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
+                if resp.status().as_u16() != 201 {
+                let status = resp.status().as_u16();
+                let err_text = resp.text().unwrap_or_default();
+                let clean_err = err_text.replace(&token, "***TOKEN***");
+                result.error = Some(format!("create ref failed: {} {}", status, clean_err));
+                result.user_message = Some(format!("GitHub API 同步创建引用失败: {} {}", status, clean_err));
+                    Self::save_sync_attempt_state(workspace_path, &result);
+                    return Ok(result);
+                }
+            }
+        } else {
+            // No changes, no commit created.
+            result.status = SyncStatus::Success;
+            result.user_message = Some("双向同步完成，无变化。".to_string());
+            Self::save_sync_attempt_state(workspace_path, &result);
+            return Ok(result);
         }
 
+        // Update successful result
         result.status = SyncStatus::Success;
-        result.user_message = Some(format!("单向上传同步成功 (GitHub API)。使用网络模式: {}", mode));
+        result.uploaded_files = to_upload.clone();
+        result.downloaded_files = to_download.clone();
+        result.ignored_files = ignored;
+        result.commit_hash = Some(new_commit_sha.clone());
+        result.first_sync_mode = if is_first_sync {
+             if latest_commit_sha.is_empty() { FirstSyncMode::InitExistingWorkspace } else { FirstSyncMode::AlreadyGitRepo }
+        } else {
+             FirstSyncMode::NotAttempted
+        };
+        result.user_message = if is_first_sync {
+            Some("已初始化远端分支并完成首次同步。".to_string())
+        } else {
+            Some(format!("双向同步完成。上传: {}, 下载: {}, 远端删除: {}, 本地移入回收站: {} (网络模式: {})。",
+                to_upload.len(), to_download.len(), to_delete_local.len(), to_delete_remote.len(), mode))
+        };
+
+        state.last_sync_time = Some(chrono::Utc::now().timestamp());
+        state.last_synced_commit = Some(new_commit_sha);
+
+        // Re-scan to update known_files
+        if let Ok(entries) = SyncService::scan_workspace_for_sync(workspace_path) {
+            state.known_files.clear();
+            for e in entries {
+                if e.sync_kind == SyncKind::Upload {
+                    let full_path = workspace_path.join(&e.relative_path);
+                    if let Ok(content) = std::fs::read(&full_path) {
+                        let git_hash = SyncService::compute_git_hash(&content);
+                        state.known_files.insert(e.relative_path, git_hash);
+                    }
+                }
+            }
+
+            // Add tombstones and trash payload to known_files manually so they don't get deleted later
+            if !state.tombstones.is_empty() {
+                let tombstones_path = "app-meta/sync/tombstones.json";
+                if let Ok(content) = std::fs::read(workspace_path.join(tombstones_path)) {
+                    state.known_files.insert(tombstones_path.to_string(), SyncService::compute_git_hash(&content));
+                }
+            }
+            for t in &state.tombstones {
+                if let Ok(content) = std::fs::read(workspace_path.join(&t.trash_path)) {
+                    state.known_files.insert(t.trash_path.clone(), SyncService::compute_git_hash(&content));
+                }
+            }
+        }
+        let _ = SyncService::save_sync_state(workspace_path, &state);
+
         Self::save_sync_attempt_state(workspace_path, &result);
+
         Ok(result)
     }
 }
@@ -1673,6 +2044,8 @@ pub struct SyncPlan {
     pub files_to_delete_local: Vec<String>,
     pub files_to_delete_remote: Vec<String>,
     pub ignored_files: Vec<String>,
+    #[serde(default)]
+    pub conflicts: Vec<String>,
 }
 
 impl Default for SyncPlan {
@@ -1689,8 +2062,20 @@ impl SyncPlan {
             files_to_delete_local: Vec::new(),
             files_to_delete_remote: Vec::new(),
             ignored_files: Vec::new(),
+            conflicts: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tombstone {
+    pub original_path: String,
+    pub trash_path: String,
+    pub deleted_at: i64,
+    pub purge_after: i64,
+    pub deleted_by: String,
+    pub original_hash: String,
+    pub kind: String, // "local_delete" or "remote_delete"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1703,6 +2088,10 @@ pub struct SyncState {
     pub last_successful_network_mode: Option<String>,
     pub known_files: std::collections::HashMap<String, String>,
     pub conflicts: Vec<SyncConflict>,
+    #[serde(default)]
+    pub tombstones: Vec<Tombstone>,
+    #[serde(default)]
+    pub deleted_files: std::collections::HashSet<String>,
 }
 
 impl Default for SyncState {
@@ -1716,6 +2105,8 @@ impl Default for SyncState {
             last_successful_network_mode: None,
             known_files: std::collections::HashMap::new(),
             conflicts: Vec::new(),
+            tombstones: Vec::new(),
+            deleted_files: std::collections::HashSet::new(),
         }
     }
 }
@@ -2225,6 +2616,8 @@ impl SyncService {
             return Ok(SyncPlan::new());
         }
         Self::build_sync_plan_from_workspace(workspace_path)
+        // Note: Full dry-run combining remote diffs is not currently supported without
+        // network access inside the dry-run invocation, so it operates locally for now.
     }
 
     pub fn perform_sync(
@@ -2689,7 +3082,6 @@ impl SyncService {
             "sqlite_cache",
             "tmp",
             "backups",
-            "trash",
         ];
 
         if rel_path.ends_with(".tmp") || rel_path.ends_with(".lock") {
@@ -2700,6 +3092,14 @@ impl SyncService {
             return true;
         }
 
+        // But we DO want to sync app-meta/sync/trash!
+        if rel_path.starts_with("app-meta/sync/trash/") {
+            return false;
+        }
+
+        // Keep 'trash' pattern if it's anywhere else?
+        // Let's just avoid a blanket "trash" ignore. We used to ignore "trash".
+        // Instead of ignoring all "trash", we only ignore it if it matches something else, but since we removed it from ignored_patterns, it won't.
         for pattern in ignored_patterns {
             if rel_path.contains(pattern) {
                 return true;
@@ -2758,12 +3158,27 @@ impl SyncService {
             return true;
         }
 
+        if rel_path.starts_with("app-meta/sync/trash/") {
+            return true;
+        }
+
+        if rel_path == "app-meta/sync/tombstones.json" {
+            return true;
+        }
+
         false
     }
 
     fn compute_file_hash(path: &Path) -> std::io::Result<String> {
         let content = std::fs::read(path)?;
-        Ok(format!("{:x}", md5::compute(content)))
+        Ok(format!("{:x}", md5::compute(&content)))
+    }
+
+    pub fn compute_git_hash(content: &[u8]) -> String {
+        match git2::Oid::hash_object(git2::ObjectType::Blob, content) {
+            Ok(oid) => oid.to_string(),
+            Err(_) => format!("{:x}", md5::compute(content)),
+        }
     }
 
     pub fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Vec<SyncFileEntry>> {
@@ -2822,20 +3237,48 @@ impl SyncService {
         let mut plan = SyncPlan::new();
 
         let entries = Self::scan_workspace_for_sync(workspace_path)?;
+        let state = Self::load_sync_state(workspace_path).unwrap_or_default();
+        let is_first_sync = state.known_files.is_empty();
+
+        let mut local_files = std::collections::HashSet::new();
 
         for entry in entries {
             if Self::is_blacklisted_path(&entry.relative_path) {
-                plan.ignored_files.push(entry.relative_path);
+                plan.ignored_files.push(entry.relative_path.clone());
                 continue;
             }
 
-            match entry.sync_kind {
-                SyncKind::Upload | SyncKind::ConflictCandidate => {
-                    plan.files_to_upload.push(entry.relative_path);
+            if entry.sync_kind == SyncKind::Upload || entry.sync_kind == SyncKind::ConflictCandidate {
+                local_files.insert(entry.relative_path.clone());
+                let known_hash_opt = state.known_files.get(&entry.relative_path);
+                if is_first_sync {
+                    plan.files_to_upload.push(entry.relative_path.clone());
+                } else if let Some(kh) = known_hash_opt {
+                    if *kh != entry.file_hash {
+                        // local changed
+                        plan.files_to_upload.push(entry.relative_path.clone());
+                    }
+                } else {
+                    // local added
+                    plan.files_to_upload.push(entry.relative_path.clone());
                 }
-                SyncKind::Ignore => {
-                    plan.ignored_files.push(entry.relative_path);
+            } else {
+                plan.ignored_files.push(entry.relative_path.clone());
+            }
+        }
+
+        if !is_first_sync {
+            for known_path in state.known_files.keys() {
+                if !local_files.contains(known_path) {
+                    plan.files_to_delete_remote.push(known_path.clone());
                 }
+            }
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        for t in &state.tombstones {
+            if t.purge_after <= now {
+                plan.files_to_delete_local.push(t.trash_path.clone());
             }
         }
 
@@ -3205,6 +3648,8 @@ mod tests {
             last_successful_network_mode: None,
             known_files: std::collections::HashMap::new(),
             conflicts: vec![],
+            tombstones: Vec::new(),
+            deleted_files: std::collections::HashSet::new(),
         };
         let config_str = serde_json::to_string(&config).unwrap();
         let state_str = serde_json::to_string(&state).unwrap();
@@ -3311,6 +3756,8 @@ mod tests {
             last_successful_network_mode: None,
             known_files: std::collections::HashMap::new(),
             conflicts: vec![],
+            tombstones: Vec::new(),
+            deleted_files: std::collections::HashSet::new(),
         };
 
         SyncService::save_sync_state(dir.path(), &state).unwrap();

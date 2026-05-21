@@ -105,7 +105,7 @@
     <string name="sync_error_unrelated">远端仓库不是空仓库，不能自动合并。建议使用空 GitHub 私人仓库。</string>
     <string name="sync_error_conflict">存在冲突文件，需要手动处理。</string>
     <string name="sync_error_save_failed">同步状态保存失败，请检查存储权限。</string>
-    <string name="sync_dry_run_result">将上传: %1$d，将下载: %2$d，将忽略: %3$d</string>
+    <string name="sync_dry_run_result">将上传 %1$d 个，将下载 %2$d 个，远端将删除 %3$d 个，本地移入回收站 %4$d 个，忽略 %5$d 个。</string>
 
     <string name="action_ok">确定</string>
     <string name="sync_error_not_loaded">Native Core 未加载</string>

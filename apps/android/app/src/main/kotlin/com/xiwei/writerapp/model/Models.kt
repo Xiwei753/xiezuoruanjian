@@ -184,8 +184,13 @@ enum class FirstSyncMode {
 }
 
 data class SyncConflict(
-    val path: String,
-    val description: String? = null
+    @SerializedName("local_path") val localPath: String,
+    @SerializedName("remote_path") val remotePath: String,
+    @SerializedName("local_hash") val localHash: String,
+    @SerializedName("remote_hash") val remoteHash: String,
+    @SerializedName("base_hash") val baseHash: String,
+    @SerializedName("created_at") val createdAt: Long,
+    val description: String
 )
 
 data class NetworkProbeResult(
