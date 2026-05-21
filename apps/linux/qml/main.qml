@@ -203,6 +203,8 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: !appState.hasWorkspace
+            backendRef: backend
+            appTheme: theme
             onCreateWorkspace: {
                 backend.create_new_workspace();
                 applyState(JSON.parse(backend.refresh_app_state_json()));
@@ -261,6 +263,10 @@ ApplicationWindow {
     SettingsDialog {
         id: settingsDialog
         theme: theme
+        backendRef: backend
+        onSettingsChanged: {
+            applyState(JSON.parse(backend.refresh_app_state_json()));
+        }
     }
 
     Dialog {
@@ -274,6 +280,10 @@ ApplicationWindow {
         SyncPage {
             anchors.fill: parent
             theme: theme
+            backendRef: backend
+            onSettingsChanged: {
+                applyState(JSON.parse(backend.refresh_app_state_json()));
+            }
         }
     }
 

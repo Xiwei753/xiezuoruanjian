@@ -12,6 +12,8 @@ Dialog {
     standardButtons: Dialog.Close
 
     property var theme: null
+    property var backendRef: null
+    signal settingsChanged()
 
     background: Rectangle {
         color: theme ? theme.bgDark : "#1E1E1E"
@@ -44,13 +46,13 @@ Dialog {
                     width: 150
                     model: ["system", "light", "dark"]
                     currentIndex: {
-                        if (backend.setting_theme_mode === "light") return 1;
-                        if (backend.setting_theme_mode === "dark") return 2;
+                        if ((root.backendRef ? root.backendRef.setting_theme_mode : 'system') === "light") return 1;
+                        if ((root.backendRef ? root.backendRef.setting_theme_mode : 'system') === "dark") return 2;
                         return 0;
                     }
                     onActivated: {
-                        backend.setting_theme_mode = currentText;
-                        backend.save_local_settings();
+                        (root.backendRef ? root.backendRef.setting_theme_mode : 'system') = currentText;
+                        if(root.backendRef && root.backendRef.save_local_settings()) { root.settingsChanged(); }
                     }
                 }
             }
@@ -68,12 +70,12 @@ Dialog {
                 Text { text: "字号"; color: theme ? theme.textMain : "#E0E0E0"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter; width: 100 }
                 SpinBox {
                     id: fontSpin
-                    value: backend.setting_font_size
+                    value: (root.backendRef ? root.backendRef.setting_font_size : 16)
                     from: 10
                     to: 40
                     onValueChanged: {
-                        backend.setting_font_size = value;
-                        backend.save_local_settings();
+                        (root.backendRef ? root.backendRef.setting_font_size : 16) = value;
+                        if(root.backendRef && root.backendRef.save_local_settings()) { root.settingsChanged(); }
                     }
                 }
             }
@@ -84,10 +86,10 @@ Dialog {
                 Text { text: "自动保存"; color: theme ? theme.textMain : "#E0E0E0"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter; width: 100 }
                 Switch {
                     id: autoSaveSwitch
-                    checked: backend.setting_auto_save_enabled
+                    checked: (root.backendRef ? root.backendRef.setting_auto_save_enabled : false)
                     onCheckedChanged: {
-                        backend.setting_auto_save_enabled = checked;
-                        backend.save_local_settings();
+                        (root.backendRef ? root.backendRef.setting_auto_save_enabled : false) = checked;
+                        if(root.backendRef && root.backendRef.save_local_settings()) { root.settingsChanged(); }
                     }
                 }
             }

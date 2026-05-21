@@ -44,14 +44,28 @@ Rectangle {
                 width: ListView.view.width
                 height: 32
                 
-                property var itemData: {
-                    return {
+                                property var itemData: {
+                    var out = {
                         "id": model.id || "",
                         "type": model.type || "",
                         "title": model.title || "",
                         "projectId": model.projectId || "",
                         "volumeId": model.volumeId || ""
+                    };
+                    if (out.type === "project") {
+                        out.projectIdForAction = out.id;
+                        out.volumeIdForAction = "";
+                        out.chapterIdForAction = "";
+                    } else if (out.type === "volume") {
+                        out.projectIdForAction = out.projectId;
+                        out.volumeIdForAction = out.id;
+                        out.chapterIdForAction = "";
+                    } else if (out.type === "chapter") {
+                        out.projectIdForAction = out.projectId;
+                        out.volumeIdForAction = out.volumeId;
+                        out.chapterIdForAction = out.id;
                     }
+                    return out;
                 }
 
                 property bool isSelected: root.selectedId !== "" && root.selectedId === model.id
@@ -98,7 +112,7 @@ Rectangle {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: (mouse) => {
                         if (mouse.button === Qt.LeftButton) {
-                            root.itemActivated(model.type, model.projectId, model.volumeId, model.id);
+                            root.itemActivated(delegateRect.itemData.type, delegateRect.itemData.projectIdForAction, delegateRect.itemData.volumeIdForAction, delegateRect.itemData.chapterIdForAction);
                         } else if (mouse.button === Qt.RightButton) {
                             contextMenu.itemData = delegateRect.itemData;
                             contextMenu.popup();

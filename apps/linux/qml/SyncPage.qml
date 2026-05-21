@@ -5,6 +5,8 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property var theme: null
+    property var backendRef: null
+    signal settingsChanged()
 
     color: theme ? theme.bgDark : "#1E1E1E"
 
@@ -31,7 +33,7 @@ Rectangle {
                 TextField {
                     id: urlField
                     width: parent.width
-                    text: backend.sync_remote_url
+                    text: (root.backendRef ? root.backendRef.sync_remote_url : '')
                     placeholderText: "https://github.com/user/repo"
                     color: theme ? theme.textMain : "#E0E0E0"
                     background: Rectangle {
@@ -49,7 +51,7 @@ Rectangle {
                 TextField {
                     id: branchField
                     width: parent.width
-                    text: backend.sync_branch
+                    text: (root.backendRef ? root.backendRef.sync_branch : '')
                     placeholderText: "main"
                     color: theme ? theme.textMain : "#E0E0E0"
                     background: Rectangle {
@@ -67,7 +69,7 @@ Rectangle {
                 TextField {
                     id: tokenField
                     width: parent.width
-                    placeholderText: backend.has_sync_token ? "已设置 (输入新 Token 以覆盖)" : "请输入 GitHub Personal Access Token"
+                    placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? "已设置 (输入新 Token 以覆盖)" : "请输入 GitHub Personal Access Token"
                     echoMode: TextInput.Password
                     color: theme ? theme.textMain : "#E0E0E0"
                     background: Rectangle {
@@ -83,29 +85,29 @@ Rectangle {
                 Button {
                     text: "保存配置"
                     onClicked: {
-                        backend.sync_remote_url = urlField.text;
-                        backend.sync_branch = branchField.text;
+                        (root.backendRef ? root.backendRef.sync_remote_url : '') = urlField.text;
+                        (root.backendRef ? root.backendRef.sync_branch : '') = branchField.text;
                         if (tokenField.text.trim() !== "") {
-                            backend.set_sync_token(tokenField.text.trim());
+                            if (root.backendRef) root.backendRef.set_sync_token(tokenField.text.trim());
                             tokenField.text = "";
                         }
-                        backend.sync_enabled = true;
-                        backend.sync_backend_type = "git";
-                        backend.save_sync_config();
+                        if (root.backendRef) root.backendRef.sync_enabled = true;
+                        if (root.backendRef) root.backendRef.sync_backend_type = "git";
+                        if(root.backendRef && root.backendRef.save_sync_config()) { root.settingsChanged(); }
                     }
                 }
 
                 Button {
                     text: "执行同步"
                     onClicked: {
-                        backend.perform_sync();
+                        if (root.backendRef) root.backendRef.perform_sync();
                     }
                 }
 
                 Button {
                     text: "运行诊断"
                     onClicked: {
-                        backend.perform_sync_diagnostics();
+                        if (root.backendRef) root.backendRef.perform_sync_diagnostics();
                     }
                 }
             }
@@ -122,7 +124,7 @@ Rectangle {
                     anchors.fill: parent
                     anchors.margins: 8
                     TextArea {
-                        text: backend.sync_action_result
+                        text: (root.backendRef ? root.backendRef.sync_action_result : '')
                         color: theme ? theme.textDim : "#A0A0A0"
                         font.family: "monospace"
                         readOnly: true
