@@ -22,10 +22,17 @@ pub fn validate_delete_target(
         .canonicalize()
         .map_err(|e| Error::InvalidDeleteTarget(format!("Failed to canonicalize workspace: {}", e)))?;
 
-    // The target_path might not be canonicalizable if we only rely on canonicalize because some parts might be symlinks,
-    // but target MUST exist before deleting.
-    if !target_path.exists() {
-        return Err(Error::InvalidDeleteTarget("Target path does not exist".to_string()));
+
+    // Prevent deleting if the target itself is a symlink
+    if let Ok(meta) = std::fs::symlink_metadata(target_path) {
+        if meta.file_type().is_symlink() {
+            return Err(Error::InvalidDeleteTarget("Target is a symlink, refusing to delete".to_string()));
+        }
+        if !meta.file_type().is_dir() {
+            return Err(Error::InvalidDeleteTarget("Target is not a directory".to_string()));
+        }
+    } else {
+        return Err(Error::InvalidDeleteTarget("Target path does not exist or cannot be accessed".to_string()));
     }
 
     let target_canon = target_path
@@ -41,9 +48,17 @@ pub fn validate_delete_target(
     }
 
     let marker = target_canon.join(expected_marker_file);
-    if !marker.exists() {
+    if let Ok(marker_meta) = std::fs::symlink_metadata(&marker) {
+        if marker_meta.file_type().is_symlink() {
+            return Err(Error::InvalidDeleteTarget(format!("Marker file {} is a symlink", expected_marker_file)));
+        }
+        if !marker_meta.file_type().is_file() {
+            return Err(Error::InvalidDeleteTarget(format!("Marker file {} is not a regular file", expected_marker_file)));
+        }
+    } else {
         return Err(Error::InvalidDeleteTarget(format!("Marker file {} not found in target", expected_marker_file)));
     }
+
 
     Ok(target_canon)
 }

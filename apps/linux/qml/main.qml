@@ -380,8 +380,8 @@ ApplicationWindow {
     Dialog {
         id: syncPageDialog
         modal: true
-        width: Math.min(mainWindow.width - 80, 720)
-        height: Math.min(mainWindow.height - 120, 560)
+        width: Math.min(window.width - 80, 720)
+        height: Math.min(window.height - 120, 560)
         anchors.centerIn: Overlay.overlay
         background: Rectangle { color: theme.bgDark; border.color: theme.border; radius: 8; border.width: 1 }
         contentItem: Item {

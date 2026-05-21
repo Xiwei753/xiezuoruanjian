@@ -171,7 +171,10 @@ Rectangle {
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
-                    if (!data || !data.id) { console.error("Missing node ID"); return; }
+                    if (!data) return;
+                    if (data.type === "project" && !data.projectIdForAction) { console.error("Missing projectId"); return; }
+                    if (data.type === "volume" && (!data.projectIdForAction || !data.volumeIdForAction)) { console.error("Missing projectId or volumeId"); return; }
+                    if (data.type === "chapter" && (!data.projectIdForAction || !data.volumeIdForAction || !data.chapterIdForAction)) { console.error("Missing projectId, volumeId or chapterId"); return; }
                     root.deleteItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }
