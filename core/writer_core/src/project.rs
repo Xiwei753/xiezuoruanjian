@@ -124,7 +124,34 @@ pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) 
 pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
     let project_dir = workspace_path.join("projects").join(project_id);
     if project_dir.exists() {
-        fs::remove_dir_all(project_dir)?;
+        let trash_dir = workspace_path.join("app-meta/sync/trash");
+        let _ = fs::create_dir_all(&trash_dir);
+        let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), project_id));
+        fs::rename(&project_dir, &trash_path)?;
+
+        // Also update tombstone
+        if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
+             let rel_project_dir = project_dir.strip_prefix(workspace_path).unwrap_or(&project_dir).to_string_lossy().replace("\\", "/");
+             let rel_trash_path = trash_path.strip_prefix(workspace_path).unwrap_or(&trash_path).to_string_lossy().replace("\\", "/");
+
+             for entry in walkdir::WalkDir::new(&trash_path).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
+                 let rel_file_path = entry.path().strip_prefix(&trash_path).unwrap_or(entry.path()).to_string_lossy().replace("\\", "/");
+                 let original_file_path = format!("{}/{}", rel_project_dir, rel_file_path);
+                 let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
+
+                 let tombstone = crate::sync_service::Tombstone {
+                     original_path: original_file_path.clone(),
+                     trash_path: new_trash_path,
+                     deleted_at: chrono::Utc::now().timestamp(),
+                     purge_after: chrono::Utc::now().timestamp() + 30 * 24 * 3600,
+                     deleted_by: "local".to_string(),
+                     original_hash: state.known_files.get(&original_file_path).cloned().unwrap_or_default(),
+                     kind: "local_delete".to_string(),
+                 };
+                 state.tombstones.push(tombstone);
+             }
+             let _ = crate::sync_service::SyncService::save_sync_state(workspace_path, &state);
+        }
     } else {
         return Err(crate::error::Error::ProjectNotFound);
     }
