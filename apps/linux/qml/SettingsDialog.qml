@@ -51,8 +51,9 @@ Dialog {
                         return 0;
                     }
                     onActivated: {
-                        (root.backendRef ? root.backendRef.setting_theme_mode : 'system') = currentText;
-                        if(root.backendRef && root.backendRef.save_local_settings()) { root.settingsChanged(); }
+                        if (!root.backendRef) return;
+                        root.backendRef.setting_theme_mode = currentText;
+                        if (root.backendRef.save_local_settings()) root.settingsChanged();
                     }
                 }
             }
@@ -74,8 +75,9 @@ Dialog {
                     from: 10
                     to: 40
                     onValueChanged: {
-                        (root.backendRef ? root.backendRef.setting_font_size : 16) = value;
-                        if(root.backendRef && root.backendRef.save_local_settings()) { root.settingsChanged(); }
+                        if (!root.backendRef) return;
+                        root.backendRef.setting_font_size = value;
+                        if (root.backendRef.save_local_settings()) root.settingsChanged();
                     }
                 }
             }
@@ -88,8 +90,9 @@ Dialog {
                     id: autoSaveSwitch
                     checked: (root.backendRef ? root.backendRef.setting_auto_save_enabled : false)
                     onCheckedChanged: {
-                        (root.backendRef ? root.backendRef.setting_auto_save_enabled : false) = checked;
-                        if(root.backendRef && root.backendRef.save_local_settings()) { root.settingsChanged(); }
+                        if (!root.backendRef) return;
+                        root.backendRef.setting_auto_save_enabled = checked;
+                        if (root.backendRef.save_local_settings()) root.settingsChanged();
                     }
                 }
             }
