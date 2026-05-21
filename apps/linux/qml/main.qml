@@ -213,18 +213,24 @@ ApplicationWindow {
     }
 
     function isFirstSibling(index) {
-        let node = treeModel.get(index)
-        for (let i = 0; i < index; i++) {
-            let sib = treeModel.get(i)
+        if (index === undefined || index < 0 || treeModel.count <= 0 || index >= treeModel.count) return true
+        var node = treeModel.get(index)
+        if (!node || !node.type) return true
+        for (var i = 0; i < index; i++) {
+            var sib = treeModel.get(i)
+            if (!sib || !sib.type) continue
             if (sib.type === node.type && sib.projectId === node.projectId && sib.volumeId === node.volumeId) return false
         }
         return true
     }
 
     function isLastSibling(index) {
-        let node = treeModel.get(index)
-        for (let i = index + 1; i < treeModel.count; i++) {
-            let sib = treeModel.get(i)
+        if (index === undefined || index < 0 || treeModel.count <= 0 || index >= treeModel.count) return true
+        var node = treeModel.get(index)
+        if (!node || !node.type) return true
+        for (var i = index + 1; i < treeModel.count; i++) {
+            var sib = treeModel.get(i)
+            if (!sib || !sib.type) continue
             if (sib.type === node.type && sib.projectId === node.projectId && sib.volumeId === node.volumeId) return false
         }
         return true
@@ -418,23 +424,37 @@ ApplicationWindow {
                     text: createProjectDialog.processing ? "处理中..." : "确定"
                     enabled: !createProjectDialog.processing && projectTitleInput.text.trim().length > 0
                     onClicked: {
+                        console.log("[CreateProjectDialog] submit:", projectTitleInput.text.trim())
                         createProjectDialog.processing = true
+                        createProjectDialog.errorMessage = ""
+                        createProjectDialog.diagnosticsJson = ""
+                        console.log("[CreateProjectDialog] calling backend.create_new_project")
                         var result = backend.create_new_project(projectTitleInput.text.trim())
+                        console.log("[CreateProjectDialog] result raw:", result)
                         try {
                             var r = JSON.parse(result)
+                            console.log("[CreateProjectDialog] parsed:", JSON.stringify(r, null, 2))
                             if (r.success) {
-                                createProjectDialog.errorMessage = ""
-                                createProjectDialog.diagnosticsJson = ""
                                 backend.save_status = r.message
                                 createProjectDialog.close()
                                 reloadTree()
+                                // Select the newly created project and default volume
+                                if (r.projectId) {
+                                    if (r.defaultVolumeId) {
+                                        backend.select_volume(r.projectId, r.defaultVolumeId)
+                                    } else {
+                                        backend.select_project(r.projectId)
+                                    }
+                                }
                             } else {
                                 createProjectDialog.errorMessage = r.message || "创建失败"
                                 createProjectDialog.diagnosticsJson = JSON.stringify(r, null, 2)
                                 createProjectDialog.processing = false
                             }
                         } catch(e) {
+                            console.log("[CreateProjectDialog] parse error:", e)
                             createProjectDialog.errorMessage = "解析返回结果失败: " + e
+                            createProjectDialog.diagnosticsJson = result
                             createProjectDialog.processing = false
                         }
                     }

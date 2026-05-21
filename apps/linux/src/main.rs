@@ -395,21 +395,17 @@ impl AppBackend {
 
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
         let text_str = text.to_string();
-        // 1. Try arboard (Rust clipboard API)
-        #[allow(unused_assignments)]
-        let mut backend_name = String::new();
-        if let Ok(mut clip) = arboard::Clipboard::new() {
-            if clip.set_text(text_str.clone()).is_ok() {
-                backend_name = "arboard".to_string();
-                let result = serde_json::json!({
-                    "success": true,
-                    "backend": backend_name,
-                    "message": "已复制到剪贴板",
-                });
-                return result.to_string().into();
-            }
-        }
-        // 2. Try wl-copy (Wayland)
+
+        // Helper to build a success response
+        let mk_success = |backend: &str| -> QString {
+            serde_json::json!({
+                "success": true,
+                "backend": backend,
+                "message": format!("已复制 (backend={})", backend),
+            }).to_string().into()
+        };
+
+        // 1. Try wl-copy (Wayland — best clipboard manager handoff)
         if let Ok(mut child) = std::process::Command::new("wl-copy")
             .stdin(std::process::Stdio::piped())
             .spawn()
@@ -418,19 +414,12 @@ impl AppBackend {
                 let _ = stdin.write_all(text_str.as_bytes());
             }
             match child.wait() {
-                Ok(status) if status.success() => {
-                    backend_name = "wl-copy".to_string();
-                    let result = serde_json::json!({
-                        "success": true,
-                        "backend": backend_name,
-                        "message": "已复制到剪贴板",
-                    });
-                    return result.to_string().into();
-                }
+                Ok(status) if status.success() => return mk_success("wl-copy"),
                 _ => {}
             }
         }
-        // 3. Try xclip (X11)
+
+        // 2. Try xclip (X11)
         if let Ok(mut child) = std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-in"])
             .stdin(std::process::Stdio::piped())
@@ -440,19 +429,12 @@ impl AppBackend {
                 let _ = stdin.write_all(text_str.as_bytes());
             }
             match child.wait() {
-                Ok(status) if status.success() => {
-                    backend_name = "xclip".to_string();
-                    let result = serde_json::json!({
-                        "success": true,
-                        "backend": backend_name,
-                        "message": "已复制到剪贴板",
-                    });
-                    return result.to_string().into();
-                }
+                Ok(status) if status.success() => return mk_success("xclip"),
                 _ => {}
             }
         }
-        // 4. Try xsel (X11 fallback)
+
+        // 3. Try xsel (X11 fallback)
         if let Ok(mut child) = std::process::Command::new("xsel")
             .args(["--clipboard", "--input"])
             .stdin(std::process::Stdio::piped())
@@ -462,23 +444,28 @@ impl AppBackend {
                 let _ = stdin.write_all(text_str.as_bytes());
             }
             match child.wait() {
-                Ok(status) if status.success() => {
-                    backend_name = "xsel".to_string();
-                    let result = serde_json::json!({
-                        "success": true,
-                        "backend": backend_name,
-                        "message": "已复制到剪贴板",
-                    });
-                    return result.to_string().into();
-                }
+                Ok(status) if status.success() => return mk_success("xsel"),
                 _ => {}
             }
         }
+
+        // 4. Last resort: arboard (Rust clipboard API).
+        //    On Linux, arboard can raise "Clipboard was dropped very quickly"
+        //    warnings because the clipboard manager may not have read the
+        //    contents before the Clipboard handle is dropped.  We keep the
+        //    object alive by leaking it so the clipboard manager can pick up.
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            if clip.set_text(text_str.clone()).is_ok() {
+                Box::leak(Box::new(clip));
+                return mk_success("arboard");
+            }
+        }
+
         // All backends failed
         let result = serde_json::json!({
             "success": false,
             "backend": "none",
-            "message": "复制失败：未找到可用的剪贴板后端。请安装 arboard（默认已集成）、wl-copy、xclip 或 xsel。",
+            "message": "复制失败：未找到可用的剪贴板后端。请安装 wl-copy (Wayland)、xclip 或 xsel (X11)。",
         });
         result.to_string().into()
     }
