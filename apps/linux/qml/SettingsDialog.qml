@@ -75,7 +75,7 @@ Popup {
                         SectionHeader { theme: root.appTheme; text: "编辑" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 96
                             SettingsRow {
-                                theme: root.appTheme; isSwitch: false; label: "字号"
+                                theme: root.appTheme; mode: "slider"; label: "字号"
                                 sliderValue: backendRef && backendRef.setting_font_size > 0 ? backendRef.setting_font_size : 16
                                 sliderFrom: 10; sliderTo: 72
                                 valueLabel: sliderValue.toFixed(0) + "px"
@@ -84,30 +84,27 @@ Popup {
                         }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 96
                             SettingsRow {
-                                theme: root.appTheme; isSwitch: false; label: "行距"
+                                theme: root.appTheme; mode: "slider"; label: "行距"
                                 sliderValue: backendRef && backendRef.setting_line_spacing > 0 ? backendRef.setting_line_spacing * 100 : 150
                                 sliderFrom: 100; sliderTo: 300; sliderStep: 10
                                 valueLabel: (sliderValue / 100).toFixed(2) + "x"
                                 id: lineSpacingRow
                             }
                         }
-                        Item {
+                        Rectangle {
                             Layout.fillWidth: true
-                            implicitHeight: autoIndentInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: root.appTheme ? root.appTheme.radiusMd : 8
-                                color: root.appTheme ? root.appTheme.surface : "#ffffff"
-                                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
-                                border.width: 1
-                            }
+                            height: 180
+                            radius: root.appTheme ? root.appTheme.radiusMd : 8
+                            color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                            border.width: 1
                             ColumnLayout {
                                 id: autoIndentInner
                                 anchors.fill: parent
                                 anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                                 SettingsRow {
-                                    theme: root.appTheme; isSwitch: true; label: "自动缩进"; description: "自动在换行时添加缩进"
+                                    theme: root.appTheme; mode: "switch"; label: "自动缩进"; description: "自动在换行时添加缩进"
                                     id: autoIndentCheck
                                     checked: backendRef ? backendRef.setting_auto_indent_enabled : false
                                 }
@@ -138,23 +135,20 @@ Popup {
                         }
 
                         SectionHeader { theme: root.appTheme; text: "保存" }
-                        Item {
+                        Rectangle {
                             Layout.fillWidth: true
-                            implicitHeight: autoSaveInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: root.appTheme ? root.appTheme.radiusMd : 8
-                                color: root.appTheme ? root.appTheme.surface : "#ffffff"
-                                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
-                                border.width: 1
-                            }
+                            height: 180
+                            radius: root.appTheme ? root.appTheme.radiusMd : 8
+                            color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                            border.width: 1
                             ColumnLayout {
                                 id: autoSaveInner
                                 anchors.fill: parent
                                 anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                                 SettingsRow {
-                                    theme: root.appTheme; isSwitch: true; label: "自动保存"; description: "在编辑内容变化时自动保存到磁盘"
+                                    theme: root.appTheme; mode: "switch"; label: "自动保存"; description: "在编辑内容变化时自动保存到磁盘"
                                     id: autoSaveCheck
                                     checked: backendRef ? backendRef.setting_auto_save_enabled : false
                                 }
@@ -239,7 +233,7 @@ Popup {
                         SectionHeader { theme: root.appTheme; text: "界面" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
                             SettingsRow {
-                                theme: root.appTheme; isSwitch: true
+                                theme: root.appTheme; mode: "switch"
                                 label: "自动保存时显示保存状态"
                                 description: "在底部状态栏显示当前保存状态指示"
                                 checked: true
@@ -287,7 +281,7 @@ Popup {
                         SectionHeader { theme: root.appTheme; text: "输入动效" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
                             SettingsRow {
-                                theme: root.appTheme; isSwitch: true
+                                theme: root.appTheme; mode: "switch"
                                 label: "输入动画"
                                 description: "启用逐字输入动画效果"
                                 id: typingAnimCheck
@@ -296,7 +290,7 @@ Popup {
                         }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
                             SettingsRow {
-                                theme: root.appTheme; isSwitch: true
+                                theme: root.appTheme; mode: "switch"
                                 label: "平滑光标"
                                 description: "启用光标平滑移动效果"
                                 id: smoothCursorCheck

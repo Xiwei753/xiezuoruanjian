@@ -45,7 +45,7 @@ ScrollView {
         usernameInput.text = root.backendRef.sync_username
         root.hasExistingToken = root.backendRef.has_sync_token
         tokenInput.text = ""
-        tokenInput.placeholderText = root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
+        tokenInput.placeholder = root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
         syncResultLabel.text = root.backendRef.sync_action_result
     }
 
@@ -102,16 +102,13 @@ ScrollView {
             spacing: root.appTheme ? root.appTheme.sp12 : 12
             visible: !root.backendRef || !root.backendRef.has_workspace
 
-            Item {
+            Rectangle {
                 Layout.fillWidth: true
-                implicitHeight: ghInitInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
-                Rectangle {
-                    anchors.fill: parent
-                    radius: root.appTheme ? root.appTheme.radiusMd : 8
-                    color: root.appTheme ? root.appTheme.surface : "#ffffff"
-                    border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
-                    border.width: 1
-                }
+                height: 420
+                radius: root.appTheme ? root.appTheme.radiusMd : 8
+                color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                border.width: 1
                 ColumnLayout {
                     id: ghInitInner
                     Layout.fillWidth: true; spacing: root.appTheme ? root.appTheme.sp8 : 8
@@ -288,7 +285,7 @@ ScrollView {
         AppCard {
             theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
             SettingsRow {
-                theme: root.appTheme; isSwitch: true
+                theme: root.appTheme; mode: "switch"
                 label: "启用同步"
                 description: "启用后可将作品同步到远程仓库"
                 id: syncEnabledCheck
@@ -369,23 +366,20 @@ ScrollView {
             }
         }
 
-        Item {
+        Rectangle {
             Layout.fillWidth: true
-            implicitHeight: autoSyncInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
-            Rectangle {
-                anchors.fill: parent
-                radius: root.appTheme ? root.appTheme.radiusMd : 8
-                color: root.appTheme ? root.appTheme.surface : "#ffffff"
-                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
-                border.width: 1
-            }
+            height: 180
+            radius: root.appTheme ? root.appTheme.radiusMd : 8
+            color: root.appTheme ? root.appTheme.surface : "#ffffff"
+            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+            border.width: 1
             ColumnLayout {
                 id: autoSyncInner
                 anchors.fill: parent
                 anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                 SettingsRow {
-                    theme: root.appTheme; isSwitch: true
+                    theme: root.appTheme; mode: "switch"
                     label: "自动同步"
                     description: "按间隔时间自动执行同步"
                     id: autoSyncCheck
@@ -420,16 +414,13 @@ ScrollView {
             }
         }
 
-        Item {
+        Rectangle {
             Layout.fillWidth: true
-            implicitHeight: proxyInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
-            Rectangle {
-                anchors.fill: parent
-                radius: root.appTheme ? root.appTheme.radiusMd : 8
-                color: root.appTheme ? root.appTheme.surface : "#ffffff"
-                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
-                border.width: 1
-            }
+            height: 280
+            radius: root.appTheme ? root.appTheme.radiusMd : 8
+            color: root.appTheme ? root.appTheme.surface : "#ffffff"
+            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+            border.width: 1
             ColumnLayout {
                 id: proxyInner
                 anchors.fill: parent
@@ -442,7 +433,7 @@ ScrollView {
                     font.weight: Font.Medium
                 }
                 SettingsRow {
-                    theme: root.appTheme; isSwitch: true
+                    theme: root.appTheme; mode: "switch"
                     label: "启用应用内代理"
                     description: "兜底代理，默认关闭"
                     id: proxyEnabledCheck

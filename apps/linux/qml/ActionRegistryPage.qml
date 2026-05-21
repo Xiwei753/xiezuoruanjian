@@ -18,7 +18,7 @@ ScrollView {
     property bool smoothCursorCheckChecked: false
 
     ColumnLayout {
-        width: Math.min(560, parent ? parent.width - 8 : 500)
+        width: Math.min(560, root.availableWidth - 24)
         spacing: root.appTheme ? root.appTheme.sp12 : 10
 
         // Header
