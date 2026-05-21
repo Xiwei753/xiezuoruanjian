@@ -127,13 +127,27 @@ data class SyncSecrets(
     @SerializedName("ssh_private_key") val sshPrivateKey: String? = null
 )
 
+data class Tombstone(
+    @SerializedName("original_path") val originalPath: String,
+    @SerializedName("trash_path") val trashPath: String,
+    @SerializedName("deleted_at") val deletedAt: Long,
+    @SerializedName("purge_after") val purgeAfter: Long,
+    @SerializedName("deleted_by") val deletedBy: String,
+    @SerializedName("original_hash") val originalHash: String,
+    val kind: String
+)
+
 data class SyncState(
     @SerializedName("remote_url") val remoteUrl: String? = null,
     val transport: String? = null,
     @SerializedName("last_synced_commit") val lastSyncedCommit: String? = null,
     @SerializedName("last_sync_time") val lastSyncTime: Long? = null,
     @SerializedName("last_error") val lastError: String? = null,
-    @SerializedName("last_successful_network_mode") val lastSuccessfulNetworkMode: String? = null
+    @SerializedName("last_successful_network_mode") val lastSuccessfulNetworkMode: String? = null,
+    @SerializedName("known_files") val knownFiles: Map<String, String>? = emptyMap(),
+    val conflicts: List<SyncConflict>? = emptyList(),
+    val tombstones: List<Tombstone>? = emptyList(),
+    @SerializedName("deleted_files") val deletedFiles: Set<String>? = emptySet()
 )
 
 enum class SyncStatus {
@@ -251,12 +265,12 @@ data class SyncDiagnosticsResult(
 )
 
 data class SyncPlan(
-
     @SerializedName("files_to_upload") val filesToUpload: List<String> = emptyList(),
     @SerializedName("files_to_download") val filesToDownload: List<String> = emptyList(),
     @SerializedName("files_to_delete_local") val filesToDeleteLocal: List<String> = emptyList(),
     @SerializedName("files_to_delete_remote") val filesToDeleteRemote: List<String> = emptyList(),
-    @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList()
+    @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList(),
+    @SerializedName("conflicts") val conflicts: List<String> = emptyList()
 )
 
 data class ActionDescriptor(

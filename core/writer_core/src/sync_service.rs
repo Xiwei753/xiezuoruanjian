@@ -1735,7 +1735,8 @@ impl SyncBackend for GitHubApiBackend {
         }
 
         // 5. Create new tree & commit if there are changes
-        let mut new_commit_sha = latest_commit_sha.clone();
+        #[allow(unused_assignments)]
+        let mut new_commit_sha = String::new();
 
         if !tree_nodes.is_empty() {
             tree_payload["tree"] = serde_json::json!(tree_nodes);
@@ -1823,33 +1824,39 @@ impl SyncBackend for GitHubApiBackend {
                 }
             }
         } else {
-            // No changes, no commit created.
-            result.status = SyncStatus::Success;
-            result.user_message = Some("双向同步完成，无变化。".to_string());
-            Self::save_sync_attempt_state(workspace_path, &result);
-            return Ok(result);
+            // No tree changes - no commit needed. May still have downloads/local trash moves.
+            // known_files will be updated below alongside the commit path.
+            // Set new_commit_sha to latest_commit_sha for state tracking.
+            new_commit_sha = latest_commit_sha.clone();
         }
 
-        // Update successful result
+        // Update successful result (always runs regardless of tree_nodes)
         result.status = SyncStatus::Success;
         result.uploaded_files = to_upload.clone();
         result.downloaded_files = to_download.clone();
         result.ignored_files = ignored;
-        result.commit_hash = Some(new_commit_sha.clone());
+        if !new_commit_sha.is_empty() {
+            result.commit_hash = Some(new_commit_sha.clone());
+        }
         result.first_sync_mode = if is_first_sync {
              if latest_commit_sha.is_empty() { FirstSyncMode::InitExistingWorkspace } else { FirstSyncMode::AlreadyGitRepo }
         } else {
              FirstSyncMode::NotAttempted
         };
+        let has_changes = !to_upload.is_empty() || !to_download.is_empty() || !to_delete_remote.is_empty() || !to_delete_local.is_empty();
         result.user_message = if is_first_sync {
             Some("已初始化远端分支并完成首次同步。".to_string())
+        } else if !has_changes {
+            Some("双向同步完成，无变化。".to_string())
         } else {
             Some(format!("双向同步完成。上传: {}, 下载: {}, 远端删除: {}, 本地移入回收站: {} (网络模式: {})。",
-                to_upload.len(), to_download.len(), to_delete_local.len(), to_delete_remote.len(), mode))
+                to_upload.len(), to_download.len(), to_delete_remote.len(), to_delete_local.len(), mode))
         };
 
         state.last_sync_time = Some(chrono::Utc::now().timestamp());
-        state.last_synced_commit = Some(new_commit_sha);
+        if !new_commit_sha.is_empty() && new_commit_sha != latest_commit_sha {
+            state.last_synced_commit = Some(new_commit_sha);
+        }
 
         // Re-scan to update known_files
         if let Ok(entries) = SyncService::scan_workspace_for_sync(workspace_path) {
