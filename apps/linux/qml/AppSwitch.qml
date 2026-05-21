@@ -37,7 +37,7 @@ Item {
         width: 16
         height: 16
         radius: 8
-        color: control.enabled ? "#ffffff" : (control.theme ? control.theme.textDim : "#94a3b8")
+        color: control.enabled ? "#ffffff" : (control.theme ? control.theme.textDisabled : "#94a3b8")
         y: 3
         x: control.checked ? parent.width - width - 3 : 3
 

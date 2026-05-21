@@ -7,7 +7,7 @@ ScrollView {
     clip: true
 
     property var backendRef: null
-    property var theme: null
+    property var appTheme: null
     property real fontSizeSpinValue: 16
     property bool autoSaveCheckChecked: false
     property real autoSaveDelaySpinValue: 1500
@@ -19,20 +19,20 @@ ScrollView {
 
     ColumnLayout {
         width: parent ? parent.width : 500
-        spacing: theme ? theme.sp12 : 10
+        spacing: root.appTheme ? root.appTheme.sp12 : 10
 
         // Header
         Label {
             text: "Action 调试"
-            font.pixelSize: theme ? theme.fontXl : 18
+            font.pixelSize: root.appTheme ? root.appTheme.fontXl : 18
             font.weight: Font.Bold
-            color: theme ? theme.textPrimary : "#0f172a"
+            color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
         }
 
         Label {
             text: "列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。"
-            color: theme ? theme.textSecondary : "#475569"
-            font.pixelSize: theme ? theme.fontSm : 12
+            color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
@@ -40,7 +40,7 @@ ScrollView {
         // Action buttons
         RowLayout {
             Layout.fillWidth: true
-            spacing: theme ? theme.sp8 : 8
+            spacing: root.appTheme ? root.appTheme.sp8 : 8
 
             Button {
                 text: "列出所有 Action"
@@ -57,16 +57,16 @@ ScrollView {
                 }
                 contentItem: Text {
                     text: parent.text
-                    color: theme ? theme.primaryText : "#ffffff"
-                    font.pixelSize: theme ? theme.fontSm : 12
+                    color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
+                    font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
                     color: parent.hovered
-                        ? (theme ? theme.primaryHover : "#60a5fa")
-                        : (theme ? theme.primary : "#3b82f6")
-                    radius: theme ? theme.radiusSm : 6
+                        ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa")
+                        : (root.appTheme ? root.appTheme.primary : "#3b82f6")
+                    radius: root.appTheme ? root.appTheme.radiusSm : 6
                 }
             }
 
@@ -80,14 +80,14 @@ ScrollView {
                 }
                 contentItem: Text {
                     text: parent.text
-                    color: theme ? theme.textSecondary : "#475569"
-                    font.pixelSize: theme ? theme.fontSm : 12
+                    color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                    font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
-                    color: parent.hovered ? (theme ? theme.hover : "#f1f5f9") : "transparent"
-                    radius: theme ? theme.radiusSm : 6
+                    color: parent.hovered ? (root.appTheme ? root.appTheme.hover : "#f1f5f9") : "transparent"
+                    radius: root.appTheme ? root.appTheme.radiusSm : 6
                 }
             }
         }
@@ -99,30 +99,25 @@ ScrollView {
 
             delegate: Rectangle {
                 Layout.fillWidth: true
-                implicitHeight: actionCardCol.implicitHeight + (theme ? theme.sp24 : 24)
-                color: theme ? theme.surfaceAlt : "#f1f5f9"
-                radius: theme ? theme.radiusMd : 8
-                border.color: theme ? theme.border : "#e2e8f0"
+                implicitHeight: actionCardCol.implicitHeight + (root.appTheme ? root.appTheme.sp24 : 24)
+                color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
+                radius: root.appTheme ? root.appTheme.radiusMd : 8
+                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
                 border.width: 1
 
                 ColumnLayout {
                     id: actionCardCol
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.leftMargin: theme ? theme.sp12 : 12
-                    anchors.rightMargin: theme ? theme.sp12 : 12
-                    anchors.topMargin: theme ? theme.sp12 : 12
-                    anchors.bottomMargin: theme ? theme.sp12 : 12
-                    spacing: theme ? theme.sp6 : 4
+                    anchors.fill: parent
+                    anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
+                    spacing: root.appTheme ? root.appTheme.sp6 : 4
 
                     RowLayout {
                         Layout.fillWidth: true
                         Label {
                             text: modelData.title || modelData.id || ""
-                            font.pixelSize: theme ? theme.fontMd : 14
+                            font.pixelSize: root.appTheme ? root.appTheme.fontMd : 14
                             font.weight: Font.DemiBold
-                            color: theme ? theme.textPrimary : "#0f172a"
+                            color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                             Layout.fillWidth: true
                         }
                         Label {
@@ -133,34 +128,34 @@ ScrollView {
                                 if (risk === "safeWrite") return "写入"
                                 return "只读"
                             }
-                            font.pixelSize: theme ? theme.fontXs : 11
+                            font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
                             color: {
                                 var risk = modelData.riskLevel || ""
-                                if (risk === "dangerous") return theme ? theme.danger : "#ef4444"
-                                if (risk === "contentWrite") return theme ? theme.warning : "#f59e0b"
-                                if (risk === "safeWrite") return theme ? theme.success : "#22c55e"
-                                return theme ? theme.textSecondary : "#475569"
+                                if (risk === "dangerous") return root.appTheme ? root.appTheme.danger : "#ef4444"
+                                if (risk === "contentWrite") return root.appTheme ? root.appTheme.warning : "#f59e0b"
+                                if (risk === "safeWrite") return root.appTheme ? root.appTheme.success : "#22c55e"
+                                return root.appTheme ? root.appTheme.textSecondary : "#475569"
                             }
                         }
                     }
 
                     Label {
                         text: modelData.id || ""
-                        font.pixelSize: theme ? theme.fontXs : 11
-                        color: theme ? theme.textSecondary : "#475569"
+                        font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
+                        color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                         font.family: "monospace"
                     }
 
                     Label {
                         text: modelData.description || ""
-                        font.pixelSize: theme ? theme.fontSm : 12
-                        color: theme ? theme.textSecondary : "#475569"
+                        font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                        color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
 
                     RowLayout {
-                        spacing: theme ? theme.sp8 : 8
+                        spacing: root.appTheme ? root.appTheme.sp8 : 8
                         Button {
                             text: "执行"
                             visible: modelData.kind === "query" || modelData.kind === "preview"
@@ -181,16 +176,16 @@ ScrollView {
                             }
                             contentItem: Text {
                                 text: parent.text
-                                color: theme ? theme.primaryText : "#ffffff"
-                                font.pixelSize: theme ? theme.fontSm : 12
+                                color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
+                                font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
                                 color: parent.hovered
-                                    ? (theme ? theme.primaryHover : "#60a5fa")
-                                    : (theme ? theme.primary : "#3b82f6")
-                                radius: theme ? theme.radiusSm : 6
+                                    ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa")
+                                    : (root.appTheme ? root.appTheme.primary : "#3b82f6")
+                                radius: root.appTheme ? root.appTheme.radiusSm : 6
                             }
                         }
                         Button {
@@ -230,25 +225,25 @@ ScrollView {
                             }
                             contentItem: Text {
                                 text: parent.text
-                                color: theme ? theme.primaryText : "#ffffff"
-                                font.pixelSize: theme ? theme.fontSm : 12
+                                color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
+                                font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
                                 color: parent.enabled
                                     ? (parent.hovered
-                                        ? (theme ? theme.primaryHover : "#60a5fa")
-                                        : (theme ? theme.primary : "#3b82f6"))
-                                    : (theme ? theme.border : "#e2e8f0")
-                                radius: theme ? theme.radiusSm : 6
+                                        ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa")
+                                        : (root.appTheme ? root.appTheme.primary : "#3b82f6"))
+                                    : (root.appTheme ? root.appTheme.border : "#e2e8f0")
+                                radius: root.appTheme ? root.appTheme.radiusSm : 6
                             }
                         }
                         Label {
                             text: "危险操作已阻断"
                             visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
-                            color: theme ? theme.danger : "#ef4444"
-                            font.pixelSize: theme ? theme.fontSm : 12
+                            color: root.appTheme ? root.appTheme.danger : "#ef4444"
+                            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                         }
                     }
                 }
@@ -259,23 +254,23 @@ ScrollView {
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: Math.min(actionResultText.implicitHeight + 20, 200)
-            color: theme ? theme.surfaceAlt : "#f1f5f9"
-            radius: theme ? theme.radiusSm : 6
-            border.color: theme ? theme.border : "#e2e8f0"
+            color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
+            radius: root.appTheme ? root.appTheme.radiusSm : 6
+            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
             border.width: 1
 
             TextArea {
                 id: actionResultText
                 anchors.fill: parent
-                anchors.margins: theme ? theme.sp8 : 8
+                anchors.margins: root.appTheme ? root.appTheme.sp8 : 8
                 readOnly: true
                 wrapMode: Text.Wrap
-                color: theme ? theme.textPrimary : "#0f172a"
-                font.pixelSize: theme ? theme.fontSm : 12
+                color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
+                font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                 font.family: "monospace"
                 placeholderText: "执行结果将显示在此处..."
                 background: Rectangle { color: "transparent" }
-                placeholderTextColor: theme ? theme.textSecondary : "#475569"
+                placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
             }
         }
     }

@@ -43,7 +43,7 @@ Item {
             text: control.text
             color: {
                 if (control.active) return control.theme ? control.theme.selectedText : "#e2e8f0"
-                return control.theme ? control.theme.text : "#e2e8f0"
+                return control.theme ? control.theme.textPrimary : "#0f172a"
             }
             font.pixelSize: control.theme ? control.theme.fontMd : 13
             font.weight: control.active ? Font.Medium : Font.Normal

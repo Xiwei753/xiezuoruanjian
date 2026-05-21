@@ -4,10 +4,10 @@ import QtQuick.Layouts 1.15
 
 Rectangle {
     id: root
-    color: theme ? theme.editorBg : "#1a1a2e"
+    color: appTheme ? appTheme.editorBg : "#1a1a2e"
 
     property var backendRef: null
-    property var theme: null
+    property var appTheme: null
     readonly property string text: editorArea.text
 
     signal contentChanged()
@@ -18,22 +18,22 @@ Rectangle {
 
     Rectangle {
         anchors.fill: parent
-        color: theme ? theme.editorBg : "#1a1a2e"
+        color: root.appTheme ? root.appTheme.editorBg : "#1a1a2e"
         clip: true
 
         // Placeholder
         Text {
             anchors.centerIn: parent
             text: "请在左侧选择或创建一个章节"
-            color: theme ? theme.textDim : "#94a3b8"
-            font.pixelSize: theme ? theme.fontLg : 15
+            color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+            font.pixelSize: root.appTheme ? root.appTheme.fontLg : 15
             visible: !root.backendRef || !root.backendRef.has_selected_chapter_prop
         }
 
         // Editor area with max-width
         Item {
             anchors.fill: parent
-            anchors.margins: theme ? theme.sp24 : 24
+            anchors.margins: root.appTheme ? root.appTheme.sp24 : 24
             visible: root.backendRef && root.backendRef.has_selected_chapter_prop
 
             Rectangle {
@@ -59,12 +59,12 @@ Rectangle {
                     TextArea {
                         id: editorArea
                         width: Math.min(parent.width, 800)
-                        color: theme ? theme.text : "#e2e8f0"
+                        color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                         font.pixelSize: {
                             if (root.backendRef && root.backendRef.setting_font_size > 0) {
                                 return root.backendRef.setting_font_size
                             }
-                            let def = theme ? theme.fontLg : 15
+                            let def = root.appTheme ? root.appTheme.fontLg : 15
                             return def
                         }
                         font.family: "serif"
@@ -75,10 +75,10 @@ Rectangle {
                         activeFocusOnTab: true
                         selectByMouse: true
                         persistentSelection: true
-                        leftPadding: theme ? theme.sp4 : 4
-                        rightPadding: theme ? theme.sp4 : 4
-                        topPadding: theme ? theme.sp4 : 4
-                        bottomPadding: theme ? theme.sp4 : 4
+                        leftPadding: root.appTheme ? root.appTheme.sp4 : 4
+                        rightPadding: root.appTheme ? root.appTheme.sp4 : 4
+                        topPadding: root.appTheme ? root.appTheme.sp4 : 4
+                        bottomPadding: root.appTheme ? root.appTheme.sp4 : 4
 
                         onTextChanged: {
                             root.contentChanged()

@@ -236,20 +236,20 @@ ApplicationWindow {
         id: inputDialog
         property string actionType: ""
         property var contextData: ({})
-        property string errorMessage: ""
-        property bool processing: false
+        property string dialogErrorMessage: ""
+        property bool dialogProcessing: false
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
         width: 380
+        implicitHeight: 220
         modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        implicitHeight: contentCol.implicitHeight + tokens.sp32
         background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
 
         onOpened: {
             inputField.text = contextData.initialText || ""
-            errorMessage = ""
-            processing = false
+            inputDialog.dialogErrorMessage = ""
+            inputDialog.dialogProcessing = false
             inputField.forceActiveFocus()
         }
 
@@ -267,8 +267,8 @@ ApplicationWindow {
                 onAccepted: confirmButton.clicked()
             }
             Label {
-                text: errorMessage
-                visible: errorMessage.length > 0
+                text: inputDialog.dialogErrorMessage
+                visible: inputDialog.dialogErrorMessage.length > 0
                 color: tokens.danger
                 font.pixelSize: tokens.fontSm
                 wrapMode: Text.WordWrap
@@ -278,7 +278,7 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: tokens.sp8
                 Item { Layout.fillWidth: true }
                 Button {
-                    text: "取消"; flat: true; enabled: !inputDialog.processing
+                    text: "取消"; flat: true; enabled: !inputDialog.dialogProcessing
                     onClicked: inputDialog.close()
                     contentItem: Text { text: parent.text; color: tokens.textSecondary; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
@@ -286,21 +286,21 @@ ApplicationWindow {
                 }
                 Button {
                     id: confirmButton
-                    text: inputDialog.processing ? "处理中..." : "确定"
-                    enabled: !inputDialog.processing && inputField.text.trim().length > 0
+                    text: inputDialog.dialogProcessing ? "处理中..." : "确定"
+                    enabled: !inputDialog.dialogProcessing && inputField.text.trim().length > 0
                     onClicked: {
                         if (actionType === "create_project") {
                             var result = backend.create_new_project(inputField.text.trim())
                             try {
                                 var r = JSON.parse(result)
                                 if (r.success) {
-                                    errorMessage = ""
+                                    inputDialog.dialogErrorMessage = ""
                                     inputDialog.close()
                                 } else {
-                                    errorMessage = r.message || "创建失败"
+                                    inputDialog.dialogErrorMessage = r.message || "创建失败"
                                 }
                             } catch(e) {
-                                errorMessage = "解析返回结果失败: " + e
+                                inputDialog.dialogErrorMessage = "解析返回结果失败: " + e
                             }
                         } else if (actionType === "create_volume") {
                             backend.create_new_volume(contextData.projectId, inputField.text.trim())
@@ -331,12 +331,11 @@ ApplicationWindow {
         id: errorDialog
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: 420; implicitHeight: errorContentCol.implicitHeight + tokens.sp32
+        width: 420; height: 200
         modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
         ColumnLayout {
-            id: errorContentCol
             anchors.fill: parent; anchors.margins: tokens.sp16; spacing: tokens.sp12
             Label { text: "错误"; font.pixelSize: tokens.fontXl; font.weight: Font.DemiBold; color: tokens.danger }
             Label { text: backend.error_message; Layout.fillWidth: true; Layout.fillHeight: true; wrapMode: Text.Wrap; color: tokens.textPrimary; font.pixelSize: tokens.fontMd }
@@ -355,12 +354,11 @@ ApplicationWindow {
         property var contextData: ({})
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: 340; implicitHeight: confirmContentCol.implicitHeight + tokens.sp32
+        width: 340; height: 180
         modal: true; focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
         ColumnLayout {
-            id: confirmContentCol
             anchors.fill: parent; anchors.margins: tokens.sp16; spacing: tokens.sp12
             Label { text: "确认删除"; font.pixelSize: tokens.fontXl; font.weight: Font.DemiBold; color: tokens.danger }
             Label { text: "您确定要删除此项目吗？此操作不可撤销。"; color: tokens.textPrimary; font.pixelSize: tokens.fontMd; wrapMode: Text.Wrap }
@@ -393,7 +391,7 @@ ApplicationWindow {
         id: settingsDialog
         backendRef: backend
         editorPageRef: editorPage
-        theme: tokens
+        appTheme: tokens
     }
 
     // ── Models ────────────────────────────────────────────────
@@ -488,7 +486,7 @@ ApplicationWindow {
 
         // Page 0: Empty Workspace
         EmptyWorkspace {
-            theme: tokens
+            appTheme: tokens
             backendRef: backend
             onCreateWorkspace: backend.create_new_workspace()
             onOpenWorkspace: backend.open_existing_workspace()
@@ -745,7 +743,7 @@ ApplicationWindow {
             EditorPage {
                 id: editorPage
                 Layout.fillWidth: true; Layout.fillHeight: true
-                backendRef: backend; theme: tokens
+                backendRef: backend; appTheme: tokens
                 onContentChanged: {
                     backend.calculate_word_count(text)
                     if (backend.setting_auto_save_enabled) {

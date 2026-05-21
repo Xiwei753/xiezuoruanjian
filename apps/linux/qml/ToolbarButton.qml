@@ -13,7 +13,7 @@ Button {
 
     contentItem: Text {
         text: control.text
-        color: control.hovered ? (control.theme ? control.theme.primary : "#0ea5e9") : (control.theme ? control.theme.textDim : "#94a3b8")
+        color: control.hovered ? (control.theme ? control.theme.primary : "#3b82f6") : (control.theme ? control.theme.textSecondary : "#475569")
         font.pixelSize: control.theme ? control.theme.fontSm : 12
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
