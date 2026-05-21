@@ -18,11 +18,16 @@ Item {
     property real sliderStep: 1
     property string valueLabel: ""
 
-    implicitHeight: isSwitch ? (description.length > 0 ? 56 : 44) : 48
     implicitWidth: 200
+    implicitHeight: contentLoader.implicitHeight + (control.theme ? control.theme.sp8 : 8)
 
     Loader {
-        anchors.fill: parent
+        id: contentLoader
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.leftMargin: control.theme ? control.theme.sp4 : 4
+        anchors.rightMargin: control.theme ? control.theme.sp4 : 4
         sourceComponent: control.isSwitch ? switchComponent : sliderComponent
     }
 
@@ -30,9 +35,6 @@ Item {
         id: switchComponent
         RowLayout {
             spacing: control.theme ? control.theme.sp12 : 12
-            anchors.fill: parent
-            anchors.leftMargin: control.theme ? control.theme.sp4 : 4
-            anchors.rightMargin: control.theme ? control.theme.sp4 : 4
 
             AppSwitch {
                 id: switchCtrl
@@ -51,14 +53,18 @@ Item {
                 Label {
                     text: control.label
                     font.pixelSize: control.theme ? control.theme.fontMd : 13
-                    color: control.enabled ? (control.theme ? control.theme.text : "#e2e8f0") : (control.theme ? control.theme.textDim : "#94a3b8")
+                    color: control.enabled
+                        ? (control.theme ? control.theme.textPrimary : "#0f172a")
+                        : (control.theme ? control.theme.textDisabled : "#94a3b8")
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                 }
                 Label {
                     text: control.description
-                    font.pixelSize: control.theme ? control.theme.fontXs : 11
-                    color: control.theme ? control.theme.textDim : "#94a3b8"
+                    font.pixelSize: control.theme ? control.theme.fontSm : 12
+                    color: control.enabled
+                        ? (control.theme ? control.theme.textSecondary : "#475569")
+                        : (control.theme ? control.theme.textDisabled : "#94a3b8")
                     visible: control.description.length > 0
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
@@ -70,9 +76,6 @@ Item {
     Component {
         id: sliderComponent
         ColumnLayout {
-            anchors.fill: parent
-            anchors.leftMargin: control.theme ? control.theme.sp4 : 4
-            anchors.rightMargin: control.theme ? control.theme.sp4 : 4
             spacing: control.theme ? control.theme.sp4 : 4
 
             RowLayout {
@@ -82,7 +85,7 @@ Item {
                 Label {
                     text: control.label
                     font.pixelSize: control.theme ? control.theme.fontMd : 13
-                    color: control.theme ? control.theme.text : "#e2e8f0"
+                    color: control.theme ? control.theme.textPrimary : "#0f172a"
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                 }
@@ -90,7 +93,7 @@ Item {
                 Label {
                     text: control.valueLabel
                     font.pixelSize: control.theme ? control.theme.fontSm : 12
-                    color: control.theme ? control.theme.textDim : "#94a3b8"
+                    color: control.theme ? control.theme.textSecondary : "#475569"
                     Layout.preferredWidth: 60
                     horizontalAlignment: Text.AlignRight
                 }
@@ -103,8 +106,8 @@ Item {
                 value: control.sliderValue
                 stepSize: control.sliderStep
                 Layout.fillWidth: true
-                Layout.preferredHeight: 24
-                Layout.bottomMargin: 4
+                Layout.preferredHeight: 28
+                Layout.bottomMargin: 2
                 onValueChanged: control.sliderValue = value
             }
         }

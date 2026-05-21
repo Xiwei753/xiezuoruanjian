@@ -25,6 +25,9 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/AppCard.qml" as "AppCard.qml",
     "qml/AppTextField.qml" as "AppTextField.qml",
     "qml/AppSwitch.qml" as "AppSwitch.qml",
+    "qml/AppSlider.qml" as "AppSlider.qml",
+    "qml/AppComboBox.qml" as "AppComboBox.qml",
+    "qml/AppText.qml" as "AppText.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
     "qml/SettingsRow.qml" as "SettingsRow.qml",
     "qml/SidebarItem.qml" as "SidebarItem.qml",
@@ -194,7 +197,7 @@ struct AppBackend {
     poll_sync_result: qt_method!(fn(&mut self)),
     query_system_color_scheme: qt_method!(fn(&mut self)),
 
-    create_new_project: qt_method!(fn(&mut self, title: QString)),
+    create_new_project: qt_method!(fn(&mut self, title: QString) -> QString),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
     create_new_chapter:
         qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
@@ -1586,37 +1589,104 @@ impl AppBackend {
         self.cached_tree.clone()
     }
 
-    fn create_new_project(&mut self, title: QString) {
+    fn create_new_project(&mut self, title: QString) -> QString {
+        let title_str = title.to_string();
+        if title_str.trim().is_empty() {
+            let err_json = serde_json::json!({
+                "success": false,
+                "message": "作品名不能为空",
+                "projectId": null,
+                "createdDefaultVolume": false,
+                "workspacePath": self.current_workspace,
+                "validateWorkspace": false,
+                "projectsDirExists": false,
+                "treeCount": self.cached_tree.len(),
+            });
+            return err_json.to_string().into();
+        }
         if !self.current_has_workspace {
-            self.set_error("未打开工作区，无法创建作品。请先新建或打开一个工作区。");
-            return;
+            let err_json = serde_json::json!({
+                "success": false,
+                "message": "未打开工作区，无法创建作品。请先新建或打开一个工作区。",
+                "projectId": null,
+                "createdDefaultVolume": false,
+                "workspacePath": self.current_workspace,
+                "validateWorkspace": false,
+                "projectsDirExists": false,
+                "treeCount": self.cached_tree.len(),
+            });
+            self.set_error(&err_json["message"].to_string());
+            return err_json.to_string().into();
         }
         if self.current_workspace.is_empty() {
-            self.set_error("工作区路径为空，无法创建作品。");
-            return;
+            let err_json = serde_json::json!({
+                "success": false,
+                "message": "工作区路径为空，无法创建作品。",
+                "projectId": null,
+                "createdDefaultVolume": false,
+                "workspacePath": self.current_workspace,
+                "validateWorkspace": false,
+                "projectsDirExists": false,
+                "treeCount": self.cached_tree.len(),
+            });
+            self.set_error(&err_json["message"].to_string());
+            return err_json.to_string().into();
         }
         let ws_path = std::path::Path::new(&self.current_workspace);
+        let projects_dir = ws_path.join("projects");
+        let projects_exists = projects_dir.exists();
         if !ws_path.exists() || !ws_path.is_dir() {
-            self.set_error(&format!("工作区目录不存在: {}", self.current_workspace));
-            return;
+            let msg = format!("工作区目录不存在: {}", self.current_workspace);
+            let err_json = serde_json::json!({
+                "success": false,
+                "message": msg,
+                "projectId": null,
+                "createdDefaultVolume": false,
+                "workspacePath": self.current_workspace,
+                "validateWorkspace": false,
+                "projectsDirExists": projects_exists,
+                "treeCount": self.cached_tree.len(),
+            });
+            self.set_error(&msg);
+            return err_json.to_string().into();
         }
         let core_check = WriterCore::new(&self.current_workspace);
-        if !core_check.validate_workspace().unwrap_or(false) {
-            let projects_dir = ws_path.join("projects");
-            let projects_exists = projects_dir.exists();
-            self.set_error(&format!(
+        let validate_ok = core_check.validate_workspace().unwrap_or(false);
+        if !validate_ok {
+            let msg = format!(
                 "创建作品失败: 工作区验证失败\n工作区: {}\nprojects 目录存在: {}\n请检查工作区结构是否正确。",
                 self.current_workspace, projects_exists
-            ));
-            return;
+            );
+            let err_json = serde_json::json!({
+                "success": false,
+                "message": msg,
+                "projectId": null,
+                "createdDefaultVolume": false,
+                "workspacePath": self.current_workspace,
+                "validateWorkspace": false,
+                "projectsDirExists": projects_exists,
+                "treeCount": self.cached_tree.len(),
+            });
+            self.set_error(&msg);
+            return err_json.to_string().into();
         }
 
         if self.core.is_none() {
-            // Re-initialize core if it was dropped
             let new_core = WriterCore::new(&self.current_workspace);
             if !new_core.validate_workspace().unwrap_or(false) {
-                self.set_error(&format!("无法重新打开工作区: {}", self.current_workspace));
-                return;
+                let msg = format!("无法重新打开工作区: {}", self.current_workspace);
+                let err_json = serde_json::json!({
+                    "success": false,
+                    "message": msg,
+                    "projectId": null,
+                    "createdDefaultVolume": false,
+                    "workspacePath": self.current_workspace,
+                    "validateWorkspace": false,
+                    "projectsDirExists": projects_exists,
+                    "treeCount": self.cached_tree.len(),
+                });
+                self.set_error(&msg);
+                return err_json.to_string().into();
             }
             self.core = Some(Rc::new(RefCell::new(new_core)));
         }
@@ -1624,29 +1694,78 @@ impl AppBackend {
         if let Some(core_ref) = &self.core {
             let result = {
                 let core = core_ref.borrow();
-                core.create_project(&title.to_string())
+                core.create_project(&title_str)
             };
             match result {
                 Ok(proj) => {
-                    self.selected_project_id = Some(proj.id.clone());
+                    let project_id = proj.id.clone();
+                    self.selected_project_id = Some(project_id.clone());
                     self.selected_item_changed();
                     self.selected_volume_id = None;
                     self.selected_chapter_id = None;
+
+                    // Try to find and select the default first volume
+                    let default_volume_id = {
+                        let core = core_ref.borrow();
+                        if let Ok(volumes) = core.list_volumes(&project_id) {
+                            volumes.first().map(|v| v.id.clone())
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(ref vol_id) = default_volume_id {
+                        self.selected_volume_id = Some(vol_id.clone());
+                    }
+
                     self.reload_tree();
                     self.projects_reloaded();
+
+                    let ok_json = serde_json::json!({
+                        "success": true,
+                        "message": format!("作品「{}」创建成功", proj.title),
+                        "projectId": project_id,
+                        "createdDefaultVolume": default_volume_id.is_some(),
+                        "workspacePath": self.current_workspace,
+                        "validateWorkspace": true,
+                        "projectsDirExists": true,
+                        "treeCount": self.cached_tree.len(),
+                    });
+                    ok_json.to_string().into()
                 }
                 Err(e) => {
-                    let ws_path = std::path::Path::new(&self.current_workspace);
-                    let projects_dir = ws_path.join("projects");
-                    let projects_exists = projects_dir.exists();
-                    let validate_result = core_check.validate_workspace();
+                    let validate_ok = core_check.validate_workspace().unwrap_or(false);
                     let msg = format!(
-                        "创建作品失败: {}\n工作区: {}\n工作区验证: {:?}\nprojects 目录存在: {}",
-                        e, self.current_workspace, validate_result, projects_exists
+                        "创建作品失败: {}\n工作区: {}\n工作区验证: {}\nprojects 目录存在: {}",
+                        e, self.current_workspace, validate_ok, projects_exists
                     );
+                    let err_json = serde_json::json!({
+                        "success": false,
+                        "message": msg,
+                        "projectId": null,
+                        "createdDefaultVolume": false,
+                        "workspacePath": self.current_workspace,
+                        "validateWorkspace": validate_ok,
+                        "projectsDirExists": projects_exists,
+                        "treeCount": self.cached_tree.len(),
+                    });
                     self.set_error(&msg);
+                    err_json.to_string().into()
                 }
             }
+        } else {
+            let msg = "Core 未初始化".to_string();
+            let err_json = serde_json::json!({
+                "success": false,
+                "message": msg,
+                "projectId": null,
+                "createdDefaultVolume": false,
+                "workspacePath": self.current_workspace,
+                "validateWorkspace": false,
+                "projectsDirExists": projects_exists,
+                "treeCount": self.cached_tree.len(),
+            });
+            self.set_error(&msg);
+            err_json.to_string().into()
         }
     }
 

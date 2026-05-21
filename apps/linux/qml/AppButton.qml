@@ -14,7 +14,10 @@ Button {
 
     contentItem: Text {
         text: control.text
-        color: control.theme ? control.theme.primaryText : "#ffffff"
+        color: {
+            if (!control.enabled) return control.theme ? control.theme.textDisabled : "#94a3b8"
+            return control.theme ? control.theme.primaryText : "#ffffff"
+        }
         font.pixelSize: control.theme ? control.theme.fontSm : 12
         font.weight: Font.Medium
         horizontalAlignment: Text.AlignHCenter
@@ -23,9 +26,11 @@ Button {
 
     background: Rectangle {
         color: {
-            if (!control.enabled) return control.theme ? control.theme.border : "#555555"
-            return control.hovered ? (control.theme ? control.theme.primaryHover : "#38bdf8") : (control.theme ? control.theme.primary : "#0ea5e9")
+            if (!control.enabled) return control.theme ? control.theme.surfaceAlt : "#f1f5f9"
+            return control.hovered ? (control.theme ? control.theme.primaryHover : "#60a5fa") : (control.theme ? control.theme.primary : "#3b82f6")
         }
-        radius: control.theme ? control.theme.radiusSm : 4
+        border.color: !control.enabled ? (control.theme ? control.theme.border : "#e2e8f0") : "transparent"
+        border.width: !control.enabled ? 1 : 0
+        radius: control.theme ? control.theme.radiusSm : 6
     }
 }

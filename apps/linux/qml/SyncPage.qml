@@ -84,10 +84,8 @@ ScrollView {
     property string githubInitPath: ""
 
     function startGithubInit() {
-        // Called from EmptyWorkspace - prepare for init flow
         root.githubInitMode = true
         root.githubInitPath = ""
-        // User selects directory
     }
 
     Component.onCompleted: loadForm()
@@ -96,7 +94,7 @@ ScrollView {
         width: Math.min(parent.width, 560)
         spacing: root.theme ? root.theme.sp16 : 16
 
-        // GitHub Init section (visible when no workspace open)
+        // GitHub Init section
         ColumnLayout {
             Layout.fillWidth: true
             spacing: root.theme ? root.theme.sp12 : 12
@@ -109,12 +107,13 @@ ScrollView {
                     Label {
                         text: "从 GitHub 初始化工作区"
                         font.pixelSize: root.theme ? root.theme.fontXl : 18
-                        font.weight: Font.Bold; color: root.theme ? root.theme.text : "#e2e8f0"
+                        font.weight: Font.Bold
+                        color: root.theme ? root.theme.textPrimary : "#0f172a"
                     }
                     Label {
                         text: "选择本地空目录（或已有工作区目录），填写远程仓库地址和 Token 后初始化。非空非工作区目录将被阻止。"
                         font.pixelSize: root.theme ? root.theme.fontSm : 12
-                        color: root.theme ? root.theme.textDim : "#94a3b8"
+                        color: root.theme ? root.theme.textSecondary : "#475569"
                         wrapMode: Text.Wrap; Layout.fillWidth: true
                     }
 
@@ -123,7 +122,7 @@ ScrollView {
                         Label {
                             text: "目录:"
                             font.pixelSize: root.theme ? root.theme.fontMd : 13
-                            color: root.theme ? root.theme.text : "#e2e8f0"
+                            color: root.theme ? root.theme.textPrimary : "#0f172a"
                         }
                         Label {
                             text: root.backendRef && root.backendRef.pending_github_init_path
@@ -131,8 +130,8 @@ ScrollView {
                                   : "未选择"
                             font.pixelSize: root.theme ? root.theme.fontMd : 13
                             color: root.backendRef && root.backendRef.pending_github_init_path
-                                   ? (root.theme ? root.theme.text : "#e2e8f0")
-                                   : (root.theme ? root.theme.textDim : "#94a3b8")
+                                   ? (root.theme ? root.theme.textPrimary : "#0f172a")
+                                   : (root.theme ? root.theme.textSecondary : "#475569")
                             Layout.fillWidth: true; elide: Text.ElideRight
                         }
                     }
@@ -204,7 +203,7 @@ ScrollView {
 
             Rectangle {
                 Layout.fillWidth: true; height: 1
-                color: root.theme ? root.theme.divider : "#334155"
+                color: root.theme ? root.theme.divider : "#e2e8f0"
             }
         }
 
@@ -228,7 +227,7 @@ ScrollView {
                         if (ss === "non_fast_forward") return root.theme ? root.theme.danger : "#ef4444"
                         if (ss === "unrelated_histories") return root.theme ? root.theme.danger : "#ef4444"
                         if (ss === "configured_untested") return root.theme ? root.theme.warning : "#f59e0b"
-                        return root.theme ? root.theme.textDim : "#94a3b8"
+                        return root.theme ? root.theme.textSecondary : "#475569"
                     }
                 }
 
@@ -252,7 +251,7 @@ ScrollView {
                         }
                         font.pixelSize: root.theme ? root.theme.fontMd : 13
                         font.weight: Font.Medium
-                        color: root.theme ? root.theme.text : "#e2e8f0"
+                        color: root.theme ? root.theme.textPrimary : "#0f172a"
                     }
                     Label {
                         text: {
@@ -266,7 +265,7 @@ ScrollView {
                             return ""
                         }
                         font.pixelSize: root.theme ? root.theme.fontSm : 12
-                        color: root.theme ? root.theme.textDim : "#94a3b8"
+                        color: root.theme ? root.theme.textSecondary : "#475569"
                         visible: text.length > 0
                     }
                 }
@@ -293,13 +292,13 @@ ScrollView {
                 Label {
                     text: "后端:"
                     font.pixelSize: root.theme ? root.theme.fontMd : 13
-                    color: root.theme ? root.theme.text : "#e2e8f0"
+                    color: root.theme ? root.theme.textPrimary : "#0f172a"
                     Layout.preferredWidth: 80
                 }
                 Label {
                     text: "Git / GitHub 仓库"
                     font.pixelSize: root.theme ? root.theme.fontMd : 13
-                    color: root.theme ? root.theme.text : "#e2e8f0"
+                    color: root.theme ? root.theme.textPrimary : "#0f172a"
                     font.weight: Font.Medium
                 }
             }
@@ -339,7 +338,7 @@ ScrollView {
                 Label {
                     text: "Token"
                     font.pixelSize: root.theme ? root.theme.fontMd : 13
-                    color: root.theme ? root.theme.text : "#e2e8f0"
+                    color: root.theme ? root.theme.textPrimary : "#0f172a"
                     font.weight: Font.Medium
                 }
                 TextField {
@@ -347,12 +346,14 @@ ScrollView {
                     Layout.fillWidth: true; implicitHeight: 32
                     echoMode: TextInput.Password
                     placeholderText: root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
-                    color: root.theme ? root.theme.text : "#e2e8f0"
+                    color: root.theme ? root.theme.textPrimary : "#0f172a"
                     background: Rectangle {
-                        color: root.theme ? root.theme.surface : "#1a1a2e"
-                        border.color: parent.activeFocus ? (root.theme ? root.theme.borderFocus : "#0ea5e9") : (root.theme ? root.theme.border : "#334155")
+                        color: root.theme ? root.theme.surfaceAlt : "#f1f5f9"
+                        border.color: parent.activeFocus
+                            ? (root.theme ? root.theme.borderFocus : "#3b82f6")
+                            : (root.theme ? root.theme.border : "#e2e8f0")
                         border.width: 1
-                        radius: root.theme ? root.theme.radiusSm : 4
+                        radius: root.theme ? root.theme.radiusSm : 6
                     }
                     font.pixelSize: root.theme ? root.theme.fontMd : 13
                     leftPadding: 8; topPadding: 6; bottomPadding: 6
@@ -360,7 +361,9 @@ ScrollView {
                 Label {
                     text: root.hasExistingToken ? "Token 已配置" : "Token 未配置，同步将无法进行"
                     font.pixelSize: root.theme ? root.theme.fontXs : 11
-                    color: root.hasExistingToken ? (root.theme ? root.theme.success : "#22c55e") : (root.theme ? root.theme.warning : "#f59e0b")
+                    color: root.hasExistingToken
+                        ? (root.theme ? root.theme.success : "#22c55e")
+                        : (root.theme ? root.theme.warning : "#f59e0b")
                 }
             }
         }
@@ -383,18 +386,20 @@ ScrollView {
                     Label {
                         text: "同步间隔 (秒):"
                         font.pixelSize: root.theme ? root.theme.fontMd : 13
-                        color: root.theme ? root.theme.text : "#e2e8f0"
+                        color: root.theme ? root.theme.textPrimary : "#0f172a"
                     }
                     TextField {
                         id: syncIntervalInput
                         Layout.preferredWidth: 100; implicitHeight: 30
                         validator: IntValidator { bottom: 60 }
-                        color: root.theme ? root.theme.text : "#e2e8f0"
+                        color: root.theme ? root.theme.textPrimary : "#0f172a"
                         background: Rectangle {
-                            color: root.theme ? root.theme.surface : "#1a1a2e"
-                            border.color: parent.activeFocus ? (root.theme ? root.theme.borderFocus : "#0ea5e9") : (root.theme ? root.theme.border : "#334155")
+                            color: root.theme ? root.theme.surfaceAlt : "#f1f5f9"
+                            border.color: parent.activeFocus
+                                ? (root.theme ? root.theme.borderFocus : "#3b82f6")
+                                : (root.theme ? root.theme.border : "#e2e8f0")
                             border.width: 1
-                            radius: root.theme ? root.theme.radiusSm : 4
+                            radius: root.theme ? root.theme.radiusSm : 6
                         }
                         font.pixelSize: root.theme ? root.theme.fontMd : 13
                         leftPadding: 8; topPadding: 6; bottomPadding: 6
@@ -411,7 +416,7 @@ ScrollView {
                 Label {
                     text: "代理设置（可选）"
                     font.pixelSize: root.theme ? root.theme.fontMd : 13
-                    color: root.theme ? root.theme.text : "#e2e8f0"
+                    color: root.theme ? root.theme.textPrimary : "#0f172a"
                     font.weight: Font.Medium
                 }
                 SettingsRow {
@@ -421,52 +426,68 @@ ScrollView {
                     id: proxyEnabledCheck
                 }
                 RowLayout {
-                    Layout.fillWidth: true; spacing: 8
+                    Layout.fillWidth: true; spacing: root.theme ? root.theme.sp8 : 8
                     visible: proxyEnabledCheck.checked
-                    Label { text: "类型:"; font.pixelSize: 12; color: root.theme ? root.theme.textDim : "#94a3b8" }
-                    ComboBox {
-                        id: proxyTypeCombo; model: ["none", "auto", "http", "socks5"]
-                        Layout.preferredWidth: 100
+                    Label {
+                        text: "类型:"
+                        font.pixelSize: root.theme ? root.theme.fontSm : 12
+                        color: root.theme ? root.theme.textSecondary : "#475569"
+                    }
+                    AppComboBox {
+                        id: proxyTypeCombo
+                        model: ["none", "auto", "http", "socks5"]
+                        theme: root.theme
+                        Layout.preferredWidth: 120
                         onCurrentTextChanged: {
                             if (currentText === "http" && proxyPortInput.text === "0") proxyPortInput.text = "7890"
                             else if (currentText === "socks5" && proxyPortInput.text === "0") proxyPortInput.text = "7891"
                         }
-                        contentItem: Text {
-                            text: parent.displayText; color: root.theme ? root.theme.text : "#e2e8f0"
-                            font.pixelSize: 12; leftPadding: 6; verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            color: root.theme ? root.theme.surface : "#1a1a2e"
-                            border.color: parent.activeFocus ? (root.theme ? root.theme.borderFocus : "#0ea5e9") : (root.theme ? root.theme.border : "#334155")
-                            border.width: 1; radius: root.theme ? root.theme.radiusSm : 4
-                        }
                     }
                 }
                 RowLayout {
-                    visible: proxyEnabledCheck.checked; spacing: 8
-                    Label { text: "Host:"; font.pixelSize: 12; color: root.theme ? root.theme.textDim : "#94a3b8" }
-                    TextField {
-                        id: proxyHostInput; Layout.preferredWidth: 120; implicitHeight: 28
-                        placeholderText: "127.0.0.1"
-                        color: root.theme ? root.theme.text : "#e2e8f0"
-                        background: Rectangle {
-                            color: root.theme ? root.theme.surface : "#1a1a2e"
-                            border.color: parent.activeFocus ? (root.theme ? root.theme.borderFocus : "#0ea5e9") : (root.theme ? root.theme.border : "#334155")
-                            border.width: 1; radius: root.theme ? root.theme.radiusSm : 4
-                        }
-                        font.pixelSize: 12; leftPadding: 6; topPadding: 4; bottomPadding: 4
+                    visible: proxyEnabledCheck.checked
+                    spacing: root.theme ? root.theme.sp8 : 8
+                    Label {
+                        text: "Host:"
+                        font.pixelSize: root.theme ? root.theme.fontSm : 12
+                        color: root.theme ? root.theme.textSecondary : "#475569"
                     }
-                    Label { text: "Port:"; font.pixelSize: 12; color: root.theme ? root.theme.textDim : "#94a3b8" }
                     TextField {
-                        id: proxyPortInput; Layout.preferredWidth: 80; implicitHeight: 28
-                        validator: IntValidator { bottom: 0; top: 65535 }
-                        color: root.theme ? root.theme.text : "#e2e8f0"
+                        id: proxyHostInput
+                        Layout.preferredWidth: 120; implicitHeight: 28
+                        placeholderText: "127.0.0.1"
+                        color: root.theme ? root.theme.textPrimary : "#0f172a"
                         background: Rectangle {
-                            color: root.theme ? root.theme.surface : "#1a1a2e"
-                            border.color: parent.activeFocus ? (root.theme ? root.theme.borderFocus : "#0ea5e9") : (root.theme ? root.theme.border : "#334155")
-                            border.width: 1; radius: root.theme ? root.theme.radiusSm : 4
+                            color: root.theme ? root.theme.surfaceAlt : "#f1f5f9"
+                            border.color: parent.activeFocus
+                                ? (root.theme ? root.theme.borderFocus : "#3b82f6")
+                                : (root.theme ? root.theme.border : "#e2e8f0")
+                            border.width: 1
+                            radius: root.theme ? root.theme.radiusSm : 6
                         }
-                        font.pixelSize: 12; leftPadding: 6; topPadding: 4; bottomPadding: 4
+                        font.pixelSize: root.theme ? root.theme.fontSm : 12
+                        leftPadding: 6; topPadding: 4; bottomPadding: 4
+                    }
+                    Label {
+                        text: "Port:"
+                        font.pixelSize: root.theme ? root.theme.fontSm : 12
+                        color: root.theme ? root.theme.textSecondary : "#475569"
+                    }
+                    TextField {
+                        id: proxyPortInput
+                        Layout.preferredWidth: 80; implicitHeight: 28
+                        validator: IntValidator { bottom: 0; top: 65535 }
+                        color: root.theme ? root.theme.textPrimary : "#0f172a"
+                        background: Rectangle {
+                            color: root.theme ? root.theme.surfaceAlt : "#f1f5f9"
+                            border.color: parent.activeFocus
+                                ? (root.theme ? root.theme.borderFocus : "#3b82f6")
+                                : (root.theme ? root.theme.border : "#e2e8f0")
+                            border.width: 1
+                            radius: root.theme ? root.theme.radiusSm : 6
+                        }
+                        font.pixelSize: root.theme ? root.theme.fontSm : 12
+                        leftPadding: 6; topPadding: 4; bottomPadding: 4
                     }
                 }
             }
@@ -494,7 +515,7 @@ ScrollView {
             Label {
                 text: "提示：首次同步时如果远程分支不存在，系统将自动创建分支并推送初始内容。\n当前使用 Git / libgit2 后端，由本地 Git 仓库直接操作。"
                 font.pixelSize: root.theme ? root.theme.fontXs : 11
-                color: root.theme ? root.theme.textDim : "#94a3b8"
+                color: root.theme ? root.theme.textSecondary : "#475569"
                 wrapMode: Text.Wrap; Layout.fillWidth: true
             }
         }
@@ -506,12 +527,12 @@ ScrollView {
             TextArea {
                 id: syncResultLabel; width: parent.width
                 readOnly: true; wrapMode: Text.Wrap
-                color: root.theme ? root.theme.text : "#e2e8f0"
+                color: root.theme ? root.theme.textPrimary : "#0f172a"
                 font.pixelSize: root.theme ? root.theme.fontSm : 12
                 background: Rectangle {
-                    color: root.theme ? root.theme.surfaceAlt : "#16213e"
-                    radius: root.theme ? root.theme.radiusSm : 4
-                    border.color: root.theme ? root.theme.border : "#334155"
+                    color: root.theme ? root.theme.surfaceAlt : "#f1f5f9"
+                    radius: root.theme ? root.theme.radiusSm : 6
+                    border.color: root.theme ? root.theme.border : "#e2e8f0"
                     border.width: 1
                 }
                 leftPadding: 8; topPadding: 8; rightPadding: 8; bottomPadding: 8

@@ -36,7 +36,7 @@ Popup {
             ColumnLayout {
                 anchors.fill: parent; anchors.topMargin: theme.sp16; spacing: theme.sp2
                 Label {
-                    text: "设置"; font.pixelSize: theme.fontXl; font.weight: Font.Bold; color: theme.text
+                    text: "设置"; font.pixelSize: theme.fontXl; font.weight: Font.Bold; color: theme.textPrimary
                     Layout.leftMargin: theme.sp16; Layout.bottomMargin: theme.sp12
                 }
 
@@ -66,7 +66,7 @@ Popup {
                 ScrollView {
                     clip: true
                     ColumnLayout {
-                        width: Math.min(parent.width, 560); spacing: theme.sp16
+                        width: Math.min(parent.width - theme.sp32, 560); spacing: theme.sp16
                         Layout.alignment: Qt.AlignTop
                         SectionHeader { theme: theme; text: "编辑" }
                         AppCard { theme: theme; Layout.fillWidth: true
@@ -90,7 +90,7 @@ Popup {
                         AppCard { theme: theme; Layout.fillWidth: true
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 0
+                                spacing: theme.sp8
                                 SettingsRow {
                                     theme: theme; isSwitch: true; label: "自动缩进"; description: "自动在换行时添加缩进"
                                     id: autoIndentCheck
@@ -98,18 +98,26 @@ Popup {
                                 }
                                 ColumnLayout {
                                     Layout.fillWidth: true
-                                    Layout.leftMargin: 44
+                                    Layout.leftMargin: theme.sp16
                                     Layout.rightMargin: theme.sp12
                                     spacing: theme.sp4
                                     visible: autoIndentCheck.checked
-                                    Label { text: "缩进宽度:"; font.pixelSize: theme.fontSm; color: theme.textDim }
+                                    Label {
+                                        text: "缩进宽度:"
+                                        font.pixelSize: theme.fontSm
+                                        color: theme.textSecondary
+                                    }
                                     Slider {
                                         id: autoIndentWidthSlider
                                         from: 0; to: 800; value: backendRef.setting_auto_indent_width > 0 ? backendRef.setting_auto_indent_width * 100 : 200; stepSize: 50
-                                        Layout.fillWidth: true; Layout.preferredHeight: 28
-                                        Layout.bottomMargin: 4
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 28
                                     }
-                                    Label { text: (autoIndentWidthSlider.value / 100).toFixed(1) + " 字符"; font.pixelSize: theme.fontSm; color: theme.textDim; Layout.bottomMargin: 4 }
+                                    Label {
+                                        text: (autoIndentWidthSlider.value / 100).toFixed(1) + " 字符"
+                                        font.pixelSize: theme.fontSm
+                                        color: theme.textSecondary
+                                    }
                                 }
                             }
                         }
@@ -118,7 +126,7 @@ Popup {
                         AppCard { theme: theme; Layout.fillWidth: true
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 0
+                                spacing: theme.sp8
                                 SettingsRow {
                                     theme: theme; isSwitch: true; label: "自动保存"; description: "在编辑内容变化时自动保存到磁盘"
                                     id: autoSaveCheck
@@ -126,18 +134,26 @@ Popup {
                                 }
                                 ColumnLayout {
                                     Layout.fillWidth: true
-                                    Layout.leftMargin: 44
+                                    Layout.leftMargin: theme.sp16
                                     Layout.rightMargin: theme.sp12
                                     spacing: theme.sp4
                                     visible: autoSaveCheck.checked
-                                    Label { text: "延迟:"; font.pixelSize: theme.fontSm; color: theme.textDim }
+                                    Label {
+                                        text: "延迟:"
+                                        font.pixelSize: theme.fontSm
+                                        color: theme.textSecondary
+                                    }
                                     Slider {
                                         id: autoSaveDelaySlider
                                         from: 500; to: 60000; value: backendRef.setting_auto_save_delay_ms > 0 ? backendRef.setting_auto_save_delay_ms : 1500; stepSize: 500
-                                        Layout.fillWidth: true; Layout.preferredHeight: 28
-                                        Layout.bottomMargin: 4
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 28
                                     }
-                                    Label { text: autoSaveDelaySlider.value.toFixed(0) + " ms"; font.pixelSize: theme.fontSm; color: theme.textDim; Layout.bottomMargin: 4 }
+                                    Label {
+                                        text: autoSaveDelaySlider.value.toFixed(0) + " ms"
+                                        font.pixelSize: theme.fontSm
+                                        color: theme.textSecondary
+                                    }
                                 }
                             }
                         }
@@ -146,23 +162,20 @@ Popup {
                         AppCard { theme: theme; Layout.fillWidth: true
                             RowLayout {
                                 Layout.fillWidth: true; spacing: theme.sp12
-                                Label { text: "主题模式:"; font.pixelSize: theme.fontMd; color: theme.text }
-                                ComboBox {
+                                Label {
+                                    text: "主题模式:"
+                                    font.pixelSize: theme.fontMd
+                                    color: theme.textPrimary
+                                }
+                                AppComboBox {
                                     id: themeCombo
                                     model: ["system", "light", "dark"]
-                                    Layout.preferredWidth: 120
+                                    theme: theme
+                                    Layout.preferredWidth: 140
                                     currentIndex: {
                                         var modes = ["system", "light", "dark"]
                                         var idx = modes.indexOf(backendRef.setting_theme_mode)
                                         return idx >= 0 ? idx : 0
-                                    }
-                                    contentItem: Text {
-                                        text: parent.displayText; color: theme.text; font.pixelSize: theme.fontMd
-                                        leftPadding: 8; verticalAlignment: Text.AlignVCenter
-                                    }
-                                    background: Rectangle {
-                                        color: theme.surfaceAlt; border.color: parent.activeFocus ? theme.borderFocus : theme.border
-                                        border.width: 1; radius: theme.radiusSm
                                     }
                                 }
                             }
@@ -190,16 +203,37 @@ Popup {
                 // Tab 1: Appearance
                 ScrollView {
                     clip: true
-                    ColumnLayout { width: Math.min(parent.width, 560); spacing: theme.sp16
+                    ColumnLayout {
+                        width: Math.min(parent.width - theme.sp32, 560); spacing: theme.sp16
                         Layout.alignment: Qt.AlignTop
                         SectionHeader { theme: theme; text: "界面" }
                         AppCard { theme: theme; Layout.fillWidth: true
-                            SettingsRow { theme: theme; isSwitch: true; label: "自动保存时显示保存状态"; description: "在底部状态栏显示当前保存状态指示"; checked: true; enabled: false }
+                            SettingsRow {
+                                theme: theme; isSwitch: true
+                                label: "自动保存时显示保存状态"
+                                description: "在底部状态栏显示当前保存状态指示"
+                                checked: true
+                                enabled: false
+                            }
                         }
                         SectionHeader { theme: theme; text: "关于外观" }
                         AppCard { theme: theme; Layout.fillWidth: true
-                            Label { text: "当前主题: " + (theme.mode === "light" ? "浅色" : "深色"); font.pixelSize: theme.fontMd; color: theme.text }
-                            Label { text: "设计系统: 统一间距/圆角/色彩体系"; font.pixelSize: theme.fontSm; color: theme.textDim; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.sp4
+                                Label {
+                                    text: "当前主题: " + (theme.mode === "light" ? "浅色" : "深色")
+                                    font.pixelSize: theme.fontMd
+                                    color: theme.textPrimary
+                                }
+                                Label {
+                                    text: "设计系统: 统一间距/圆角/色彩体系"
+                                    font.pixelSize: theme.fontSm
+                                    color: theme.textSecondary
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                            }
                         }
                         Item { height: theme.sp16 }
                     }
@@ -215,14 +249,27 @@ Popup {
                 // Tab 3: Animations
                 ScrollView {
                     clip: true
-                    ColumnLayout { width: Math.min(parent.width, 560); spacing: theme.sp16
+                    ColumnLayout {
+                        width: Math.min(parent.width - theme.sp32, 560); spacing: theme.sp16
                         Layout.alignment: Qt.AlignTop
                         SectionHeader { theme: theme; text: "输入动效" }
                         AppCard { theme: theme; Layout.fillWidth: true
-                            SettingsRow { theme: theme; isSwitch: true; label: "输入动画"; description: "启用逐字输入动画效果"; id: typingAnimCheck; checked: backendRef.setting_typing_animation_enabled }
+                            SettingsRow {
+                                theme: theme; isSwitch: true
+                                label: "输入动画"
+                                description: "启用逐字输入动画效果"
+                                id: typingAnimCheck
+                                checked: backendRef.setting_typing_animation_enabled
+                            }
                         }
                         AppCard { theme: theme; Layout.fillWidth: true
-                            SettingsRow { theme: theme; isSwitch: true; label: "平滑光标"; description: "启用光标平滑移动效果"; id: smoothCursorCheck; checked: backendRef.setting_smooth_cursor_enabled }
+                            SettingsRow {
+                                theme: theme; isSwitch: true
+                                label: "平滑光标"
+                                description: "启用光标平滑移动效果"
+                                id: smoothCursorCheck
+                                checked: backendRef.setting_smooth_cursor_enabled
+                            }
                         }
                         Item { height: theme.sp16 }
                     }
@@ -245,12 +292,43 @@ Popup {
                 Item {
                     ColumnLayout {
                         anchors.centerIn: parent; spacing: theme.sp12
-                        Label { text: "Writer"; font.pixelSize: theme.fontXxl; font.weight: Font.Bold; color: theme.primary; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
-                        Label { text: "版本 1.0.0"; font.pixelSize: theme.fontMd; color: theme.textDim; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
+                        Label {
+                            text: "Writer"
+                            font.pixelSize: theme.fontXxl
+                            font.weight: Font.Bold
+                            color: theme.primary
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.fillWidth: true
+                        }
+                        Label {
+                            text: "版本 1.0.0"
+                            font.pixelSize: theme.fontMd
+                            color: theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.fillWidth: true
+                        }
                         Rectangle { width: 40; height: 1; color: theme.divider; Layout.alignment: Qt.AlignHCenter }
-                        Label { text: "技术栈: Rust + Qt/QML (qmetaobject)"; font.pixelSize: theme.fontSm; color: theme.textDim; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
-                        Label { text: "GitHub API 同步 | 双向同步 | 30 天回收站"; font.pixelSize: theme.fontSm; color: theme.textDim; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
-                        Label { text: "跨平台写作工具，专注长文创作体验"; font.pixelSize: theme.fontSm; color: theme.textDim; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
+                        Label {
+                            text: "技术栈: Rust + Qt/QML (qmetaobject)"
+                            font.pixelSize: theme.fontSm
+                            color: theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.fillWidth: true
+                        }
+                        Label {
+                            text: "GitHub API 同步 | 双向同步 | 30 天回收站"
+                            font.pixelSize: theme.fontSm
+                            color: theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.fillWidth: true
+                        }
+                        Label {
+                            text: "跨平台写作工具，专注长文创作体验"
+                            font.pixelSize: theme.fontSm
+                            color: theme.textSecondary
+                            horizontalAlignment: Text.AlignHCenter
+                            Layout.fillWidth: true
+                        }
 
                         Item { height: theme.sp16 }
 

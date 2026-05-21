@@ -26,12 +26,12 @@ ScrollView {
             text: "Action 调试"
             font.pixelSize: theme ? theme.fontXl : 18
             font.weight: Font.Bold
-            color: theme ? theme.text : "#e0e0e0"
+            color: theme ? theme.textPrimary : "#0f172a"
         }
 
         Label {
             text: "列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。"
-            color: theme ? theme.textDim : "#94a3b8"
+            color: theme ? theme.textSecondary : "#475569"
             font.pixelSize: theme ? theme.fontSm : 12
             wrapMode: Text.Wrap
             Layout.fillWidth: true
@@ -56,12 +56,17 @@ ScrollView {
                     }
                 }
                 contentItem: Text {
-                    text: parent.text; color: theme ? theme.primaryText : "#ffffff"; font.pixelSize: theme ? theme.fontSm : 12
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    text: parent.text
+                    color: theme ? theme.primaryText : "#ffffff"
+                    font.pixelSize: theme ? theme.fontSm : 12
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
-                    color: parent.hovered ? (theme ? theme.primaryHover : "#38bdf8") : (theme ? theme.primary : "#0ea5e9")
-                    radius: theme ? theme.radiusSm : 4
+                    color: parent.hovered
+                        ? (theme ? theme.primaryHover : "#60a5fa")
+                        : (theme ? theme.primary : "#3b82f6")
+                    radius: theme ? theme.radiusSm : 6
                 }
             }
 
@@ -74,12 +79,15 @@ ScrollView {
                     actionResultText.text = ""
                 }
                 contentItem: Text {
-                    text: parent.text; color: theme ? theme.textDim : "#94a3b8"; font.pixelSize: theme ? theme.fontSm : 12
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    text: parent.text
+                    color: theme ? theme.textSecondary : "#475569"
+                    font.pixelSize: theme ? theme.fontSm : 12
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
-                    color: parent.hovered ? (theme ? theme.hover : "#1e293b") : "transparent"
-                    radius: theme ? theme.radiusSm : 4
+                    color: parent.hovered ? (theme ? theme.hover : "#f1f5f9") : "transparent"
+                    radius: theme ? theme.radiusSm : 6
                 }
             }
         }
@@ -91,16 +99,21 @@ ScrollView {
 
             delegate: Rectangle {
                 Layout.fillWidth: true
-                height: actionCardCol.implicitHeight + theme.sp12
-                color: theme ? theme.surfaceAlt : "#2a2a2a"
-                radius: theme ? theme.radiusMd : 4
-                border.color: theme ? theme.border : "#334155"
+                implicitHeight: actionCardCol.implicitHeight + (theme ? theme.sp24 : 24)
+                color: theme ? theme.surfaceAlt : "#f1f5f9"
+                radius: theme ? theme.radiusMd : 8
+                border.color: theme ? theme.border : "#e2e8f0"
                 border.width: 1
 
                 ColumnLayout {
                     id: actionCardCol
-                    anchors.fill: parent
-                    anchors.margins: theme ? theme.sp12 : 8
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.leftMargin: theme ? theme.sp12 : 12
+                    anchors.rightMargin: theme ? theme.sp12 : 12
+                    anchors.topMargin: theme ? theme.sp12 : 12
+                    anchors.bottomMargin: theme ? theme.sp12 : 12
                     spacing: theme ? theme.sp6 : 4
 
                     RowLayout {
@@ -109,24 +122,24 @@ ScrollView {
                             text: modelData.title || modelData.id || ""
                             font.pixelSize: theme ? theme.fontMd : 14
                             font.weight: Font.DemiBold
-                            color: theme ? theme.text : "#e0e0e0"
+                            color: theme ? theme.textPrimary : "#0f172a"
                             Layout.fillWidth: true
                         }
                         Label {
                             text: {
                                 var risk = modelData.riskLevel || ""
-                                if (risk === "dangerous") return "⚠ 危险"
-                                if (risk === "contentWrite") return "⚠ 内容写入"
+                                if (risk === "dangerous") return "危险"
+                                if (risk === "contentWrite") return "内容写入"
                                 if (risk === "safeWrite") return "写入"
                                 return "只读"
                             }
                             font.pixelSize: theme ? theme.fontXs : 11
                             color: {
                                 var risk = modelData.riskLevel || ""
-                                if (risk === "dangerous") return theme ? theme.danger : "#f44336"
-                                if (risk === "contentWrite") return theme ? theme.warning : "#ff9800"
-                                if (risk === "safeWrite") return theme ? theme.success : "#4caf50"
-                                return theme ? theme.textDim : "#90a4ae"
+                                if (risk === "dangerous") return theme ? theme.danger : "#ef4444"
+                                if (risk === "contentWrite") return theme ? theme.warning : "#f59e0b"
+                                if (risk === "safeWrite") return theme ? theme.success : "#22c55e"
+                                return theme ? theme.textSecondary : "#475569"
                             }
                         }
                     }
@@ -134,14 +147,14 @@ ScrollView {
                     Label {
                         text: modelData.id || ""
                         font.pixelSize: theme ? theme.fontXs : 11
-                        color: theme ? theme.textDim : "#78909c"
+                        color: theme ? theme.textSecondary : "#475569"
                         font.family: "monospace"
                     }
 
                     Label {
                         text: modelData.description || ""
                         font.pixelSize: theme ? theme.fontSm : 12
-                        color: theme ? theme.textDim : "#b0bec5"
+                        color: theme ? theme.textSecondary : "#475569"
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -167,13 +180,17 @@ ScrollView {
                                 }
                             }
                             contentItem: Text {
-                                text: parent.text; color: theme ? theme.primaryText : "#ffffff"
+                                text: parent.text
+                                color: theme ? theme.primaryText : "#ffffff"
                                 font.pixelSize: theme ? theme.fontSm : 12
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: parent.hovered ? (theme ? theme.primaryHover : "#38bdf8") : (theme ? theme.primary : "#0ea5e9")
-                                radius: theme ? theme.radiusSm : 4
+                                color: parent.hovered
+                                    ? (theme ? theme.primaryHover : "#60a5fa")
+                                    : (theme ? theme.primary : "#3b82f6")
+                                radius: theme ? theme.radiusSm : 6
                             }
                         }
                         Button {
@@ -212,19 +229,25 @@ ScrollView {
                                 }
                             }
                             contentItem: Text {
-                                text: parent.text; color: theme ? theme.primaryText : "#ffffff"
+                                text: parent.text
+                                color: theme ? theme.primaryText : "#ffffff"
                                 font.pixelSize: theme ? theme.fontSm : 12
-                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: parent.enabled ? (parent.hovered ? (theme ? theme.primaryHover : "#38bdf8") : (theme ? theme.primary : "#0ea5e9")) : (theme ? theme.border : "#334155")
-                                radius: theme ? theme.radiusSm : 4
+                                color: parent.enabled
+                                    ? (parent.hovered
+                                        ? (theme ? theme.primaryHover : "#60a5fa")
+                                        : (theme ? theme.primary : "#3b82f6"))
+                                    : (theme ? theme.border : "#e2e8f0")
+                                radius: theme ? theme.radiusSm : 6
                             }
                         }
                         Label {
                             text: "危险操作已阻断"
                             visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
-                            color: theme ? theme.danger : "#f44336"
+                            color: theme ? theme.danger : "#ef4444"
                             font.pixelSize: theme ? theme.fontSm : 12
                         }
                     }
@@ -235,10 +258,10 @@ ScrollView {
         // Result display
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(actionResultText.implicitHeight + 20, 200)
-            color: theme ? theme.surfaceAlt : "#2a2a2a"
-            radius: theme ? theme.radiusSm : 4
-            border.color: theme ? theme.border : "#334155"
+            implicitHeight: Math.min(actionResultText.implicitHeight + 20, 200)
+            color: theme ? theme.surfaceAlt : "#f1f5f9"
+            radius: theme ? theme.radiusSm : 6
+            border.color: theme ? theme.border : "#e2e8f0"
             border.width: 1
 
             TextArea {
@@ -247,12 +270,12 @@ ScrollView {
                 anchors.margins: theme ? theme.sp8 : 8
                 readOnly: true
                 wrapMode: Text.Wrap
-                color: theme ? theme.text : "#e0e0e0"
+                color: theme ? theme.textPrimary : "#0f172a"
                 font.pixelSize: theme ? theme.fontSm : 12
                 font.family: "monospace"
                 placeholderText: "执行结果将显示在此处..."
                 background: Rectangle { color: "transparent" }
-                placeholderTextColor: theme ? theme.textDim : "#94a3b8"
+                placeholderTextColor: theme ? theme.textSecondary : "#475569"
             }
         }
     }

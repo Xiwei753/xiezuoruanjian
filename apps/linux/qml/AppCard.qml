@@ -7,7 +7,7 @@ Rectangle {
     property alias spacing: col.spacing
 
     implicitWidth: 200
-    implicitHeight: col.implicitHeight + 24
+    implicitHeight: col.implicitHeight + (control.theme ? control.theme.sp24 : 24)
     radius: control.theme ? control.theme.radiusMd : 8
     color: control.theme ? control.theme.surface : "#ffffff"
     border.color: control.theme ? control.theme.border : "#e2e8f0"
@@ -17,8 +17,13 @@ Rectangle {
 
     ColumnLayout {
         id: col
-        anchors.fill: parent
-        anchors.margins: 12
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.leftMargin: control.theme ? control.theme.sp12 : 12
+        anchors.rightMargin: control.theme ? control.theme.sp12 : 12
+        anchors.topMargin: control.theme ? control.theme.sp12 : 12
+        anchors.bottomMargin: control.theme ? control.theme.sp12 : 12
         spacing: control.theme ? control.theme.sp8 : 8
     }
 }

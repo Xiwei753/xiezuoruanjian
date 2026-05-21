@@ -7,5 +7,5 @@ Label {
 
     font.pixelSize: control.theme ? control.theme.fontXl : 18
     font.weight: Font.Bold
-    color: control.theme ? control.theme.text : "#e2e8f0"
+    color: control.theme ? control.theme.textPrimary : "#0f172a"
 }
