@@ -239,34 +239,16 @@ pub fn delete_chapter(
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<()> {
-    let project_id = project_id.trim();
-    if project_id.is_empty() || project_id.contains("..") || project_id.contains("/") || project_id.contains("\\") {
-        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", project_id)));
-    }
+    let project_id = crate::delete_guard::validate_id_segment(project_id)?;
+    let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
+    let chapter_id = crate::delete_guard::validate_id_segment(chapter_id)?;
+    let chapter_dir = workspace_path.join("projects").join(project_id).join("volumes").join(volume_id).join("chapters").join(chapter_id);
+    let target_canon = crate::delete_guard::validate_delete_target(workspace_path, &chapter_dir, "chapter.meta.json")?;
 
-    let volume_id = volume_id.trim();
-    if volume_id.is_empty() || volume_id.contains("..") || volume_id.contains("/") || volume_id.contains("\\") {
-        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", volume_id)));
-    }
-
-    let chapter_id = chapter_id.trim();
-    if chapter_id.is_empty() || chapter_id.contains("..") || chapter_id.contains("/") || chapter_id.contains("\\") {
-        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", chapter_id)));
-    }
-
-    let chapter_dir = workspace_path
-        .join("projects")
-        .join(project_id)
-        .join("volumes")
-        .join(volume_id)
-        .join("chapters")
-        .join(chapter_id);
-
-    if chapter_dir.exists() {
-        let trash_dir = workspace_path.join("app-meta/sync/trash");
+    let trash_dir = workspace_path.join("app-meta/sync/trash");
         let _ = fs::create_dir_all(&trash_dir);
         let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), chapter_id));
-        fs::rename(&chapter_dir, &trash_path)?;
+        fs::rename(&target_canon, &trash_path)?;
 
         // Also update tombstone
         if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
@@ -293,9 +275,6 @@ pub fn delete_chapter(
              }
              let _ = crate::sync_service::SyncService::save_sync_state(workspace_path, &state);
         }
-    } else {
-        return Err(crate::error::Error::ChapterNotFound);
-    }
     Ok(())
 }
 

@@ -16,6 +16,10 @@ pub enum Error {
     ChapterNotFound,
     #[error("Not implemented")]
     NotImplemented,
+    #[error("Refuse to delete workspace root")]
+    RefuseToDeleteWorkspaceRoot,
+    #[error("Invalid delete target: {0}")]
+    InvalidDeleteTarget(String),
     #[error("Other error: {0}")]
     Other(String),
 }

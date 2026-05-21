@@ -122,17 +122,14 @@ pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) 
 }
 
 pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
-    let project_id = project_id.trim();
-    if project_id.is_empty() || project_id.contains("..") || project_id.contains("/") || project_id.contains("\\") {
-        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", project_id)));
-    }
-
+    let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let project_dir = workspace_path.join("projects").join(project_id);
-    if project_dir.exists() {
-        let trash_dir = workspace_path.join("app-meta/sync/trash");
+    let target_canon = crate::delete_guard::validate_delete_target(workspace_path, &project_dir, "project.json")?;
+    
+    let trash_dir = workspace_path.join("app-meta/sync/trash");
         let _ = fs::create_dir_all(&trash_dir);
         let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), project_id));
-        fs::rename(&project_dir, &trash_path)?;
+        fs::rename(&target_canon, &trash_path)?;
 
         // Also update tombstone
         if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
@@ -157,9 +154,6 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
              }
              let _ = crate::sync_service::SyncService::save_sync_state(workspace_path, &state);
         }
-    } else {
-        return Err(crate::error::Error::ProjectNotFound);
-    }
     Ok(())
 }
 

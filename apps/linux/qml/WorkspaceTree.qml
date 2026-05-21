@@ -160,7 +160,9 @@ Rectangle {
             text: "重命名"
             onTriggered: {
                 if (contextMenu.itemData) {
-                    root.renameItem(contextMenu.itemData.type, contextMenu.itemData.projectId, contextMenu.itemData.volumeId, contextMenu.itemData.id, contextMenu.itemData.title);
+                    var data = contextMenu.itemData;
+                    if (!data || !data.id) { console.error("Missing node ID"); return; }
+                    root.renameItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }
         }
@@ -168,7 +170,9 @@ Rectangle {
             text: "删除"
             onTriggered: {
                 if (contextMenu.itemData) {
-                    root.deleteItem(contextMenu.itemData.type, contextMenu.itemData.projectId, contextMenu.itemData.volumeId, contextMenu.itemData.id, contextMenu.itemData.title);
+                    var data = contextMenu.itemData;
+                    if (!data || !data.id) { console.error("Missing node ID"); return; }
+                    root.deleteItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }
         }

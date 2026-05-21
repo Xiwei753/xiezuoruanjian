@@ -1,3 +1,4 @@
+pub(crate) mod delete_guard;
 pub mod action_registry;
 pub mod ai_service;
 pub mod app_config;
