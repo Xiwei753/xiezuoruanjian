@@ -4,6 +4,20 @@ import QtQuick.Layouts 1.15
 
 Rectangle {
     id: root
+    Connections {
+        target: root.backendRef
+        function onSync_action_completed() {
+            if (root.backendRef) {
+                syncResultArea.text = root.backendRef.sync_action_result;
+            }
+        }
+        function onSync_status_changed() {
+            if (root.backendRef) {
+                syncResultArea.text = root.backendRef.sync_action_result;
+            }
+        }
+    }
+
     property var theme: null
     property var backendRef: null
     signal settingsChanged()
@@ -101,6 +115,7 @@ Rectangle {
                 Button {
                     text: "执行同步"
                     onClicked: {
+                        syncResultArea.text = "正在同步...";
                         if (root.backendRef) root.backendRef.perform_sync();
                     }
                 }
@@ -108,6 +123,7 @@ Rectangle {
                 Button {
                     text: "运行诊断"
                     onClicked: {
+                        syncResultArea.text = "正在诊断...";
                         if (root.backendRef) root.backendRef.perform_sync_diagnostics();
                     }
                 }
@@ -125,7 +141,8 @@ Rectangle {
                     anchors.fill: parent
                     anchors.margins: 8
                     TextArea {
-                        text: (root.backendRef ? root.backendRef.sync_action_result : '')
+                        id: syncResultArea
+                        text: root.backendRef ? root.backendRef.sync_action_result : ''
                         color: theme ? theme.textDim : "#A0A0A0"
                         font.family: "monospace"
                         readOnly: true

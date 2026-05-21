@@ -241,6 +241,9 @@ struct AppBackend {
     create_volume_json: qt_method!(fn(&mut self, project_id: QString, title: QString) -> QString),
     create_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString) -> QString),
     select_tree_item_json: qt_method!(fn(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString) -> QString),
+    delete_project_json: qt_method!(fn(&mut self, project_id: QString) -> QString),
+    delete_volume_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString) -> QString),
+    delete_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString),
 
     refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
@@ -1887,6 +1890,45 @@ impl AppBackend {
         });
         final_res.to_string().into()
     }
+    fn delete_project_json(&mut self, project_id: QString) -> QString {
+        self.error_message = "".into();
+        self.delete_project(project_id);
+        let success = self.error_message.to_string().is_empty();
+        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
+        let final_res = serde_json::json!({
+            "success": success,
+            "message": msg,
+            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+        });
+        final_res.to_string().into()
+    }
+
+    fn delete_volume_json(&mut self, project_id: QString, volume_id: QString) -> QString {
+        self.error_message = "".into();
+        self.delete_volume(project_id, volume_id);
+        let success = self.error_message.to_string().is_empty();
+        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
+        let final_res = serde_json::json!({
+            "success": success,
+            "message": msg,
+            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+        });
+        final_res.to_string().into()
+    }
+
+    fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString {
+        self.error_message = "".into();
+        self.delete_chapter(project_id, volume_id, chapter_id);
+        let success = self.error_message.to_string().is_empty();
+        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
+        let final_res = serde_json::json!({
+            "success": success,
+            "message": msg,
+            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+        });
+        final_res.to_string().into()
+    }
+
 
     fn get_tree_model(&self) -> QJsonArray {
         self.cached_tree.clone()
