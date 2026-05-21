@@ -93,7 +93,7 @@ ScrollView {
     Component.onCompleted: loadForm()
 
     ColumnLayout {
-        width: Math.min(560, root.availableWidth - 24)
+        width: Math.min(540, root.width - 32)
         spacing: root.appTheme ? root.appTheme.sp16 : 16
 
         // GitHub Init section

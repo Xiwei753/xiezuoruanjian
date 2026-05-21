@@ -18,7 +18,7 @@ ScrollView {
     property bool smoothCursorCheckChecked: false
 
     ColumnLayout {
-        width: Math.min(560, root.availableWidth - 24)
+        width: Math.min(540, root.width - 32)
         spacing: root.appTheme ? root.appTheme.sp12 : 10
 
         // Header
@@ -253,7 +253,7 @@ ScrollView {
         // Result display
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: Math.min(actionResultText.implicitHeight + 20, 200)
+            height: 120
             color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
             radius: root.appTheme ? root.appTheme.radiusSm : 6
             border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"

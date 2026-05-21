@@ -1730,6 +1730,50 @@ impl AppBackend {
         self.cached_tree = list;
     }
 
+    fn build_tree_model_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        let mut tree = Vec::new();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            if let Ok(projects) = core.list_projects() {
+                for p in &projects {
+                    let mut p_map = serde_json::Map::new();
+                    p_map.insert("title".into(), json!(p.title));
+                    p_map.insert("id".into(), json!(p.id));
+                    p_map.insert("type".into(), json!("project"));
+                    p_map.insert("projectId".into(), json!(""));
+                    p_map.insert("volumeId".into(), json!(""));
+                    tree.push(serde_json::Value::Object(p_map));
+
+                    if let Ok(volumes) = core.list_volumes(&p.id) {
+                        for v in &volumes {
+                            let mut v_map = serde_json::Map::new();
+                            v_map.insert("title".into(), json!(v.title));
+                            v_map.insert("id".into(), json!(v.id));
+                            v_map.insert("projectId".into(), json!(p.id));
+                            v_map.insert("volumeId".into(), json!(""));
+                            v_map.insert("type".into(), json!("volume"));
+                            tree.push(serde_json::Value::Object(v_map));
+
+                            if let Ok(chapters) = core.list_chapters(&p.id, &v.id) {
+                                for c in &chapters {
+                                    let mut c_map = serde_json::Map::new();
+                                    c_map.insert("title".into(), json!(c.title));
+                                    c_map.insert("id".into(), json!(c.id));
+                                    c_map.insert("projectId".into(), json!(p.id));
+                                    c_map.insert("volumeId".into(), json!(v.id));
+                                    c_map.insert("type".into(), json!("chapter"));
+                                    tree.push(serde_json::Value::Object(c_map));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        serde_json::Value::Array(tree)
+    }
+
     fn get_tree_model(&self) -> QJsonArray {
         self.cached_tree.clone()
     }
@@ -1848,9 +1892,10 @@ impl AppBackend {
                     } else {
                         0
                     };
+                    let before_tree_count = self.cached_tree.len();
 
-                    eprintln!("[create_new_project] success: workspace_path={}, project_id={}, project_json_exists={}, volumes_dir_exists={}, volume_count={}, treeCount={}",
-                        self.current_workspace, project_id, project_json_exists, volumes_dir_exists, volume_count, self.cached_tree.len());
+                    eprintln!("[create_new_project] success: workspace_path={}, project_id={}, project_json_exists={}, volumes_dir_exists={}, volume_count={}, beforeTreeCount={}",
+                        self.current_workspace, project_id, project_json_exists, volumes_dir_exists, volume_count, before_tree_count);
 
                     if !project_json_exists {
                         let msg = format!("作品元数据创建失败（project.json 未写入）: {}", self.current_workspace);
@@ -1886,7 +1931,16 @@ impl AppBackend {
                         );
                         return build_err(&msg, true).into();
                     }
+                    if self.cached_tree.len() <= before_tree_count {
+                        let msg = format!(
+                            "作品文件已写入但树模型未增长 (before={}, after={})。\nprojectId={}",
+                            before_tree_count, self.cached_tree.len(), project_id
+                        );
+                        eprintln!("[create_new_project] error: {}", msg);
+                        return build_err(&msg, true).into();
+                    }
 
+                    let after_tree = self.build_tree_model_json();
                     let ok_json = serde_json::json!({
                         "success": true,
                         "message": format!("作品「{}」创建成功", proj.title),
@@ -1896,7 +1950,9 @@ impl AppBackend {
                         "projectJsonExists": project_json_exists,
                         "volumesDirExists": volumes_dir_exists,
                         "volumeCount": volume_count,
+                        "beforeTreeCount": before_tree_count,
                         "treeCount": self.cached_tree.len(),
+                        "treeModel": after_tree,
                     });
                     ok_json.to_string().into()
                 }

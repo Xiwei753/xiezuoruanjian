@@ -70,7 +70,7 @@ Popup {
                     clip: true
                     ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     ColumnLayout {
-                        width: Math.min(560, editorScroll.availableWidth - 24)
+                        width: Math.min(540, editorScroll.width - 32)
                         spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "编辑" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 96
@@ -228,7 +228,7 @@ Popup {
                     clip: true
                     ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     ColumnLayout {
-                        width: Math.min(560, appearanceScroll.availableWidth - 24)
+                        width: Math.min(540, appearanceScroll.width - 32)
                         spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "界面" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
@@ -276,7 +276,7 @@ Popup {
                     clip: true
                     ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     ColumnLayout {
-                        width: Math.min(560, animScroll.availableWidth - 24)
+                        width: Math.min(540, animScroll.width - 32)
                         spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "输入动效" }
                         AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80

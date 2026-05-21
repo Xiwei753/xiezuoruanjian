@@ -126,8 +126,14 @@ ApplicationWindow {
 
     AppBackend {
         id: backend
-        onWorkspace_opened: reloadTree()
-        onProjects_reloaded: reloadTree()
+        onWorkspace_opened: {
+            console.log("[QML] workspace_opened received")
+            reloadTree()
+        }
+        onProjects_reloaded: {
+            console.log("[QML] projects_reloaded received")
+            reloadTree()
+        }
         onError_occurred: errorDialog.open()
         onClear_editor: {
             loadingChapter = true
@@ -194,12 +200,17 @@ ApplicationWindow {
     }
 
     function reloadTree() {
+        console.log("[QML] reloadTree from backend.get_tree_model")
+        applyTreeItems(backend.get_tree_model(), "", "")
+    }
+
+    function applyTreeItems(items, selectProjectId, selectVolumeId) {
         treeModel.clear()
-        let items = backend.get_tree_model()
-        let selId = backend.selected_item_id
-        let matchIndex = -1
-        for (let i = 0; i < items.length; i++) {
-            let item = items[i]
+        var selId = selectVolumeId || selectProjectId || backend.selected_item_id
+        var matchIndex = -1
+        var selectChapterId = ""
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i]
             treeModel.append({
                 "title": item.title, "id": item.id,
                 "projectId": item.projectId || "",
@@ -208,8 +219,17 @@ ApplicationWindow {
             })
             if (selId !== "" && item.id === selId) matchIndex = i
         }
-        if (matchIndex !== -1) treeView.currentIndex = matchIndex
+        if (matchIndex !== -1) {
+            treeView.currentIndex = matchIndex
+            treeView.positionViewAtIndex(matchIndex, ListView.Contain)
+        }
         if (treeModel.count === 0) treeView.currentIndex = -1
+        // Sync backend selection
+        if (selectVolumeId && selectVolumeId.length > 0) {
+            backend.select_volume(selectProjectId, selectVolumeId)
+        } else if (selectProjectId && selectProjectId.length > 0) {
+            backend.select_project(selectProjectId)
+        }
     }
 
     function isFirstSibling(index) {
@@ -433,17 +453,23 @@ ApplicationWindow {
                         console.log("[CreateProjectDialog] result raw:", result)
                         try {
                             var r = JSON.parse(result)
-                            console.log("[CreateProjectDialog] parsed:", JSON.stringify(r, null, 2))
+                            console.log("[CreateProjectDialog] parsed success=" + r.success + " id=" + r.projectId + " defaultVolumeId=" + r.defaultVolumeId + " treeCount=" + r.treeCount)
                             if (r.success) {
                                 backend.save_status = r.message
                                 createProjectDialog.close()
-                                reloadTree()
-                                // Select the newly created project and default volume
-                                if (r.projectId) {
-                                    if (r.defaultVolumeId) {
-                                        backend.select_volume(r.projectId, r.defaultVolumeId)
-                                    } else {
-                                        backend.select_project(r.projectId)
+                                // Atomic tree refresh using returned treeModel if available
+                                if (r.treeModel && r.treeModel.length > 0) {
+                                    console.log("[CreateProjectDialog] using r.treeModel, items=" + r.treeModel.length)
+                                    applyTreeItems(r.treeModel, r.projectId, r.defaultVolumeId)
+                                } else {
+                                    console.log("[CreateProjectDialog] r.treeModel empty, falling back to reloadTree")
+                                    reloadTree()
+                                    if (r.projectId) {
+                                        if (r.defaultVolumeId) {
+                                            backend.select_volume(r.projectId, r.defaultVolumeId)
+                                        } else {
+                                            backend.select_project(r.projectId)
+                                        }
                                     }
                                 }
                             } else {
