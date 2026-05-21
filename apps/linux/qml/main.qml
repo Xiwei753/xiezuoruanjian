@@ -134,6 +134,10 @@ ApplicationWindow {
             console.log("[QML] projects_reloaded received")
             reloadTree()
         }
+        onProjectsReloaded: {
+            console.log("[QML] projectsReloaded received")
+            reloadTree()
+        }
         onError_occurred: errorDialog.open()
         onClear_editor: {
             loadingChapter = true
@@ -200,36 +204,68 @@ ApplicationWindow {
     }
 
     function reloadTree() {
-        console.log("[QML] reloadTree from backend.get_tree_model")
-        applyTreeItems(backend.get_tree_model(), "", "")
+        console.log("[QML] reloadTree using refresh_tree_model_json")
+        var jsonText = backend.refresh_tree_model_json()
+        loadTreeFromJson(jsonText, "", "", "")
+    }
+
+    function loadTreeFromJson(jsonText, selectProjectId, selectVolumeId, selectChapterId) {
+        console.log("[QML] loadTreeFromJson starting...")
+        try {
+            var data = JSON.parse(jsonText)
+            if (!data.success) {
+                console.log("[QML] loadTreeFromJson failed: success is false")
+                return
+            }
+            var items = data.items || []
+            treeModel.clear()
+            
+            var selId = selectChapterId || selectVolumeId || selectProjectId || backend.selected_item_id
+            var matchIndex = -1
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i]
+                treeModel.append({
+                    "title": item.title,
+                    "id": item.id,
+                    "projectId": item.projectId || "",
+                    "volumeId": item.volumeId || "",
+                    "type": item.type
+                })
+                if (selId !== "" && item.id === selId) {
+                    matchIndex = i
+                }
+            }
+            console.log("[QML] tree applied count=" + treeModel.count + " selectedIndex=" + matchIndex)
+            
+            if (matchIndex !== -1) {
+                treeView.currentIndex = matchIndex
+                Qt.callLater(function() {
+                    treeView.positionViewAtIndex(matchIndex, ListView.Contain)
+                })
+            }
+            if (treeModel.count === 0) {
+                treeView.currentIndex = -1
+            }
+            
+            // Sync selection to backend
+            if (selectChapterId && selectChapterId.length > 0) {
+                backend.select_chapter(selectProjectId, selectVolumeId, selectChapterId)
+            } else if (selectVolumeId && selectVolumeId.length > 0) {
+                backend.select_volume(selectProjectId, selectVolumeId)
+            } else if (selectProjectId && selectProjectId.length > 0) {
+                backend.select_project(selectProjectId)
+            }
+        } catch(e) {
+            console.log("[QML] Error in loadTreeFromJson: " + e)
+        }
     }
 
     function applyTreeItems(items, selectProjectId, selectVolumeId) {
-        treeModel.clear()
-        var selId = selectVolumeId || selectProjectId || backend.selected_item_id
-        var matchIndex = -1
-        var selectChapterId = ""
-        for (var i = 0; i < items.length; i++) {
-            var item = items[i]
-            treeModel.append({
-                "title": item.title, "id": item.id,
-                "projectId": item.projectId || "",
-                "volumeId": item.volumeId || "",
-                "type": item.type
-            })
-            if (selId !== "" && item.id === selId) matchIndex = i
+        var wrapper = {
+            "success": true,
+            "items": items
         }
-        if (matchIndex !== -1) {
-            treeView.currentIndex = matchIndex
-            treeView.positionViewAtIndex(matchIndex, ListView.Contain)
-        }
-        if (treeModel.count === 0) treeView.currentIndex = -1
-        // Sync backend selection
-        if (selectVolumeId && selectVolumeId.length > 0) {
-            backend.select_volume(selectProjectId, selectVolumeId)
-        } else if (selectProjectId && selectProjectId.length > 0) {
-            backend.select_project(selectProjectId)
-        }
+        loadTreeFromJson(JSON.stringify(wrapper), selectProjectId, selectVolumeId, "")
     }
 
     function isFirstSibling(index) {
@@ -458,9 +494,9 @@ ApplicationWindow {
                                 backend.save_status = r.message
                                 createProjectDialog.close()
                                 // Atomic tree refresh using returned treeModel if available
-                                if (r.treeModel && r.treeModel.length > 0) {
-                                    console.log("[CreateProjectDialog] using r.treeModel, items=" + r.treeModel.length)
-                                    applyTreeItems(r.treeModel, r.projectId, r.defaultVolumeId)
+                                if (r.treeModel) {
+                                    console.log("[CreateProjectDialog] using r.treeModel")
+                                    loadTreeFromJson(JSON.stringify(r.treeModel), r.projectId, r.defaultVolumeId, "")
                                 } else {
                                     console.log("[CreateProjectDialog] r.treeModel empty, falling back to reloadTree")
                                     reloadTree()
@@ -664,18 +700,16 @@ ApplicationWindow {
         // Page 1: Main Workspace View
         RowLayout {
             spacing: 0
+            Layout.fillWidth: true
+            Layout.fillHeight: true
 
             // ── Left Sidebar ────────────────────────────────────────
 
             Rectangle {
                 id: sidebar
                 Layout.preferredWidth: sidebarVisible ? sidebarWidth : 0
-                Layout.maximumWidth: sidebarVisible ? sidebarWidth : 0
-                Layout.minimumWidth: sidebarVisible ? sidebarWidth : 0
                 color: tokens.sidebarBg
                 clip: true
-
-                Behavior on Layout.preferredWidth { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
                 property bool sidebarVisible: true
 
@@ -751,30 +785,6 @@ ApplicationWindow {
                             anchors.fill: parent; anchors.topMargin: tokens.sp4
                             model: treeModel; clip: true
                             ScrollBar.vertical: ScrollBar { parent: treeView.parent; anchors.top: treeView.top; anchors.bottom: treeView.bottom; anchors.right: treeView.right }
-
-                            // Empty state for tree
-                            ColumnLayout {
-                                anchors.centerIn: parent
-                                spacing: tokens.sp8
-                                visible: treeModel.count === 0
-                                width: parent.width - tokens.sp24
-
-                                Text {
-                                    Layout.alignment: Qt.AlignHCenter
-                                    text: "暂无作品"
-                                    color: tokens.textSecondary
-                                    font.pixelSize: tokens.fontMd
-                                }
-                                Text {
-                                    Layout.alignment: Qt.AlignHCenter
-                                    text: "点击上方「新建作品」开始创作"
-                                    color: tokens.textSecondary
-                                    font.pixelSize: tokens.fontSm
-                                    horizontalAlignment: Text.AlignHCenter
-                                    wrapMode: Text.Wrap
-                                    Layout.fillWidth: true
-                                }
-                            }
 
                             delegate: Item {
                                 width: ListView.view.width; height: 32
@@ -884,6 +894,41 @@ ApplicationWindow {
                                 }
                             }
                         }
+
+                        // Empty state for tree
+                        ColumnLayout {
+                            anchors.centerIn: parent
+                            spacing: tokens.sp8
+                            visible: treeModel.count === 0
+                            width: parent.width - tokens.sp24
+                            z: 10
+
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "暂无作品"
+                                color: tokens.textSecondary
+                                font.pixelSize: tokens.fontMd
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "点击上方「新建作品」开始创作"
+                                color: tokens.textSecondary
+                                font.pixelSize: tokens.fontSm
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: "工作区: " + backend.workspace_path + "\n作品数量: " + treeModel.count
+                                color: tokens.textSecondary
+                                font.pixelSize: tokens.fontXs
+                                opacity: 0.6
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                        }
                     }
                 }
             }
@@ -891,7 +936,9 @@ ApplicationWindow {
             // Sidebar resize handle
             Rectangle {
                 id: sidebarHandle
-                Layout.preferredWidth: 4; Layout.fillHeight: true
+                Layout.preferredWidth: sidebar.sidebarVisible ? 4 : 0
+                visible: sidebar.sidebarVisible
+                Layout.fillHeight: true
                 color: tokens.divider
                 MouseArea {
                     anchors.fill: parent; anchors.leftMargin: -2; anchors.rightMargin: -2; cursorShape: Qt.SizeHorCursor

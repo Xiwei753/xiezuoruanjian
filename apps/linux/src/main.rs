@@ -117,6 +117,7 @@ fn try_kreadconfig(cmd: &str) -> Option<String> {
 }
 
 #[allow(dead_code)]
+#[allow(non_snake_case)]
 #[derive(QObject, Default)]
 struct AppBackend {
     base: qt_base_class!(trait QObject),
@@ -133,6 +134,8 @@ struct AppBackend {
     workspace_opened: qt_signal!(),
     workspace_state_changed: qt_signal!(),
     projects_reloaded: qt_signal!(),
+    #[allow(non_snake_case)]
+    projectsReloaded: qt_signal!(),
     save_status_changed: qt_signal!(),
     word_count_changed: qt_signal!(),
     error_occurred: qt_signal!(),
@@ -230,6 +233,8 @@ struct AppBackend {
     ),
 
     get_tree_model: qt_method!(fn(&self) -> QJsonArray),
+    get_tree_model_json: qt_method!(fn(&self) -> QString),
+    refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
 
     select_project: qt_method!(fn(&mut self, project_id: QString)),
@@ -297,6 +302,12 @@ impl AppBackend {
     fn has_workspace(&self) -> bool {
         self.current_has_workspace
     }
+
+    fn trigger_projects_reloaded(&mut self) {
+        self.projects_reloaded();
+        self.projectsReloaded();
+    }
+
 
     fn sync_status(&self) -> QString {
         self.current_sync_status.clone().into()
@@ -787,7 +798,7 @@ impl AppBackend {
         self.clear_editor();
         // Emit signals
         self.workspace_state_changed();
-        self.projects_reloaded();
+        self.trigger_projects_reloaded();
         self.sync_status_changed();
     }
 
@@ -1491,7 +1502,7 @@ impl AppBackend {
 
                 if self.current_sync_status == "success" && self.has_workspace() {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
 
                 if self.current_sync_status == "success" && !self.current_pending_github_init_path.is_empty() {
@@ -1507,7 +1518,7 @@ impl AppBackend {
                 // On unrelated_histories or conflict, reload tree to reflect current state
                 if (self.current_sync_status == "unrelated_histories" || self.current_sync_status == "conflict") && self.has_workspace() {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
             }
         }
@@ -1751,7 +1762,7 @@ impl AppBackend {
                             v_map.insert("title".into(), json!(v.title));
                             v_map.insert("id".into(), json!(v.id));
                             v_map.insert("projectId".into(), json!(p.id));
-                            v_map.insert("volumeId".into(), json!(""));
+                            v_map.insert("volumeId".into(), json!(v.id));
                             v_map.insert("type".into(), json!("volume"));
                             tree.push(serde_json::Value::Object(v_map));
 
@@ -1772,6 +1783,25 @@ impl AppBackend {
             }
         }
         serde_json::Value::Array(tree)
+    }
+
+    fn get_tree_model_json(&self) -> QString {
+        let items = self.build_tree_model_json();
+        let count = match &items {
+            serde_json::Value::Array(arr) => arr.len(),
+            _ => 0,
+        };
+        let val = serde_json::json!({
+            "success": true,
+            "treeCount": count,
+            "items": items
+        });
+        val.to_string().into()
+    }
+
+    fn refresh_tree_model_json(&mut self) -> QString {
+        self.reload_tree();
+        self.get_tree_model_json()
     }
 
     fn get_tree_model(&self) -> QJsonArray {
@@ -1921,7 +1951,7 @@ impl AppBackend {
                     }
 
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
 
                     if self.cached_tree.len() == 0 {
                         eprintln!("[create_new_project] warning: tree count is 0 after reload");
@@ -1941,6 +1971,10 @@ impl AppBackend {
                     }
 
                     let after_tree = self.build_tree_model_json();
+                    let tree_count = match &after_tree {
+                        serde_json::Value::Array(arr) => arr.len(),
+                        _ => 0,
+                    };
                     let ok_json = serde_json::json!({
                         "success": true,
                         "message": format!("作品「{}」创建成功", proj.title),
@@ -1952,7 +1986,11 @@ impl AppBackend {
                         "volumeCount": volume_count,
                         "beforeTreeCount": before_tree_count,
                         "treeCount": self.cached_tree.len(),
-                        "treeModel": after_tree,
+                        "treeModel": {
+                            "success": true,
+                            "treeCount": tree_count,
+                            "items": after_tree
+                        },
                     });
                     ok_json.to_string().into()
                 }
@@ -1983,7 +2021,7 @@ impl AppBackend {
                     self.selected_item_changed();
                     self.selected_chapter_id = None;
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("创建分卷失败: {}", e)),
             }
@@ -2007,7 +2045,7 @@ impl AppBackend {
                     self.selected_chapter_id = Some(chap.id.clone());
                     self.selected_item_changed();
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("创建章节失败: {}", e)),
             }
@@ -2023,7 +2061,7 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重命名作品失败: {}", e)),
             }
@@ -2045,7 +2083,7 @@ impl AppBackend {
                     }
 
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("删除作品失败: {}", e)),
             }
@@ -2067,7 +2105,7 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重排作品失败: {}", e)),
             }
@@ -2087,7 +2125,7 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重命名分卷失败: {}", e)),
             }
@@ -2108,7 +2146,7 @@ impl AppBackend {
                     }
 
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("删除分卷失败: {}", e)),
             }
@@ -2130,7 +2168,7 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重排分卷失败: {}", e)),
             }
@@ -2157,7 +2195,7 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重命名章节失败: {}", e)),
             }
@@ -2181,7 +2219,7 @@ impl AppBackend {
                     }
 
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("删除章节失败: {}", e)),
             }
@@ -2208,7 +2246,7 @@ impl AppBackend {
             match result {
                 Ok(_) => {
                     self.reload_tree();
-                    self.projects_reloaded();
+                    self.trigger_projects_reloaded();
                 }
                 Err(e) => self.set_error(&format!("重排章节失败: {}", e)),
             }
