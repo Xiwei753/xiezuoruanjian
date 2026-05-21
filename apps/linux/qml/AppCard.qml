@@ -7,7 +7,6 @@ Item {
     property alias spacing: col.spacing
 
     implicitWidth: 200
-    implicitHeight: col.implicitHeight + (theme ? theme.sp12 * 2 : 24)
 
     Rectangle {
         anchors.fill: parent
@@ -21,9 +20,7 @@ Item {
 
     ColumnLayout {
         id: col
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.fill: parent
         anchors.margins: theme ? theme.sp12 : 12
         spacing: theme ? theme.sp8 : 8
     }

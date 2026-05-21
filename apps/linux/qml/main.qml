@@ -248,7 +248,7 @@ ApplicationWindow {
         background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
 
         onOpened: {
-            inputField.text = contextData.initialText || ""
+            inputField.text = inputDialog.contextData.initialText || ""
             inputDialog.dialogErrorMessage = ""
             inputDialog.dialogDiagnosticsJson = ""
             inputDialog.dialogProcessing = false
@@ -307,7 +307,7 @@ ApplicationWindow {
                     text: inputDialog.dialogProcessing ? "处理中..." : "确定"
                     enabled: !inputDialog.dialogProcessing && inputField.text.trim().length > 0
                     onClicked: {
-                        if (actionType === "create_project") {
+                        if (inputDialog.actionType === "create_project") {
                             var result = backend.create_new_project(inputField.text.trim())
                             try {
                                 var r = JSON.parse(result)
@@ -323,20 +323,20 @@ ApplicationWindow {
                             } catch(e) {
                                 inputDialog.dialogErrorMessage = "解析返回结果失败: " + e
                             }
-                        } else if (actionType === "create_volume") {
-                            backend.create_new_volume(contextData.projectId, inputField.text.trim())
+                        } else if (inputDialog.actionType === "create_volume") {
+                            backend.create_new_volume(inputDialog.contextData.projectId, inputField.text.trim())
                             inputDialog.close()
-                        } else if (actionType === "create_chapter") {
-                            backend.create_new_chapter(contextData.projectId, contextData.volumeId, inputField.text.trim())
+                        } else if (inputDialog.actionType === "create_chapter") {
+                            backend.create_new_chapter(inputDialog.contextData.projectId, inputDialog.contextData.volumeId, inputField.text.trim())
                             inputDialog.close()
-                        } else if (actionType === "rename_project") {
-                            backend.rename_project(contextData.id, inputField.text.trim())
+                        } else if (inputDialog.actionType === "rename_project") {
+                            backend.rename_project(inputDialog.contextData.id, inputField.text.trim())
                             inputDialog.close()
-                        } else if (actionType === "rename_volume") {
-                            backend.rename_volume(contextData.projectId, contextData.id, inputField.text.trim())
+                        } else if (inputDialog.actionType === "rename_volume") {
+                            backend.rename_volume(inputDialog.contextData.projectId, inputDialog.contextData.id, inputField.text.trim())
                             inputDialog.close()
-                        } else if (actionType === "rename_chapter") {
-                            backend.rename_chapter(contextData.projectId, contextData.volumeId, contextData.id, inputField.text.trim())
+                        } else if (inputDialog.actionType === "rename_chapter") {
+                            backend.rename_chapter(inputDialog.contextData.projectId, inputDialog.contextData.volumeId, inputDialog.contextData.id, inputField.text.trim())
                             inputDialog.close()
                         }
                     }
@@ -395,9 +395,9 @@ ApplicationWindow {
                 Button {
                     text: "删除"
                     onClicked: {
-                        if (actionType === "delete_project") backend.delete_project(contextData.id)
-                        else if (actionType === "delete_volume") backend.delete_volume(contextData.projectId, contextData.id)
-                        else if (actionType === "delete_chapter") backend.delete_chapter(contextData.projectId, contextData.volumeId, contextData.id)
+                        if (confirmDialog.actionType === "delete_project") backend.delete_project(confirmDialog.contextData.id)
+                        else if (confirmDialog.actionType === "delete_volume") backend.delete_volume(confirmDialog.contextData.projectId, confirmDialog.contextData.id)
+                        else if (confirmDialog.actionType === "delete_chapter") backend.delete_chapter(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId, confirmDialog.contextData.id)
                         confirmDialog.close()
                     }
                     contentItem: Text { text: parent.text; color: "#ffffff"; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }

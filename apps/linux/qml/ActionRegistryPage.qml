@@ -99,7 +99,7 @@ ScrollView {
 
             delegate: Rectangle {
                 Layout.fillWidth: true
-                implicitHeight: actionCardCol.implicitHeight + (root.appTheme ? root.appTheme.sp24 : 24)
+                implicitHeight: 120
                 color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
                 radius: root.appTheme ? root.appTheme.radiusMd : 8
                 border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
@@ -276,7 +276,7 @@ ScrollView {
 
         // Workspace diagnostics
         SectionHeader { theme: root.appTheme; text: "工作区诊断" }
-        AppCard { theme: root.appTheme; Layout.fillWidth: true
+        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 300
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: root.appTheme ? root.appTheme.sp8 : 8

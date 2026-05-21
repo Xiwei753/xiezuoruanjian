@@ -7,6 +7,7 @@ Item {
     property var theme: null
     property string label: ""
     property string placeholder: ""
+    property alias placeholderText: control.placeholder
     property alias text: inputField.text
     property alias echoMode: inputField.echoMode
     property alias validator: inputField.validator

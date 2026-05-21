@@ -6,9 +6,10 @@ Item {
     id: control
     property var theme: null
 
+    property string mode: "switch"
     property string label: ""
     property string description: ""
-    property bool isSwitch: true
+    property bool isSwitch: mode === "switch"
     property bool checked: false
     property bool enabled: true
 
@@ -19,17 +20,21 @@ Item {
     property string valueLabel: ""
 
     implicitWidth: 200
-    implicitHeight: (control.isSwitch ? switchLayout.implicitHeight : sliderLayout.implicitHeight) + (control.theme ? control.theme.sp8 : 8)
+    implicitHeight: {
+        if (mode === "switch") return 56
+        if (mode === "slider") return 72
+        return 40
+    }
 
     RowLayout {
         id: switchLayout
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.verticalCenter: parent.verticalCenter
         anchors.leftMargin: control.theme ? control.theme.sp4 : 4
         anchors.rightMargin: control.theme ? control.theme.sp4 : 4
         spacing: control.theme ? control.theme.sp12 : 12
-        visible: control.isSwitch
+        visible: control.mode === "switch"
 
         AppSwitch {
             id: switchCtrl
@@ -71,11 +76,11 @@ Item {
         id: sliderLayout
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: parent.top
+        anchors.verticalCenter: parent.verticalCenter
         anchors.leftMargin: control.theme ? control.theme.sp4 : 4
         anchors.rightMargin: control.theme ? control.theme.sp4 : 4
         spacing: control.theme ? control.theme.sp4 : 4
-        visible: !control.isSwitch
+        visible: control.mode === "slider"
 
         RowLayout {
             Layout.fillWidth: true
@@ -106,7 +111,6 @@ Item {
             stepSize: control.sliderStep
             theme: control.theme
             Layout.fillWidth: true
-            Layout.bottomMargin: 2
             onValueChanged: control.sliderValue = value
         }
     }

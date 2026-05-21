@@ -93,7 +93,7 @@ ScrollView {
     Component.onCompleted: loadForm()
 
     ColumnLayout {
-        width: Math.min(560, parent ? parent.width - 8 : 540)
+        width: Math.min(560, root.availableWidth - 24)
         spacing: root.appTheme ? root.appTheme.sp16 : 16
 
         // GitHub Init section
@@ -102,9 +102,18 @@ ScrollView {
             spacing: root.appTheme ? root.appTheme.sp12 : 12
             visible: !root.backendRef || !root.backendRef.has_workspace
 
-            AppCard {
-                theme: root.appTheme; Layout.fillWidth: true
+            Item {
+                Layout.fillWidth: true
+                implicitHeight: ghInitInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
+                Rectangle {
+                    anchors.fill: parent
+                    radius: root.appTheme ? root.appTheme.radiusMd : 8
+                    color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                    border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                    border.width: 1
+                }
                 ColumnLayout {
+                    id: ghInitInner
                     Layout.fillWidth: true; spacing: root.appTheme ? root.appTheme.sp8 : 8
                     Label {
                         text: "从 GitHub 初始化工作区"
@@ -211,7 +220,7 @@ ScrollView {
 
         // Sync status card
         AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+            theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 72
             RowLayout {
                 Layout.fillWidth: true
                 spacing: root.appTheme ? root.appTheme.sp12 : 12
@@ -277,7 +286,7 @@ ScrollView {
         SectionHeader { theme: root.appTheme; text: "同步设置" }
 
         AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+            theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
             SettingsRow {
                 theme: root.appTheme; isSwitch: true
                 label: "启用同步"
@@ -287,7 +296,7 @@ ScrollView {
         }
 
         AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+            theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 72
             RowLayout {
                 Layout.fillWidth: true
                 spacing: root.appTheme ? root.appTheme.sp12 : 12
@@ -307,7 +316,7 @@ ScrollView {
         }
 
         AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+            theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 200
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
@@ -333,7 +342,7 @@ ScrollView {
         }
 
         AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+            theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 140
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
@@ -360,10 +369,20 @@ ScrollView {
             }
         }
 
-        AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+        Item {
+            Layout.fillWidth: true
+            implicitHeight: autoSyncInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
+            Rectangle {
+                anchors.fill: parent
+                radius: root.appTheme ? root.appTheme.radiusMd : 8
+                color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                border.width: 1
+            }
             ColumnLayout {
-                Layout.fillWidth: true
+                id: autoSyncInner
+                anchors.fill: parent
+                anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                 SettingsRow {
                     theme: root.appTheme; isSwitch: true
@@ -401,10 +420,20 @@ ScrollView {
             }
         }
 
-        AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+        Item {
+            Layout.fillWidth: true
+            implicitHeight: proxyInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
+            Rectangle {
+                anchors.fill: parent
+                radius: root.appTheme ? root.appTheme.radiusMd : 8
+                color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                border.width: 1
+            }
             ColumnLayout {
-                Layout.fillWidth: true
+                id: proxyInner
+                anchors.fill: parent
+                anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                 Label {
                     text: "代理设置（可选）"
@@ -506,7 +535,7 @@ ScrollView {
         }
 
         AppCard {
-            theme: root.appTheme; Layout.fillWidth: true
+            theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
             Label {
                 text: "提示：首次同步时如果远程分支不存在，系统将自动创建分支并推送初始内容。\n当前使用 Git / libgit2 后端，由本地 Git 仓库直接操作。"
                 font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11

@@ -2127,6 +2127,7 @@ extern "C" fn qml_load_error_handler(
 }
 
 fn main() {
+    std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     qmetaobject::qml_register_type::<AppBackend>(
         CStr::from_bytes_with_nul(b"WriterApp\0").unwrap(),

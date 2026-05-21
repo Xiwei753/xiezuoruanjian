@@ -68,11 +68,12 @@ Popup {
                 ScrollView {
                     id: editorScroll
                     clip: true
+                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     ColumnLayout {
-                        width: Math.min(560, parent ? parent.width - 8 : 540)
+                        width: Math.min(560, editorScroll.availableWidth - 24)
                         spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "编辑" }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 96
                             SettingsRow {
                                 theme: root.appTheme; isSwitch: false; label: "字号"
                                 sliderValue: backendRef && backendRef.setting_font_size > 0 ? backendRef.setting_font_size : 16
@@ -81,7 +82,7 @@ Popup {
                                 id: fontSizeRow
                             }
                         }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 96
                             SettingsRow {
                                 theme: root.appTheme; isSwitch: false; label: "行距"
                                 sliderValue: backendRef && backendRef.setting_line_spacing > 0 ? backendRef.setting_line_spacing * 100 : 150
@@ -90,9 +91,20 @@ Popup {
                                 id: lineSpacingRow
                             }
                         }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        Item {
+                            Layout.fillWidth: true
+                            implicitHeight: autoIndentInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: root.appTheme ? root.appTheme.radiusMd : 8
+                                color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                                border.width: 1
+                            }
                             ColumnLayout {
-                                Layout.fillWidth: true
+                                id: autoIndentInner
+                                anchors.fill: parent
+                                anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                                 SettingsRow {
                                     theme: root.appTheme; isSwitch: true; label: "自动缩进"; description: "自动在换行时添加缩进"
@@ -126,9 +138,20 @@ Popup {
                         }
 
                         SectionHeader { theme: root.appTheme; text: "保存" }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        Item {
+                            Layout.fillWidth: true
+                            implicitHeight: autoSaveInner.implicitHeight + (root.appTheme ? root.appTheme.sp12 * 2 : 24)
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: root.appTheme ? root.appTheme.radiusMd : 8
+                                color: root.appTheme ? root.appTheme.surface : "#ffffff"
+                                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                                border.width: 1
+                            }
                             ColumnLayout {
-                                Layout.fillWidth: true
+                                id: autoSaveInner
+                                anchors.fill: parent
+                                anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                                 SettingsRow {
                                     theme: root.appTheme; isSwitch: true; label: "自动保存"; description: "在编辑内容变化时自动保存到磁盘"
@@ -162,7 +185,7 @@ Popup {
                         }
 
                         SectionHeader { theme: root.appTheme; text: "主题" }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 72
                             RowLayout {
                                 Layout.fillWidth: true; spacing: root.appTheme ? root.appTheme.sp12 : 12
                                 Label {
@@ -207,12 +230,14 @@ Popup {
 
                 // Tab 1: Appearance
                 ScrollView {
+                    id: appearanceScroll
                     clip: true
+                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     ColumnLayout {
-                        width: Math.min(560, parent ? parent.width - 8 : 540)
+                        width: Math.min(560, appearanceScroll.availableWidth - 24)
                         spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "界面" }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
                             SettingsRow {
                                 theme: root.appTheme; isSwitch: true
                                 label: "自动保存时显示保存状态"
@@ -222,7 +247,7 @@ Popup {
                             }
                         }
                         SectionHeader { theme: root.appTheme; text: "关于外观" }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 96
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: root.appTheme ? root.appTheme.sp4 : 4
@@ -253,12 +278,14 @@ Popup {
 
                 // Tab 3: Animations
                 ScrollView {
+                    id: animScroll
                     clip: true
+                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
                     ColumnLayout {
-                        width: Math.min(560, parent ? parent.width - 8 : 540)
+                        width: Math.min(560, animScroll.availableWidth - 24)
                         spacing: root.appTheme ? root.appTheme.sp16 : 16
                         SectionHeader { theme: root.appTheme; text: "输入动效" }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
                             SettingsRow {
                                 theme: root.appTheme; isSwitch: true
                                 label: "输入动画"
@@ -267,7 +294,7 @@ Popup {
                                 checked: backendRef ? backendRef.setting_typing_animation_enabled : false
                             }
                         }
-                        AppCard { theme: root.appTheme; Layout.fillWidth: true
+                        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 80
                             SettingsRow {
                                 theme: root.appTheme; isSwitch: true
                                 label: "平滑光标"
