@@ -4,6 +4,7 @@ use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
 use std::cell::RefCell;
 use std::ffi::CStr;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -197,6 +198,7 @@ struct AppBackend {
     poll_sync_result: qt_method!(fn(&mut self)),
     query_system_color_scheme: qt_method!(fn(&mut self)),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
+    copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> bool),
 
     create_new_project: qt_method!(fn(&mut self, title: QString) -> QString),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
@@ -391,45 +393,113 @@ impl AppBackend {
         "light".to_string()
     }
 
+    fn copy_text_to_clipboard(&mut self, text: QString) -> bool {
+        let text_str = text.to_string();
+        // Try wl-copy (Wayland)
+        if let Ok(mut child) = std::process::Command::new("wl-copy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(text_str.as_bytes());
+            }
+            match child.wait() {
+                Ok(status) if status.success() => return true,
+                _ => {}
+            }
+        }
+        // Try xclip (X11)
+        if let Ok(mut child) = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-in"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(text_str.as_bytes());
+            }
+            match child.wait() {
+                Ok(status) if status.success() => return true,
+                _ => {}
+            }
+        }
+        // Try xsel (X11 fallback)
+        if let Ok(mut child) = std::process::Command::new("xsel")
+            .args(["--clipboard", "--input"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(text_str.as_bytes());
+            }
+            match child.wait() {
+                Ok(status) if status.success() => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn get_workspace_diagnostics(&self) -> QString {
         use std::path::Path;
         let ws_path = &self.current_workspace;
         let path_obj = Path::new(ws_path);
         let path_exists = path_obj.exists();
         let is_dir = path_obj.is_dir();
-        let manifest_exists = path_obj.join("workspace_manifest.json").exists();
-        let projects_dir_exists = path_obj.join("projects").exists();
+        let manifest_path = path_obj.join("workspace_manifest.json");
+        let manifest_exists = manifest_path.exists();
+        let projects_path = path_obj.join("projects");
+        let projects_dir_exists = projects_path.exists();
         let app_meta_exists = path_obj.join("app-meta").exists();
-        let writable = if path_exists {
-            std::fs::metadata(ws_path).map(|m| !m.permissions().readonly()).unwrap_or(false)
-        } else {
-            false
-        };
         let validate_workspace = if self.current_has_workspace && self.core.is_some() {
             self.core.as_ref().and_then(|c| {
                 let core = c.borrow();
                 core.validate_workspace().ok()
             }).unwrap_or(false)
-        } else if path_exists {
+        } else if path_exists && path_obj.is_dir() {
             let core = WriterCore::new(ws_path);
             core.validate_workspace().unwrap_or(false)
         } else {
             false
         };
         let last_workspace = writer_core::app_config::get_last_workspace_path().unwrap_or_default();
+        // Real writable test: try to create and delete a temp file
+        let (writable, writable_error) = if path_exists && path_obj.is_dir() {
+            let test_file = path_obj.join(".writer_write_test");
+            match std::fs::write(&test_file, b"test") {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&test_file);
+                    (true, String::new())
+                }
+                Err(e) => (false, format!("{}", e)),
+            }
+        } else {
+            (false, "path does not exist or is not a directory".to_string())
+        };
+        let create_project_available = self.current_has_workspace
+            && self.core.is_some()
+            && validate_workspace
+            && path_exists
+            && is_dir
+            && manifest_exists
+            && projects_dir_exists
+            && writable;
         let diag = serde_json::json!({
             "hasWorkspace": self.current_has_workspace,
             "workspacePath": ws_path,
             "coreInitialized": self.core.is_some(),
             "pathExists": path_exists,
             "isDir": is_dir,
+            "manifestPath": manifest_path.to_string_lossy(),
             "manifestExists": manifest_exists,
+            "projectsPath": projects_path.to_string_lossy(),
             "projectsDirExists": projects_dir_exists,
             "appMetaExists": app_meta_exists,
             "writable": writable,
+            "writableError": writable_error,
             "validateWorkspace": validate_workspace,
             "treeCount": self.cached_tree.len(),
             "lastWorkspacePath": last_workspace,
+            "createProjectAvailable": create_project_available,
         });
         diag.to_string().into()
     }
@@ -1636,11 +1706,11 @@ impl AppBackend {
     fn create_new_project(&mut self, title: QString) -> QString {
         let title_str = title.to_string();
         let validate_before = WriterCore::new(&self.current_workspace).validate_workspace().unwrap_or(false);
-        eprintln!("[create_new_project] start: workspace_path={}, validate={}, title={}, hasWorkspace={}, coreInit={}",
-            self.current_workspace, validate_before, title_str, self.current_has_workspace, self.core.is_some());
-
         let diag_json_str = self.get_workspace_diagnostics().to_string();
         let diag: serde_json::Value = serde_json::from_str(&diag_json_str).unwrap_or_default();
+        eprintln!("[create_new_project] start: workspace_path={}, validate={}, title={}, hasWorkspace={}, coreInit={}",
+            self.current_workspace, validate_before, title_str, self.current_has_workspace, self.core.is_some());
+        eprintln!("[create_new_project] diagnostics: {}", diag_json_str);
 
         let build_err = |msg: &str, add_diag: bool| -> String {
             let mut obj = serde_json::json!({
@@ -1697,6 +1767,25 @@ impl AppBackend {
                 "创建作品失败: 工作区验证失败\n工作区: {}\n请确保 workspace_manifest.json 和 projects 目录存在。",
                 self.current_workspace
             );
+            self.set_error(&msg);
+            return build_err(&msg, true).into();
+        }
+        // Real writable test
+        let test_file = ws_path.join(".writer_write_test");
+        let writable = match std::fs::write(&test_file, b"test") {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&test_file);
+                true
+            }
+            Err(e) => {
+                let msg = format!("创建工作目录不可写: {} ({})", self.current_workspace, e);
+                self.set_error(&msg);
+                eprintln!("[create_new_project] writable test failed: {}", e);
+                return build_err(&msg, true).into();
+            }
+        };
+        if !writable {
+            let msg = "工作目录不可写".to_string();
             self.set_error(&msg);
             return build_err(&msg, true).into();
         }
@@ -1760,6 +1849,11 @@ impl AppBackend {
 
                     if self.cached_tree.len() == 0 {
                         eprintln!("[create_new_project] warning: tree count is 0 after reload");
+                        let msg = format!(
+                            "作品文件已写入 (projectJsonExists={}, volumesDirExists={}, volumeCount={})，但左侧树刷新失败 (treeCount=0)。\n请关闭并重新打开工作区。",
+                            project_json_exists, volumes_dir_exists, volume_count
+                        );
+                        return build_err(&msg, true).into();
                     }
 
                     let ok_json = serde_json::json!({

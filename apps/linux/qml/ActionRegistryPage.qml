@@ -276,9 +276,16 @@ ScrollView {
 
         // Workspace diagnostics
         SectionHeader { theme: root.appTheme; text: "工作区诊断" }
-        AppCard { theme: root.appTheme; Layout.fillWidth: true; Layout.preferredHeight: 300
+        Rectangle {
+            Layout.fillWidth: true
+            height: 320
+            radius: root.appTheme ? root.appTheme.radiusMd : 8
+            color: root.appTheme ? root.appTheme.surface : "#ffffff"
+            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+            border.width: 1
             ColumnLayout {
-                Layout.fillWidth: true
+                anchors.fill: parent
+                anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                 Label {
                     text: "获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。"
@@ -318,8 +325,11 @@ ScrollView {
                         text: "复制诊断"
                         implicitHeight: 32; flat: true
                         onClicked: {
-                            if (workspaceDiagText.text.length > 0) {
-                                Qt.clipboard.setText(workspaceDiagText.text)
+                            if (workspaceDiagText.text.length > 0 && root.backendRef) {
+                                var ok = root.backendRef.copy_text_to_clipboard(workspaceDiagText.text)
+                                if (!ok) {
+                                    workspaceDiagText.text = "复制失败：未找到剪贴板后端 (wl-copy/xclip/xsel)"
+                                }
                             }
                         }
                         contentItem: Text {
@@ -335,24 +345,29 @@ ScrollView {
                         }
                     }
                 }
-                TextArea {
-                    id: workspaceDiagText
+                ScrollView {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 150
-                    readOnly: true
-                    wrapMode: Text.Wrap
-                    font.family: "monospace"
-                    font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
-                    color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
-                    background: Rectangle {
-                        color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
-                        radius: root.appTheme ? root.appTheme.radiusSm : 6
-                        border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
-                        border.width: 1
+                    Layout.fillHeight: true
+                    clip: true
+                    TextArea {
+                        id: workspaceDiagText
+                        width: parent.width
+                        readOnly: true
+                        selectByMouse: true
+                        wrapMode: TextArea.Wrap
+                        font.family: "monospace"
+                        font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
+                        color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
+                        background: Rectangle {
+                            color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
+                            radius: root.appTheme ? root.appTheme.radiusSm : 6
+                            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                            border.width: 1
+                        }
+                        leftPadding: 8; topPadding: 8; rightPadding: 8; bottomPadding: 8
+                        placeholderText: "点击「获取工作区诊断」查看详情..."
+                        placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
                     }
-                    leftPadding: 8; topPadding: 8; rightPadding: 8; bottomPadding: 8
-                    placeholderText: "点击「获取工作区诊断」查看详情..."
-                    placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
                 }
             }
         }

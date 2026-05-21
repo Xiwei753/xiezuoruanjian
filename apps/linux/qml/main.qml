@@ -284,12 +284,8 @@ ApplicationWindow {
                     visible: inputDialog.dialogDiagnosticsJson.length > 0
                     flat: true
                     onClicked: {
-                        try {
-                            var pretty = JSON.stringify(JSON.parse(inputDialog.dialogDiagnosticsJson), null, 2)
-                            Qt.clipboard.setText(pretty)
-                        } catch(e) {
-                            Qt.clipboard.setText(inputDialog.dialogDiagnosticsJson)
-                        }
+                        var pretty = inputDialog.dialogDiagnosticsJson
+                        backend.copy_text_to_clipboard(pretty)
                     }
                     contentItem: Text { text: parent.text; color: tokens.primary; font.pixelSize: tokens.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
@@ -835,7 +831,7 @@ ApplicationWindow {
                 font.pixelSize: tokens.fontXs
                 onClicked: {
                     var diag = backend.get_workspace_diagnostics()
-                    Qt.clipboard.setText(diag)
+                    backend.copy_text_to_clipboard(diag)
                     backend.save_status = "诊断已复制"
                 }
                 contentItem: Text {
