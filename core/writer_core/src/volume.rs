@@ -106,6 +106,16 @@ pub fn rename_volume(
 }
 
 pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -> Result<()> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() || project_id.contains("..") || project_id.contains("/") || project_id.contains("\\") {
+        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", project_id)));
+    }
+
+    let volume_id = volume_id.trim();
+    if volume_id.is_empty() || volume_id.contains("..") || volume_id.contains("/") || volume_id.contains("\\") {
+        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", volume_id)));
+    }
+
     let volume_dir = workspace_path
         .join("projects")
         .join(project_id)

@@ -239,6 +239,21 @@ pub fn delete_chapter(
     volume_id: &str,
     chapter_id: &str,
 ) -> Result<()> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() || project_id.contains("..") || project_id.contains("/") || project_id.contains("\\") {
+        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", project_id)));
+    }
+
+    let volume_id = volume_id.trim();
+    if volume_id.is_empty() || volume_id.contains("..") || volume_id.contains("/") || volume_id.contains("\\") {
+        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", volume_id)));
+    }
+
+    let chapter_id = chapter_id.trim();
+    if chapter_id.is_empty() || chapter_id.contains("..") || chapter_id.contains("/") || chapter_id.contains("\\") {
+        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", chapter_id)));
+    }
+
     let chapter_dir = workspace_path
         .join("projects")
         .join(project_id)

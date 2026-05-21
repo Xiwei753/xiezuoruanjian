@@ -122,6 +122,11 @@ pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) 
 }
 
 pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() || project_id.contains("..") || project_id.contains("/") || project_id.contains("\\") {
+        return Err(crate::error::Error::Other(format!("Invalid parameter: {}", project_id)));
+    }
+
     let project_dir = workspace_path.join("projects").join(project_id);
     if project_dir.exists() {
         let trash_dir = workspace_path.join("app-meta/sync/trash");

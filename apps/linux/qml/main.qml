@@ -379,7 +379,6 @@ ApplicationWindow {
 
     Dialog {
         id: syncPageDialog
-        title: "同步设置"
         modal: true
         width: 720
         height: 560
