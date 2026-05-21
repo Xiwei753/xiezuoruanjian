@@ -326,10 +326,8 @@ ScrollView {
                         implicitHeight: 32; flat: true
                         onClicked: {
                             if (workspaceDiagText.text.length > 0 && root.backendRef) {
-                                var ok = root.backendRef.copy_text_to_clipboard(workspaceDiagText.text)
-                                if (!ok) {
-                                    workspaceDiagText.text = "复制失败：未找到剪贴板后端 (wl-copy/xclip/xsel)"
-                                }
+                                var result = JSON.parse(root.backendRef.copy_text_to_clipboard(workspaceDiagText.text))
+                                workspaceDiagText.text = result.success ? "诊断已复制" : ("复制失败: " + result.message)
                             }
                         }
                         contentItem: Text {

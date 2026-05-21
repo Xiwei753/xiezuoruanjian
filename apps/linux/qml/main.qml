@@ -284,8 +284,12 @@ ApplicationWindow {
                     visible: inputDialog.dialogDiagnosticsJson.length > 0
                     flat: true
                     onClicked: {
-                        var pretty = inputDialog.dialogDiagnosticsJson
-                        backend.copy_text_to_clipboard(pretty)
+                        var result = JSON.parse(backend.copy_text_to_clipboard(inputDialog.dialogDiagnosticsJson))
+                        if (!result.success) {
+                            inputDialog.dialogErrorMessage = result.message
+                        } else {
+                            backend.save_status = result.message
+                        }
                     }
                     contentItem: Text { text: parent.text; color: tokens.primary; font.pixelSize: tokens.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
@@ -303,23 +307,7 @@ ApplicationWindow {
                     text: inputDialog.dialogProcessing ? "处理中..." : "确定"
                     enabled: !inputDialog.dialogProcessing && inputField.text.trim().length > 0
                     onClicked: {
-                        if (inputDialog.actionType === "create_project") {
-                            var result = backend.create_new_project(inputField.text.trim())
-                            try {
-                                var r = JSON.parse(result)
-                                console.log("[create_project] result:", r.success, r.projectId, r.message)
-                                if (r.success) {
-                                    inputDialog.dialogErrorMessage = ""
-                                    inputDialog.dialogDiagnosticsJson = ""
-                                    inputDialog.close()
-                                } else {
-                                    inputDialog.dialogErrorMessage = r.message || "创建失败"
-                                    inputDialog.dialogDiagnosticsJson = result
-                                }
-                            } catch(e) {
-                                inputDialog.dialogErrorMessage = "解析返回结果失败: " + e
-                            }
-                        } else if (inputDialog.actionType === "create_volume") {
+                        if (inputDialog.actionType === "create_volume") {
                             backend.create_new_volume(inputDialog.contextData.projectId, inputField.text.trim())
                             inputDialog.close()
                         } else if (inputDialog.actionType === "create_chapter") {
@@ -334,6 +322,120 @@ ApplicationWindow {
                         } else if (inputDialog.actionType === "rename_chapter") {
                             backend.rename_chapter(inputDialog.contextData.projectId, inputDialog.contextData.volumeId, inputDialog.contextData.id, inputField.text.trim())
                             inputDialog.close()
+                        }
+                    }
+                    contentItem: Text { text: parent.text; color: tokens.primaryText; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.primaryHover : tokens.primary; radius: tokens.radiusSm }
+                    implicitWidth: 64; implicitHeight: 32
+                }
+            }
+        }
+    }
+    // ── Create Project Dialog (dedicated) ─────────────────────
+
+    Popup {
+        id: createProjectDialog
+        property string projectTitle: ""
+        property string errorMessage: ""
+        property string diagnosticsJson: ""
+        property bool processing: false
+        x: Math.round((window.width - width) / 2)
+        y: Math.round((window.height - height) / 2)
+        width: 420
+        implicitHeight: 320
+        modal: true; focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle { color: tokens.surface; radius: tokens.radiusMd; border.color: tokens.border; border.width: 1 }
+
+        onOpened: {
+            projectTitle = ""
+            errorMessage = ""
+            diagnosticsJson = ""
+            processing = false
+            projectTitleInput.forceActiveFocus()
+        }
+
+        ColumnLayout {
+            anchors.fill: parent; anchors.margins: tokens.sp16; spacing: tokens.sp12
+
+            Label { text: "新建作品"; font.pixelSize: tokens.fontLg; font.weight: Font.DemiBold; color: tokens.textPrimary }
+
+            TextField {
+                id: projectTitleInput
+                Layout.fillWidth: true
+                placeholderText: "输入作品名称"
+                color: tokens.textPrimary
+                background: Rectangle {
+                    color: tokens.surfaceAlt
+                    border.color: projectTitleInput.activeFocus ? tokens.borderFocus : tokens.border
+                    border.width: 1; radius: tokens.radiusSm
+                }
+                font.pixelSize: tokens.fontMd
+                leftPadding: tokens.sp8; topPadding: tokens.sp8; bottomPadding: tokens.sp8
+                onAccepted: {
+                    if (!processing && projectTitleInput.text.trim().length > 0)
+                        createProjectBtn.clicked()
+                }
+            }
+
+            Label {
+                text: createProjectDialog.errorMessage
+                visible: createProjectDialog.errorMessage.length > 0
+                color: tokens.danger
+                font.pixelSize: tokens.fontSm
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true; Layout.alignment: Qt.AlignRight; spacing: tokens.sp8
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "复制诊断"
+                    visible: createProjectDialog.diagnosticsJson.length > 0
+                    flat: true
+                    onClicked: {
+                        var result = JSON.parse(backend.copy_text_to_clipboard(createProjectDialog.diagnosticsJson))
+                        if (result.success) {
+                            backend.save_status = result.message
+                        } else {
+                            createProjectDialog.errorMessage = result.message
+                        }
+                    }
+                    contentItem: Text { text: parent.text; color: tokens.primary; font.pixelSize: tokens.fontSm; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
+                    implicitWidth: 64; implicitHeight: 28
+                }
+                Button {
+                    text: "取消"; flat: true; enabled: !createProjectDialog.processing
+                    onClicked: createProjectDialog.close()
+                    contentItem: Text { text: parent.text; color: tokens.textSecondary; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? tokens.hover : "transparent"; radius: tokens.radiusSm }
+                    implicitWidth: 64; implicitHeight: 32
+                }
+                Button {
+                    id: createProjectBtn
+                    text: createProjectDialog.processing ? "处理中..." : "确定"
+                    enabled: !createProjectDialog.processing && projectTitleInput.text.trim().length > 0
+                    onClicked: {
+                        createProjectDialog.processing = true
+                        var result = backend.create_new_project(projectTitleInput.text.trim())
+                        try {
+                            var r = JSON.parse(result)
+                            if (r.success) {
+                                createProjectDialog.errorMessage = ""
+                                createProjectDialog.diagnosticsJson = ""
+                                backend.save_status = r.message
+                                createProjectDialog.close()
+                                reloadTree()
+                            } else {
+                                createProjectDialog.errorMessage = r.message || "创建失败"
+                                createProjectDialog.diagnosticsJson = JSON.stringify(r, null, 2)
+                                createProjectDialog.processing = false
+                            }
+                        } catch(e) {
+                            createProjectDialog.errorMessage = "解析返回结果失败: " + e
+                            createProjectDialog.processing = false
                         }
                     }
                     contentItem: Text { text: parent.text; color: tokens.primaryText; font.pixelSize: tokens.fontMd; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
@@ -458,9 +560,7 @@ ApplicationWindow {
                 text: "新建作品"; theme: tokens
                 visible: backend.has_workspace
                 onClicked: {
-                    inputDialog.actionType = "create_project"
-                    inputDialog.contextData = { initialText: "新作品" }
-                    inputDialog.open()
+                    createProjectDialog.open()
                 }
             }
 
@@ -831,8 +931,8 @@ ApplicationWindow {
                 font.pixelSize: tokens.fontXs
                 onClicked: {
                     var diag = backend.get_workspace_diagnostics()
-                    backend.copy_text_to_clipboard(diag)
-                    backend.save_status = "诊断已复制"
+                    var result = JSON.parse(backend.copy_text_to_clipboard(diag))
+                    backend.save_status = result.success ? "诊断已复制" : result.message
                 }
                 contentItem: Text {
                     text: parent.text

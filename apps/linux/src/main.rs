@@ -198,7 +198,7 @@ struct AppBackend {
     poll_sync_result: qt_method!(fn(&mut self)),
     query_system_color_scheme: qt_method!(fn(&mut self)),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
-    copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> bool),
+    copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
 
     create_new_project: qt_method!(fn(&mut self, title: QString) -> QString),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
@@ -393,9 +393,23 @@ impl AppBackend {
         "light".to_string()
     }
 
-    fn copy_text_to_clipboard(&mut self, text: QString) -> bool {
+    fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
         let text_str = text.to_string();
-        // Try wl-copy (Wayland)
+        // 1. Try arboard (Rust clipboard API)
+        #[allow(unused_assignments)]
+        let mut backend_name = String::new();
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            if clip.set_text(text_str.clone()).is_ok() {
+                backend_name = "arboard".to_string();
+                let result = serde_json::json!({
+                    "success": true,
+                    "backend": backend_name,
+                    "message": "已复制到剪贴板",
+                });
+                return result.to_string().into();
+            }
+        }
+        // 2. Try wl-copy (Wayland)
         if let Ok(mut child) = std::process::Command::new("wl-copy")
             .stdin(std::process::Stdio::piped())
             .spawn()
@@ -404,11 +418,19 @@ impl AppBackend {
                 let _ = stdin.write_all(text_str.as_bytes());
             }
             match child.wait() {
-                Ok(status) if status.success() => return true,
+                Ok(status) if status.success() => {
+                    backend_name = "wl-copy".to_string();
+                    let result = serde_json::json!({
+                        "success": true,
+                        "backend": backend_name,
+                        "message": "已复制到剪贴板",
+                    });
+                    return result.to_string().into();
+                }
                 _ => {}
             }
         }
-        // Try xclip (X11)
+        // 3. Try xclip (X11)
         if let Ok(mut child) = std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-in"])
             .stdin(std::process::Stdio::piped())
@@ -418,11 +440,19 @@ impl AppBackend {
                 let _ = stdin.write_all(text_str.as_bytes());
             }
             match child.wait() {
-                Ok(status) if status.success() => return true,
+                Ok(status) if status.success() => {
+                    backend_name = "xclip".to_string();
+                    let result = serde_json::json!({
+                        "success": true,
+                        "backend": backend_name,
+                        "message": "已复制到剪贴板",
+                    });
+                    return result.to_string().into();
+                }
                 _ => {}
             }
         }
-        // Try xsel (X11 fallback)
+        // 4. Try xsel (X11 fallback)
         if let Ok(mut child) = std::process::Command::new("xsel")
             .args(["--clipboard", "--input"])
             .stdin(std::process::Stdio::piped())
@@ -432,11 +462,25 @@ impl AppBackend {
                 let _ = stdin.write_all(text_str.as_bytes());
             }
             match child.wait() {
-                Ok(status) if status.success() => return true,
+                Ok(status) if status.success() => {
+                    backend_name = "xsel".to_string();
+                    let result = serde_json::json!({
+                        "success": true,
+                        "backend": backend_name,
+                        "message": "已复制到剪贴板",
+                    });
+                    return result.to_string().into();
+                }
                 _ => {}
             }
         }
-        false
+        // All backends failed
+        let result = serde_json::json!({
+            "success": false,
+            "backend": "none",
+            "message": "复制失败：未找到可用的剪贴板后端。请安装 arboard（默认已集成）、wl-copy、xclip 或 xsel。",
+        });
+        result.to_string().into()
     }
 
     fn get_workspace_diagnostics(&self) -> QString {
@@ -1860,6 +1904,7 @@ impl AppBackend {
                         "success": true,
                         "message": format!("作品「{}」创建成功", proj.title),
                         "projectId": project_id,
+                        "defaultVolumeId": default_volume_id,
                         "createdDefaultVolume": default_volume_id.is_some(),
                         "projectJsonExists": project_json_exists,
                         "volumesDirExists": volumes_dir_exists,
