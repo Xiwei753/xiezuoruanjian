@@ -4,5 +4,14 @@
     <file alias="SettingsDialog.qml">qml/SettingsDialog.qml</file>
     <file alias="EditorPage.qml">qml/EditorPage.qml</file>
     <file alias="ActionRegistryPage.qml">qml/ActionRegistryPage.qml</file>
+    <file alias="SyncPage.qml">qml/SyncPage.qml</file>
+    <file alias="AppButton.qml">qml/AppButton.qml</file>
+    <file alias="AppCard.qml">qml/AppCard.qml</file>
+    <file alias="AppTextField.qml">qml/AppTextField.qml</file>
+    <file alias="SectionHeader.qml">qml/SectionHeader.qml</file>
+    <file alias="SettingsRow.qml">qml/SettingsRow.qml</file>
+    <file alias="SidebarItem.qml">qml/SidebarItem.qml</file>
+    <file alias="StatusPill.qml">qml/StatusPill.qml</file>
+    <file alias="ToolbarButton.qml">qml/ToolbarButton.qml</file>
 </qresource>
 </RCC>
