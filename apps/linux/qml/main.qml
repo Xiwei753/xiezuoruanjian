@@ -99,6 +99,8 @@ ApplicationWindow {
             var sysColorScheme = backend ? backend.system_color_scheme : ""
             if (sysColorScheme === "dark") {
                 mode = "dark"
+            } else if (sysColorScheme === "light") {
+                mode = "light"
             } else {
                 mode = "light"
             }
@@ -122,6 +124,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         backend.try_restore_last_workspace()
+        backend.query_system_color_scheme()
         var themeMode = backend.setting_theme_mode
         if (themeMode === "system") {
             tokens.applySystemTheme()
@@ -139,6 +142,11 @@ ApplicationWindow {
                 tokens.applySystemTheme()
             } else {
                 tokens.apply(mode)
+            }
+        }
+        function onSystem_color_scheme_changed() {
+            if (backend.setting_theme_mode === "system") {
+                tokens.applySystemTheme()
             }
         }
     }

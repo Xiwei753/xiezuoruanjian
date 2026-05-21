@@ -22,7 +22,7 @@ ScrollView {
         root.backendRef.sync_proxy_port = parseInt(proxyPortInput.text) || 0
         root.backendRef.sync_username = usernameInput.text
         if (tokenInput.text.length > 0)
-            root.backendRef.sync_token = tokenInput.text
+            root.backendRef.set_sync_token(tokenInput.text)
     }
 
     function loadForm() {
@@ -38,7 +38,7 @@ ScrollView {
         proxyHostInput.text = root.backendRef.sync_proxy_host
         proxyPortInput.text = root.backendRef.sync_proxy_port.toString()
         usernameInput.text = root.backendRef.sync_username
-        root.hasExistingToken = (root.backendRef.sync_token.length > 0)
+        root.hasExistingToken = root.backendRef.has_sync_token
         tokenInput.text = ""
         tokenInput.placeholderText = root.hasExistingToken ? "已配置（输入新 Token 以覆盖）" : "未配置"
         syncResultLabel.text = root.backendRef.sync_action_result
@@ -109,7 +109,7 @@ ScrollView {
                         font.weight: Font.Bold; color: root.theme ? root.theme.text : "#e2e8f0"
                     }
                     Label {
-                        text: "选择本地空目录，配置远程仓库地址后克隆或初始化。"
+                        text: "选择本地空目录（或已有工作区目录），填写远程仓库地址和 Token 后初始化。非空非工作区目录将被阻止。"
                         font.pixelSize: root.theme ? root.theme.fontSm : 12
                         color: root.theme ? root.theme.textDim : "#94a3b8"
                         wrapMode: Text.Wrap; Layout.fillWidth: true
@@ -284,7 +284,7 @@ ScrollView {
                     Layout.preferredWidth: 80
                 }
                 Label {
-                    text: "GitHub API (推荐)"
+                    text: "Git / GitHub 仓库"
                     font.pixelSize: root.theme ? root.theme.fontMd : 13
                     color: root.theme ? root.theme.text : "#e2e8f0"
                     font.weight: Font.Medium
@@ -479,7 +479,7 @@ ScrollView {
         AppCard {
             theme: root.theme; Layout.fillWidth: true
             Label {
-                text: "提示：首次同步时如果远程分支不存在，系统将自动创建分支并推送初始内容。\nGitHub API 后端使用 REST API，支持双向同步、冲突检测、30 天回收站。"
+                text: "提示：首次同步时如果远程分支不存在，系统将自动创建分支并推送初始内容。\n当前使用 Git / libgit2 后端，由本地 Git 仓库直接操作。"
                 font.pixelSize: root.theme ? root.theme.fontXs : 11
                 color: root.theme ? root.theme.textDim : "#94a3b8"
                 wrapMode: Text.Wrap; Layout.fillWidth: true

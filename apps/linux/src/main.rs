@@ -88,7 +88,8 @@ struct AppBackend {
     sync_proxy_host: qt_property!(QString; READ sync_proxy_host WRITE set_sync_proxy_host NOTIFY sync_config_changed),
     sync_proxy_port: qt_property!(u16; READ sync_proxy_port WRITE set_sync_proxy_port NOTIFY sync_config_changed),
     sync_username: qt_property!(QString; READ sync_username WRITE set_sync_username NOTIFY sync_config_changed),
-    sync_token: qt_property!(QString; READ sync_token WRITE set_sync_token NOTIFY sync_config_changed),
+    has_sync_token: qt_property!(bool; READ has_sync_token NOTIFY sync_config_changed),
+    set_sync_token: qt_method!(fn(&mut self, token: QString)),
 
     sync_config_changed: qt_signal!(),
     sync_action_result: qt_property!(QString; READ sync_action_result NOTIFY sync_action_completed),
@@ -247,11 +248,69 @@ impl AppBackend {
     }
 
     fn query_system_color_scheme(&mut self) {
-        // QML-side handles detection via Qt.styleHints.colorScheme when available
-        // (Qt 6.5+). On Qt 5 / early Qt 6, styleHints is unavailable and we mark
-        // it unknown so QML defaults to light mode.
-        self.current_system_color_scheme = "unknown".to_string();
+        // Priority:
+        // 1. QML-side Qt.styleHints.colorScheme (Qt 6.5+) — handled in main.qml
+        // 2. Bridge fallback: try gsettings (GNOME), kreadconfig5 (KDE), env vars
+        // 3. Fallback: light
+        let scheme = Self::detect_system_theme_from_platform();
+        self.current_system_color_scheme = scheme;
         self.system_color_scheme_changed();
+    }
+
+    fn detect_system_theme_from_platform() -> String {
+        // Try GNOME gsettings (most common on Linux desktops)
+        if let Ok(output) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+            .output()
+        {
+            if output.status.success() {
+                let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+                if value.contains("dark") || value.contains("'prefer-dark'") {
+                    return "dark".to_string();
+                }
+                if value.contains("light") || value.contains("'default'") || value.contains("'prefer-light'") {
+                    return "light".to_string();
+                }
+            }
+        }
+
+        // Try KDE kreadconfig5
+        if let Ok(output) = std::process::Command::new("kreadconfig5")
+            .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
+            .output()
+        {
+            if output.status.success() {
+                let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+                if value.contains("dark") || value.contains("breeze dark") {
+                    return "dark".to_string();
+                }
+                // KDE also stores "styleName" which might be "Breeze Dark"
+                return "light".to_string();
+            }
+        }
+
+        // Try reading GTK_THEME env var
+        if let Ok(theme) = std::env::var("GTK_THEME") {
+            if theme.to_lowercase().contains("dark") || theme.to_lowercase().contains("-dark") {
+                return "dark".to_string();
+            }
+        }
+
+        // Try XDG desktop portal settings
+        if let Ok(output) = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
+            .output()
+        {
+            if output.status.success() {
+                let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+                if value.contains("dark") || value.contains("-dark") || value.contains("_dark") {
+                    return "dark".to_string();
+                }
+            }
+        }
+
+        // Fallback to light
+        "light".to_string()
     }
 
     fn sync_enabled(&self) -> bool {
@@ -342,8 +401,8 @@ impl AppBackend {
         self.sync_config_changed();
     }
 
-    fn sync_token(&self) -> QString {
-        self.current_sync_token.clone().into()
+    fn has_sync_token(&self) -> bool {
+        !self.current_sync_token.is_empty()
     }
     fn set_sync_token(&mut self, val: QString) {
         self.current_sync_token = val.to_string();
@@ -536,6 +595,12 @@ impl AppBackend {
             path_obj.join(".git").exists()
         };
 
+        let effective_token = if token.is_empty() {
+            parsed.extracted_token.clone()
+        } else {
+            Some(token.to_string())
+        };
+
         let config = SyncConfig {
             enabled: true,
             backend_type: BackendType::Git,
@@ -554,26 +619,56 @@ impl AppBackend {
         };
 
         let secrets = SyncSecrets {
-            token: if token.is_empty() { parsed.extracted_token.clone() } else { Some(token.to_string()) },
+            token: effective_token,
             ssh_private_key: None,
         };
 
+        let save_configs = |p: &str, cfg: &SyncConfig, sec: &SyncSecrets| {
+            let core = WriterCore::new(p);
+            let _ = core.save_sync_config(cfg);
+            let _ = core.save_sync_secrets(sec);
+        };
+
         if !has_content() {
-            // Empty directory - use perform_sync which handles clone for empty dirs
+            // Empty directory - clone remote first
             let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
             match backend.sync(path_obj, &config, &secrets) {
                 Ok(result) => {
                     if result.status == writer_core::sync_service::SyncStatus::Success {
-                        // Make sure workspace is valid
                         let core = WriterCore::new(path);
                         if !core.validate_workspace().unwrap_or(false) {
+                            // Remote is empty or not a valid workspace — create workspace locally
                             if let Err(e) = core.create_workspace() {
                                 return SyncTaskOutcome {
                                     sync_status: "error".to_string(),
                                     action_result: format!("克隆成功但工作区初始化失败: {}", e),
                                 };
                             }
+                            // Push the newly created workspace files
+                            let push_backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
+                            match push_backend.sync(path_obj, &config, &secrets) {
+                                Ok(push_result) => {
+                                    if push_result.status != writer_core::sync_service::SyncStatus::Success {
+                                        let err = push_result.error.unwrap_or_default();
+                                        // Config saved locally, push failed
+                                        save_configs(path, &config, &secrets);
+                                        return SyncTaskOutcome {
+                                            sync_status: sync_error_category(&err),
+                                            action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&err)),
+                                        };
+                                    }
+                                }
+                                Err(e) => {
+                                    save_configs(path, &config, &secrets);
+                                    return SyncTaskOutcome {
+                                        sync_status: sync_error_category(&e.to_string()),
+                                        action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&e.to_string())),
+                                    };
+                                }
+                            }
                         }
+                        // Save config + secrets to disk
+                        save_configs(path, &config, &secrets);
                         SyncTaskOutcome {
                             sync_status: "success".to_string(),
                             action_result: "克隆并初始化工作区成功".to_string(),
@@ -591,44 +686,13 @@ impl AppBackend {
                     action_result: format!("克隆失败: {}", mask_sync_error(&e.to_string())),
                 },
             }
-        } else if !has_workspace() && !is_git_repo() {
-            // Non-empty, no workspace, no git
-            let core = WriterCore::new(path);
-            if let Err(e) = core.create_workspace() {
-                return SyncTaskOutcome {
-                    sync_status: "error".to_string(),
-                    action_result: format!("创建工作区失败: {}", e),
-                };
-            }
-
-            // Use perform_sync which handles init + commit + push
-            let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
-            match backend.sync(path_obj, &config, &secrets) {
-                Ok(result) => {
-                    if result.status == writer_core::sync_service::SyncStatus::Success {
-                        SyncTaskOutcome {
-                            sync_status: "success".to_string(),
-                            action_result: "初始化工作区并推送到远程成功".to_string(),
-                        }
-                    } else {
-                        let err = result.error.unwrap_or_default();
-                        SyncTaskOutcome {
-                            sync_status: sync_error_category(&err),
-                            action_result: format!("初始化并推送失败: {}", mask_sync_error(&err)),
-                        }
-                    }
-                }
-                Err(e) => SyncTaskOutcome {
-                    sync_status: sync_error_category(&e.to_string()),
-                    action_result: format!("初始化失败: {}", mask_sync_error(&e.to_string())),
-                },
-            }
         } else if has_workspace() {
-            // Existing workspace with git repo
+            // Existing workspace — sync and save config
             let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
             match backend.sync(path_obj, &config, &secrets) {
                 Ok(result) => {
                     if result.status == writer_core::sync_service::SyncStatus::Success {
+                        save_configs(path, &config, &secrets);
                         SyncTaskOutcome {
                             sync_status: "success".to_string(),
                             action_result: "远程仓库已配置并同步成功".to_string(),
@@ -651,10 +715,17 @@ impl AppBackend {
                     action_result: format!("同步失败: {}", mask_sync_error(&e.to_string())),
                 },
             }
-        } else {
+        } else if is_git_repo() {
+            // Has git repo but no workspace — error, user should open as workspace
             SyncTaskOutcome {
                 sync_status: "error".to_string(),
-                action_result: "目录非空且不是有效工作区。请选择空目录或已有工作区目录。".to_string(),
+                action_result: "目录包含 Git 仓库但不是 Writer 工作区。请先新建本地工作区（新建作品后保存），再配置同步。".to_string(),
+            }
+        } else {
+            // Non-empty, no workspace, no git — blocked
+            SyncTaskOutcome {
+                sync_status: "error".to_string(),
+                action_result: "目录非空且不是 Writer 工作区。请选择空目录，或先新建本地工作区。".to_string(),
             }
         }
     }
@@ -1078,6 +1149,8 @@ impl AppBackend {
                     self.current_pending_github_init_path.clear();
                     self.pending_github_init_path_changed();
                     self.internal_open_workspace(&path, false);
+                    // Load sync config so bridge properties reflect saved config
+                    self.load_sync_config();
                 }
             }
         }
