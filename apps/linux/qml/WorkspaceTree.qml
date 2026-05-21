@@ -1,0 +1,162 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+Rectangle {
+    id: root
+    property var items: []
+    property string selectedId: ""
+    property var theme: null
+
+    signal itemActivated(string type, string projectId, string volumeId, string chapterId)
+    signal createVolume(string projectId)
+    signal createChapter(string projectId, string volumeId)
+    signal renameItem(string type, string projectId, string volumeId, string chapterId, string currentTitle)
+    signal deleteItem(string type, string projectId, string volumeId, string chapterId, string title)
+
+    color: theme ? theme.sidebarBg : "#2D2D2D"
+
+    ListModel {
+        id: treeModel
+    }
+
+    onItemsChanged: {
+        treeModel.clear();
+        if (items) {
+            for (let i = 0; i < items.length; i++) {
+                treeModel.append(items[i]);
+            }
+        }
+    }
+
+    ScrollView {
+        anchors.fill: parent
+        contentWidth: parent.width
+        clip: true
+
+        ListView {
+            id: listView
+            width: parent.width
+            model: treeModel
+            
+            delegate: Rectangle {
+                id: delegateRect
+                width: ListView.view.width
+                height: 32
+                
+                property var itemData: {
+                    return {
+                        "id": model.id || "",
+                        "type": model.type || "",
+                        "title": model.title || "",
+                        "projectId": model.projectId || "",
+                        "volumeId": model.volumeId || ""
+                    }
+                }
+
+                property bool isSelected: root.selectedId !== "" && root.selectedId === model.id
+                property bool isHovered: hoverArea.containsMouse
+                
+                color: isSelected ? (theme ? theme.sidebarHover : "#404040") :
+                       isHovered ? (theme ? theme.sidebarHover : "#383838") : "transparent"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: {
+                        if (model.type === "project") return 8;
+                        if (model.type === "volume") return 24;
+                        if (model.type === "chapter") return 40;
+                        return 8;
+                    }
+                    anchors.rightMargin: 8
+                    spacing: 8
+
+                    Text {
+                        text: {
+                            if (model.type === "project") return "📚";
+                            if (model.type === "volume") return "📁";
+                            if (model.type === "chapter") return "📄";
+                            return "";
+                        }
+                        color: root.theme ? root.theme.textMain : "#E0E0E0"
+                        font.pixelSize: 14
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: model.title || ""
+                        color: delegateRect.isSelected ? (root.theme ? root.theme.accent : "#82AAFF") : (root.theme ? root.theme.textMain : "#E0E0E0")
+                        font.pixelSize: 14
+                        elide: Text.ElideRight
+                    }
+                }
+
+                MouseArea {
+                    id: hoverArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onClicked: (mouse) => {
+                        if (mouse.button === Qt.LeftButton) {
+                            root.itemActivated(model.type, model.projectId, model.volumeId, model.id);
+                        } else if (mouse.button === Qt.RightButton) {
+                            contextMenu.itemData = delegateRect.itemData;
+                            contextMenu.popup();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Text {
+        anchors.centerIn: parent
+        visible: treeModel.count === 0
+        text: "暂无作品"
+        color: theme ? theme.textDim : "#808080"
+        font.pixelSize: 14
+    }
+
+    Menu {
+        id: contextMenu
+        property var itemData: null
+
+        MenuItem {
+            text: "新建卷"
+            visible: contextMenu.itemData && contextMenu.itemData.type === "project"
+            onTriggered: {
+                if (contextMenu.itemData) {
+                    root.createVolume(contextMenu.itemData.id);
+                }
+            }
+        }
+        MenuItem {
+            text: "新建章节"
+            visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
+            onTriggered: {
+                if (contextMenu.itemData) {
+                    root.createChapter(contextMenu.itemData.projectId, contextMenu.itemData.id);
+                }
+            }
+        }
+        MenuSeparator {
+            visible: contextMenu.itemData && (contextMenu.itemData.type === "project" || contextMenu.itemData.type === "volume")
+        }
+        MenuItem {
+            text: "重命名"
+            onTriggered: {
+                if (contextMenu.itemData) {
+                    root.renameItem(contextMenu.itemData.type, contextMenu.itemData.projectId, contextMenu.itemData.volumeId, contextMenu.itemData.id, contextMenu.itemData.title);
+                }
+            }
+        }
+        MenuItem {
+            text: "删除"
+            onTriggered: {
+                if (contextMenu.itemData) {
+                    root.deleteItem(contextMenu.itemData.type, contextMenu.itemData.projectId, contextMenu.itemData.volumeId, contextMenu.itemData.id, contextMenu.itemData.title);
+                }
+            }
+        }
+    }
+}
