@@ -18,7 +18,7 @@ ApplicationWindow {
 
     QtObject {
         id: tokens
-        property string mode: "dark"
+        property string mode: "light"
 
         // Backgrounds
         property color bg:           mode === "light" ? "#f8fafc" : "#0f172a"
@@ -125,10 +125,14 @@ ApplicationWindow {
     Component.onCompleted: {
         backend.try_restore_last_workspace()
         backend.query_system_color_scheme()
+        // Apply system theme FIRST before checking workspace settings
+        tokens.applySystemTheme()
+        effectiveTheme = tokens.mode
+        // Then apply workspace theme mode if available
         var themeMode = backend.setting_theme_mode
         if (themeMode === "system") {
             tokens.applySystemTheme()
-        } else {
+        } else if (themeMode === "light" || themeMode === "dark") {
             tokens.apply(themeMode)
         }
         effectiveTheme = tokens.mode
@@ -397,6 +401,17 @@ ApplicationWindow {
             ToolbarButton { text: "调试"; theme: tokens; onClicked: { settingsDialog.switchToCategory(4); settingsDialog.open() } }
 
             Item { width: tokens.sp8 }
+
+            // Workspace switcher entry
+            AppButton {
+                text: "切换工作区"; theme: tokens
+                visible: backend.has_workspace
+                small: true
+                onClicked: {
+                    backend.switch_workspace()
+                    reloadTree()
+                }
+            }
         }
     }
 

@@ -9,8 +9,8 @@ Rectangle {
     implicitWidth: 200
     implicitHeight: col.implicitHeight + 24
     radius: control.theme ? control.theme.radiusMd : 8
-    color: control.theme ? control.theme.surface : "#1e293b"
-    border.color: control.theme ? control.theme.border : "#334155"
+    color: control.theme ? control.theme.surface : "#ffffff"
+    border.color: control.theme ? control.theme.border : "#e2e8f0"
     border.width: 1
 
     default property alias content: col.children

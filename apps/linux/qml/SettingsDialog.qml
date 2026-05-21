@@ -251,6 +251,19 @@ Popup {
                         Label { text: "技术栈: Rust + Qt/QML (qmetaobject)"; font.pixelSize: theme.fontSm; color: theme.textDim; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
                         Label { text: "GitHub API 同步 | 双向同步 | 30 天回收站"; font.pixelSize: theme.fontSm; color: theme.textDim; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
                         Label { text: "跨平台写作工具，专注长文创作体验"; font.pixelSize: theme.fontSm; color: theme.textDim; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
+
+                        Item { height: theme.sp16 }
+
+                        // Workspace switcher (only visible when workspace is open)
+                        AppButton {
+                            text: "切换工作区"; theme: theme
+                            Layout.alignment: Qt.AlignHCenter
+                            visible: backendRef && backendRef.has_workspace
+                            onClicked: {
+                                backendRef.switch_workspace()
+                                root.close()
+                            }
+                        }
                     }
                 }
             }

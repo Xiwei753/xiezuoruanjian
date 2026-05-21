@@ -52,11 +52,10 @@ fn sync_error_category(msg: &str) -> String {
        lower.contains("permission denied") || lower.contains("403") {
         return "auth_failed".to_string();
     }
-    // Branch not found — was previously classified as configured_untested, now properly as its own category
+    // Branch not found
     if lower.contains("ref not found") || lower.contains("couldn't find remote ref") ||
        lower.contains("remote branch not found") ||
        (lower.contains("branch") && lower.contains("not found")) {
-        // If this is the first sync, we can create the branch; but the error itself says branch doesn't exist
         return "branch_missing".to_string();
     }
     // non-fast-forward
@@ -64,11 +63,19 @@ fn sync_error_category(msg: &str) -> String {
        (lower.contains("fetch first") && lower.contains("push")) {
         return "non_fast_forward".to_string();
     }
-    // Conflict / merge / unrelated histories
-    if lower.contains("conflict") || lower.contains("merge conflict") || lower.contains("unrelated") {
+    // Checkout conflict / local blocking file
+    if lower.contains("checkout_conflict") || lower.contains("local_blocking_file") {
         return "conflict".to_string();
     }
-    // Authentication errors (separate from token-missing since token may be present but wrong)
+    // Conflict / merge / unrelated histories
+    if lower.contains("conflict") || lower.contains("merge conflict") {
+        return "conflict".to_string();
+    }
+    // Unrelated histories
+    if lower.contains("unrelated") {
+        return "unrelated_histories".to_string();
+    }
+    // Authentication errors
     if lower.contains("authentication") || lower.contains("auth failed") || lower.contains("401") ||
        lower.contains("credentials") || lower.contains("could not authenticate") ||
        lower.contains("bad credentials") {
@@ -177,6 +184,9 @@ struct AppBackend {
     try_restore_last_workspace: qt_method!(fn(&mut self)),
     create_new_workspace: qt_method!(fn(&mut self)),
     open_existing_workspace: qt_method!(fn(&mut self)),
+    close_workspace: qt_method!(fn(&mut self)),
+    clear_last_workspace: qt_method!(fn(&mut self)),
+    switch_workspace: qt_method!(fn(&mut self)),
     init_workspace_from_github: qt_method!(fn(&mut self)),
     pending_github_init_path: qt_property!(QString; READ pending_github_init_path NOTIFY pending_github_init_path_changed),
     pending_github_init_path_changed: qt_signal!(),
@@ -496,7 +506,13 @@ impl AppBackend {
     fn setting_auto_indent_width(&self) -> f32 { self.current_setting_auto_indent_width }
     fn set_setting_auto_indent_width(&mut self, val: f32) { self.current_setting_auto_indent_width = val; self.settings_changed(); }
 
-    fn setting_theme_mode(&self) -> QString { self.current_setting_theme_mode.clone().into() }
+    fn setting_theme_mode(&self) -> QString {
+        if self.current_setting_theme_mode.is_empty() {
+            "system".into()
+        } else {
+            self.current_setting_theme_mode.clone().into()
+        }
+    }
     fn set_setting_theme_mode(&mut self, val: QString) { self.current_setting_theme_mode = val.to_string(); self.settings_changed(); }
 
     fn setting_typing_animation_enabled(&self) -> bool { self.current_setting_typing_animation_enabled }
@@ -518,17 +534,29 @@ impl AppBackend {
                     self.save_status_changed();
                     self.reload_tree();
                     self.load_sync_config();
-                    self.load_local_settings();  // Load theme mode immediately
+                    self.load_local_settings();
                     self.workspace_opened();
                     self.workspace_state_changed();
                     return;
                 }
             }
+            // Restore failed: clear the invalid lastWorkspacePath to avoid being stuck
+            let _ = writer_core::app_config::clear_last_workspace_path();
         }
+        // No valid workspace to restore
         self.current_has_workspace = false;
         self.current_sync_status = "not_configured".to_string();
         self.sync_status_changed();
         self.workspace_state_changed();
+        // Load app-level theme mode even without workspace
+        self.load_app_theme_mode();
+    }
+
+    fn load_app_theme_mode(&mut self) {
+        // Load theme mode from app_config (when no workspace is open)
+        // Default to "system"
+        self.current_setting_theme_mode = "system".to_string();
+        self.settings_changed();
     }
 
     fn internal_open_workspace(&mut self, path: &str, initialize: bool) {
@@ -559,6 +587,11 @@ impl AppBackend {
             return;
         }
 
+        // Ensure necessary directories exist even for valid workspaces
+        let _ = std::fs::create_dir_all(path_obj.join("projects"));
+        let _ = std::fs::create_dir_all(path_obj.join("app-meta/settings"));
+        let _ = std::fs::create_dir_all(path_obj.join("app-meta/sync"));
+
         self.core = Some(Rc::new(RefCell::new(core)));
         self.current_workspace = path.to_string();
         self.current_has_workspace = true;
@@ -566,6 +599,7 @@ impl AppBackend {
         self.save_status_changed();
         self.reload_tree();
         self.load_sync_config();
+        self.load_local_settings();
         self.workspace_opened();
         self.workspace_state_changed();
 
@@ -582,6 +616,40 @@ impl AppBackend {
         if let Some(path) = FileDialog::new().pick_folder() {
             self.internal_open_workspace(&path.to_string_lossy(), false);
         }
+    }
+
+    fn close_workspace(&mut self) {
+        // Clear core
+        self.core = None;
+        // Clear workspace state
+        self.current_workspace = "".to_string();
+        self.current_has_workspace = false;
+        // Clear selection state
+        self.selected_project_id = None;
+        self.selected_volume_id = None;
+        self.selected_chapter_id = None;
+        // Clear tree
+        self.cached_tree = QJsonArray::default();
+        // Reset sync status
+        self.current_sync_status = "not_configured".to_string();
+        // Reset save status
+        self.current_save_status = "未打开工作区".to_string();
+        self.save_status_changed();
+        // Clear editor
+        self.clear_editor();
+        // Emit signals
+        self.workspace_state_changed();
+        self.projects_reloaded();
+        self.sync_status_changed();
+    }
+
+    fn clear_last_workspace(&mut self) {
+        let _ = writer_core::app_config::clear_last_workspace_path();
+    }
+
+    fn switch_workspace(&mut self) {
+        self.close_workspace();
+        self.clear_last_workspace();
     }
 
     fn init_workspace_from_github(&mut self) {
@@ -1022,7 +1090,7 @@ impl AppBackend {
                     writer_core::sync_service::BackendType::LocalFolder => "local_folder".to_string(),
                 };
                 self.current_sync_remote_url = config.remote_url.clone();
-                self.current_sync_branch = config.branch.clone();
+                self.current_sync_branch = if config.branch.is_empty() { "main".to_string() } else { config.branch.clone() };
                 self.current_sync_auto_sync = config.auto_sync;
                 self.current_sync_interval = config.sync_interval_seconds;
                 self.current_sync_proxy_enabled = config.proxy_enabled;
@@ -1033,6 +1101,7 @@ impl AppBackend {
             } else {
                 self.current_sync_enabled = false;
                 self.current_sync_remote_url = "".to_string();
+                self.current_sync_branch = "main".to_string();
                 self.current_sync_token = "".to_string();
             }
             if let Some(t) = token_opt {
@@ -1042,6 +1111,9 @@ impl AppBackend {
             }
             self.refresh_sync_status_from_config();
             self.sync_config_changed();
+        } else {
+            // No workspace open - ensure branch defaults to main
+            self.current_sync_branch = "main".to_string();
         }
     }
 
@@ -1081,7 +1153,7 @@ impl AppBackend {
                 _ => writer_core::sync_service::BackendType::Git,
             };
             c.remote_url = parsed.sanitized_url.clone();
-            c.branch = self.current_sync_branch.clone();
+            c.branch = if self.current_sync_branch.is_empty() { "main".to_string() } else { self.current_sync_branch.clone() };
             c.auto_sync = self.current_sync_auto_sync;
             c.sync_interval_seconds = self.current_sync_interval;
             c.proxy_enabled = self.current_sync_proxy_enabled;
@@ -1282,6 +1354,12 @@ impl AppBackend {
                     self.internal_open_workspace(&path, false);
                     // Load sync config so bridge properties reflect saved config
                     self.load_sync_config();
+                }
+
+                // On unrelated_histories or conflict, reload tree to reflect current state
+                if (self.current_sync_status == "unrelated_histories" || self.current_sync_status == "conflict") && self.has_workspace() {
+                    self.reload_tree();
+                    self.projects_reloaded();
                 }
             }
         }
@@ -1524,7 +1602,12 @@ impl AppBackend {
         }
         let core_check = WriterCore::new(&self.current_workspace);
         if !core_check.validate_workspace().unwrap_or(false) {
-            self.set_error(&format!("工作区验证失败，不是有效 Writer 工作区: {}", self.current_workspace));
+            let projects_dir = ws_path.join("projects");
+            let projects_exists = projects_dir.exists();
+            self.set_error(&format!(
+                "创建作品失败: 工作区验证失败\n工作区: {}\nprojects 目录存在: {}\n请检查工作区结构是否正确。",
+                self.current_workspace, projects_exists
+            ));
             return;
         }
 
@@ -1553,7 +1636,14 @@ impl AppBackend {
                     self.projects_reloaded();
                 }
                 Err(e) => {
-                    let msg = format!("创建作品失败: {} (工作区: {})", e, self.current_workspace);
+                    let ws_path = std::path::Path::new(&self.current_workspace);
+                    let projects_dir = ws_path.join("projects");
+                    let projects_exists = projects_dir.exists();
+                    let validate_result = core_check.validate_workspace();
+                    let msg = format!(
+                        "创建作品失败: {}\n工作区: {}\n工作区验证: {:?}\nprojects 目录存在: {}",
+                        e, self.current_workspace, validate_result, projects_exists
+                    );
                     self.set_error(&msg);
                 }
             }

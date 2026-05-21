@@ -13,7 +13,9 @@ ScrollView {
     function applySyncFormToBackend() {
         root.backendRef.sync_enabled = syncEnabledCheck.checked
         root.backendRef.sync_remote_url = remoteUrlInput.text
-        root.backendRef.sync_branch = branchInput.text
+        var branchVal = branchInput.text
+        if (!branchVal || branchVal.length === 0) branchVal = "main"
+        root.backendRef.sync_branch = branchVal
         root.backendRef.sync_auto_sync = autoSyncCheck.checked
         root.backendRef.sync_interval = parseInt(syncIntervalInput.text) || 300
         root.backendRef.sync_proxy_enabled = proxyEnabledCheck.checked
@@ -29,7 +31,8 @@ ScrollView {
         root.backendRef.load_sync_config()
         syncEnabledCheck.checked = root.backendRef.sync_enabled
         remoteUrlInput.text = root.backendRef.sync_remote_url
-        branchInput.text = root.backendRef.sync_branch
+        var branchVal = root.backendRef.sync_branch
+        branchInput.text = (branchVal && branchVal.length > 0) ? branchVal : "main"
         autoSyncCheck.checked = root.backendRef.sync_auto_sync
         syncIntervalInput.text = root.backendRef.sync_interval.toString()
         proxyEnabledCheck.checked = root.backendRef.sync_proxy_enabled
@@ -223,6 +226,7 @@ ScrollView {
                         if (ss === "conflict") return root.theme ? root.theme.danger : "#ef4444"
                         if (ss === "branch_missing") return root.theme ? root.theme.warning : "#f59e0b"
                         if (ss === "non_fast_forward") return root.theme ? root.theme.danger : "#ef4444"
+                        if (ss === "unrelated_histories") return root.theme ? root.theme.danger : "#ef4444"
                         if (ss === "configured_untested") return root.theme ? root.theme.warning : "#f59e0b"
                         return root.theme ? root.theme.textDim : "#94a3b8"
                     }
@@ -243,6 +247,7 @@ ScrollView {
                             if (ss === "conflict") return "冲突需要处理"
                             if (ss === "branch_missing") return "远程分支不存在"
                             if (ss === "non_fast_forward") return "推送被拒绝（非快进）"
+                            if (ss === "unrelated_histories") return "历史不一致"
                             return "未知状态"
                         }
                         font.pixelSize: root.theme ? root.theme.fontMd : 13
@@ -256,6 +261,8 @@ ScrollView {
                             if (ss === "configured_untested") return "配置已保存，点击「测试连接」验证"
                             if (ss === "branch_missing") return "首次同步会自动创建分支"
                             if (ss === "non_fast_forward") return "远程有更新，请先拉取再推送"
+                            if (ss === "conflict") return "本地工作区有会被远端覆盖的文件，请先保存/同步/处理冲突"
+                            if (ss === "unrelated_histories") return "远端仓库和本地历史不一致，建议使用空仓库"
                             return ""
                         }
                         font.pixelSize: root.theme ? root.theme.fontSm : 12

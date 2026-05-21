@@ -707,10 +707,94 @@ impl GitBackend for Git2Backend {
                     e.to_string(),
                 ))
             })?;
+
+        // Pre-pull safety check: check for index conflicts and blocking untracked files
+        let refname = format!("refs/heads/{}", branch);
+        if let Ok(statuses) = repo.statuses(Some(git2::StatusOptions::new().include_untracked(true))) {
+            let mut blocking_files = Vec::new();
+            for entry in statuses.iter() {
+                if let Some(path) = entry.path() {
+                    if SyncService::is_blacklisted_path(path) {
+                        continue;
+                    }
+                    let status = entry.status();
+                    if status.is_index_new() || status.is_index_deleted() || status.is_index_modified() {
+                        // Index has conflicts or unmerged entries
+                        if status.is_conflicted() {
+                            return Err(crate::Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Index has conflicts in: {}. Please resolve before pulling.", path),
+                            )));
+                        }
+                    }
+                    // Check for untracked files that would be overwritten
+                    if status.is_wt_new() {
+                        if SyncService::is_whitelisted_path(path) {
+                            blocking_files.push(path.to_string());
+                        }
+                    }
+                }
+            }
+            if !blocking_files.is_empty() {
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("local_blocking_file: 本地工作区有 {} 个未跟踪文件会阻止远端 checkout: {}. 请先处理这些文件。",
+                        blocking_files.len(), blocking_files.join(", ")),
+                )));
+            }
+        }
+
         if analysis.0.is_up_to_date() {
             // Do nothing
         } else if analysis.0.is_fast_forward() {
-            let refname = format!("refs/heads/{}", branch);
+            // Fast-forward: checkout target tree FIRST, then update ref/head.
+            // This ensures that if checkout fails, HEAD/ref remain unchanged.
+
+            // Step 1: Dry-run checkout to detect conflicts before making any changes
+            let mut dry_run_builder = git2::build::CheckoutBuilder::default();
+            dry_run_builder.dry_run();
+            let fetch_tree = repo.find_commit(fetch_commit.id()).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?.tree().map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?;
+            match repo.checkout_tree(
+                fetch_tree.as_object(),
+                Some(&mut dry_run_builder),
+            ) {
+                Ok(_) => {},
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("conflict") || err_msg.contains("Conflict") {
+                        return Err(crate::Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("checkout_conflict: 本地工作区有文件会阻止远端更新. {}", err_msg),
+                        )));
+                    }
+                    return Err(crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("checkout dry-run failed: {}", err_msg),
+                    )));
+                }
+            }
+
+            // Step 2: Actual checkout (safe) - still no ref/head change yet
+            let fetch_tree2 = repo.find_commit(fetch_commit.id()).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?.tree().map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?;
+            repo.checkout_tree(
+                fetch_tree2.as_object(),
+                Some(git2::build::CheckoutBuilder::default().safe()),
+            ).map_err(|e: git2::Error| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?;
+
+            // Step 3: Only after successful checkout, update ref and head
             let mut reference = repo.find_reference(&refname).map_err(|e: git2::Error| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -731,14 +815,6 @@ impl GitBackend for Git2Backend {
                     e.to_string(),
                 ))
             })?;
-            // Safe to checkout since we checked for uncommitted changes
-            repo.checkout_head(Some(git2::build::CheckoutBuilder::default().safe()))
-                .map_err(|e: git2::Error| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
         } else if analysis.0.is_normal() {
             let mut merge_opts = git2::MergeOptions::new();
             repo.merge(&[&fetch_commit], Some(&mut merge_opts), None)
@@ -2861,6 +2937,15 @@ impl SyncService {
             .err();
         if let Some(e) = pull_failed {
             let e_str = e.to_string().to_lowercase();
+            // Checkout conflict / local blocking file
+            if e_str.contains("checkout_conflict") || e_str.contains("local_blocking_file") {
+                return Ok(SyncResult::error(
+                    SyncStatus::Error(format!("Pull failed: {}", e)),
+                    result.first_sync_mode,
+                    Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
+                    format!("Pull failed: {}", e),
+                ));
+            }
             if e_str.contains("unrelated")
                 || e_str.contains("merge")
                 || e_str.contains("no common ancestor")
