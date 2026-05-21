@@ -12,6 +12,7 @@ Rectangle {
     signal createVolume(string projectId)
     signal createChapter(string projectId, string volumeId)
     signal renameItem(string type, string projectId, string volumeId, string chapterId, string currentTitle)
+    signal showError(string message)
     signal deleteItem(string type, string projectId, string volumeId, string chapterId, string title)
 
     color: theme ? theme.sidebarBg : "#2D2D2D"
@@ -161,7 +162,7 @@ Rectangle {
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
-                    if (!data || !data.id) { console.error("Missing node ID"); return; }
+                    if (!data || !data.id) { root.showError("删除失败：缺失节点 ID"); return; }
                     root.renameItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }
@@ -172,9 +173,9 @@ Rectangle {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
                     if (!data) return;
-                    if (data.type === "project" && !data.projectIdForAction) { console.error("Missing projectId"); return; }
-                    if (data.type === "volume" && (!data.projectIdForAction || !data.volumeIdForAction)) { console.error("Missing projectId or volumeId"); return; }
-                    if (data.type === "chapter" && (!data.projectIdForAction || !data.volumeIdForAction || !data.chapterIdForAction)) { console.error("Missing projectId, volumeId or chapterId"); return; }
+                    if (data.type === "project" && !data.projectIdForAction) { root.showError("删除失败：缺失项目 ID"); return; }
+                    if (data.type === "volume" && (!data.projectIdForAction || !data.volumeIdForAction)) { root.showError("删除失败：缺失卷的归属 ID"); return; }
+                    if (data.type === "chapter" && (!data.projectIdForAction || !data.volumeIdForAction || !data.chapterIdForAction)) { root.showError("删除失败：缺失章节的归属 ID"); return; }
                     root.deleteItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }

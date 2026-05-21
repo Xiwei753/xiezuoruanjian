@@ -28,8 +28,10 @@ Rectangle {
         anchors.fill: parent
         anchors.margins: 24
         contentWidth: width
+        contentHeight: mainCol.height
 
         Column {
+            id: mainCol
             width: Math.min(parent.width, 600)
             spacing: 24
 

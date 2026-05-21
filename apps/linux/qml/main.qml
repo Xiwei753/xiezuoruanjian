@@ -132,6 +132,10 @@ ApplicationWindow {
             WorkspaceTree {
                 id: workspaceTree
                 anchors.fill: parent
+                onShowError: function(msg) {
+                    errorDialog.message = msg;
+                    errorDialog.open();
+                }
                 theme: theme
                 selectedId: ""
                 
