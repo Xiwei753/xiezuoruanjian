@@ -724,7 +724,21 @@ impl WriterCore {
             ))
         })?;
         let tmp_path = secrets_path.with_extension("tmp");
-        std::fs::write(&tmp_path, content)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::io::Write;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true).mode(0o600);
+            let mut file = options.open(&tmp_path)?;
+            file.write_all(content.as_bytes())?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp_path, content)?;
+        }
+
         std::fs::rename(tmp_path, secrets_path)?;
         Ok(())
     }
