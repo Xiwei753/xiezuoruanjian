@@ -28,6 +28,14 @@ class EditorAnimationRuntime(private val editText: WriterEditText) {
         override fun doFrame(frameTimeNanos: Long) {
             if (!isRunning) return
 
+            // Check if page is visible or attached
+            if (!editText.isAttachedToWindow || !editText.isShown) {
+                isRunning = false
+                lastFrameTimeNanos = -1L
+                choreographer.removeFrameCallback(this)
+                return
+            }
+
             // Debug frame analysis
             frameCount++
             if (lastFrameTimeNanos != -1L) {
@@ -41,16 +49,22 @@ class EditorAnimationRuntime(private val editText: WriterEditText) {
             lastFrameTimeNanos = frameTimeNanos
 
             var hasMore = false
+            var needsFullInvalidate = false
             for (anim in animatables) {
                 if (anim.onAnimationStep(frameTimeNanos)) {
                     hasMore = true
+                    if (anim is TypingOverlayRenderer) {
+                        needsFullInvalidate = true
+                    }
                 } else {
                     animatables.remove(anim)
                 }
             }
 
-            // Request draw
-            editText.invalidate()
+            // Request draw using postInvalidateOnAnimation() if needed
+            if (needsFullInvalidate) {
+                editText.postInvalidateOnAnimation()
+            }
 
             if (debugEnabled) {
                 val nowMs = System.currentTimeMillis()
@@ -84,6 +98,7 @@ class EditorAnimationRuntime(private val editText: WriterEditText) {
         if (!isRunning) {
             isRunning = true
             lastFrameTimeNanos = -1L
+            choreographer.removeFrameCallback(frameCallback) // Safely avoid duplicate posts
             choreographer.postFrameCallback(frameCallback)
             requestHighRefreshRate()
         }
@@ -94,6 +109,7 @@ class EditorAnimationRuntime(private val editText: WriterEditText) {
         if (animatables.isEmpty()) {
             isRunning = false
             lastFrameTimeNanos = -1L
+            choreographer.removeFrameCallback(frameCallback)
         }
     }
 
@@ -101,6 +117,7 @@ class EditorAnimationRuntime(private val editText: WriterEditText) {
         animatables.clear()
         isRunning = false
         lastFrameTimeNanos = -1L
+        choreographer.removeFrameCallback(frameCallback)
     }
 
     fun isRunning(): Boolean = isRunning

@@ -33,7 +33,6 @@ class WriterEditText @JvmOverloads constructor(
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
-        if (lastTypingEnabled == enabled && lastTypingDuration == durationMs) return
         lastTypingEnabled = enabled
         lastTypingDuration = durationMs
         typingAnimationController?.setTypingAnimationEnabled(enabled, durationMs)
@@ -41,7 +40,6 @@ class WriterEditText @JvmOverloads constructor(
 
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         if (!controllersReady) return
-        if (lastSmoothEnabled == enabled && lastSmoothDuration == durationMs) return
         lastSmoothEnabled = enabled
         lastSmoothDuration = durationMs
         renderLayer?.smoothCursorRenderer?.setSmoothCursorEnabled(enabled, durationMs)

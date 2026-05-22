@@ -122,4 +122,32 @@ class EditorSettingsTest {
         val edgeMap: Map<String, Any> = gson.fromJson(jsonEdge, type)
         assertEquals("mysterious_relationship", edgeMap["kind"])
     }
+
+    @Test
+    fun testSettingsChangeBusBehavior() {
+        com.xiwei.writerapp.data.SettingsChangeBus.consumeChanged()
+        com.xiwei.writerapp.data.SettingsChangeBus.consumeEditorChanged()
+
+        com.xiwei.writerapp.data.SettingsChangeBus.markChanged()
+
+        assertTrue(com.xiwei.writerapp.data.SettingsChangeBus.consumeChanged())
+        assertTrue(com.xiwei.writerapp.data.SettingsChangeBus.consumeEditorChanged())
+
+        assertFalse(com.xiwei.writerapp.data.SettingsChangeBus.consumeChanged())
+        assertFalse(com.xiwei.writerapp.data.SettingsChangeBus.consumeEditorChanged())
+    }
+
+    @Test
+    fun testEditorViewModelReloadSettings() {
+        val application = org.robolectric.RuntimeEnvironment.getApplication()
+        val viewModel = EditorViewModel(application)
+
+        viewModel.onContentChanged("Test Content 123")
+        assertEquals("Test Content 123", viewModel.uiState.value.content)
+
+        viewModel.reloadSettings()
+
+        assertEquals("Test Content 123", viewModel.uiState.value.content)
+        assertNotNull(viewModel.uiState.value.settings)
+    }
 }

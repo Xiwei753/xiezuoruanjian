@@ -29,6 +29,7 @@ import android.widget.Toast
 import com.xiwei.writerapp.R
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import com.xiwei.writerapp.data.SettingsChangeBus
 
 class EditorActivity : AppCompatActivity() {
     private lateinit var toolbar: MaterialToolbar
@@ -317,7 +318,9 @@ class EditorActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (!::editorEditText.isInitialized) return
-        viewModel.onSettingsChanged()
+        if (SettingsChangeBus.consumeEditorChanged()) {
+            viewModel.onSettingsChanged()
+        }
     }
 
     private fun setupSearchAndReplace() {

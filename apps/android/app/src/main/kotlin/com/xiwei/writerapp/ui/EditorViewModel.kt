@@ -88,7 +88,7 @@ class EditorViewModel(
             loading = true,
             chapterTitle = chapterTitle
         )
-        loadSettings()
+        reloadSettings()
         loadChapter()
     }
 
@@ -101,7 +101,7 @@ class EditorViewModel(
         )
     }
 
-    private fun loadSettings() {
+    fun reloadSettings() {
         viewModelScope.launch {
             val settings = settingsRepository.getLocalSettings()
             val syncable = settingsRepository.getSyncableSettings()
@@ -277,7 +277,7 @@ class EditorViewModel(
     }
 
     fun onSettingsChanged() {
-        loadSettings()
+        reloadSettings()
     }
 
     override fun onCleared() {

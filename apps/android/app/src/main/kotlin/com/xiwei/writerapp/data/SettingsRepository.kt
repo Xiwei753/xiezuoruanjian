@@ -21,7 +21,10 @@ class SettingsRepository(context: Context) {
 
     fun saveLocalSettings(settings: LocalSettings): Boolean {
         return when (val result = bridge.saveLocalSettings(settings)) {
-            is NativeResult.Success -> result.data
+            is NativeResult.Success -> {
+                SettingsChangeBus.notifyChanged()
+                result.data
+            }
             is NativeResult.Error -> {
                 System.err.println("保存本地设置失败: ${result.message}")
                 false
@@ -35,7 +38,8 @@ class SettingsRepository(context: Context) {
             is NativeResult.Success -> result.data ?: SyncableSettings()
             is NativeResult.Error -> {
                 System.err.println("加载同步设置失败: ${result.message}")
-                SyncableSettings()
+                val defaultSettings = SyncableSettings()
+                defaultSettings
             }
             NativeResult.NotLoaded -> SyncableSettings()
         }
@@ -43,7 +47,10 @@ class SettingsRepository(context: Context) {
 
     fun saveSyncableSettings(settings: SyncableSettings): Boolean {
         return when (val result = bridge.saveSyncableSettings(settings)) {
-            is NativeResult.Success -> result.data
+            is NativeResult.Success -> {
+                SettingsChangeBus.notifyChanged()
+                result.data
+            }
             is NativeResult.Error -> {
                 System.err.println("保存同步设置失败: ${result.message}")
                 false

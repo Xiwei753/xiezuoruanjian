@@ -781,6 +781,8 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
+        SettingsChangeBus.markChanged()
+
         if (finishActivity) { finish() }
     }
 }

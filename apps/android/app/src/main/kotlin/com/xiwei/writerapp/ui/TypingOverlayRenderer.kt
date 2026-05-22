@@ -24,6 +24,10 @@ data class OverlayAnim(
             i += Character.charCount(cp)
         }
     }
+
+    val cachedStrings: List<String> = codePoints.map { cp ->
+        String(Character.toChars(cp))
+    }
 }
 
 class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimationRuntime.Animatable {
@@ -136,7 +140,8 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
             // Apply decelerate interpolation dynamically
             val interpolatedProgress = 1f - (1f - anim.progress) * (1f - anim.progress)
 
-            for (cp in anim.codePoints) {
+            for (idx in anim.codePoints.indices) {
+                val cp = anim.codePoints[idx]
                 val charCount = Character.charCount(cp)
                 if (i + charCount > textLength) break
 
@@ -148,7 +153,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
                     continue
                 }
 
-                val textToDraw = String(Character.toChars(cp))
+                val textToDraw = anim.cachedStrings[idx]
                 val destX = layout.getPrimaryHorizontal(i)
                 val line = layout.getLineForOffset(i)
                 val destY = layout.getLineBaseline(line).toFloat()
