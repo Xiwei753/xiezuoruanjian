@@ -7,7 +7,6 @@ use std::ffi::CStr;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use writer_core::facade::WriterCore;
@@ -200,7 +199,6 @@ struct AppBackend {
     pending_github_init_path: qt_property!(QString; READ pending_github_init_path NOTIFY pending_github_init_path_changed),
     pending_github_init_path_changed: qt_signal!(),
     execute_github_init: qt_method!(fn(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16)),
-    poll_sync_result: qt_method!(fn(&mut self)),
     query_system_color_scheme: qt_method!(fn(&mut self)),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
@@ -296,8 +294,6 @@ struct AppBackend {
 
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
-    sync_task_rx: Option<Receiver<SyncTaskOutcome>>,
-
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
     current_setting_auto_save_enabled: bool,
@@ -857,15 +853,27 @@ impl AppBackend {
         self.sync_status_changed();
         self.current_sync_action_result = "正在初始化...".to_string();
 
-        let (tx, rx) = mpsc::channel();
-        self.sync_task_rx = Some(rx);
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
+            qptr.as_pinned().map(|this| {
+                let mut this = this.borrow_mut();
+                this.current_sync_status = outcome.sync_status.clone();
+                this.current_sync_action_result = outcome.action_result.clone();
+                this.sync_status_changed();
+                this.sync_action_completed();
+                if outcome.sync_status == "success" && this.has_workspace() {
+                    this.reload_tree();
+                    this.trigger_projects_reloaded();
+                }
+            });
+        });
 
         thread::spawn(move || {
             let result = Self::do_github_init(
                 &path_str, &remote_url_str, &branch_str, &token_str,
                 &proxy_type_str, &proxy_host_str, proxy_port_val,
             );
-            tx.send(result).ok();
+            callback(result);
         });
     }
 
@@ -1149,18 +1157,30 @@ impl AppBackend {
         self.sync_status_changed();
         self.current_sync_action_result = "正在诊断...".to_string();
 
-        let (tx, rx) = mpsc::channel();
-        self.sync_task_rx = Some(rx);
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
+            qptr.as_pinned().map(|this| {
+                let mut this = this.borrow_mut();
+                this.current_sync_status = outcome.sync_status.clone();
+                this.current_sync_action_result = outcome.action_result.clone();
+                this.sync_status_changed();
+                this.sync_action_completed();
+                if outcome.sync_status == "success" && this.has_workspace() {
+                    this.reload_tree();
+                    this.trigger_projects_reloaded();
+                }
+            });
+        });
 
         thread::spawn(move || {
             let core = WriterCore::new(&workspace_path);
             let config = match core.load_sync_config() {
                 Ok(c) => c,
                 Err(e) => {
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: "error".to_string(),
                         action_result: format!("无法加载同步配置: {}", e),
-                    }).ok();
+                    });
                     return;
                 }
             };
@@ -1222,16 +1242,16 @@ impl AppBackend {
                         msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(&err)));
                     }
 
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: status.to_string(),
                         action_result: msg,
-                    }).ok();
+                    });
                 }
                 Err(e) => {
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: sync_error_category(&e.to_string()),
                         action_result: format!("诊断过程发生错误:\n{}", mask_sync_error(&e.to_string())),
-                    }).ok();
+                    });
                 }
             }
         });
@@ -1376,7 +1396,7 @@ impl AppBackend {
         }
 
         if self.current_sync_remote_url.is_empty() {
-            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_status = "error".to_string();
             self.current_sync_action_result = "同步检查失败: 未配置远程仓库 URL".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
@@ -1384,7 +1404,7 @@ impl AppBackend {
         }
 
         if self.current_sync_token.is_empty() {
-            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_status = "error".to_string();
             self.current_sync_action_result = "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
@@ -1400,18 +1420,30 @@ impl AppBackend {
         self.sync_status_changed();
         self.current_sync_action_result = "正在检查同步计划...".to_string();
 
-        let (tx, rx) = mpsc::channel();
-        self.sync_task_rx = Some(rx);
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
+            qptr.as_pinned().map(|this| {
+                let mut this = this.borrow_mut();
+                this.current_sync_status = outcome.sync_status.clone();
+                this.current_sync_action_result = outcome.action_result.clone();
+                this.sync_status_changed();
+                this.sync_action_completed();
+                if outcome.sync_status == "success" && this.has_workspace() {
+                    this.reload_tree();
+                    this.trigger_projects_reloaded();
+                }
+            });
+        });
 
         thread::spawn(move || {
             let core = WriterCore::new(&workspace_path);
             let config = match core.load_sync_config() {
                 Ok(c) => c,
                 Err(e) => {
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: "configured_untested".to_string(),
                         action_result: format!("无法加载同步配置: {}", e),
-                    }).ok();
+                    });
                     return;
                 }
             };
@@ -1434,16 +1466,16 @@ impl AppBackend {
                             msg.push_str("  ... 更多文件省略\n");
                         }
                     }
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: "configured_untested".to_string(),
                         action_result: msg,
-                    }).ok();
+                    });
                 }
                 Err(e) => {
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: "configured_untested".to_string(),
                         action_result: format!("检查同步计划失败: {}", mask_sync_error(&e.to_string())),
-                    }).ok();
+                    });
                 }
             }
         });
@@ -1458,7 +1490,7 @@ impl AppBackend {
         }
 
         if self.current_sync_remote_url.is_empty() {
-            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_status = "error".to_string();
             self.current_sync_action_result = "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
@@ -1466,7 +1498,7 @@ impl AppBackend {
         }
 
         if self.current_sync_token.is_empty() {
-            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_status = "error".to_string();
             self.current_sync_action_result = "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
@@ -1482,18 +1514,30 @@ impl AppBackend {
         self.sync_status_changed();
         self.current_sync_action_result = "正在同步...".to_string();
 
-        let (tx, rx) = mpsc::channel();
-        self.sync_task_rx = Some(rx);
+        let qptr = QPointer::from(&*self);
+        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
+            qptr.as_pinned().map(|this| {
+                let mut this = this.borrow_mut();
+                this.current_sync_status = outcome.sync_status.clone();
+                this.current_sync_action_result = outcome.action_result.clone();
+                this.sync_status_changed();
+                this.sync_action_completed();
+                if outcome.sync_status == "success" && this.has_workspace() {
+                    this.reload_tree();
+                    this.trigger_projects_reloaded();
+                }
+            });
+        });
 
         thread::spawn(move || {
             let core = WriterCore::new(&workspace_path);
             let config = match core.load_sync_config() {
                 Ok(c) => c,
                 Err(e) => {
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: "error".to_string(),
                         action_result: format!("无法读取同步配置: {}", e),
-                    }).ok();
+                    });
                     return;
                 }
             };
@@ -1529,55 +1573,22 @@ impl AppBackend {
                         }
                     };
 
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: status.to_string(),
                         action_result: msg,
-                    }).ok();
+                    });
                 }
                 Err(e) => {
-                    tx.send(SyncTaskOutcome {
+                    callback(SyncTaskOutcome {
                         sync_status: sync_error_category(&e.to_string()),
                         action_result: format!("同步操作失败:\n{}", mask_sync_error(&e.to_string())),
-                    }).ok();
+                    });
                 }
             }
         });
     }
 
-    fn poll_sync_result(&mut self) {
-        if let Some(rx) = &self.sync_task_rx {
-            if let Ok(outcome) = rx.try_recv() {
-                self.current_sync_status = outcome.sync_status;
-                self.current_sync_action_result = outcome.action_result;
-                self.sync_status_changed();
-                self.sync_action_completed();
-                self.sync_task_rx = None;
-
-                if self.current_sync_status == "success" && self.has_workspace() {
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                }
-
-                if self.current_sync_status == "success" && !self.current_pending_github_init_path.is_empty() {
-                    // GitHub init successful - open the workspace
-                    let path = self.current_pending_github_init_path.clone();
-                    self.current_pending_github_init_path.clear();
-                    self.pending_github_init_path_changed();
-                    self.internal_open_workspace(&path, false);
-                    // Load sync config so bridge properties reflect saved config
-                    self.load_sync_config();
-                }
-
-                // On unrelated_histories or conflict, reload tree to reflect current state
-                if (self.current_sync_status == "unrelated_histories" || self.current_sync_status == "conflict") && self.has_workspace() {
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                }
-            }
-        }
-    }
-
-    fn workspace_path(&self) -> QString {
+        fn workspace_path(&self) -> QString {
         self.current_workspace.clone().into()
     }
 
@@ -1888,12 +1899,20 @@ impl AppBackend {
         let success = parsed["success"].as_bool().unwrap_or(false);
         let msg = parsed["message"].as_str().unwrap_or("").to_string();
         
-        let final_res = serde_json::json!({
-            "success": success,
-            "message": msg,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
+        if success {
+            let final_res = serde_json::json!({
+                "success": true,
+                "message": msg,
+                "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+            });
+            final_res.to_string().into()
+        } else {
+            let final_res = serde_json::json!({
+                "success": false,
+                "message": msg
+            });
+            final_res.to_string().into()
+        }
     }
 
     fn create_volume_json(&mut self, project_id: QString, title: QString) -> QString {
@@ -2530,4 +2549,22 @@ fn main() {
 
     eprintln!("[Linux] QML engine started, entering event loop");
     engine.exec();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_dry_run_missing_config_returns_error() {
+        let mut backend = AppBackend::default();
+        backend.current_sync_remote_url = "".to_string();
+        backend.current_sync_token = "".to_string();
+        backend.current_workspace = "some_path".to_string();
+
+        backend.perform_sync_dry_run();
+
+        assert_eq!(backend.current_sync_status, "error");
+        assert!(backend.current_sync_action_result.contains("未配置远程仓库 URL"));
+    }
 }
