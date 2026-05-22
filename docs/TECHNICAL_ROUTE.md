@@ -180,3 +180,14 @@
 - V1 先做可测骨架，不一次做完整功能。
   - 原因：分步验证，降低风险，避免大重构。
   - 以后如何改变该决策：无。
+
+## 目录级技术路线
+除了本全局技术路线外，各个核心目录也定义了各自的实现边界。后续修改代码时，必须遵守对应目录的技术路线：
+
+- **Android 技术路线**：[apps/android/TECHNICAL_ROUTE.md](../apps/android/TECHNICAL_ROUTE.md)
+- **Linux 技术路线**：[apps/linux/TECHNICAL_ROUTE.md](../apps/linux/TECHNICAL_ROUTE.md)
+- **Rust Core 技术路线**：[core/writer_core/TECHNICAL_ROUTE.md](../core/writer_core/TECHNICAL_ROUTE.md)
+
+**冲突处理规则**：
+- 如果全局文档和目录文档存在冲突，先以更严格的约束为准。
+- 如果需要调整路线，必须先提交文档变更，不能在功能代码里绕开。
