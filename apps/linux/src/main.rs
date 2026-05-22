@@ -306,6 +306,31 @@ struct AppBackend {
 }
 
 impl AppBackend {
+    fn handle_sync_outcome(&mut self, outcome: SyncTaskOutcome) {
+        self.current_sync_status = outcome.sync_status.clone();
+        self.current_sync_action_result = outcome.action_result.clone();
+        self.sync_status_changed();
+        self.sync_action_completed();
+
+        let status = outcome.sync_status.as_str();
+
+        if status == "success" {
+            let pending_path = self.current_pending_github_init_path.clone();
+            if !pending_path.is_empty() {
+                self.current_pending_github_init_path.clear();
+                self.pending_github_init_path_changed();
+                self.internal_open_workspace(&pending_path, false);
+                self.load_sync_config();
+                return;
+            }
+        }
+
+        if (status == "success" || status == "conflict" || status == "unrelated_histories") && self.has_workspace() {
+            self.reload_tree();
+            self.trigger_projects_reloaded();
+        }
+    }
+
     fn has_workspace(&self) -> bool {
         self.current_has_workspace
     }
@@ -857,14 +882,7 @@ impl AppBackend {
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
             qptr.as_pinned().map(|this| {
                 let mut this = this.borrow_mut();
-                this.current_sync_status = outcome.sync_status.clone();
-                this.current_sync_action_result = outcome.action_result.clone();
-                this.sync_status_changed();
-                this.sync_action_completed();
-                if outcome.sync_status == "success" && this.has_workspace() {
-                    this.reload_tree();
-                    this.trigger_projects_reloaded();
-                }
+                this.handle_sync_outcome(outcome);
             });
         });
 
@@ -1161,14 +1179,7 @@ impl AppBackend {
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
             qptr.as_pinned().map(|this| {
                 let mut this = this.borrow_mut();
-                this.current_sync_status = outcome.sync_status.clone();
-                this.current_sync_action_result = outcome.action_result.clone();
-                this.sync_status_changed();
-                this.sync_action_completed();
-                if outcome.sync_status == "success" && this.has_workspace() {
-                    this.reload_tree();
-                    this.trigger_projects_reloaded();
-                }
+                this.handle_sync_outcome(outcome);
             });
         });
 
@@ -1424,14 +1435,7 @@ impl AppBackend {
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
             qptr.as_pinned().map(|this| {
                 let mut this = this.borrow_mut();
-                this.current_sync_status = outcome.sync_status.clone();
-                this.current_sync_action_result = outcome.action_result.clone();
-                this.sync_status_changed();
-                this.sync_action_completed();
-                if outcome.sync_status == "success" && this.has_workspace() {
-                    this.reload_tree();
-                    this.trigger_projects_reloaded();
-                }
+                this.handle_sync_outcome(outcome);
             });
         });
 
@@ -1518,14 +1522,7 @@ impl AppBackend {
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
             qptr.as_pinned().map(|this| {
                 let mut this = this.borrow_mut();
-                this.current_sync_status = outcome.sync_status.clone();
-                this.current_sync_action_result = outcome.action_result.clone();
-                this.sync_status_changed();
-                this.sync_action_completed();
-                if outcome.sync_status == "success" && this.has_workspace() {
-                    this.reload_tree();
-                    this.trigger_projects_reloaded();
-                }
+                this.handle_sync_outcome(outcome);
             });
         });
 
@@ -2551,9 +2548,55 @@ fn main() {
     engine.exec();
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_handle_sync_outcome_success_pending_path() {
+        let mut backend = AppBackend::default();
+        backend.current_pending_github_init_path = "/tmp/test_workspace".to_string();
+        backend.current_has_workspace = false;
+
+        let outcome = SyncTaskOutcome {
+            sync_status: "success".to_string(),
+            action_result: "OK".to_string(),
+        };
+        backend.handle_sync_outcome(outcome);
+
+        assert_eq!(backend.current_sync_status, "success");
+        assert_eq!(backend.current_pending_github_init_path, "");
+    }
+
+    #[test]
+    fn test_handle_sync_outcome_conflict_reloads_tree() {
+        let mut backend = AppBackend::default();
+        backend.current_has_workspace = true;
+
+        let outcome = SyncTaskOutcome {
+            sync_status: "conflict".to_string(),
+            action_result: "Conflict".to_string(),
+        };
+        backend.handle_sync_outcome(outcome);
+
+        assert_eq!(backend.current_sync_status, "conflict");
+    }
+
+    #[test]
+    fn test_handle_sync_outcome_error_does_not_clear_tree() {
+        let mut backend = AppBackend::default();
+        backend.current_has_workspace = true;
+
+        let outcome = SyncTaskOutcome {
+            sync_status: "error".to_string(),
+            action_result: "Failed".to_string(),
+        };
+        backend.handle_sync_outcome(outcome);
+
+        assert_eq!(backend.current_sync_status, "error");
+        assert_eq!(backend.current_has_workspace, true);
+    }
 
     #[test]
     fn test_sync_dry_run_missing_config_returns_error() {
