@@ -1,0 +1,178 @@
+# 技术路线与架构约束
+
+## 最高优先级规则
+- 任何后续提示词、AI 任务、人工改动，如果与本文档冲突，以本文档为准。
+- 不能在功能实现中私自换技术栈。
+- 如需改变路线，必须先单独提交技术路线文档变更，并说明为什么旧路线不再适用。
+
+## 当前仓库事实
+- Android：
+  - Kotlin + XML/View。
+  - AppCompat / Material / ConstraintLayout / Lifecycle。
+  - NativeCoreBridge 调用 writer_core_jni。
+  - 当前 JNI 数据返回主要是 JSON。
+  - 只正式支持 arm64-v8a。
+  - 暂不引入 Compose 作为主 UI 技术。
+- Linux：
+  - 当前是 Qt/QML 路线。
+  - 遵循 Qt/KDE 桌面应用路线。
+  - 不再随意 Qt5 / Qt6 / Qt Quick / 其他 UI 栈来回切。
+- Core：
+  - Rust Core 是业务真相来源。
+  - 工作区、作品、卷、章节、同步、删除安全等由 Core 兜底。
+
+## 总体原则
+- Core 负责业务数据和跨平台逻辑。
+- 平台端负责输入、渲染、系统能力接入。
+- UI 不保存长期业务真相。
+- 不用临时文件或 SharedPreferences 绕过 Core。
+- 不在 UI 层假成功。
+- 不在 UI 层吞错误。
+- 不用过程文档替代架构文档。
+
+## Android 导图技术路线
+- 导图不是普通页面，而是大画布图形系统。
+- 数据模型与布局在 Rust Core。
+- Android 只拿快照渲染。
+- Android 不在每帧访问 Rust Core。
+- Android 不在每帧解析 JSON。
+- Android 不在每帧重新布局。
+- Android 不用 RecyclerView / LinearLayout / 普通 ViewGroup 拼节点。
+- Android 不用 WebView 做导图。
+- Android 暂不迁移 Compose。
+- Compose Canvas 可作为参考，但不是当前主路线。
+- 推荐路线：
+  - V1：建立 MindMapSnapshot、MindMapRenderer 接口、Android 自定义渲染 View 骨架。
+  - V1 可以用硬件加速 Canvas 验证数据链路和交互。
+  - 渲染接口必须预留 GLSurfaceView/OpenGL ES 后端。
+  - 目标路线是独立渲染 Surface + GPU 批量绘制节点/边/文本纹理。
+  - 后续性能不足时升级到 GLSurfaceView/OpenGL ES，不推翻 Core 和 Model。
+- 为什么：
+  - 普通 View 树无法承受大量节点高频平移缩放。
+  - RecyclerView 是列表，不是无限二维画布。
+  - WebView 会带来输入延迟、调试复杂、原生能力割裂。
+  - Compose 迁移成本高，当前仓库没有 Compose 依赖，不适合为导图单点引入新 UI 栈。
+  - OpenGL ES / GLSurfaceView 是 Android 大画布高性能图形路线之一。
+
+## JNI 与快照传输路线
+- 当前路线：
+  - V1 允许 Rust Core 通过 JNI 返回 MindMapSnapshot JSON。
+  - Android 用 Gson 解析成 Kotlin data class。
+  - 这个 JSON 只允许在进入导图、重新布局、数据变化时加载。
+  - 严禁在拖动、缩放、惯性滑动、每帧绘制时调用 JNI 或解析 JSON。
+- JSON 使用边界：
+  - 小图和中图可以先用 JSON。
+  - 50 到 300 节点以内，JSON 作为 V1 快照格式可以接受。
+  - 上千节点、频繁重新布局、或解析明显卡顿时，不应继续扩大 JSON 方案。
+- 必须做性能门槛：
+  - 记录 snapshot JSON 字节大小。
+  - 记录 Gson 解析耗时。
+  - 记录节点数、边数。
+  - 记录进入导图页首帧耗时。
+  - 记录内存分配峰值。
+- 升级触发条件：
+  - 单次 snapshot JSON 超过 1MB；
+  - Gson 解析超过 16ms；
+  - 进入导图页首帧超过 100ms；
+  - 节点数超过 1000 后明显卡顿；
+  - 重新布局/刷新时用户可感知卡顿。
+- 后续二进制路线：
+  - 首选 DirectByteBuffer 或 FlatBuffers。
+  - FlatBuffers 适合稳定结构的读多写少快照，可以减少反序列化开销。
+  - DirectByteBuffer 适合从 Rust/JNI 传递连续内存快照，但必须严格处理生命周期，不能悬垂指针。
+  - Protobuf 可作为兼容性更强的结构化传输方案，但不是零拷贝优先路线。
+  - 切换二进制快照前必须保留 MindMapSnapshot 抽象，不允许让 Android Renderer 直接依赖某一种序列化格式。
+- 禁止事项：
+  - 禁止每帧通过 JNI 获取节点。
+  - 禁止每帧解析 JSON。
+  - 禁止拖动中从 Rust 重新生成快照。
+  - 禁止 Renderer 直接拼接 JSON 字符串。
+  - 禁止为了性能直接绕开 Rust Core 的业务真相。
+
+## Android 导图分层职责
+- Rust Core：
+  - MindMapGraph
+  - MindMapNode
+  - MindMapEdge
+  - MindMapLayout
+  - MindMapRenderSnapshot
+  - 从作品/卷/章节生成导图快照。
+  - 计算 radial tree / horizontal tree 布局。
+  - 未来支持 AI 概念节点、人物关系、地点、时间线。
+- JNI Bridge：
+  - 暴露 getMindMapSnapshotJson。
+  - 返回 success/data/error 结构。
+  - V1 用 JSON。
+  - 后续可新增 getMindMapSnapshotBuffer，但不能删除旧抽象。
+  - 不泄露 token。
+  - 不崩溃。
+- Android Model：
+  - Kotlin data class 映射快照。
+  - 管理 Viewport。
+  - 管理选中节点。
+  - 不保存长期业务数据。
+- Android Activity：
+  - 只负责页面生命周期、入口、错误显示。
+- Android Renderer：
+  - 只负责绘制快照。
+  - 每帧只更新 viewport matrix。
+  - 支持平移、缩放、惯性、点击命中。
+  - 缓存 Paint、Path、TextLayout、节点 bounds。
+  - 可见区域裁剪。
+  - Debug HUD 显示 fps、frame time、visible nodes、total nodes。
+- Layout：
+  - 只放 toolbar、surface、状态层。
+  - 不用复杂嵌套布局堆节点。
+
+## 120fps 性能约束
+- 目标设备：骁龙 888 级别。
+- 目标体验：小中型导图拖动/缩放尽量贴近 120Hz。
+- 每帧预算按 8.33ms 设计。
+- 拖动过程中禁止：
+  - IO；
+  - JSON 解析；
+  - Rust Core 调用；
+  - 布局计算；
+  - 大量 Kotlin 对象分配；
+  - 创建 Paint / Path / Rect / Shader；
+  - 重新测量所有文本。
+- 必须：
+  - 支持 requestedFrameRate / 高刷请求；
+  - 支持 frame time 统计；
+  - 支持可见区域裁剪；
+  - 支持文本/路径缓存；
+  - 支持布局快照复用。
+- 后续 OpenGL ES 路线：
+  - 节点和边批量绘制。
+  - 文本使用纹理图集或缓存 bitmap。
+  - 大量节点不走每节点 View。
+  - 后续可接 Android Frame Pacing / Swappy，但不在 V1 强制引入。
+
+## 技术决策记录
+- 不用 WebView。
+  - 原因：会带来输入延迟、调试复杂、原生能力割裂。
+  - 以后如何改变该决策：如果未来需要完全跨平台的 Web 渲染且能接受性能损失，必须先证明原生方案不再适用。
+- 不用每节点 Android View。
+  - 原因：普通 View 树无法承受大量节点高频平移缩放。
+  - 以后如何改变该决策：除非 Android 推出能在普通 View 树上支持无限大画布万级节点高性能的新机制。
+- 不把 Compose 作为当前导图主路线。
+  - 原因：当前仓库没有 Compose 依赖，迁移成本高，不适合为导图单点引入。
+  - 以后如何改变该决策：当整个 Android App 全面迁移 Compose，且 Compose Canvas 性能达标时。
+- 不把导图数据写死在 Android。
+  - 原因：业务数据和结构应由 Rust Core 统一管理，保证多端一致性。
+  - 以后如何改变该决策：如果完全放弃跨平台策略。
+- Rust Core 负责图数据和布局。
+  - 原因：统一数据结构和布局算法，避免多端重复实现。
+  - 以后如何改变该决策：如果布局算法极其依赖特定平台的字体测量且无法在 Core 中实现时，但仍应尽量在 Core 算大局，平台微调。
+- Android 渲染层以 Renderer 接口隔离 Canvas / OpenGL 后端。
+  - 原因：V1 可先用 Canvas 验证逻辑，后续性能不足时可平滑升级 OpenGL ES。
+  - 以后如何改变该决策：不可轻易改变，始终需要接口隔离。
+- V1 允许 JSON 快照，但只用于低频加载。
+  - 原因：实现成本低，适合早期验证，但大规模数据会卡顿。
+  - 以后如何改变该决策：当 JSON 快照成为性能瓶颈（达到前述触发条件）时，升级二进制。
+- 如果 JSON 快照成为瓶颈，升级到 DirectByteBuffer / FlatBuffers / Protobuf。
+  - 原因：减少内存拷贝和反序列化开销。
+  - 以后如何改变该决策：如果发现新一代零拷贝序列化方案更好。
+- V1 先做可测骨架，不一次做完整功能。
+  - 原因：分步验证，降低风险，避免大重构。
+  - 以后如何改变该决策：无。
