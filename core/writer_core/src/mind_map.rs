@@ -113,10 +113,17 @@ pub struct MindMapSnapshot {
 }
 
 pub fn generate_snapshot(core: &WriterCore, project_id: &str) -> Result<MindMapSnapshot> {
+    // Read projects to find the matching one, validating the project exists first
+    let projects = core.list_projects()?;
+    let project = projects.into_iter().find(|p| p.id == project_id).ok_or_else(|| {
+        crate::error::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "Project not found"))
+    })?;
+
     // Try to load a custom mind map first
     let mind_map_path = core.workspace_path().join("projects").join(project_id).join("mind_map.json");
-    if let Ok(content) = std::fs::read_to_string(&mind_map_path) {
-        if let Ok(graph) = serde_json::from_str::<MindMapGraph>(&content) {
+    match std::fs::read_to_string(&mind_map_path) {
+        Ok(content) => {
+            let graph: MindMapGraph = serde_json::from_str(&content)?;
             // For V1, just compute a simple layout or use existing coordinates
             // Assuming nodes already have x, y coordinates from editor
             let mut min_x = f32::MAX;
@@ -150,13 +157,11 @@ pub fn generate_snapshot(core: &WriterCore, project_id: &str) -> Result<MindMapS
                     .as_millis() as u64,
             });
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // File does not exist, continue to fallback to auto-generated layout
+        }
+        Err(e) => return Err(e.into()),
     }
-
-    // Read projects to find the matching one
-    let projects = core.list_projects()?;
-    let project = projects.into_iter().find(|p| p.id == project_id).ok_or_else(|| {
-        crate::error::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "Project not found"))
-    })?;
 
     let volumes = core.list_volumes(project_id)?;
 
@@ -393,5 +398,46 @@ mod tests {
         assert_eq!(snapshot.nodes.len(), 1);
         assert_eq!(snapshot.nodes[0].kind, MindMapNodeKind::Character);
         assert_eq!(snapshot.edges[0].kind, "References");
+    }
+
+    #[test]
+    fn test_unknown_project_with_orphan_mind_map() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let core = WriterCore::new(temp_dir.path());
+
+        let unknown_project_id = "unknown_project_123";
+        let project_dir = core.workspace_path().join("projects").join(unknown_project_id);
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let mind_map_path = project_dir.join("mind_map.json");
+        std::fs::write(&mind_map_path, "{}").unwrap(); // Valid empty JSON but not a valid graph, doesn't matter because project check should fail first
+
+        let result = generate_snapshot(&core, unknown_project_id);
+        assert!(result.is_err());
+        if let Err(crate::error::Error::Io(err)) = result {
+            assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+            assert_eq!(err.to_string(), "Project not found");
+        } else {
+            panic!("Expected Io Error NotFound, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_broken_custom_mind_map_returns_error() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        let proj = core.create_project("Test Project").unwrap();
+
+        let mind_map_path = core.workspace_path().join("projects").join(&proj.id).join("mind_map.json");
+        std::fs::write(&mind_map_path, "{ invalid json ]").unwrap();
+
+        let result = generate_snapshot(&core, &proj.id);
+        assert!(result.is_err());
+        match result {
+            Err(crate::error::Error::Json(_)) => {}
+            _ => panic!("Expected JSON parsing error, got {:?}", result),
+        }
     }
 }
