@@ -29,7 +29,7 @@
 
 ## Mind Map Core 路线
 - **分层边界**：必须严格区分 Graph（业务真相）、Layout（纯位置信息）和 Snapshot（发给平台的只读渲染视图）。
-- **存储结构 (V2)**：使用 `projects/<id>/mind_map/graphs/`、`layouts/` 等模块化目录，弃用 V1 单文件方案。
+- **存储结构 (V2)**：使用 `projects/<id>/mind_map/graphs/`、`layouts/` 等模块化目录，弃用 V1 单文件方案。引入 `projects/<id>/mind_map/index.json` 作为图的索引，包含 `schemaVersion` (必须为 2)、`defaultGraphId`、`graphIds` 和 `updatedAt`。如果多图存在但无索引文件，则必须返回明确错误。
 - **Schema 与迁移**：目前 schemaVersion 为 2。支持从 V1 `mind_map.json` 解析并自动填充新节点字段，遇到不支持的 schemaVersion 必须返回明确错误。
 - **Anchor 解析规则**：优先使用 exact offset。漂移时，使用 `prefix + selectedText + suffix` 重新定位。未找到时明确返回 `BrokenAnchor`，不在拖拽时运行该操作。
 - MindMapGraph 是业务图。

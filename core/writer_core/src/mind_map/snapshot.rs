@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,8 +59,33 @@ pub fn generate_snapshot(
     let mut max_x = f32::MIN;
     let mut max_y = f32::MIN;
 
+    // 1. Build layout_by_node_id HashMap
+    let layout_by_node_id: HashMap<&str, &crate::mind_map::layout::MindMapLayoutNode> = layout
+        .nodes
+        .iter()
+        .map(|ln| (ln.node_id.as_str(), ln))
+        .collect();
+
+    // 2. Build anchor_ids set
+    let anchor_ids: HashSet<&str> = graph
+        .anchors
+        .iter()
+        .map(|a| a.id.as_str())
+        .collect();
+
+    // 3. Build link_count_by_node_id and broken_link_by_node_id
+    let mut link_count_by_node_id = HashMap::new();
+    let mut broken_link_by_node_id = HashMap::new();
+
+    for link in &graph.links {
+        *link_count_by_node_id.entry(link.node_id.as_str()).or_insert(0) += 1;
+        if !anchor_ids.contains(link.anchor_id.as_str()) {
+            broken_link_by_node_id.insert(link.node_id.as_str(), true);
+        }
+    }
+
     for g_node in &graph.nodes {
-        let l_node = layout.nodes.iter().find(|ln| ln.node_id == g_node.id);
+        let l_node = layout_by_node_id.get(g_node.id.as_str());
 
         // Defaults if layout is missing for some reason
         let (x, y, w, h, r, collapsed) = if let Some(ln) = l_node {
@@ -73,18 +99,8 @@ pub fn generate_snapshot(
         if x + w / 2.0 > max_x { max_x = x + w / 2.0; }
         if y + h / 2.0 > max_y { max_y = y + h / 2.0; }
 
-        let links_for_node: Vec<_> = graph.links.iter().filter(|l| l.node_id == g_node.id).collect();
-        let mut broken_link = false;
-        let mut anchor_count = 0;
-
-        for link in links_for_node {
-            anchor_count += 1;
-            // Simplified check: If anchor doesn't exist in graph.anchors, it's broken
-            // A more rigorous check would require full content parsing, but for snapshot generation, we use current state
-            if !graph.anchors.iter().any(|a| a.id == link.anchor_id) {
-                broken_link = true;
-            }
-        }
+        let anchor_count = link_count_by_node_id.get(g_node.id.as_str()).copied().unwrap_or(0);
+        let broken_link = broken_link_by_node_id.get(g_node.id.as_str()).copied().unwrap_or(false);
 
         snapshot_nodes.push(MindMapSnapshotNode {
             id: g_node.id.clone(),
