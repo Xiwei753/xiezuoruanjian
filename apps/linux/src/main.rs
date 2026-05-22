@@ -1375,6 +1375,27 @@ impl AppBackend {
             return;
         }
 
+        if self.current_sync_remote_url.is_empty() {
+            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_action_result = "同步检查失败: 未配置远程仓库 URL".to_string();
+            self.sync_status_changed();
+            self.sync_action_completed();
+            return;
+        }
+
+        if self.current_sync_token.is_empty() {
+            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_action_result = "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
+            self.sync_status_changed();
+            self.sync_action_completed();
+            return;
+        }
+
+        if self.current_sync_branch.is_empty() {
+            self.current_sync_branch = "main".to_string();
+            self.sync_config_changed();
+        }
+
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
         self.current_sync_action_result = "正在检查同步计划...".to_string();
@@ -1434,6 +1455,27 @@ impl AppBackend {
             self.current_sync_action_result = "请先打开工作区".to_string();
             self.sync_action_completed();
             return;
+        }
+
+        if self.current_sync_remote_url.is_empty() {
+            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_action_result = "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
+            self.sync_status_changed();
+            self.sync_action_completed();
+            return;
+        }
+
+        if self.current_sync_token.is_empty() {
+            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_action_result = "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
+            self.sync_status_changed();
+            self.sync_action_completed();
+            return;
+        }
+
+        if self.current_sync_branch.is_empty() {
+            self.current_sync_branch = "main".to_string();
+            self.sync_config_changed();
         }
 
         self.current_sync_status = "syncing".to_string();
@@ -2081,19 +2123,10 @@ impl AppBackend {
 
                     if self.cached_tree.len() == 0 {
                         eprintln!("[create_new_project] warning: tree count is 0 after reload");
-                        let msg = format!(
-                            "作品文件已写入 (projectJsonExists={}, volumesDirExists={}, volumeCount={})，但左侧树刷新失败 (treeCount=0)。\n请关闭并重新打开工作区。",
-                            project_json_exists, volumes_dir_exists, volume_count
-                        );
-                        return build_err(&msg, true).into();
                     }
                     if self.cached_tree.len() <= before_tree_count {
-                        let msg = format!(
-                            "作品文件已写入但树模型未增长 (before={}, after={})。\nprojectId={}",
-                            before_tree_count, self.cached_tree.len(), project_id
-                        );
-                        eprintln!("[create_new_project] error: {}", msg);
-                        return build_err(&msg, true).into();
+                        eprintln!("[create_new_project] warning: tree model did not grow (before={}, after={}) for projectId={}",
+                            before_tree_count, self.cached_tree.len(), project_id);
                     }
 
                     let after_tree = self.build_tree_model_json();
