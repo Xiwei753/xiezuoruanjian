@@ -9,6 +9,8 @@
 ## 当前事实
 - Linux 当前路线是 Qt/QML。
 - 遵循 Qt/KDE 桌面应用路线。
+- **遵守跨平台契约：** 所有的业务适配与状态展示必须无条件符合 [《跨平台能力契约与 Core-first 架构约束》](../../docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md)。
+- **纯适配器层：** Linux backend / `qmetaobject` 只能作为调用 Core Capability API 的适配器（Adapter）。**只负责状态和指令的转发，绝不能独立实现任何与 Android 侧分叉的业务语义或状态机。**
 - QML 负责展示和交互，不负责业务真相。
 - Rust/Linux backend 负责调用 Core、组织 AppState、同步状态。
 

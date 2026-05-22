@@ -6,10 +6,11 @@
 - 如果提示词和本文档冲突，以本文档为准。
 - 如果确实需要改变路线，必须先提交本文档变更。
 
-## 当前事实
-- Rust Core 是跨平台业务真相来源。
-- Workspace / Project / Volume / Chapter / Settings / Sync / Trash / Delete Guard / Mind Map 都应该由 Core 兜底。
-- Android 和 Linux 不能绕过 Core 写长期业务数据。
+## 当前事实与全局契约
+- **跨平台唯一业务入口：** 所有跨平台业务能力统一由 Core Capability API 定义和暴露，详情参考全局 [《跨平台能力契约与 Core-first 架构约束》](../../docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md)。
+- Rust Core 是所有客户端唯一的业务真相来源。
+- Workspace / Project / Volume / Chapter / Settings / Sync / Trash / Delete Guard / Mind Map 都由 Core 统一兜底与定义。
+- Android 和 Linux 等所有端均不能绕过 Core 提供的 Capability API 读写长期业务数据，也不得在平台端自行编写重复的业务逻辑。
 
 ## Core 职责
 - 数据结构。
