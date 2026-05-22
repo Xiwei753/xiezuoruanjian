@@ -817,6 +817,241 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
+    private external fun createMindMapGraphJson(workspacePath: String, projectId: String, title: String): String?
+    private external fun listMindMapGraphsJson(workspacePath: String, projectId: String): String?
+    private external fun setDefaultMindMapGraphJson(workspacePath: String, projectId: String, graphId: String): String?
+    private external fun createMindMapNodeJson(workspacePath: String, projectId: String, graphId: String, nodeJson: String): String?
+    private external fun updateMindMapNodeJson(workspacePath: String, projectId: String, graphId: String, nodeId: String, patchJson: String): String?
+    private external fun deleteMindMapNodeJson(workspacePath: String, projectId: String, graphId: String, nodeId: String, cascade: Boolean): String?
+    private external fun createMindMapEdgeJson(workspacePath: String, projectId: String, graphId: String, edgeJson: String): String?
+    private external fun updateMindMapEdgeJson(workspacePath: String, projectId: String, graphId: String, edgeId: String, patchJson: String): String?
+    private external fun deleteMindMapEdgeJson(workspacePath: String, projectId: String, graphId: String, edgeId: String): String?
+    private external fun createMindMapAnchorJson(workspacePath: String, projectId: String, graphId: String, anchorJson: String): String?
+    private external fun bindMindMapAnchorJson(workspacePath: String, projectId: String, graphId: String, nodeId: String, anchorId: String, linkKind: String): String?
+    private external fun saveMindMapLayoutJson(workspacePath: String, projectId: String, graphId: String, layoutJson: String): String?
+
+    fun createMindMapGraph(projectId: String, title: String): NativeResult<MindMapGraph> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val json = createMindMapGraphJson(workspaceDir, projectId, title)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapGraph>>() {}.type
+            val response: RustResponse<MindMapGraph> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun listMindMapGraphs(projectId: String): NativeResult<MindMapGraphsList> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val json = listMindMapGraphsJson(workspaceDir, projectId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapGraphsList>>() {}.type
+            val response: RustResponse<MindMapGraphsList> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun setDefaultMindMapGraph(projectId: String, graphId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val json = setDefaultMindMapGraphJson(workspaceDir, projectId, graphId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            return if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun createMindMapNode(projectId: String, graphId: String, node: MindMapGraphNode): NativeResult<MindMapGraphNode> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val nodeJson = gson.toJson(node)
+            val json = createMindMapNodeJson(workspaceDir, projectId, graphId, nodeJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapGraphNode>>() {}.type
+            val response: RustResponse<MindMapGraphNode> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun updateMindMapNode(projectId: String, graphId: String, nodeId: String, patch: MindMapGraphNodePatch): NativeResult<MindMapGraphNode> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val patchJson = gson.toJson(patch)
+            val json = updateMindMapNodeJson(workspaceDir, projectId, graphId, nodeId, patchJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapGraphNode>>() {}.type
+            val response: RustResponse<MindMapGraphNode> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteMindMapNode(projectId: String, graphId: String, nodeId: String, cascade: Boolean): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val json = deleteMindMapNodeJson(workspaceDir, projectId, graphId, nodeId, cascade)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            return if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun createMindMapEdge(projectId: String, graphId: String, edge: MindMapGraphEdge): NativeResult<MindMapGraphEdge> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val edgeJson = gson.toJson(edge)
+            val json = createMindMapEdgeJson(workspaceDir, projectId, graphId, edgeJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapGraphEdge>>() {}.type
+            val response: RustResponse<MindMapGraphEdge> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun updateMindMapEdge(projectId: String, graphId: String, edgeId: String, patch: MindMapGraphEdgePatch): NativeResult<MindMapGraphEdge> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val patchJson = gson.toJson(patch)
+            val json = updateMindMapEdgeJson(workspaceDir, projectId, graphId, edgeId, patchJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapGraphEdge>>() {}.type
+            val response: RustResponse<MindMapGraphEdge> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteMindMapEdge(projectId: String, graphId: String, edgeId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val json = deleteMindMapEdgeJson(workspaceDir, projectId, graphId, edgeId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            return if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun createMindMapAnchor(projectId: String, graphId: String, anchor: MindMapAnchor): NativeResult<MindMapAnchor> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val anchorJson = gson.toJson(anchor)
+            val json = createMindMapAnchorJson(workspaceDir, projectId, graphId, anchorJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapAnchor>>() {}.type
+            val response: RustResponse<MindMapAnchor> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun bindMindMapAnchor(projectId: String, graphId: String, nodeId: String, anchorId: String, linkKind: String): NativeResult<MindMapLink> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val json = bindMindMapAnchorJson(workspaceDir, projectId, graphId, nodeId, anchorId, linkKind)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<MindMapLink>>() {}.type
+            val response: RustResponse<MindMapLink> = gson.fromJson(json, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun saveMindMapLayout(projectId: String, graphId: String, layout: MindMapLayout): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val layoutJson = gson.toJson(layout)
+            val json = saveMindMapLayoutJson(workspaceDir, projectId, graphId, layoutJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            return if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
     fun listRegisteredActions(): NativeResult<List<ActionDescriptor>> {
         if (!isLoaded) return NativeResult.NotLoaded
         try {

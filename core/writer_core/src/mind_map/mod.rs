@@ -1,4 +1,5 @@
 pub mod anchor;
+pub mod edit;
 pub mod graph;
 pub mod layout;
 pub mod migration;
@@ -28,8 +29,11 @@ pub fn generate_snapshot(
                 crate::error::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{:?}", e)))
             })?;
 
-            // Calculate layout and generate snapshot.
-            let layout = layout::calculate_layout(&graph, LayoutKind::Freeform);
+            // Try to load layout, fallback to calculate_layout if not found
+            let layout = match storage::load_mind_map_layout(core, project_id, &graph.id) {
+                Ok(layout) => layout,
+                Err(_) => layout::calculate_layout(&graph, LayoutKind::Freeform),
+            };
             Ok(snapshot::generate_snapshot(&graph, &layout))
         }
         Err(e) => {

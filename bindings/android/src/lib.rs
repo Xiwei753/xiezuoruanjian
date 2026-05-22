@@ -963,6 +963,435 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getMindMap
     result_to_jstring(&mut env, result)
 }
 
+fn result_to_jstring_unified<T: Serialize>(
+    env: &mut JNIEnv,
+    result: Result<T, writer_core::Error>,
+) -> jstring {
+    let json_str = match result {
+        Ok(data) => json!({
+            "success": true,
+            "data": data,
+            "error": serde_json::Value::Null
+        })
+        .to_string(),
+        Err(e) => json!({
+            "success": false,
+            "data": serde_json::Value::Null,
+            "error": e.to_string()
+        })
+        .to_string(),
+    };
+
+    match env.new_string(json_str) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMindMapGraphJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    title_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let title = match jstring_to_string(&mut env, &title_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.create_mind_map_graph(&project_id, &title);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listMindMapGraphsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.list_mind_map_graphs(&project_id);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_setDefaultMindMapGraphJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.set_default_mind_map_graph(&project_id, &graph_id);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMindMapNodeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    node_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let node_json = match jstring_to_string(&mut env, &node_json_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let node = match serde_json::from_str(&node_json) {
+        Ok(n) => n,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.create_mind_map_node(&project_id, &graph_id, node);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateMindMapNodeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    node_id_j: JString,
+    patch_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let node_id = match jstring_to_string(&mut env, &node_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let patch_json = match jstring_to_string(&mut env, &patch_json_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let patch = match serde_json::from_str(&patch_json) {
+        Ok(p) => p,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.update_mind_map_node(&project_id, &graph_id, &node_id, patch);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteMindMapNodeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    node_id_j: JString,
+    cascade_j: jboolean,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let node_id = match jstring_to_string(&mut env, &node_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let cascade = cascade_j != 0;
+    let core = WriterCore::new(&workspace_path);
+    let result = core.delete_mind_map_node(&project_id, &graph_id, &node_id, cascade);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMindMapEdgeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    edge_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let edge_json = match jstring_to_string(&mut env, &edge_json_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let edge = match serde_json::from_str(&edge_json) {
+        Ok(ed) => ed,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.create_mind_map_edge(&project_id, &graph_id, edge);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateMindMapEdgeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    edge_id_j: JString,
+    patch_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let edge_id = match jstring_to_string(&mut env, &edge_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let patch_json = match jstring_to_string(&mut env, &patch_json_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let patch = match serde_json::from_str(&patch_json) {
+        Ok(p) => p,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.update_mind_map_edge(&project_id, &graph_id, &edge_id, patch);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteMindMapEdgeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    edge_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let edge_id = match jstring_to_string(&mut env, &edge_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.delete_mind_map_edge(&project_id, &graph_id, &edge_id);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMindMapAnchorJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    anchor_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let anchor_json = match jstring_to_string(&mut env, &anchor_json_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let anchor = match serde_json::from_str(&anchor_json) {
+        Ok(an) => an,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.create_mind_map_anchor(&project_id, &graph_id, anchor);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_bindMindMapAnchorJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    node_id_j: JString,
+    anchor_id_j: JString,
+    link_kind_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let node_id = match jstring_to_string(&mut env, &node_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let anchor_id = match jstring_to_string(&mut env, &anchor_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let link_kind = match jstring_to_string(&mut env, &link_kind_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.bind_mind_map_node_to_anchor(&project_id, &graph_id, &node_id, &anchor_id, &link_kind);
+    result_to_jstring_unified(&mut env, result)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveMindMapLayoutJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    graph_id_j: JString,
+    layout_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let graph_id = match jstring_to_string(&mut env, &graph_id_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+    let layout_json = match jstring_to_string(&mut env, &layout_json_j) {
+        Ok(s) => s,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))),
+    };
+
+    let layout = match serde_json::from_str(&layout_json) {
+        Ok(la) => la,
+        Err(e) => return result_to_jstring_unified::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let result = core.save_mind_map_layout(&project_id, &graph_id, layout);
+    result_to_jstring_unified(&mut env, result)
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listRegisteredActionsNative(
     mut env: JNIEnv,

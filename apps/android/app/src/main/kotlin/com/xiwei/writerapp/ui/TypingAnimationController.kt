@@ -115,11 +115,6 @@ class TypingAnimationController(
             if (end > start && typingAnimationDurationMs > 0) {
                 val insertedText = editable.subSequence(start, end).toString()
 
-                val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-                    duration = typingAnimationDurationMs
-                    interpolator = android.view.animation.DecelerateInterpolator()
-                }
-
                 val hiddenSpan = android.text.style.ForegroundColorSpan(android.graphics.Color.TRANSPARENT)
                 editText.isUpdatingSpanWrapper = true
                 editable.setSpan(hiddenSpan, start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -131,7 +126,8 @@ class TypingAnimationController(
                     startX = cursorBeforeX,
                     startY = cursorBeforeY,
                     progress = 0f,
-                    animator = animator,
+                    startTimeNanos = -1L,
+                    durationMs = typingAnimationDurationMs,
                     hiddenSpan = hiddenSpan
                 )
 
@@ -140,18 +136,6 @@ class TypingAnimationController(
                 if (DEBUG_ANIM) {
                     android.util.Log.d(TAG, "afterTextChanged - created anim: insertedStart=${anim.insertedStart}, length=${insertedText.length}")
                 }
-
-                animator.addUpdateListener { a ->
-                    anim.progress = a.animatedValue as Float
-                    editText.invalidate()
-                }
-                animator.addListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: Animator) {
-                        renderLayer.removeTypingAnim(anim)
-                        editText.invalidate()
-                    }
-                })
-                animator.start()
             }
             lastAddedStart = -1
             lastAddedCount = 0

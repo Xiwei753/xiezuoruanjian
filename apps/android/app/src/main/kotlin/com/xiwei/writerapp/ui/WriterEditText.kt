@@ -17,24 +17,46 @@ class WriterEditText @JvmOverloads constructor(
     internal var isUpdatingSpanWrapper = false
     private var controllersReady = false
 
+    var animationRuntime: EditorAnimationRuntime? = null
+        private set
+
     private var typingAnimationController: TypingAnimationController? = null
     internal var renderLayer: EditorRenderLayer? = null
     private var autoIndentController: AutoIndentController? = null
 
+    private var lastTypingEnabled: Boolean? = null
+    private var lastTypingDuration: Long? = null
+    private var lastSmoothEnabled: Boolean? = null
+    private var lastSmoothDuration: Long? = null
+    private var lastAutoIndentEnabled: Boolean? = null
+    private var lastAutoIndentWidth: Float? = null
+
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
+        if (lastTypingEnabled == enabled && lastTypingDuration == durationMs) return
+        lastTypingEnabled = enabled
+        lastTypingDuration = durationMs
         typingAnimationController?.setTypingAnimationEnabled(enabled, durationMs)
     }
 
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         if (!controllersReady) return
+        if (lastSmoothEnabled == enabled && lastSmoothDuration == durationMs) return
+        lastSmoothEnabled = enabled
+        lastSmoothDuration = durationMs
         renderLayer?.smoothCursorRenderer?.setSmoothCursorEnabled(enabled, durationMs)
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
         if (!controllersReady) return
+        if (lastAutoIndentEnabled == enabled && lastAutoIndentWidth == widthChars) return
+        lastAutoIndentEnabled = enabled
+        lastAutoIndentWidth = widthChars
         autoIndentController?.setAutoIndent(enabled, widthChars)
     }
+
+    fun typingAnimationDurationMs(): Long = typingAnimationController?.typingAnimationDurationMs ?: 0L
+    fun cursorAnimationDurationMs(): Long = renderLayer?.smoothCursorRenderer?.smoothCursorDurationMs ?: 0L
 
     fun runWithoutTextAnimations(block: () -> Unit) {
         if (!controllersReady) {
@@ -58,6 +80,7 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     init {
+        animationRuntime = EditorAnimationRuntime(this)
         val layer = EditorRenderLayer(this)
         renderLayer = layer
         typingAnimationController = TypingAnimationController(this, layer)
@@ -110,6 +133,7 @@ class WriterEditText @JvmOverloads constructor(
         if (!controllersReady) return
         renderLayer?.onDetachedFromWindow()
         typingAnimationController?.onDetachedFromWindow()
+        animationRuntime?.clear()
     }
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {

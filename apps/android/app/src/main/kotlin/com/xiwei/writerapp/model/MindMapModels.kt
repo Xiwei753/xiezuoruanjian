@@ -100,3 +100,101 @@ data class MindMapViewport(
     var translateX: Float = 0.0f,
     var translateY: Float = 0.0f
 )
+
+data class MindMapGraphNode(
+    val id: String,
+    val title: String,
+    val kind: MindMapNodeKind,
+    val payload: Map<String, Any>? = null,
+    val tags: List<String> = emptyList(),
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0
+)
+
+data class MindMapGraphEdge(
+    val id: String,
+    val from: String,
+    val to: String,
+    val kind: String,
+    val label: String? = null,
+    val payload: Map<String, Any>? = null,
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0
+)
+
+data class MindMapGraphMetadata(
+    val id: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+data class MindMapGraphsList(
+    val defaultGraphId: String?,
+    val graphs: List<MindMapGraphMetadata>
+)
+
+data class MindMapAnchor(
+    val id: String,
+    val projectId: String,
+    val chapterId: String,
+    val startOffset: Int,
+    val endOffset: Int,
+    val selectedText: String,
+    val prefixText: String,
+    val suffixText: String,
+    val checksum: String = "",
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0
+)
+
+data class MindMapLink(
+    val id: String,
+    val nodeId: String,
+    val anchorId: String,
+    val kind: String,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+data class MindMapGraph(
+    val schemaVersion: Int,
+    val id: String,
+    val projectId: String,
+    val title: String,
+    val nodes: List<MindMapGraphNode>,
+    val edges: List<MindMapGraphEdge>,
+    val anchors: List<MindMapAnchor>,
+    val links: List<MindMapLink>,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+data class MindMapLayoutNode(
+    val nodeId: String,
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+    val radius: Float,
+    val collapsed: Boolean,
+    val zIndex: Int
+)
+
+data class MindMapLayout(
+    val kind: String,
+    val nodes: List<MindMapLayoutNode>
+)
+
+data class MindMapGraphNodePatch(
+    val title: String? = null,
+    val kind: MindMapNodeKind? = null,
+    val payload: Map<String, Any>? = null,
+    val tags: List<String>? = null
+)
+
+data class MindMapGraphEdgePatch(
+    val kind: String? = null,
+    val label: String? = null,
+    val payload: Map<String, Any>? = null
+)

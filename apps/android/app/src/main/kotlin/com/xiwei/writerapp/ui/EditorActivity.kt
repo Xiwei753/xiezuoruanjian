@@ -190,9 +190,18 @@ class EditorActivity : AppCompatActivity() {
         }
     }
 
+    private var lastFontSize: Float? = null
+    private var lastLineSpacing: Float? = null
+
     private fun applySettingsToEditor(settings: EditorSettingsState) {
-        editorEditText.textSize = settings.fontSize
-        editorEditText.setLineSpacing(0f, settings.lineSpacingMultiplier)
+        if (lastFontSize != settings.fontSize) {
+            lastFontSize = settings.fontSize
+            editorEditText.textSize = settings.fontSize
+        }
+        if (lastLineSpacing != settings.lineSpacingMultiplier) {
+            lastLineSpacing = settings.lineSpacingMultiplier
+            editorEditText.setLineSpacing(0f, settings.lineSpacingMultiplier)
+        }
         editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
         editorEditText.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
         editorEditText.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)

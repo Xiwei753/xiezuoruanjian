@@ -47,6 +47,54 @@ impl WriterCore {
         crate::mind_map::generate_snapshot(self, project_id)
     }
 
+    pub fn create_mind_map_graph(&self, project_id: &str, title: &str) -> Result<crate::mind_map::graph::MindMapGraph> {
+        crate::mind_map::edit::create_mind_map_graph(self, project_id, title)
+    }
+
+    pub fn list_mind_map_graphs(&self, project_id: &str) -> Result<crate::mind_map::edit::MindMapGraphsList> {
+        crate::mind_map::edit::list_mind_map_graphs(self, project_id)
+    }
+
+    pub fn set_default_mind_map_graph(&self, project_id: &str, graph_id: &str) -> Result<()> {
+        crate::mind_map::edit::set_default_mind_map_graph(self, project_id, graph_id)
+    }
+
+    pub fn create_mind_map_node(&self, project_id: &str, graph_id: &str, node: crate::mind_map::graph::MindMapGraphNode) -> Result<crate::mind_map::graph::MindMapGraphNode> {
+        crate::mind_map::edit::create_mind_map_node(self, project_id, graph_id, node)
+    }
+
+    pub fn update_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, patch: crate::mind_map::edit::MindMapGraphNodePatch) -> Result<crate::mind_map::graph::MindMapGraphNode> {
+        crate::mind_map::edit::update_mind_map_node(self, project_id, graph_id, node_id, patch)
+    }
+
+    pub fn delete_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, cascade: bool) -> Result<()> {
+        crate::mind_map::edit::delete_mind_map_node(self, project_id, graph_id, node_id, cascade)
+    }
+
+    pub fn create_mind_map_edge(&self, project_id: &str, graph_id: &str, edge: crate::mind_map::graph::MindMapGraphEdge) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
+        crate::mind_map::edit::create_mind_map_edge(self, project_id, graph_id, edge)
+    }
+
+    pub fn update_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str, patch: crate::mind_map::edit::MindMapGraphEdgePatch) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
+        crate::mind_map::edit::update_mind_map_edge(self, project_id, graph_id, edge_id, patch)
+    }
+
+    pub fn delete_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str) -> Result<()> {
+        crate::mind_map::edit::delete_mind_map_edge(self, project_id, graph_id, edge_id)
+    }
+
+    pub fn create_mind_map_anchor(&self, project_id: &str, graph_id: &str, anchor: crate::mind_map::anchor::MindMapAnchor) -> Result<crate::mind_map::anchor::MindMapAnchor> {
+        crate::mind_map::edit::create_mind_map_anchor(self, project_id, graph_id, anchor)
+    }
+
+    pub fn bind_mind_map_node_to_anchor(&self, project_id: &str, graph_id: &str, node_id: &str, anchor_id: &str, link_kind: &str) -> Result<crate::mind_map::anchor::MindMapLink> {
+        crate::mind_map::edit::bind_mind_map_node_to_anchor(self, project_id, graph_id, node_id, anchor_id, link_kind)
+    }
+
+    pub fn save_mind_map_layout(&self, project_id: &str, graph_id: &str, layout: crate::mind_map::layout::MindMapLayout) -> Result<()> {
+        crate::mind_map::edit::save_mind_map_layout(self, project_id, graph_id, layout)
+    }
+
     pub fn list_registered_actions(&self) -> crate::error::Result<Vec<ActionDescriptor>> {
         let registry = ActionRegistry::new();
         Ok(registry.list_registered_actions())

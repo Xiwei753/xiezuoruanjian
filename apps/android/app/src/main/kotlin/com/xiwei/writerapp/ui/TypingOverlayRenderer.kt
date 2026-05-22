@@ -1,21 +1,19 @@
 package com.xiwei.writerapp.ui
 
-import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.util.TypedValue
+import android.text.style.ForegroundColorSpan
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.sqrt
-
-import android.text.style.ForegroundColorSpan
 
 data class OverlayAnim(
     val insertedStart: Int,
     val insertedText: String,
     val startX: Float,
     val startY: Float,
-    var progress: Float,
-    val animator: ValueAnimator,
+    var progress: Float = 0f,
+    var startTimeNanos: Long = -1L,
+    val durationMs: Long,
     val hiddenSpan: ForegroundColorSpan? = null
 ) {
     val codePoints: List<Int> = buildList {
@@ -28,7 +26,7 @@ data class OverlayAnim(
     }
 }
 
-class TypingOverlayRenderer(private val editText: WriterEditText) {
+class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimationRuntime.Animatable {
     private val DEBUG_ANIM = false
     private val TAG = "WriterEditorAnim"
     private val activeAnims = CopyOnWriteArrayList<OverlayAnim>()
@@ -37,9 +35,10 @@ class TypingOverlayRenderer(private val editText: WriterEditText) {
     fun addAnim(anim: OverlayAnim) {
         if (activeAnims.size >= MAX_ANIMATIONS) {
             val oldest = activeAnims.removeAt(0)
-            oldest.animator.cancel()
+            removeSpan(oldest)
         }
         activeAnims.add(anim)
+        editText.animationRuntime?.register(this)
     }
 
     private fun removeSpan(anim: OverlayAnim) {
@@ -55,20 +54,47 @@ class TypingOverlayRenderer(private val editText: WriterEditText) {
     fun removeAnim(anim: OverlayAnim) {
         removeSpan(anim)
         activeAnims.remove(anim)
+        if (activeAnims.isEmpty()) {
+            editText.animationRuntime?.unregister(this)
+        }
     }
 
     fun clear() {
         for (anim in activeAnims) {
             removeSpan(anim)
-            anim.animator.cancel()
         }
         activeAnims.clear()
+        editText.animationRuntime?.unregister(this)
     }
 
-    fun onDraw(canvas: Canvas) {
-        if (activeAnims.isEmpty()) return
+    override fun onAnimationStep(frameTimeNanos: Long): Boolean {
+        if (activeAnims.isEmpty()) return false
 
+        val iterator = activeAnims.iterator()
+        var hasMore = false
         val currentEditable = editText.text
+
+        while (iterator.hasNext()) {
+            val anim = iterator.next()
+            if (anim.startTimeNanos == -1L) {
+                anim.startTimeNanos = frameTimeNanos
+            }
+            val elapsedNanos = frameTimeNanos - anim.startTimeNanos
+            val animDurationNanos = anim.durationMs * 1_000_000f
+            if (animDurationNanos <= 0) {
+                anim.progress = 1f
+            } else {
+                anim.progress = (elapsedNanos / animDurationNanos).coerceIn(0f, 1f)
+            }
+
+            if (anim.progress >= 1f) {
+                removeSpan(anim)
+                activeAnims.remove(anim)
+            } else {
+                hasMore = true
+            }
+        }
+
         if (currentEditable != null) {
             val invalidAnims = activeAnims.filter { anim ->
                 val span = anim.hiddenSpan
@@ -81,16 +107,18 @@ class TypingOverlayRenderer(private val editText: WriterEditText) {
                 }
             }
             if (invalidAnims.isNotEmpty()) {
-                editText.post {
-                    for (invalid in invalidAnims) {
-                        invalid.animator.cancel()
-                    }
+                for (invalid in invalidAnims) {
+                    removeSpan(invalid)
                 }
-                // Pre-emptively remove them from the drawing list to avoid drawing invalid ones this frame
                 activeAnims.removeAll(invalidAnims)
             }
         }
 
+        return hasMore || activeAnims.isNotEmpty()
+    }
+
+    fun onDraw(canvas: Canvas) {
+        if (activeAnims.isEmpty()) return
 
         val layout = editText.layout ?: return
         val paint = editText.paint
@@ -104,6 +132,9 @@ class TypingOverlayRenderer(private val editText: WriterEditText) {
             var i = anim.insertedStart
             var drawnCodepoints = 0
             var skippedNewlines = 0
+
+            // Apply decelerate interpolation dynamically
+            val interpolatedProgress = 1f - (1f - anim.progress) * (1f - anim.progress)
 
             for (cp in anim.codePoints) {
                 val charCount = Character.charCount(cp)
@@ -140,10 +171,10 @@ class TypingOverlayRenderer(private val editText: WriterEditText) {
                     }
                 }
 
-                val currentX = sX + (destX - sX) * anim.progress
-                val currentY = sY + (destY - sY) * anim.progress
+                val currentX = sX + (destX - sX) * interpolatedProgress
+                val currentY = sY + (destY - sY) * interpolatedProgress
 
-                paint.alpha = (originalAlpha * anim.progress).toInt().coerceIn(0, 255)
+                paint.alpha = (originalAlpha * interpolatedProgress).toInt().coerceIn(0, 255)
                 canvas.drawText(
                     textToDraw,
                     currentX + padX,

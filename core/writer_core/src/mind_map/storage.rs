@@ -177,6 +177,39 @@ pub fn save_mind_map_graph(
     Ok(())
 }
 
+pub fn load_mind_map_layout(
+    core: &crate::facade::WriterCore,
+    project_id: &str,
+    graph_id: &str,
+) -> crate::error::Result<crate::mind_map::layout::MindMapLayout> {
+    let project_path = core.workspace_path().join("projects").join(project_id);
+    let layout_path = project_path.join("mind_map").join("layouts").join(format!("{}.json", graph_id));
+    if !layout_path.exists() {
+        return Err(crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Layout not found",
+        )));
+    }
+    let json_str = fs::read_to_string(&layout_path)?;
+    let layout: crate::mind_map::layout::MindMapLayout = serde_json::from_str(&json_str)?;
+    Ok(layout)
+}
+
+pub fn save_mind_map_layout(
+    core: &crate::facade::WriterCore,
+    project_id: &str,
+    graph_id: &str,
+    layout: &crate::mind_map::layout::MindMapLayout,
+) -> crate::error::Result<()> {
+    let project_path = core.workspace_path().join("projects").join(project_id);
+    let layouts_dir = project_path.join("mind_map").join("layouts");
+    fs::create_dir_all(&layouts_dir)?;
+    let layout_path = layouts_dir.join(format!("{}.json", graph_id));
+    let json_str = serde_json::to_string_pretty(layout)?;
+    fs::write(layout_path, json_str)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,13 +1,10 @@
 package com.xiwei.writerapp.ui
 
-import android.animation.PropertyValuesHolder
-import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
-import kotlin.math.abs
 
-class SmoothCursorRenderer(private val editText: WriterEditText) {
+class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimationRuntime.Animatable {
 
     var cursorRuntimeReady = false
     var smoothCursorEnabled = false
@@ -15,10 +12,20 @@ class SmoothCursorRenderer(private val editText: WriterEditText) {
     var smoothCursorDurationMs: Long = 80L
         private set
 
-    private var cursorAnimator: ValueAnimator? = null
     private var currentCursorX = -1f
     private var currentCursorTop = -1f
     private var currentCursorBottom = -1f
+
+    private var isAnimating = false
+    private var startTimeNanos = -1L
+    private var startX = -1f
+    private var startY_top = -1f
+    private var startY_bottom = -1f
+    private var targetX = -1f
+    private var targetTop = -1f
+    private var targetBottom = -1f
+
+    private val interpolator = androidx.core.view.animation.PathInterpolatorCompat.create(0.4f, 0.0f, 0.2f, 1.0f) // FastOutSlowIn
 
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         strokeWidth = 4f
@@ -37,6 +44,38 @@ class SmoothCursorRenderer(private val editText: WriterEditText) {
         }
     }
 
+    override fun onAnimationStep(frameTimeNanos: Long): Boolean {
+        if (!smoothCursorEnabled || smoothCursorDurationMs <= 0) {
+            currentCursorX = targetX
+            currentCursorTop = targetTop
+            currentCursorBottom = targetBottom
+            isAnimating = false
+            return false
+        }
+        if (startTimeNanos == -1L) {
+            startTimeNanos = frameTimeNanos
+        }
+        val elapsedNanos = frameTimeNanos - startTimeNanos
+        val durationNanos = smoothCursorDurationMs * 1_000_000f
+        val progress = if (durationNanos > 0) {
+            (elapsedNanos / durationNanos).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+
+        val interpolated = interpolator.getInterpolation(progress)
+
+        currentCursorX = startX + (targetX - startX) * interpolated
+        currentCursorTop = startY_top + (targetTop - startY_top) * interpolated
+        currentCursorBottom = startY_bottom + (targetBottom - startY_bottom) * interpolated
+
+        if (progress >= 1f) {
+            isAnimating = false
+            return false
+        }
+        return true
+    }
+
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         val wasEnabled = smoothCursorEnabled
         smoothCursorEnabled = enabled
@@ -51,6 +90,8 @@ class SmoothCursorRenderer(private val editText: WriterEditText) {
             }
         } else {
             stopCursorBlink()
+            isAnimating = false
+            editText.animationRuntime?.unregister(this)
             if (wasEnabled) {
                 if (cursorRuntimeReady && !lastInvalidateRect.isEmpty) {
                     editText.invalidate(lastInvalidateRect)
@@ -97,39 +138,39 @@ class SmoothCursorRenderer(private val editText: WriterEditText) {
         if (pos < 0) return
 
         val line = layout.getLineForOffset(pos)
-        val targetX = layout.getPrimaryHorizontal(pos)
-        val targetTop = layout.getLineTop(line).toFloat()
-        val targetBottom = layout.getLineBottom(line).toFloat()
+        val newTargetX = layout.getPrimaryHorizontal(pos)
 
-
+        val baseline = layout.getLineBaseline(line).toFloat()
+        val fontMetrics = editText.paint.fontMetrics
+        // Add minimal vertical padding for better aesthetics
+        val density = editText.resources.displayMetrics.density
+        val cursorVerticalPadding = 1f * density
+        val newTargetTop = baseline + fontMetrics.ascent + cursorVerticalPadding
+        val newTargetBottom = baseline + fontMetrics.descent - cursorVerticalPadding
 
         if (currentCursorX < 0 || !animate || smoothCursorDurationMs <= 0) {
-            invalidateCursorRect()
-            cursorAnimator?.cancel()
-            currentCursorX = targetX
-            currentCursorTop = targetTop
-            currentCursorBottom = targetBottom
+            isAnimating = false
+            editText.animationRuntime?.unregister(this)
+            currentCursorX = newTargetX
+            currentCursorTop = newTargetTop
+            currentCursorBottom = newTargetBottom
             invalidateCursorRect()
             return
         }
 
-        cursorAnimator?.cancel()
+        // Initialize animation start positions
+        // If currently animating, smoothly take over from current position
+        startX = currentCursorX
+        startY_top = currentCursorTop
+        startY_bottom = currentCursorBottom
 
-        val pX = PropertyValuesHolder.ofFloat("x", currentCursorX, targetX)
-        val pTop = PropertyValuesHolder.ofFloat("top", currentCursorTop, targetTop)
-        val pBottom = PropertyValuesHolder.ofFloat("bottom", currentCursorBottom, targetBottom)
+        targetX = newTargetX
+        targetTop = newTargetTop
+        targetBottom = newTargetBottom
 
-        cursorAnimator = ValueAnimator.ofPropertyValuesHolder(pX, pTop, pBottom).apply {
-            duration = smoothCursorDurationMs
-            addUpdateListener { anim ->
-                invalidateCursorRect()
-                currentCursorX = anim.getAnimatedValue("x") as Float
-                currentCursorTop = anim.getAnimatedValue("top") as Float
-                currentCursorBottom = anim.getAnimatedValue("bottom") as Float
-                invalidateCursorRect()
-            }
-            start()
-        }
+        startTimeNanos = -1L
+        isAnimating = true
+        editText.animationRuntime?.register(this)
     }
 
     fun hideNativeCursorIfNeeded() {
@@ -140,7 +181,8 @@ class SmoothCursorRenderer(private val editText: WriterEditText) {
 
     fun onDetachedFromWindow() {
         editText.removeCallbacks(cursorBlinkRunnable)
-        cursorAnimator?.cancel()
+        isAnimating = false
+        editText.animationRuntime?.unregister(this)
     }
 
     fun onFocusChanged(focused: Boolean) {
@@ -169,7 +211,6 @@ class SmoothCursorRenderer(private val editText: WriterEditText) {
         if (smoothCursorEnabled && editText.isFocused && editText.selectionStart == editText.selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
             cursorPaint.color = editText.currentTextColor
             // The Canvas provided to onDraw is already translated by scrollX and scrollY.
-            // We should only add padding.
             val drawX = currentCursorX + editText.compoundPaddingLeft
             val drawTop = currentCursorTop + editText.compoundPaddingTop
             val drawBottom = currentCursorBottom + editText.compoundPaddingTop
