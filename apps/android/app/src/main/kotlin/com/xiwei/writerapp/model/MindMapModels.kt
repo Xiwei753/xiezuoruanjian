@@ -18,6 +18,10 @@ enum class MindMapNodeKind {
     @SerializedName("concept") Concept,
     @SerializedName("theme") Theme,
     @SerializedName("note") Note,
+    @SerializedName("organization") Organization,
+    @SerializedName("timeline") Timeline,
+    @SerializedName("plot") Plot,
+    @SerializedName("foreshadowing") Foreshadowing,
     @SerializedName("custom") Custom
 }
 
@@ -40,6 +44,10 @@ class MindMapNodeKindDeserializer : JsonDeserializer<MindMapNodeKind> {
             "concept" -> MindMapNodeKind.Concept
             "theme" -> MindMapNodeKind.Theme
             "note" -> MindMapNodeKind.Note
+            "organization" -> MindMapNodeKind.Organization
+            "timeline" -> MindMapNodeKind.Timeline
+            "plot" -> MindMapNodeKind.Plot
+            "foreshadowing" -> MindMapNodeKind.Foreshadowing
             else -> MindMapNodeKind.Custom
         }
     }
@@ -49,20 +57,23 @@ data class MindMapNode(
     val id: String,
     val title: String,
     val kind: MindMapNodeKind,
-    val parentId: String?,
-    val depth: Int,
     val x: Float,
     val y: Float,
-    val radius: Float,
     val width: Float,
     val height: Float,
-    val collapsed: Boolean
+    val radius: Float,
+    val collapsed: Boolean,
+    val anchorCount: Int,
+    val brokenLink: Boolean,
+    val tags: List<String> = emptyList()
 )
 
 data class MindMapEdge(
+    val id: String,
     val from: String,
     val to: String,
-    val kind: String
+    val kind: String,
+    val label: String?
 )
 
 data class MindMapBounds(

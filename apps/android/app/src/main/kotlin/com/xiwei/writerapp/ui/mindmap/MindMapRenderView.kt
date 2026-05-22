@@ -254,7 +254,8 @@ class MindMapRenderView @JvmOverloads constructor(
                 MindMapNodeKind.Concept -> Color.parseColor("#F8BBD0") // Light Pink
                 MindMapNodeKind.Theme -> Color.parseColor("#CFD8DC") // Blue Grey
                 MindMapNodeKind.TextAnchor -> Color.parseColor("#E1BEE7") // Light Purple
-                MindMapNodeKind.Note, MindMapNodeKind.Custom -> Color.parseColor("#E0E0E0") // Grey
+                else -> Color.parseColor("#E0E0E0") // Default Grey
+
             }
 
             nodeRect.set(nMinX, nMinY, nMaxX, nMaxY)
