@@ -2,6 +2,8 @@ package com.xiwei.writerapp.ui
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -86,6 +88,21 @@ class ChapterListActivity : AppCompatActivity() {
         }
     }
 
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_chapter_list, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_mind_map -> {
+                openMindMap()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         loadChapters()
@@ -144,6 +161,17 @@ class ChapterListActivity : AppCompatActivity() {
             emptyStateLayout.visibility = View.GONE
             adapter.notifyDataSetChanged()
         }
+    }
+
+    private fun openMindMap() {
+        val pid = projectId ?: return
+        val tb: com.google.android.material.appbar.MaterialToolbar = findViewById(R.id.toolbar)
+        val title = tb.title?.toString() ?: "导图"
+        val intent = android.content.Intent(this, com.xiwei.writerapp.ui.mindmap.MindMapActivity::class.java).apply {
+            putExtra("EXTRA_PROJECT_ID", pid)
+            putExtra("EXTRA_PROJECT_TITLE", title)
+        }
+        startActivity(intent)
     }
 
     private fun showNewVolumeDialog() {

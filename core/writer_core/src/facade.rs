@@ -38,6 +38,10 @@ impl WriterCore {
 
     /// List all projects in the workspace.
 
+    pub fn get_mind_map_snapshot(&self, project_id: &str) -> Result<crate::mind_map::MindMapSnapshot> {
+        crate::mind_map::generate_snapshot(self, project_id)
+    }
+
     pub fn list_registered_actions(&self) -> crate::error::Result<Vec<ActionDescriptor>> {
         let registry = ActionRegistry::new();
         Ok(registry.list_registered_actions())
