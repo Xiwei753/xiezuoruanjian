@@ -31,8 +31,10 @@
 - 不用过程文档替代架构文档。
 
 ## Android 导图技术路线
-- 导图不是普通页面，而是大画布图形系统。
-- 数据模型与布局在 Rust Core。
+- 导图不是普通页面，而是大画布图形系统。**导图最终是与正文并列的创作知识图谱，不仅限于章节树结构。**
+- 章节结构图只是导图在未自定义时的**一种自动生成视图**。
+- 正文和导图通过 anchor 和 link 绑定。
+- 数据模型与布局在 Rust Core。**存储也必须由 Rust Core 的 workspace 统一管理**，不允许 Android 私自用 SharedPreferences 等保存长期图数据。
 - Android 只拿快照渲染。
 - Android 不在每帧访问 Rust Core。
 - Android 不在每帧解析 JSON。
@@ -94,11 +96,13 @@
   - MindMapGraph
   - MindMapNode
   - MindMapEdge
+  - MindMapAnchor
+  - MindMapLink
   - MindMapLayout
   - MindMapRenderSnapshot
-  - 从作品/卷/章节生成导图快照。
+  - 真正作为正文并列图谱的数据由 Core 读写并生成快照。若没有自定义图谱，则退化为从作品/卷/章节自动生成的结构图。
   - 计算 radial tree / horizontal tree 布局。
-  - 未来支持 AI 概念节点、人物关系、地点、时间线。
+  - 支持节点与正文片段（MindMapAnchor）的双向绑定，便于后续 AI 扩写及跳转。
 - JNI Bridge：
   - 暴露 getMindMapSnapshotJson。
   - 返回 success/data/error 结构。

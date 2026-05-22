@@ -3280,6 +3280,9 @@ impl SyncService {
             if rel_path.ends_with("/project.json") {
                 return true;
             }
+            if rel_path.ends_with("/mind_map.json") {
+                return true;
+            }
             if rel_path.contains("/volumes/") && rel_path.ends_with("/volume.json") {
                 return true;
             }

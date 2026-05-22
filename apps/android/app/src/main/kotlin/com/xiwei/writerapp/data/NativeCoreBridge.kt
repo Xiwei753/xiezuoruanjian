@@ -21,6 +21,7 @@ class NativeCoreBridge(context: Context) {
     private val appContext = context.applicationContext
     private val gson = GsonBuilder()
         .registerTypeAdapter(SyncStatus::class.java, SyncStatusDeserializer())
+        .registerTypeAdapter(com.xiwei.writerapp.model.MindMapNodeKind::class.java, com.xiwei.writerapp.model.MindMapNodeKindDeserializer())
         .create()
 
     var isLoaded = false

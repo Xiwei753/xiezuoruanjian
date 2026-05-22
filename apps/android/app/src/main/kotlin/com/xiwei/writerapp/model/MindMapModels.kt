@@ -1,11 +1,48 @@
 package com.xiwei.writerapp.model
 
 import com.google.gson.annotations.SerializedName
+import com.google.gson.JsonDeserializer
+import com.google.gson.JsonElement
+import com.google.gson.JsonDeserializationContext
+import java.lang.reflect.Type
 
 enum class MindMapNodeKind {
     @SerializedName("project") Project,
     @SerializedName("volume") Volume,
-    @SerializedName("chapter") Chapter
+    @SerializedName("chapter") Chapter,
+    @SerializedName("textAnchor") TextAnchor,
+    @SerializedName("character") Character,
+    @SerializedName("event") Event,
+    @SerializedName("location") Location,
+    @SerializedName("item") Item,
+    @SerializedName("concept") Concept,
+    @SerializedName("theme") Theme,
+    @SerializedName("note") Note,
+    @SerializedName("custom") Custom
+}
+
+class MindMapNodeKindDeserializer : JsonDeserializer<MindMapNodeKind> {
+    override fun deserialize(
+        json: JsonElement,
+        typeOfT: Type,
+        context: JsonDeserializationContext
+    ): MindMapNodeKind {
+        val kindString = json.asString.lowercase()
+        return when (kindString) {
+            "project" -> MindMapNodeKind.Project
+            "volume" -> MindMapNodeKind.Volume
+            "chapter" -> MindMapNodeKind.Chapter
+            "textanchor" -> MindMapNodeKind.TextAnchor
+            "character" -> MindMapNodeKind.Character
+            "event" -> MindMapNodeKind.Event
+            "location" -> MindMapNodeKind.Location
+            "item" -> MindMapNodeKind.Item
+            "concept" -> MindMapNodeKind.Concept
+            "theme" -> MindMapNodeKind.Theme
+            "note" -> MindMapNodeKind.Note
+            else -> MindMapNodeKind.Custom
+        }
+    }
 }
 
 data class MindMapNode(

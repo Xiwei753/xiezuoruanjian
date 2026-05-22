@@ -26,6 +26,11 @@ impl WriterCore {
         }
     }
 
+    /// Access to the workspace path for internal modules
+    pub fn workspace_path(&self) -> &Path {
+        &self.workspace_path
+    }
+
     /// Create a new workspace.
     pub fn create_workspace(&self) -> Result<()> {
         workspace::create_workspace(&self.workspace_path)
