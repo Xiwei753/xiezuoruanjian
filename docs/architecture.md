@@ -2,6 +2,8 @@
 
 This repository uses a single-repository, multi-client, shared-core architecture.
 
+> **Note:** For specific technical constraints and architecture route guidelines (especially for new features like the Android Mind Map), please see [Technical Route & Architecture Constraints](TECHNICAL_ROUTE.md).
+
 - `core/writer_core`: The shared core library written in Rust. It handles platform-independent logic, document formatting, settings, and synchronization rules. UI, animations, input methods, and window logic are strictly excluded.
 - `apps/android`: A native Kotlin Android client targeting low power usage, stable IME, and consistent keyboard interactions.
 - `apps/linux`: A native Linux client, targeting Qt/CMake for optimal integration with X11/Wayland/fcitx5.
