@@ -22,52 +22,11 @@ ApplicationWindow {
         sync: { status: "not_configured" }
     })
 
+    SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
+
     QtObject {
         id: theme
-        property bool isDark: {
-            var mode = (appState && appState.settings && appState.settings.themeMode) ? appState.settings.themeMode : "system";
-            if (mode === "system") {
-                return (backend && backend.system_color_scheme === "dark");
-            }
-            return mode === "dark";
-        }
-
-        // Standard QML theme variables used in ActionRegistryPage, EmptyWorkspace, etc.
-        property color bg: isDark ? "#1E1E1E" : "#F3F4F6"
-        property color bgDark: isDark ? "#1E1E1E" : "#F3F4F6"
-        property color bgDarker: isDark ? "#121212" : "#E5E7EB"
-        property color surface: isDark ? "#2A2A2A" : "#FFFFFF"
-        property color surfaceAlt: isDark ? "#222222" : "#F9FAFB"
-        property color border: isDark ? "#444444" : "#E5E7EB"
-        property color divider: isDark ? "#333333" : "#E5E7EB"
-
-        property color primary: isDark ? "#3B82F6" : "#2563EB"
-        property color primaryHover: isDark ? "#60A5FA" : "#1D4ED8"
-        property color primaryText: "#FFFFFF"
-
-        property color textPrimary: isDark ? "#F3F4F6" : "#111827"
-        property color textSecondary: isDark ? "#9CA3AF" : "#4B5563"
-
-        property color danger: "#EF4444"
-        property color warning: "#F59E0B"
-        property color success: "#10B981"
-        property color hover: isDark ? "#38BDF8" : "#E0F2FE"
-
-        // Sidebar and layout specific properties
-        property color sidebarBg: isDark ? "#252526" : "#F3F4F6"
-        property color sidebarHover: isDark ? "#3A3D3E" : "#E5E7EB"
-        property color inputBg: isDark ? "#2A2A2A" : "#FFFFFF"
-        property color textMain: isDark ? "#F0F0F0" : "#111827"
-        property color textDim: isDark ? "#A0A0A0" : "#4B5563"
-        property color accent: isDark ? "#007ACC" : "#2563EB"
-        property color accentHover: isDark ? "#0098FF" : "#1D4ED8"
-        property color buttonBg: isDark ? "#3A3A3A" : "#E5E7EB"
-        property color buttonHover: isDark ? "#4A4A4A" : "#D1D5DB"
-
-        // Editor specific
-        property color editorBg: isDark ? "#1E1E1E" : "#FFFFFF"
-
-        // Spacings
+        // Keep spacing and font sizes to avoid rewriting geometry
         property int sp4: 4
         property int sp6: 6
         property int sp8: 8
@@ -76,18 +35,46 @@ ApplicationWindow {
         property int sp24: 24
         property int sp32: 32
 
-        // Radius
         property int radiusSm: 4
         property int radiusMd: 8
         property int radiusLg: 12
 
-        // Font Sizes
         property int fontXs: 11
         property int fontSm: 12
         property int fontMd: 14
         property int fontLg: 16
         property int fontXl: 18
         property int fontXxl: 22
+
+        // Alias colors to system palette to provide seamless desktop integration
+        property color bg: sysPalette.window
+        property color bgDark: sysPalette.window
+        property color bgDarker: sysPalette.window
+        property color surface: sysPalette.base
+        property color surfaceAlt: sysPalette.base
+        property color border: sysPalette.mid
+        property color divider: sysPalette.midlight
+        property color primary: sysPalette.highlight
+        property color primaryHover: sysPalette.highlight
+        property color primaryText: sysPalette.highlightedText
+        property color textPrimary: sysPalette.text
+        property color textSecondary: sysPalette.text
+        property color danger: "#EF4444"
+        property color warning: "#F59E0B"
+        property color success: "#10B981"
+        property color hover: sysPalette.light
+        property color sidebarBg: sysPalette.window
+        property color sidebarHover: sysPalette.light
+        property color inputBg: sysPalette.base
+        property color textMain: sysPalette.windowText
+        property color textDim: sysPalette.text
+        property color accent: sysPalette.highlight
+        property color accentHover: sysPalette.highlight
+        property color buttonBg: sysPalette.button
+        property color buttonHover: sysPalette.light
+        property color editorBg: sysPalette.base
+
+
     }
 
     AppBackend {
@@ -331,6 +318,8 @@ ApplicationWindow {
                 applyState(res.state);
                 close();
             } else {
+                errorDialog.message = res.message || "创建失败";
+                errorDialog.open();
                 console.error("创建失败:", res.message);
             }
         }
@@ -512,19 +501,6 @@ ApplicationWindow {
         onOpened: {
             inputField.text = "";
             inputField.forceActiveFocus();
-        }
-    }
-
-    Timer {
-        id: syncPoller
-        interval: 500
-        repeat: true
-        running: appState && appState.sync && appState.sync.status === "syncing"
-        onTriggered: {
-            backend.poll_sync_result();
-            if (backend.sync_status !== "syncing") {
-                applyState(JSON.parse(backend.refresh_app_state_json()));
-            }
         }
     }
 }

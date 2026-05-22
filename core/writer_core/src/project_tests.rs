@@ -25,3 +25,27 @@ mod tests {
         assert_eq!(volumes[0].title, "第一卷");
     }
 }
+
+#[cfg(test)]
+mod tests_facade {
+    use crate::facade::WriterCore;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_facade_create_project_updates_workspace_tree() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+
+        let core = WriterCore::new(workspace_path);
+        core.create_workspace().unwrap();
+
+        let tree_before = core.list_projects().unwrap();
+        assert_eq!(tree_before.len(), 0, "Tree should be empty initially");
+
+        let _proj = core.create_project("Test Project Facade").unwrap();
+
+        let tree_after = core.list_projects().unwrap();
+        assert_eq!(tree_after.len(), 1, "Tree should have 1 project after creation");
+        assert_eq!(tree_after[0].title, "Test Project Facade");
+    }
+}
