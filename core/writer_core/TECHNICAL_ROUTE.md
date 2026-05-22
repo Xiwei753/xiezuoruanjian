@@ -28,16 +28,20 @@
 - 不把平台 UI 状态写入 Core 业务数据。
 
 ## Mind Map Core 路线
+- **分层边界**：必须严格区分 Graph（业务真相）、Layout（纯位置信息）和 Snapshot（发给平台的只读渲染视图）。
+- **存储结构 (V2)**：使用 `projects/<id>/mind_map/graphs/`、`layouts/` 等模块化目录，弃用 V1 单文件方案。
+- **Schema 与迁移**：目前 schemaVersion 为 2。支持从 V1 `mind_map.json` 解析并自动填充新节点字段，遇到不支持的 schemaVersion 必须返回明确错误。
+- **Anchor 解析规则**：优先使用 exact offset。漂移时，使用 `prefix + selectedText + suffix` 重新定位。未找到时明确返回 `BrokenAnchor`，不在拖拽时运行该操作。
 - MindMapGraph 是业务图。
 - MindMapSnapshot 是渲染快照。
 - MindMapAnchor / MindMapLink 绑定正文。
 - Project/Volume/Chapter 结构图只是自动 fallback。
 - 自定义 mind_map.json 必须先校验 project 存在。
-- mind_map.json 损坏时必须有明确错误或明确 fallback 策略。
+- 导图损坏时必须有明确错误，不能静默降级为自动章节图。
 
 ## 同步路线
 - 同步白名单必须由 Core 管。
-- 新增长期业务文件必须考虑同步白名单。
+- 新增长期业务文件（如 `projects/<id>/mind_map/` 下的文件）必须考虑同步白名单。
 - token / secrets 不得进入同步文件。
 
 ## 序列化路线
