@@ -9,6 +9,63 @@ pub enum MindMapNodeKind {
     Project,
     Volume,
     Chapter,
+    TextAnchor,
+    Character,
+    Event,
+    Location,
+    Item,
+    Concept,
+    Theme,
+    Note,
+    #[serde(other)]
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MindMapEdgeKind {
+    Contains,
+    References,
+    AppearsIn,
+    Causes,
+    RelatedTo,
+    LocatedAt,
+    CharacterRelation,
+    Timeline,
+    Hierarchy,
+    #[serde(other)]
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MindMapAnchor {
+    pub id: String,
+    pub chapter_id: String,
+    pub start_offset: usize,
+    pub end_offset: usize,
+    pub selected_text: String,
+    pub prefix_text: String,
+    pub suffix_text: String,
+    pub checksum: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MindMapLink {
+    pub id: String,
+    pub node_id: String,
+    pub anchor_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MindMapGraph {
+    pub id: String,
+    pub nodes: Vec<MindMapNode>,
+    pub edges: Vec<MindMapEdge>,
+    pub anchors: Vec<MindMapAnchor>,
+    pub links: Vec<MindMapLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +89,7 @@ pub struct MindMapNode {
 pub struct MindMapEdge {
     pub from: String,
     pub to: String,
-    pub kind: String,
+    pub kind: String, // String representation or could be MindMapEdgeKind, keeping string for backward compatibility with UI if needed, but we can also use MindMapEdgeKind
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +113,45 @@ pub struct MindMapSnapshot {
 }
 
 pub fn generate_snapshot(core: &WriterCore, project_id: &str) -> Result<MindMapSnapshot> {
+    // Try to load a custom mind map first
+    let mind_map_path = core.workspace_path().join("projects").join(project_id).join("mind_map.json");
+    if let Ok(content) = std::fs::read_to_string(&mind_map_path) {
+        if let Ok(graph) = serde_json::from_str::<MindMapGraph>(&content) {
+            // For V1, just compute a simple layout or use existing coordinates
+            // Assuming nodes already have x, y coordinates from editor
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+
+            for node in &graph.nodes {
+                if node.x - node.width / 2.0 < min_x { min_x = node.x - node.width / 2.0; }
+                if node.y - node.height / 2.0 < min_y { min_y = node.y - node.height / 2.0; }
+                if node.x + node.width / 2.0 > max_x { max_x = node.x + node.width / 2.0; }
+                if node.y + node.height / 2.0 > max_y { max_y = node.y + node.height / 2.0; }
+            }
+
+            if graph.nodes.len() <= 1 {
+                min_x = -200.0;
+                min_y = -200.0;
+                max_x = 200.0;
+                max_y = 200.0;
+            }
+
+            return Ok(MindMapSnapshot {
+                project_id: project_id.to_string(),
+                layout_kind: "custom".to_string(),
+                nodes: graph.nodes,
+                edges: graph.edges,
+                bounds: MindMapBounds { min_x, min_y, max_x, max_y },
+                generated_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            });
+        }
+    }
+
     // Read projects to find the matching one
     let projects = core.list_projects()?;
     let project = projects.into_iter().find(|p| p.id == project_id).ok_or_else(|| {
@@ -234,5 +330,68 @@ mod tests {
         let chap_nodes: Vec<_> = snapshot.nodes.iter().filter(|n| n.kind == MindMapNodeKind::Chapter).collect();
         assert_eq!(chap_nodes.len(), 2);
         assert_eq!(chap_nodes[0].depth, 2);
+    }
+
+    #[test]
+    fn test_mind_map_anchor_serialization() {
+        let anchor = MindMapAnchor {
+            id: "anchor_1".to_string(),
+            chapter_id: "chap_1".to_string(),
+            start_offset: 10,
+            end_offset: 20,
+            selected_text: "test".to_string(),
+            prefix_text: "pre".to_string(),
+            suffix_text: "suf".to_string(),
+            checksum: "123".to_string(),
+        };
+
+        let json = serde_json::to_string(&anchor).unwrap();
+        let deserialized: MindMapAnchor = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(anchor.id, deserialized.id);
+        assert_eq!(anchor.selected_text, deserialized.selected_text);
+    }
+
+    #[test]
+    fn test_custom_mind_map_snapshot() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        let proj = core.create_project("Test Project").unwrap();
+
+        let graph = MindMapGraph {
+            id: "graph_1".to_string(),
+            nodes: vec![MindMapNode {
+                id: "node_1".to_string(),
+                title: "Character A".to_string(),
+                kind: MindMapNodeKind::Character,
+                parent_id: None,
+                depth: 0,
+                x: 10.0,
+                y: 20.0,
+                radius: 10.0,
+                width: 100.0,
+                height: 50.0,
+                collapsed: false,
+            }],
+            edges: vec![MindMapEdge {
+                from: "node_1".to_string(),
+                to: "node_2".to_string(),
+                kind: "References".to_string(),
+            }],
+            anchors: vec![],
+            links: vec![],
+        };
+
+        let graph_json = serde_json::to_string(&graph).unwrap();
+        let mind_map_path = core.workspace_path().join("projects").join(&proj.id).join("mind_map.json");
+        std::fs::write(&mind_map_path, graph_json).unwrap();
+
+        let snapshot = generate_snapshot(&core, &proj.id).unwrap();
+
+        assert_eq!(snapshot.layout_kind, "custom");
+        assert_eq!(snapshot.nodes.len(), 1);
+        assert_eq!(snapshot.nodes[0].kind, MindMapNodeKind::Character);
+        assert_eq!(snapshot.edges[0].kind, "References");
     }
 }

@@ -247,6 +247,14 @@ class MindMapRenderView @JvmOverloads constructor(
                 MindMapNodeKind.Project -> Color.parseColor("#BBDEFB")
                 MindMapNodeKind.Volume -> Color.parseColor("#C8E6C9")
                 MindMapNodeKind.Chapter -> Color.parseColor("#FFF9C4")
+                MindMapNodeKind.Character -> Color.parseColor("#FFCDD2") // Light Red
+                MindMapNodeKind.Event -> Color.parseColor("#FFE0B2") // Light Orange
+                MindMapNodeKind.Location -> Color.parseColor("#B2EBF2") // Light Cyan
+                MindMapNodeKind.Item -> Color.parseColor("#D1C4E9") // Light Deep Purple
+                MindMapNodeKind.Concept -> Color.parseColor("#F8BBD0") // Light Pink
+                MindMapNodeKind.Theme -> Color.parseColor("#CFD8DC") // Blue Grey
+                MindMapNodeKind.TextAnchor -> Color.parseColor("#E1BEE7") // Light Purple
+                MindMapNodeKind.Note, MindMapNodeKind.Custom -> Color.parseColor("#E0E0E0") // Grey
             }
 
             nodeRect.set(nMinX, nMinY, nMaxX, nMaxY)
