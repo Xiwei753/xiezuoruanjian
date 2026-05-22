@@ -159,7 +159,8 @@ pub fn save_chapter(
     meta.word_count = content.chars().filter(|c| !c.is_whitespace()).count() as u32; // Simple word count
 
     // Simple hash for demonstration
-    meta.hash = format!("{:x}", md5::compute(content.as_bytes()));
+    use sha2::{Sha256, Digest};
+    meta.hash = hex::encode(Sha256::digest(content.as_bytes()));
 
     let updated_meta_str = serde_json::to_string_pretty(&meta)?;
 

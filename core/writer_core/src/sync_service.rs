@@ -1558,7 +1558,7 @@ impl SyncBackend for GitHubApiBackend {
 
         let local_entries = SyncService::scan_workspace_for_sync(workspace_path)?;
         let mut local_files_git_hash: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        let mut local_files_md5_hash: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut local_files_hash: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
         for entry in &local_entries {
             if entry.sync_kind == SyncKind::Upload {
@@ -1566,7 +1566,7 @@ impl SyncBackend for GitHubApiBackend {
                 if let Ok(content) = std::fs::read(&full_path) {
                     let git_hash = SyncService::compute_git_hash(&content);
                     local_files_git_hash.insert(entry.relative_path.clone(), git_hash);
-                    local_files_md5_hash.insert(entry.relative_path.clone(), entry.file_hash.clone());
+                    local_files_hash.insert(entry.relative_path.clone(), entry.file_hash.clone());
                 }
             } else {
                 ignored.push(entry.relative_path.clone());
@@ -3328,14 +3328,20 @@ impl SyncService {
     }
 
     fn compute_file_hash(path: &Path) -> std::io::Result<String> {
+        use sha2::{Sha256, Digest};
         let content = std::fs::read(path)?;
-        Ok(format!("{:x}", md5::compute(&content)))
+        let result = Sha256::digest(&content);
+        Ok(hex::encode(result))
     }
 
     pub fn compute_git_hash(content: &[u8]) -> String {
+        use sha2::{Sha256, Digest};
         match git2::Oid::hash_object(git2::ObjectType::Blob, content) {
             Ok(oid) => oid.to_string(),
-            Err(_) => format!("{:x}", md5::compute(content)),
+            Err(_) => {
+                let result = Sha256::digest(content);
+                hex::encode(result)
+            }
         }
     }
 

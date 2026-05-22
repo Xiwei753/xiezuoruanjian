@@ -441,7 +441,8 @@ pub fn create_mind_map_anchor(
     anchor.updated_at = now;
 
     if anchor.checksum.is_empty() {
-        anchor.checksum = format!("{:x}", md5::compute(anchor.selected_text.as_bytes()));
+        use sha2::{Sha256, Digest};
+        anchor.checksum = hex::encode(Sha256::digest(anchor.selected_text.as_bytes()));
     }
 
     let anchor_clone = anchor.clone();
