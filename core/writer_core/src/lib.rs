@@ -19,6 +19,7 @@ pub mod sync;
 pub mod trash;
 pub mod volume;
 pub mod workspace;
+pub mod mind_map;
 
 pub use error::{Error, Result};
 

@@ -74,6 +74,7 @@ class NativeCoreBridge(context: Context) {
 
     private external fun getRecentEdits(workspacePath: String): String?
     private external fun recordRecentEdit(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
+    private external fun getMindMapSnapshotJsonNative(workspacePath: String, projectId: String): String?
     private external fun loadSyncConfig(workspacePath: String): String?
     private external fun saveSyncConfig(workspacePath: String, configJson: String): String?
     private external fun loadSyncSecrets(workspacePath: String): String?
@@ -784,6 +785,36 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
+
+    fun getMindMapSnapshot(projectId: String): NativeResult<MindMapSnapshot> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val json = getMindMapSnapshotJsonNative(workspaceDir, projectId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty response")
+            val jsonBytesLength = json.toByteArray(Charsets.UTF_8).size
+
+            val type = object : TypeToken<RustResponse<MindMapSnapshot>>() {}.type
+            val startTime = System.currentTimeMillis()
+            val response: RustResponse<MindMapSnapshot> = try {
+                gson.fromJson(json, type)
+            } catch (e: Exception) {
+                return NativeResult.Error("Failed to parse MindMapSnapshot JSON: ${e.message}")
+            }
+            val parseTimeMs = System.currentTimeMillis() - startTime
+
+            return if (response.success && response.data != null) {
+                response.data.parseTimeMs = parseTimeMs
+                response.data.jsonBytes = jsonBytesLength
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
 
     fun listRegisteredActions(): NativeResult<List<ActionDescriptor>> {
         if (!isLoaded) return NativeResult.NotLoaded
