@@ -318,9 +318,9 @@ ApplicationWindow {
                 applyState(res.state);
                 close();
             } else {
-                errorDialog.message = res.message || "创建失败";
+                errorDialog.message = res.userMessage || res.message || "创建失败";
                 errorDialog.open();
-                console.error("创建失败:", res.message);
+                console.error("创建失败:", res.userMessage || res.message);
             }
         }
     }

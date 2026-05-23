@@ -97,71 +97,6 @@ fn sync_error_category(msg: &str) -> String {
     "error".to_string()
 }
 
-fn determine_diagnostics_status(result: &writer_core::sync_service::SyncDiagnosticsResult) -> &'static str {
-    if !result.success {
-        match result.error_category.as_str() {
-            "token_missing" => "configured_untested",
-            "empty_url" => "not_configured",
-            cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
-            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => "network_failed",
-            "repo_not_found_or_no_permission" => "auth_failed",
-            _ => "error",
-        }
-    } else {
-        "configured_untested"
-    }
-}
-
-fn format_proxy_diagnostics(msg: &mut String, result: &writer_core::sync_service::SyncDiagnosticsResult) {
-    if result.proxy_used && result.proxy_type != "none" {
-        if result.proxy_type == "auto" {
-            msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
-        } else {
-            let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
-            msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
-            if protocol == "http" || protocol == "socks5h" {
-                msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
-                if protocol == "http" {
-                    msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
-                }
-            }
-        }
-        msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
-    }
-}
-
-fn format_diagnostics_message(result: &writer_core::sync_service::SyncDiagnosticsResult) -> String {
-    let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
-
-    msg.push_str(&format!("\n后端类型: {}", result.backend_type));
-    msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
-
-    if !result.remote_url_sanitized.is_empty() {
-        msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
-    }
-    msg.push_str(&format!("\nTransport: {}", result.transport));
-
-    format_proxy_diagnostics(&mut msg, result);
-
-    msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
-    msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
-    msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
-    msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
-
-    if !result.error_category.is_empty() && result.error_category != "none" {
-        msg.push_str(&format!("\n错误分类: {}", result.error_category));
-    }
-
-    if !result.user_message.is_empty() {
-        msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
-    }
-    if let Some(err) = &result.raw_error {
-        msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(err)));
-    }
-
-    msg
-}
-
 fn save_sync_configs(path: &str, config: &SyncConfig, secrets: &SyncSecrets) -> Result<(), String> {
     let core = WriterCore::new(path);
     core.save_sync_config(config).map_err(|e| format!("保存同步配置失败: {}", e))?;
@@ -268,7 +203,6 @@ struct AppBackend {
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
 
-    create_new_project: qt_method!(fn(&mut self, title: QString) -> QString),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
     create_new_chapter:
         qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
@@ -1263,8 +1197,60 @@ impl AppBackend {
 
             match core.perform_sync_diagnostics(&config) {
                 Ok(result) => {
-                    let status = determine_diagnostics_status(&result);
-                    let msg = format_diagnostics_message(&result);
+                    let status = if !result.success {
+                        match result.error_category.as_str() {
+                            "token_missing" => "configured_untested",
+                            "empty_url" => "not_configured",
+                            cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
+                            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => "network_failed",
+                            "repo_not_found_or_no_permission" => "auth_failed",
+                            _ => "error",
+                        }
+                    } else {
+                        "configured_untested"
+                    };
+
+                    let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
+
+                    msg.push_str(&format!("\n后端类型: {}", result.backend_type));
+                    msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
+
+                    if !result.remote_url_sanitized.is_empty() {
+                        msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
+                    }
+                    msg.push_str(&format!("\nTransport: {}", result.transport));
+
+                    if result.proxy_used && result.proxy_type != "none" {
+                        if result.proxy_type == "auto" {
+                            msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
+                        } else {
+                            let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
+                            msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
+                            if protocol == "http" || protocol == "socks5h" {
+                                msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
+                                if protocol == "http" {
+                                    msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
+                                }
+                            }
+                        }
+                        msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
+                    }
+
+                    msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
+                    msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
+                    msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
+                    msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
+
+                    if !result.error_category.is_empty() && result.error_category != "none" {
+                        msg.push_str(&format!("\n错误分类: {}", result.error_category));
+                    }
+
+                    if !result.user_message.is_empty() {
+                        msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
+                    }
+                    if let Some(err) = result.raw_error {
+                        msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(&err)));
+                    }
 
                     callback(SyncTaskOutcome {
                         sync_status: status.to_string(),
@@ -1904,24 +1890,89 @@ impl AppBackend {
     }
 
     fn create_project_json(&mut self, title: QString) -> QString {
-        let res = self.create_new_project(title.clone());
-        let parsed: serde_json::Value = serde_json::from_str(&res.to_string()).unwrap_or_else(|_| serde_json::json!({"success": false}));
-        let success = parsed["success"].as_bool().unwrap_or(false);
-        let msg = parsed["message"].as_str().unwrap_or("").to_string();
-        
-        if success {
-            let final_res = serde_json::json!({
-                "success": true,
-                "message": msg,
-                "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-            });
-            final_res.to_string().into()
-        } else {
-            let final_res = serde_json::json!({
+        let title_str = title.to_string();
+
+        let build_err = |msg: &str| -> String {
+            serde_json::json!({
                 "success": false,
-                "message": msg
-            });
-            final_res.to_string().into()
+                "errorCode": "PROJECT_CREATION_FAILED",
+                "userMessage": msg,
+                "rawError": msg,
+                "changedEntities": []
+            }).to_string()
+        };
+
+        if title_str.trim().is_empty() {
+            let msg = "作品名不能为空";
+            self.set_error(msg);
+            return build_err(msg).into();
+        }
+
+        if !self.current_has_workspace || self.current_workspace.is_empty() {
+            let msg = "未打开工作区，无法创建作品。请先新建或打开一个工作区。";
+            self.set_error(msg);
+            return build_err(msg).into();
+        }
+
+        if self.core.is_none() {
+            let new_core = WriterCore::new(&self.current_workspace);
+            if !new_core.validate_workspace().unwrap_or(false) {
+                let msg = format!("无法重新打开工作区: {}", self.current_workspace);
+                self.set_error(&msg);
+                return build_err(&msg).into();
+            }
+            self.core = Some(Rc::new(RefCell::new(new_core)));
+        }
+
+        if let Some(core_ref) = &self.core {
+            let result = {
+                let core = core_ref.borrow();
+                core.create_project(&title_str)
+            };
+            match result {
+                Ok(proj) => {
+                    self.selected_project_id = Some(proj.id.clone());
+                    self.selected_item_changed();
+                    self.selected_volume_id = None;
+                    self.selected_chapter_id = None;
+
+                    let default_volume_id = {
+                        let core = core_ref.borrow();
+                        if let Ok(volumes) = core.list_volumes(&proj.id) {
+                            volumes.first().map(|v| v.id.clone())
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(ref vol_id) = default_volume_id {
+                        self.selected_volume_id = Some(vol_id.clone());
+                    }
+
+                    self.reload_tree();
+                    self.trigger_projects_reloaded();
+
+                    let state_val: serde_json::Value = serde_json::from_str(&self.refresh_app_state_json().to_string()).unwrap_or_default();
+
+                    let final_res = serde_json::json!({
+                        "success": true,
+                        "data": { "project": proj },
+                        "message": format!("作品「{}」创建成功", proj.title),
+                        "state": state_val,
+                        "changedEntities": ["ProjectList", "WorkspaceTree"]
+                    });
+                    final_res.to_string().into()
+                }
+                Err(e) => {
+                    let msg = format!("创建作品失败: {}", e);
+                    eprintln!("[create_project_json] error: {}", msg);
+                    self.set_error(&msg);
+                    build_err(&msg).into()
+                }
+            }
+        } else {
+            let msg = "Core 未初始化";
+            self.set_error(msg);
+            build_err(msg).into()
         }
     }
 
@@ -2003,197 +2054,6 @@ impl AppBackend {
 
     fn get_tree_model(&self) -> QJsonArray {
         self.cached_tree.clone()
-    }
-
-    fn create_new_project(&mut self, title: QString) -> QString {
-        let title_str = title.to_string();
-        let validate_before = WriterCore::new(&self.current_workspace).validate_workspace().unwrap_or(false);
-        let diag_json_str = self.get_workspace_diagnostics().to_string();
-        let diag: serde_json::Value = serde_json::from_str(&diag_json_str).unwrap_or_default();
-        eprintln!("[create_new_project] start: workspace_path={}, validate={}, title={}, hasWorkspace={}, coreInit={}",
-            self.current_workspace, validate_before, title_str, self.current_has_workspace, self.core.is_some());
-        eprintln!("[create_new_project] diagnostics: {}", diag_json_str);
-
-        let build_err = |msg: &str, add_diag: bool| -> String {
-            let mut obj = serde_json::json!({
-                "success": false,
-                "message": msg,
-                "projectId": null,
-                "createdDefaultVolume": false,
-                "treeCount": 0,
-            });
-            if add_diag {
-                if let Some(obj_map) = obj.as_object_mut() {
-                    if let Some(diag_map) = diag.as_object() {
-                        for (k, v) in diag_map {
-                            obj_map.insert(k.clone(), v.clone());
-                        }
-                    }
-                }
-            }
-            obj.to_string()
-        };
-
-        if title_str.trim().is_empty() {
-            return build_err("作品名不能为空", true).into();
-        }
-        if !self.current_has_workspace {
-            let msg = "未打开工作区，无法创建作品。请先新建或打开一个工作区。";
-            self.set_error(msg);
-            return build_err(msg, true).into();
-        }
-        if self.current_workspace.is_empty() {
-            let msg = "工作区路径为空，无法创建作品。";
-            self.set_error(msg);
-            return build_err(msg, true).into();
-        }
-        let ws_path = std::path::Path::new(&self.current_workspace);
-        if !ws_path.exists() || !ws_path.is_dir() {
-            let msg = format!("工作区目录不存在: {}", self.current_workspace);
-            self.set_error(&msg);
-            return build_err(&msg, true).into();
-        }
-        let projects_dir = ws_path.join("projects");
-        if !projects_dir.exists() {
-            eprintln!("[create_new_project] projects dir missing, creating: {:?}", projects_dir);
-            if let Err(e) = std::fs::create_dir_all(&projects_dir) {
-                let msg = format!("创建 projects 目录失败: {}", e);
-                self.set_error(&msg);
-                return build_err(&msg, true).into();
-            }
-        }
-        let core_check = WriterCore::new(&self.current_workspace);
-        let validate_ok = core_check.validate_workspace().unwrap_or(false);
-        if !validate_ok {
-            let msg = format!(
-                "创建作品失败: 工作区验证失败\n工作区: {}\n请确保 workspace_manifest.json 和 projects 目录存在。",
-                self.current_workspace
-            );
-            self.set_error(&msg);
-            return build_err(&msg, true).into();
-        }
-        // Real writable test
-        let test_file = ws_path.join(".writer_write_test");
-        let writable = match std::fs::write(&test_file, b"test") {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&test_file);
-                true
-            }
-            Err(e) => {
-                let msg = format!("创建工作目录不可写: {} ({})", self.current_workspace, e);
-                self.set_error(&msg);
-                eprintln!("[create_new_project] writable test failed: {}", e);
-                return build_err(&msg, true).into();
-            }
-        };
-        if !writable {
-            let msg = "工作目录不可写".to_string();
-            self.set_error(&msg);
-            return build_err(&msg, true).into();
-        }
-        if self.core.is_none() {
-            let new_core = WriterCore::new(&self.current_workspace);
-            if !new_core.validate_workspace().unwrap_or(false) {
-                let msg = format!("无法重新打开工作区: {}", self.current_workspace);
-                self.set_error(&msg);
-                return build_err(&msg, true).into();
-            }
-            self.core = Some(Rc::new(RefCell::new(new_core)));
-        }
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.create_project(&title_str)
-            };
-            match result {
-                Ok(proj) => {
-                    let project_id = proj.id.clone();
-
-                    // Verify actual files on disk
-                    let project_json_path = ws_path.join("projects").join(&project_id).join("project.json");
-                    let project_json_exists = project_json_path.exists();
-                    let volumes_dir = ws_path.join("projects").join(&project_id).join("volumes");
-                    let volumes_dir_exists = volumes_dir.exists();
-                    let volume_count = if volumes_dir_exists {
-                        std::fs::read_dir(&volumes_dir).map(|e| e.count()).unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    let before_tree_count = self.cached_tree.len();
-
-                    eprintln!("[create_new_project] success: workspace_path={}, project_id={}, project_json_exists={}, volumes_dir_exists={}, volume_count={}, beforeTreeCount={}",
-                        self.current_workspace, project_id, project_json_exists, volumes_dir_exists, volume_count, before_tree_count);
-
-                    if !project_json_exists {
-                        let msg = format!("作品元数据创建失败（project.json 未写入）: {}", self.current_workspace);
-                        self.set_error(&msg);
-                        return build_err(&msg, true).into();
-                    }
-
-                    self.selected_project_id = Some(project_id.clone());
-                    self.selected_item_changed();
-                    self.selected_volume_id = None;
-                    self.selected_chapter_id = None;
-
-                    let default_volume_id = {
-                        let core = core_ref.borrow();
-                        if let Ok(volumes) = core.list_volumes(&project_id) {
-                            volumes.first().map(|v| v.id.clone())
-                        } else {
-                            None
-                        }
-                    };
-                    if let Some(ref vol_id) = default_volume_id {
-                        self.selected_volume_id = Some(vol_id.clone());
-                    }
-
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-
-                    if self.cached_tree.len() == 0 {
-                        eprintln!("[create_new_project] warning: tree count is 0 after reload");
-                    }
-                    if self.cached_tree.len() <= before_tree_count {
-                        eprintln!("[create_new_project] warning: tree model did not grow (before={}, after={}) for projectId={}",
-                            before_tree_count, self.cached_tree.len(), project_id);
-                    }
-
-                    let after_tree = self.build_tree_model_json();
-                    let tree_count = match &after_tree {
-                        serde_json::Value::Array(arr) => arr.len(),
-                        _ => 0,
-                    };
-                    let ok_json = serde_json::json!({
-                        "success": true,
-                        "message": format!("作品「{}」创建成功", proj.title),
-                        "projectId": project_id,
-                        "defaultVolumeId": default_volume_id,
-                        "createdDefaultVolume": default_volume_id.is_some(),
-                        "projectJsonExists": project_json_exists,
-                        "volumesDirExists": volumes_dir_exists,
-                        "volumeCount": volume_count,
-                        "beforeTreeCount": before_tree_count,
-                        "treeCount": self.cached_tree.len(),
-                        "treeModel": {
-                            "success": true,
-                            "treeCount": tree_count,
-                            "items": after_tree
-                        },
-                    });
-                    ok_json.to_string().into()
-                }
-                Err(e) => {
-                    let msg = format!("创建作品失败: {}", e);
-                    eprintln!("[create_new_project] error: {}", msg);
-                    self.set_error(&msg);
-                    build_err(&msg, true).into()
-                }
-            }
-        } else {
-            let msg = "Core 未初始化".to_string();
-            self.set_error(&msg);
-            build_err(&msg, true).into()
-        }
     }
 
     fn create_new_volume(&mut self, project_id: QString, title: QString) {
@@ -2565,6 +2425,74 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+    use std::fs;
+
+    #[test]
+    fn test_create_project_success() {
+        let dir = tempdir().unwrap();
+        let ws_path = dir.path().to_str().unwrap().to_string();
+
+        let mut backend = AppBackend::default();
+        backend.current_workspace = ws_path.clone();
+        backend.current_has_workspace = true;
+
+        // Create workspace structure
+        fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
+        fs::create_dir_all(dir.path().join("projects")).unwrap();
+
+        // Need to initialize core explicitly since we fake the workspace
+        let core = WriterCore::new(&ws_path);
+        backend.core = Some(Rc::new(RefCell::new(core)));
+
+        // Create 3 projects
+        for i in 1..=3 {
+            let res_json = backend.create_project_json(format!("Test Project {}", i).into());
+            let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
+            assert_eq!(res["success"], true);
+        }
+
+        // Check if tree size increased
+        let tree_len_after = backend.cached_tree.len();
+        assert!(tree_len_after >= 3);
+    }
+
+    #[test]
+    fn test_create_project_failure() {
+        let mut backend = AppBackend::default();
+        backend.current_workspace = "/invalid/path/that/does/not/exist".to_string();
+        backend.current_has_workspace = true;
+
+        // Let's pretend the tree has some items
+        let test_tree = serde_json::json!([
+            { "id": "1", "title": "Old Project" }
+        ]);
+
+        let mut items = vec![];
+        items.push(QJsonValue::from(QString::from(test_tree.to_string())));
+        backend.cached_tree = QJsonArray::from(items);
+
+        let res_json = backend.create_project_json("Test Project".into());
+        let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
+
+        assert_eq!(res["success"], false);
+        // Ensure tree didn't wipe or change unexpectedly
+        assert_eq!(backend.cached_tree.len(), 1);
+    }
+
+    #[test]
+    fn test_create_project_empty_title() {
+        let mut backend = AppBackend::default();
+        backend.current_workspace = "/tmp".to_string();
+        backend.current_has_workspace = true;
+
+        let res_json = backend.create_project_json("   ".into());
+        let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
+
+        assert_eq!(res["success"], false);
+        assert_eq!(res["errorCode"], "PROJECT_CREATION_FAILED");
+        assert!(res["userMessage"].as_str().unwrap().contains("不能为空"));
+    }
 
     #[test]
     fn test_handle_sync_outcome_success_pending_path() {
