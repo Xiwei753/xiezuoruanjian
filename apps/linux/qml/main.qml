@@ -117,6 +117,48 @@ ApplicationWindow {
         }
     }
 
+    onActiveChanged: {
+        if (active && backend) {
+            foregroundAutoSyncTimer.restart();
+        }
+    }
+
+    Timer {
+        id: workspaceOpenAutoSyncTimer
+        interval: 1500
+        repeat: false
+        onTriggered: {
+            if (backend && backend.has_workspace && backend.sync_enabled && backend.sync_auto_sync && backend.sync_remote_url && backend.has_sync_token) {
+                backend.perform_sync();
+            }
+        }
+    }
+
+    Timer {
+        id: foregroundAutoSyncTimer
+        interval: 1200
+        repeat: false
+        onTriggered: {
+            if (backend && backend.has_workspace && backend.sync_enabled && backend.sync_auto_sync && backend.sync_remote_url && backend.has_sync_token) {
+                backend.maybe_auto_sync_on_foreground();
+            }
+        }
+    }
+
+    Timer {
+        id: saveAutoSyncTimer
+        interval: 20000
+        repeat: false
+        onTriggered: {
+            if (!backend || !backend.has_workspace || !backend.sync_auto_sync || !backend.sync_enabled) return;
+            if (backend.sync_status === "syncing") return;
+            if (appState.selected && appState.selected.chapterId) {
+                backend.save_current_chapter(editorPage.text);
+            }
+            backend.perform_sync();
+        }
+    }
+
     function applyState(state) {
         if (!state) return;
         appState = state;
@@ -129,6 +171,32 @@ ApplicationWindow {
         // update selected
         if (appState.selected) {
             workspaceTree.selectedId = appState.selected.chapterId || appState.selected.volumeId || appState.selected.projectId || "";
+        }
+    }
+
+    Connections {
+        target: backend
+        function onProjects_reloaded() {
+            try {
+                applyState(JSON.parse(backend.refresh_app_state_json()));
+            } catch (e) {
+                window.debugError("tree", "projects_reloaded_parse_failed", "error: " + e);
+            }
+        }
+        function onWorkspace_state_changed() {
+            try {
+                applyState(JSON.parse(backend.refresh_app_state_json()));
+                if (backend.has_workspace) {
+                    workspaceOpenAutoSyncTimer.restart();
+                }
+            } catch (e) {
+                window.debugError("workspace", "workspace_state_changed_parse_failed", "error: " + e);
+            }
+        }
+        function onClear_editor() {
+            if (editorPage) {
+                editorPage.clearText();
+            }
         }
     }
 
@@ -341,6 +409,7 @@ ApplicationWindow {
                     if (appState.selected && appState.selected.chapterId) {
                         backend.save_current_chapter(editorPage.text);
                         applyState(JSON.parse(backend.refresh_app_state_json()));
+                        saveAutoSyncTimer.restart();
                     }
                 }
             }
@@ -670,6 +739,11 @@ ApplicationWindow {
                 height: Math.max(syncDialogScroll.availableHeight, implicitHeight)
                 theme: theme
                 backendRef: backend
+                beforeSyncHook: function() {
+                    if (appState.selected && appState.selected.chapterId) {
+                        backend.save_current_chapter(editorPage.text);
+                    }
+                }
                 onSettingsChanged: {
                     applyState(JSON.parse(backend.refresh_app_state_json()));
                 }
@@ -779,4 +853,3 @@ ApplicationWindow {
         }
     }
 }
-

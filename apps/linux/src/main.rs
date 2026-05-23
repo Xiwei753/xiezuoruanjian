@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::sync::OnceLock;
 use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::facade::WriterCore;
 
@@ -365,6 +366,7 @@ struct AppBackend {
     save_sync_config: qt_method!(fn(&mut self) -> bool),
     perform_sync_dry_run: qt_method!(fn(&mut self)),
     perform_sync: qt_method!(fn(&mut self)),
+    maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
     open_workspace_dir: qt_method!(fn(&mut self)),
 
     try_restore_last_workspace: qt_method!(fn(&mut self)),
@@ -471,6 +473,8 @@ struct AppBackend {
     current_sync_token: String,
     current_sync_action_result: String,
     current_sync_status: String,
+    current_sync_in_progress: bool,
+    current_last_sync_time: i64,
 
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
@@ -575,6 +579,8 @@ impl AppBackend {
         self.debug_log("sync", "sync_outcome_received", &format!("status={}, result={}", status, sanitized_result));
 
         self.current_sync_status = outcome.sync_status.clone();
+        self.current_sync_in_progress = false;
+        self.current_last_sync_time = Self::now_epoch_seconds();
         self.current_sync_action_result = outcome.action_result.clone();
         self.sync_status_changed();
         self.sync_action_completed();
@@ -592,10 +598,94 @@ impl AppBackend {
             }
         }
 
-        if (status_str == "success" || status_str == "conflict" || status_str == "unrelated_histories") && self.has_workspace() {
+        let sync_success = matches!(status_str, "success" | "branch_missing_recovered");
+        if sync_success && self.has_workspace() {
+        self.handle_successful_sync_refresh();
+        } else if (status_str == "conflict" || status_str == "unrelated_histories") && self.has_workspace() {
             self.reload_tree();
             self.trigger_projects_reloaded();
         }
+    }
+
+    fn now_epoch_seconds() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
+    fn handle_successful_sync_refresh(&mut self) {
+        self.reload_tree();
+        let chapter_deleted = self.reconcile_selection_after_tree_reload();
+        self.trigger_projects_reloaded();
+        self.workspace_state_changed();
+
+        if chapter_deleted {
+            self.current_save_status = "当前章节已在其他设备删除，已刷新列表。".to_string();
+            self.save_status_changed();
+            self.current_sync_action_result.push_str("\n\n当前章节已在其他设备删除，已刷新列表。");
+            self.sync_action_completed();
+        }
+
+        self.debug_log("sync", "sync_refresh_applied", "tree_reloaded=true");
+    }
+
+    fn reconcile_selection_after_tree_reload(&mut self) -> bool {
+        let mut had_chapter_deleted = false;
+        let Some(core_ref) = &self.core else {
+            return false;
+        };
+
+        if let Some(project_id) = self.selected_project_id.clone() {
+            let project_exists = {
+                let core = core_ref.borrow();
+                let projects = core.list_projects().unwrap_or_default();
+                projects.iter().any(|p| p.id == project_id)
+            };
+            if !project_exists {
+                self.selected_project_id = None;
+                self.selected_volume_id = None;
+                self.clear_editor_state();
+                self.selected_item_changed();
+                self.chapter_path_changed();
+                return false;
+            }
+        }
+
+        if let (Some(project_id), Some(volume_id)) = (self.selected_project_id.clone(), self.selected_volume_id.clone()) {
+            let volume_exists = {
+                let core = core_ref.borrow();
+                let volumes = core.list_volumes(&project_id).unwrap_or_default();
+                volumes.iter().any(|v| v.id == volume_id)
+            };
+            if !volume_exists {
+                self.selected_volume_id = None;
+                self.clear_editor_state();
+                self.selected_item_changed();
+                self.chapter_path_changed();
+                return false;
+            }
+        }
+
+        if let (Some(project_id), Some(volume_id), Some(chapter_id)) = (
+            self.selected_project_id.clone(),
+            self.selected_volume_id.clone(),
+            self.selected_chapter_id.clone(),
+        ) {
+            let chapter_exists = {
+                let core = core_ref.borrow();
+                let chapters = core.list_chapters(&project_id, &volume_id).unwrap_or_default();
+                chapters.iter().any(|c| c.id == chapter_id)
+            };
+            if !chapter_exists {
+                self.clear_editor_state();
+                had_chapter_deleted = true;
+            }
+        }
+
+        self.selected_item_changed();
+        self.chapter_path_changed();
+        had_chapter_deleted
     }
 
     fn has_workspace(&self) -> bool {
@@ -999,6 +1089,7 @@ impl AppBackend {
                     self.load_local_settings();
                     self.workspace_opened();
                     self.workspace_state_changed();
+                    self.schedule_auto_sync("auto_sync_on_workspace_restore", 1500);
                     self.debug_log("workspace", "try_restore_last_workspace_success", &format!("path={}", path));
                     return;
                 }
@@ -1081,6 +1172,7 @@ impl AppBackend {
         self.load_local_settings();
         self.workspace_opened();
         self.workspace_state_changed();
+        self.schedule_auto_sync("auto_sync_on_workspace_open", 1500);
 
         let _ = writer_core::app_config::set_last_workspace_path(path);
         self.debug_log("workspace", "internal_open_workspace_success", &format!("path={}", path));
@@ -1822,12 +1914,46 @@ impl AppBackend {
     }
 
     fn perform_sync(&mut self) {
+        self.perform_sync_internal("manual", false);
+    }
+
+    fn maybe_auto_sync_on_foreground(&mut self) {
+        if !self.current_has_workspace || !self.current_sync_auto_sync || self.current_sync_in_progress {
+            return;
+        }
+        let interval_secs = self.current_sync_interval.max(60) as i64;
+        let now = Self::now_epoch_seconds();
+        let elapsed = now.saturating_sub(self.current_last_sync_time);
+        if self.current_last_sync_time > 0 && elapsed < interval_secs {
+            self.debug_log("sync", "auto_sync_skipped_foreground", &format!("elapsed={}s, min={}s", elapsed, interval_secs));
+            return;
+        }
+        self.schedule_auto_sync("auto_sync_on_foreground", 1200);
+    }
+
+    fn schedule_auto_sync(&mut self, reason: &str, _delay_ms: u64) {
+        if !self.current_has_workspace || !self.current_sync_enabled || !self.current_sync_auto_sync {
+            return;
+        }
+        if self.current_sync_remote_url.is_empty() || self.current_sync_token.is_empty() {
+            return;
+        }
+        let reason_owned = reason.to_string();
+        self.debug_log("sync", &reason_owned, "triggered");
+        self.perform_sync_internal(&reason_owned, true);
+    }
+
+    fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) {
+        if self.current_sync_in_progress {
+            self.debug_log("sync", "perform_sync_skipped", "sync already running");
+            return;
+        }
         let token_present = !self.current_sync_token.is_empty();
         let masked_url = mask_sync_error(&self.current_sync_remote_url);
         self.debug_log(
             "sync",
             "perform_sync_start",
-            &format!("remote_url={}, branch={}, token_present={}", masked_url, self.current_sync_branch, token_present)
+            &format!("trigger={}, remote_url={}, branch={}, token_present={}", trigger, masked_url, self.current_sync_branch, token_present)
         );
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
@@ -1861,8 +1987,9 @@ impl AppBackend {
         }
 
         self.current_sync_status = "syncing".to_string();
+        self.current_sync_in_progress = true;
         self.sync_status_changed();
-        self.current_sync_action_result = "正在同步...".to_string();
+        self.current_sync_action_result = if silent_success { "后台同步中...".to_string() } else { "正在同步...".to_string() };
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {

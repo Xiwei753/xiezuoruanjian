@@ -9,33 +9,26 @@ import com.xiwei.writerapp.model.SyncSecrets
 class AutoSyncScheduler(context: Context) {
     private val settingsRepository = SettingsRepository(context)
     private val handler = Handler(Looper.getMainLooper())
-    private var isRunning = false
-
-    private val checkRunnable = object : Runnable {
-        override fun run() {
-            if (!isRunning) return
-            try {
-                performAutoSyncIfNeeded()
-            } catch (_: Exception) {
-            }
-            if (isRunning) {
-                handler.postDelayed(this, 30_000L)
-            }
-        }
-    }
+    private var scheduled = false
 
     fun start() {
-        if (isRunning) return
-        isRunning = true
-        handler.post(checkRunnable)
+        if (scheduled) return
+        scheduled = true
+        handler.postDelayed({
+            scheduled = false
+            try {
+                performAutoSyncIfNeeded("app_foreground")
+            } catch (_: Exception) {
+            }
+        }, 1500L)
     }
 
     fun stop() {
-        isRunning = false
-        handler.removeCallbacks(checkRunnable)
+        scheduled = false
+        handler.removeCallbacksAndMessages(null)
     }
 
-    private fun performAutoSyncIfNeeded() {
+    private fun performAutoSyncIfNeeded(reason: String) {
         val config = try {
             settingsRepository.loadSyncConfig()
         } catch (_: Exception) {
@@ -83,7 +76,19 @@ class AutoSyncScheduler(context: Context) {
                         NativeResult.NotLoaded -> {
                             System.err.println("AutoSync: native core not loaded")
                         }
-                        is NativeResult.Success -> {}
+                        is NativeResult.Success -> {
+                            val syncResult = result.data
+                            if (syncResult != null) {
+                                val ok = syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success ||
+                                    syncResult.status == com.xiwei.writerapp.model.SyncStatus.NoChanges ||
+                                    syncResult.status == com.xiwei.writerapp.model.SyncStatus.LatestWinsApplied ||
+                                    syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered
+                                if (ok) {
+                                    SyncChangeBus.notifyChanged()
+                                    System.out.println("AutoSync success: reason=$reason")
+                                }
+                            }
+                        }
                     }
                 }
             } catch (e: Exception) {

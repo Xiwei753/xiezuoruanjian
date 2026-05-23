@@ -27,6 +27,8 @@ import android.text.style.BackgroundColorSpan
 import android.util.Log
 import android.widget.Toast
 import com.xiwei.writerapp.R
+import com.xiwei.writerapp.data.SyncChangeBus
+import com.xiwei.writerapp.data.WorkspaceRepository
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import com.xiwei.writerapp.data.SettingsChangeBus
@@ -47,6 +49,7 @@ class EditorActivity : AppCompatActivity() {
     private lateinit var tvSaveStatus: TextView
 
     private var textWatcher: TextWatcher? = null
+    private lateinit var workspaceRepository: WorkspaceRepository
 
     // Search and Replace
     private lateinit var searchLayout: LinearLayout
@@ -124,6 +127,7 @@ class EditorActivity : AppCompatActivity() {
         observeViewModel()
         setupTextWatcher()
         setupBackPressed()
+        workspaceRepository = WorkspaceRepository(this)
 
         projectId = intent.getStringExtra("PROJECT_ID")
         volumeId = intent.getStringExtra("VOLUME_ID")
@@ -318,6 +322,20 @@ class EditorActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (!::editorEditText.isInitialized) return
+        if (SyncChangeBus.consumeChanged()) {
+            val pid = projectId
+            val vid = volumeId
+            val cid = chapterId
+            if (pid != null && vid != null && cid != null) {
+                try {
+                    workspaceRepository.getChapterContentWithMeta(pid, vid, cid)
+                } catch (_: Exception) {
+                    Toast.makeText(this, "当前章节已在其他设备删除，已返回列表。", Toast.LENGTH_LONG).show()
+                    finish()
+                    return
+                }
+            }
+        }
         if (SettingsChangeBus.consumeEditorChanged()) {
             viewModel.onSettingsChanged()
         }

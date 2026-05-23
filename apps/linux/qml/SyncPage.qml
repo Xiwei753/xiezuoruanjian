@@ -44,6 +44,7 @@ Rectangle {
 
     property var theme: null
     property var backendRef: null
+    property var beforeSyncHook: null
     signal settingsChanged()
 
     color: theme ? theme.bgDark : "#1E1E1E"
@@ -151,6 +152,9 @@ Rectangle {
                         window.debugLog("sync", "perform_sync_clicked", "");
                     }
                     syncResultArea.text = "正在同步...";
+                    if (typeof root.beforeSyncHook === "function") {
+                        root.beforeSyncHook();
+                    }
                     if (root.backendRef) root.backendRef.perform_sync();
                 }
             }
