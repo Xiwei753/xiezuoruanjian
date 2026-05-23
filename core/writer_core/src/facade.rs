@@ -519,6 +519,22 @@ impl WriterCore {
         )
     }
 
+    pub fn write_chapter_verified(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+    ) -> Result<crate::chapter::ChapterSaveReceipt> {
+        chapter::save_chapter_verified(
+            &self.workspace_path,
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+        )
+    }
+
     pub fn update_chapter_note(
         &self,
         project_id: &str,

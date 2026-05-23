@@ -25,6 +25,31 @@ pub struct ChapterContent {
     pub content: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChapterSaveReceipt {
+    pub chapter_relative_path: String,
+    pub content_len: usize,
+    pub content_hash: String,
+    pub meta_hash: String,
+    pub updated_at: String,
+    pub word_count: u32,
+}
+
+fn touch_json_updated_at(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw = fs::read_to_string(path)?;
+    let mut val: serde_json::Value = serde_json::from_str(&raw)?;
+    if let Some(obj) = val.as_object_mut() {
+        obj.insert(
+            "updated_at".to_string(),
+            serde_json::Value::String(Utc::now().to_rfc3339()),
+        );
+    }
+    crate::storage::atomic_write_string(path, &serde_json::to_string_pretty(&val)?)
+}
+
 pub fn list_chapters(
     workspace_path: &Path,
     project_id: &str,
@@ -138,6 +163,16 @@ pub fn save_chapter(
     chapter_id: &str,
     content: &str,
 ) -> Result<()> {
+    save_chapter_verified(workspace_path, project_id, volume_id, chapter_id, content).map(|_| ())
+}
+
+pub fn save_chapter_verified(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+) -> Result<ChapterSaveReceipt> {
     let chapter_dir = workspace_path
         .join("projects")
         .join(project_id)
@@ -166,7 +201,42 @@ pub fn save_chapter(
     crate::storage::atomic_write_string(&md_path, content)?;
     crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
 
-    Ok(())
+    let volume_meta_path = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("volume.json");
+    let project_meta_path = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("project.json");
+    let _ = touch_json_updated_at(&volume_meta_path);
+    let _ = touch_json_updated_at(&project_meta_path);
+
+    let read_back = fs::read_to_string(&md_path)?;
+    let read_back_hash = format!("{:x}", md5::compute(read_back.as_bytes()));
+    if read_back_hash != meta.hash {
+        return Err(crate::error::Error::Other(format!(
+            "chapter save verification failed: expected_hash={}, actual_hash={}",
+            meta.hash, read_back_hash
+        )));
+    }
+
+    let chapter_relative_path = md_path
+        .strip_prefix(workspace_path)
+        .unwrap_or(&md_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    Ok(ChapterSaveReceipt {
+        chapter_relative_path,
+        content_len: content.len(),
+        content_hash: meta.hash.clone(),
+        meta_hash: format!("{:x}", md5::compute(updated_meta_str.as_bytes())),
+        updated_at: meta.updated_at,
+        word_count: meta.word_count,
+    })
 }
 
 pub fn update_chapter_note(

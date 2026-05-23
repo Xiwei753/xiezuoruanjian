@@ -35,12 +35,11 @@ Rectangle {
 
     ScrollView {
         anchors.fill: parent
-        contentWidth: parent.width
         clip: true
 
         ListView {
             id: listView
-            width: parent.width
+            width: parent ? parent.availableWidth : 0
             model: treeModel
             
             delegate: Rectangle {

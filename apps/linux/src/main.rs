@@ -2985,7 +2985,6 @@ impl AppBackend {
         let len = text_str.len();
         self.debug_log("chapter", "save_current_chapter_start", &format!("len={}", len));
         if !self.selected_chapter_exists() {
-            self.clear_editor_state();
             self.set_error("当前章节已不存在，已停止保存。");
             self.debug_error("chapter", "save_current_chapter_failed", "chapter_not_exists");
             return;
@@ -2998,17 +2997,35 @@ impl AppBackend {
             &self.selected_chapter_id,
         ) {
             let core = core_ref.borrow();
-            core.write_chapter(p, v, c, &text_str)
+            core.write_chapter_verified(p, v, c, &text_str)
         } else {
             self.debug_error("chapter", "save_current_chapter_failed", "selection_missing");
             return;
         };
 
         match save_result {
-            Ok(_) => {
+            Ok(receipt) => {
                 self.current_save_status = "已保存".to_string();
                 self.save_status_changed();
-                self.debug_log("chapter", "save_current_chapter_success", &format!("len={}", len));
+                let p = self.selected_project_id.clone().unwrap_or_default();
+                let v = self.selected_volume_id.clone().unwrap_or_default();
+                let c = self.selected_chapter_id.clone().unwrap_or_default();
+                self.debug_log(
+                    "chapter",
+                    "save_current_chapter_success",
+                    &format!(
+                        "project_id={}, volume_id={}, chapter_id={}, chapter_path={}, content_len={}, content_hash={}, meta_hash={}, updated_at={}, word_count={}",
+                        p,
+                        v,
+                        c,
+                        receipt.chapter_relative_path,
+                        receipt.content_len,
+                        receipt.content_hash,
+                        receipt.meta_hash,
+                        receipt.updated_at,
+                        receipt.word_count
+                    ),
+                );
             }
             Err(e) => {
                 let err_msg = format!("保存失败: {}", e);

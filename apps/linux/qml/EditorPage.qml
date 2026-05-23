@@ -48,10 +48,9 @@ Rectangle {
             visible: root.backendRef && root.backendRef.has_selected_chapter_prop
 
             Rectangle {
-                anchors.fill: parent
-                anchors.horizontalCenter: parent.horizontalCenter
                 width: Math.min(parent.width, 800)
-                anchors.horizontalCenterOffset: 0
+                height: parent.height
+                anchors.horizontalCenter: parent.horizontalCenter
                 color: "transparent"
 
                 ScrollView {
@@ -69,7 +68,7 @@ Rectangle {
 
                     TextArea {
                         id: editorArea
-                        width: Math.min(parent.width, 800)
+                        width: editorScroll.availableWidth
                         color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                         font.pixelSize: {
                             if (root.backendRef && root.backendRef.setting_font_size > 0) {

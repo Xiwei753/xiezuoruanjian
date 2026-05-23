@@ -134,7 +134,7 @@ Rectangle {
                         tokenField.text = "";
                     }
                     root.backendRef.sync_enabled = true;
-                    root.backendRef.sync_backend_type = "git";
+                    root.backendRef.sync_backend_type = "github_api";
                     
                     var success = root.backendRef.save_sync_config();
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -214,4 +214,3 @@ Rectangle {
         }
     }
 }
-

@@ -2847,32 +2847,6 @@ fn semantic_merge_json(
         // network access inside the dry-run invocation, so it operates locally for now.
     }
 
-    pub fn check_dirty_repo_blocked(workspace_path: &Path) -> crate::Result<Option<Vec<String>>> {
-        if let Ok(repo) = git2::Repository::open(workspace_path) {
-            let mut opts = git2::StatusOptions::new();
-            opts.include_untracked(true);
-            let mut dirty = Vec::new();
-            if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
-                for entry in statuses.iter() {
-                    if let Some(path) = entry.path() {
-                        if !Self::is_blacklisted_path(path) && !Self::is_whitelisted_path(path) {
-                            let status = entry.status();
-                            if status.is_wt_modified() || status.is_index_modified() ||
-                               status.is_wt_new() || status.is_index_new() ||
-                               status.is_wt_deleted() || status.is_index_deleted() {
-                                dirty.push(path.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            if !dirty.is_empty() {
-                return Ok(Some(dirty));
-            }
-        }
-        Ok(None)
-    }
-
     pub fn perform_lww_sync(
         workspace_path: &Path,
         config: &SyncConfig,
@@ -2906,19 +2880,6 @@ fn semantic_merge_json(
                 FirstSyncMode::NotAttempted,
                 Some("缺少 GitHub Token。".to_string()),
                 "No token provided".to_string(),
-            ));
-        }
-
-        // Check for dirty non-whitelisted changes
-        if let Some(dirty_files) = Self::check_dirty_repo_blocked(workspace_path)? {
-            return Ok(SyncResult::error(
-                SyncStatus::DirtyRepoBlocked,
-                FirstSyncMode::NotAttempted,
-                Some(format!(
-                    "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件:\n{}",
-                    dirty_files.join("\n")
-                )),
-                "Dirty repo blocked: non-whitelisted files modified".to_string(),
             ));
         }
 
@@ -4107,8 +4068,10 @@ fn semantic_merge_json(
             "app-meta/settings/settings.local.json",
             "app-meta/sync/sync_secrets.local.json",
             "app-meta/sync/state.local.json",
+            "app-meta/sync/sync_state.json",
             "sqlite_cache",
             "tmp",
+            "cache",
             "backups",
         ];
 
@@ -4117,6 +4080,10 @@ fn semantic_merge_json(
         }
 
         if rel_path.starts_with("app-meta/logs") || rel_path.contains("/logs/") {
+            return true;
+        }
+
+        if rel_path == ".git" || rel_path.starts_with(".git/") {
             return true;
         }
 
@@ -4443,6 +4410,10 @@ mod tests {
         assert!(SyncService::is_blacklisted_path(
             "app-meta/sync/sync_secrets.local.json.tmp"
         ));
+        assert!(SyncService::is_blacklisted_path("app-meta/sync/sync_state.json"));
+        assert!(SyncService::is_blacklisted_path("app-meta/sync/state.local.json"));
+        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
+        assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp"));
     }
 
     #[test]
@@ -6102,6 +6073,61 @@ mod tests {
         let p1_rec = final_m.files.iter().find(|f| f.path == "projects/p1/project.json").unwrap();
         assert_eq!(p1_rec.device_id, "device_local");
         assert_eq!(p1_rec.op, "upsert");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_lww_sync_ignores_local_only_files() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/logs")).unwrap();
+        std::fs::create_dir_all(dir.path().join("tmp")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/sync_state.json"),
+            "{\"noise\":true}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/state.local.json"),
+            "{\"local\":true}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/sync_secrets.local.json"),
+            "{\"token\":\"x\"}",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("app-meta/logs/sync.log"), "x").unwrap();
+        std::fs::write(dir.path().join("tmp/runtime.tmp"), "x").unwrap();
+
+        let (mock_url, shutdown, _files, _manifest, server_thread) =
+            start_mock_github_api(None, std::collections::HashMap::new());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert_ne!(res.status, SyncStatus::DirtyRepoBlocked);
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();
