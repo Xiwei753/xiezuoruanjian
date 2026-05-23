@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
+use base64::Engine;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -266,6 +267,8 @@ pub enum SyncStatus {
     DirtyRepoBlocked,
     BranchMissingRecovered,
     Error(String),
+    NoChanges,
+    LatestWinsApplied,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -418,6 +421,12 @@ pub struct SyncResult {
     pub chosen_network_mode: Option<String>,
     pub network_probe_summary: Vec<NetworkProbeResult>,
     pub settings_conflicts: Option<Vec<SettingConflictDetail>>,
+    #[serde(default)]
+    pub local_deletes: Vec<String>,
+    #[serde(default)]
+    pub remote_deletes: Vec<String>,
+    #[serde(default)]
+    pub overwritten_files: Vec<String>,
 }
 
 impl SyncResult {
@@ -437,6 +446,9 @@ impl SyncResult {
             chosen_network_mode: None,
             network_probe_summary: Vec::new(),
             settings_conflicts: None,
+            local_deletes: Vec::new(),
+            remote_deletes: Vec::new(),
+            overwritten_files: Vec::new(),
         }
     }
 
@@ -461,6 +473,9 @@ impl SyncResult {
             chosen_network_mode: None,
             network_probe_summary: Vec::new(),
             settings_conflicts: None,
+            local_deletes: Vec::new(),
+            remote_deletes: Vec::new(),
+            overwritten_files: Vec::new(),
         }
     }
 
@@ -484,6 +499,9 @@ impl SyncResult {
             chosen_network_mode: None,
             network_probe_summary: Vec::new(),
             settings_conflicts: None,
+            local_deletes: Vec::new(),
+            remote_deletes: Vec::new(),
+            overwritten_files: Vec::new(),
         }
     }
 }
@@ -1452,8 +1470,7 @@ impl SyncBackend for GitSyncBackend {
         config: &SyncConfig,
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncResult> {
-        let backend = Git2Backend;
-        SyncService::perform_sync(workspace_path, config, secrets, &backend)
+        SyncService::perform_lww_sync(workspace_path, config, secrets)
     }
 }
 
@@ -1465,17 +1482,6 @@ struct ProbedClient {
 }
 
 impl GitHubApiBackend {
-    fn save_sync_attempt_state(workspace_path: &Path, result: &SyncResult) {
-        let mut state = SyncService::load_sync_state(workspace_path).unwrap_or_default();
-        state.last_sync_time = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64,
-        );
-        state.last_error = result.error.clone();
-        let _ = SyncService::save_sync_state(workspace_path, &state);
-    }
 
     fn classify_reqwest_error(e: &reqwest::Error) -> (String, String) {
         let msg = e.to_string().to_lowercase();
@@ -1769,554 +1775,7 @@ impl SyncBackend for GitHubApiBackend {
     }
 
     fn sync(&self, workspace_path: &Path, config: &SyncConfig, secrets: &SyncSecrets) -> crate::Result<SyncResult> {
-        let mut result = SyncResult::success();
-        result.status = SyncStatus::Idle;
-        let token = secrets.token.clone().unwrap_or_default();
-        if token.is_empty() {
-            return Ok(SyncResult::error(SyncStatus::Error("token_missing".to_string()), FirstSyncMode::NotAttempted, Some("缺少 GitHub Token。".to_string()), "token missing".to_string()));
-        }
-        let api_base = Self::api_base_url(&config.remote_url);
-
-        let probed_res = Self::build_auto_client(config, secrets, Some(workspace_path));
-        let (client, mode, probe_summary) = match probed_res {
-            Ok((p, summary)) => (p.client, p.mode, summary),
-            Err(e) => {
-                result.error = Some(e.to_string());
-                result.user_message = Some(format!("网络探测失败: {}", e));
-                Self::save_sync_attempt_state(workspace_path, &result);
-                return Ok(result);
-            },
-        };
-
-        result.chosen_network_mode = Some(mode.clone());
-        result.network_probe_summary = probe_summary;
-
-        // Save the successful network mode
-        if let Ok(mut state) = SyncService::load_sync_state(workspace_path) {
-            state.last_successful_network_mode = Some(mode.clone());
-            let _ = SyncService::save_sync_state(workspace_path, &state);
-        }
-
-        // Check if branch exists
-        let branch_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
-        let resp = client.get(&branch_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
-
-        let mut latest_commit_sha = String::new();
-        let mut base_tree_sha = String::new();
-        let mut remote_tree_files = std::collections::HashMap::new();
-
-        if resp.status().as_u16() == 200 {
-            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-            latest_commit_sha = json["object"]["sha"].as_str().unwrap_or_default().to_string();
-
-            // get commit
-            let commit_url = format!("{}/git/commits/{}", api_base, latest_commit_sha);
-            let resp = client.get(&commit_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() == 200 {
-                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-                base_tree_sha = json["tree"]["sha"].as_str().unwrap_or_default().to_string();
-            }
-
-            // get tree recursively
-            if !base_tree_sha.is_empty() {
-                let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, base_tree_sha);
-                let resp = client.get(&tree_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
-                if resp.status().as_u16() == 200 {
-                    let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-                    if let Some(tree) = json["tree"].as_array() {
-                        for item in tree {
-                            if item["type"].as_str() == Some("blob") {
-                                if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
-                                    remote_tree_files.insert(path.to_string(), sha.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut state = SyncService::load_sync_state(workspace_path).unwrap_or_default();
-
-        let mut to_upload = vec![];
-        let mut to_download = vec![];
-        let mut to_delete_local = vec![];
-        let mut to_delete_remote = vec![];
-        let mut conflicts = vec![];
-        let mut ignored = vec![];
-
-        let local_entries = SyncService::scan_workspace_for_sync(workspace_path)?;
-        let mut local_files_git_hash: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        let mut local_files_md5_hash: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-
-        for entry in &local_entries {
-            if entry.sync_kind == SyncKind::Upload {
-                let full_path = workspace_path.join(&entry.relative_path);
-                if let Ok(content) = std::fs::read(&full_path) {
-                    let git_hash = SyncService::compute_git_hash(&content);
-                    local_files_git_hash.insert(entry.relative_path.clone(), git_hash);
-                    local_files_md5_hash.insert(entry.relative_path.clone(), entry.file_hash.clone());
-                }
-            } else {
-                ignored.push(entry.relative_path.clone());
-            }
-        }
-
-        let is_first_sync = state.known_files.is_empty();
-
-        for (local_path, local_git_hash) in &local_files_git_hash {
-            let remote_hash = remote_tree_files.get(local_path);
-            let known_hash_opt = state.known_files.get(local_path);
-
-            if is_first_sync {
-                if let Some(rh) = remote_hash {
-                    if local_git_hash != rh {
-                        conflicts.push(local_path.clone());
-                    }
-                } else {
-                    to_upload.push(local_path.clone());
-                }
-                continue;
-            }
-
-            match (remote_hash, known_hash_opt) {
-                (Some(rh), Some(kh)) => {
-                    let local_changed = local_git_hash != kh;
-                    let remote_changed = rh != kh;
-
-                    if local_changed && remote_changed {
-                        conflicts.push(local_path.clone());
-                    } else if local_changed && !remote_changed {
-                        to_upload.push(local_path.clone());
-                    } else if !local_changed && remote_changed {
-                        to_download.push(local_path.clone());
-                    }
-                }
-                (Some(_rh), None) => {
-                    // Local added, remote added -> conflict if different, else ignore
-                    if Some(local_git_hash) != remote_hash {
-                        conflicts.push(local_path.clone());
-                    }
-                }
-                (None, Some(kh)) => {
-                    // Deleted remotely
-                    let local_changed = local_git_hash != kh;
-                    if local_changed {
-                        conflicts.push(local_path.clone());
-                    } else {
-                        to_delete_local.push(local_path.clone());
-                    }
-                }
-                (None, None) => {
-                    // Local added, remote not present
-                    to_upload.push(local_path.clone());
-                }
-            }
-        }
-
-        for (remote_path, remote_hash) in &remote_tree_files {
-            if !local_files_git_hash.contains_key(remote_path) {
-                let known_hash_opt = state.known_files.get(remote_path);
-                if is_first_sync {
-                    to_download.push(remote_path.clone());
-                    continue;
-                }
-                match known_hash_opt {
-                    Some(kh) => {
-                        let remote_changed = remote_hash != kh;
-                        if remote_changed {
-                            conflicts.push(remote_path.clone());
-                        } else {
-                            to_delete_remote.push(remote_path.clone());
-                        }
-                    }
-                    None => {
-                        to_download.push(remote_path.clone());
-                    }
-                }
-            }
-        }
-
-        if !conflicts.is_empty() {
-             result.error = Some("conflict detected".to_string());
-             result.status = SyncStatus::Conflict;
-             let mut conflict_objects = vec![];
-             for c in &conflicts {
-                 conflict_objects.push(SyncConflict {
-                     local_path: c.clone(),
-                     remote_path: c.clone(),
-                     local_hash: local_files_git_hash.get(c).cloned().unwrap_or_default(),
-                     remote_hash: remote_tree_files.get(c).cloned().unwrap_or_default(),
-                     base_hash: state.known_files.get(c).cloned().unwrap_or_default(),
-                     created_at: chrono::Utc::now().timestamp(),
-                     description: "文件在本地和远端都发生了修改或存在删除冲突".to_string(),
-                 });
-             }
-             result.conflicts = conflict_objects;
-             result.user_message = Some(format!("发现 {} 个冲突文件，请先手动解决。", conflicts.len()));
-             Self::save_sync_attempt_state(workspace_path, &result);
-             return Ok(result);
-        }
-
-        let mut tree_payload = serde_json::json!({
-            "tree": []
-        });
-        if !base_tree_sha.is_empty() {
-            tree_payload["base_tree"] = serde_json::json!(base_tree_sha);
-        }
-
-        // 1. Download files
-        for dl in &to_download {
-            let api_content_url = format!("{}/contents/{}?ref={}", api_base, dl, config.branch);
-            let dl_resp = client.get(&api_content_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send().map_err(|e| crate::Error::Other(e.to_string()))?;
-            if dl_resp.status().is_success() {
-                let json: serde_json::Value = dl_resp.json().unwrap_or_default();
-                if let Some(content_b64) = json["content"].as_str() {
-                    let content_b64 = content_b64.replace("\n", "");
-                    use base64::Engine;
-                    if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
-                        let full_path = workspace_path.join(dl);
-                        if let Some(parent) = full_path.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-
-                        let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                        if std::fs::write(&tmp_path, content).is_ok() {
-                            let _ = std::fs::rename(tmp_path, &full_path);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Delete local files (from remote deletion)
-        for del in &to_delete_local {
-            let full_path = workspace_path.join::<&String>(del);
-            if full_path.exists() {
-                // Move to trash
-                let filename = full_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                let trash_dir = workspace_path.join("app-meta/sync/trash");
-                let _ = std::fs::create_dir_all(&trash_dir);
-                let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), filename));
-
-                let _ = std::fs::rename(&full_path, &trash_path);
-
-                let rel_trash_path = trash_path.strip_prefix(workspace_path).unwrap_or(&trash_path).to_string_lossy().replace("\\", "/");
-
-                let tombstone = Tombstone {
-                    original_path: del.clone(),
-                    trash_path: rel_trash_path,
-                    deleted_at: chrono::Utc::now().timestamp(),
-                    purge_after: chrono::Utc::now().timestamp() + 30 * 24 * 3600,
-                    deleted_by: "remote".to_string(),
-                    original_hash: state.known_files.get(del).cloned().unwrap_or_default(),
-                    kind: "remote_delete".to_string(),
-                };
-                state.tombstones.push(tombstone);
-            }
-        }
-
-        // 3. Prepare Uploads
-        let mut tree_nodes = vec![];
-
-        for file_path in &to_upload {
-            let full_path = workspace_path.join(file_path);
-            if !full_path.exists() { continue; }
-
-            let content = match std::fs::read_to_string(&full_path) {
-                Ok(c) => c,
-                Err(_) => {
-                    result.error = Some(format!("读取文件失败: {}", file_path));
-                    result.user_message = Some(format!("读取文件失败: {}", file_path));
-                    Self::save_sync_attempt_state(workspace_path, &result);
-                    return Ok(result);
-                }
-            };
-
-            // upload blob
-            let blob_url = format!("{}/git/blobs", api_base);
-            let blob_payload = serde_json::json!({
-                "content": content,
-                "encoding": "utf-8"
-            });
-            let resp = client.post(&blob_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&blob_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() == 201 {
-                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-                let sha = json["sha"].as_str().unwrap_or_default().to_string();
-                tree_nodes.push(serde_json::json!({
-                    "path": file_path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": sha
-                }));
-            }
-        }
-
-        // 4. Remote deletions via tree (from local deletion)
-        for file_path in &to_delete_remote {
-            tree_nodes.push(serde_json::json!({
-                "path": file_path,
-                "mode": "100644",
-                "type": "blob",
-                "sha": serde_json::Value::Null
-            }));
-        }
-
-        // Clean up expired tombstones
-        let now = chrono::Utc::now().timestamp();
-        state.tombstones.retain(|t| {
-            if t.purge_after <= now {
-                let full_trash_path = workspace_path.join(&t.trash_path);
-                let _ = std::fs::remove_file(&full_trash_path);
-                // Also issue remote delete via tree if it was previously uploaded to trash
-                tree_nodes.push(serde_json::json!({
-                    "path": t.trash_path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": serde_json::Value::Null
-                }));
-                false // removed
-            } else {
-                true // kept
-            }
-        });
-
-        // Sync tombstones.json
-        // First merge with remote tombstones.json if it exists and hasn't been downloaded yet
-        if let Some(_remote_tombstone_hash) = remote_tree_files.get("app-meta/sync/tombstones.json") {
-             if !to_download.contains(&"app-meta/sync/tombstones.json".to_string()) {
-                 let api_content_url = format!("{}/contents/{}?ref={}", api_base, "app-meta/sync/tombstones.json", config.branch);
-                 if let Ok(dl_resp) = client.get(&api_content_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send() {
-                     if dl_resp.status().is_success() {
-                         let json: serde_json::Value = dl_resp.json().unwrap_or_default();
-                         if let Some(content_b64) = json["content"].as_str() {
-                             let content_b64 = content_b64.replace("\n", "");
-                             use base64::Engine;
-                             if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
-                                 if let Ok(remote_tombstones) = serde_json::from_slice::<Vec<Tombstone>>(&content) {
-                                     let mut merged_tombstones = remote_tombstones;
-                                     // merge local tombstones
-                                     for t in &state.tombstones {
-                                         if !merged_tombstones.iter().any(|rt| rt.original_path == t.original_path && rt.trash_path == t.trash_path) {
-                                             merged_tombstones.push(t.clone());
-                                         }
-                                     }
-                                     state.tombstones = merged_tombstones;
-                                 }
-                             }
-                         }
-                     }
-                 }
-             } else {
-                 // it was downloaded, so we can read it directly from disk and merge
-                 if let Ok(content) = std::fs::read(workspace_path.join("app-meta/sync/tombstones.json")) {
-                     if let Ok(remote_tombstones) = serde_json::from_slice::<Vec<Tombstone>>(&content) {
-                         let mut merged_tombstones = remote_tombstones;
-                         for t in &state.tombstones {
-                             if !merged_tombstones.iter().any(|rt| rt.original_path == t.original_path && rt.trash_path == t.trash_path) {
-                                 merged_tombstones.push(t.clone());
-                             }
-                         }
-                         state.tombstones = merged_tombstones;
-                     }
-                 }
-             }
-        }
-
-        if !state.tombstones.is_empty() {
-            let tombstones_json = serde_json::to_string_pretty(&state.tombstones).unwrap_or_default();
-            let tombstones_path = "app-meta/sync/tombstones.json";
-
-            if let Some(parent) = workspace_path.join(tombstones_path).parent() {
-                 let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(workspace_path.join(tombstones_path), &tombstones_json);
-
-            let blob_url = format!("{}/git/blobs", api_base);
-            let blob_payload = serde_json::json!({
-                "content": tombstones_json,
-                "encoding": "utf-8"
-            });
-            let resp = client.post(&blob_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&blob_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() == 201 {
-                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-                let sha = json["sha"].as_str().unwrap_or_default().to_string();
-                tree_nodes.push(serde_json::json!({
-                    "path": tombstones_path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": sha
-                }));
-            }
-        } else {
-            // delete tombstones.json from remote if empty
-            if remote_tree_files.contains_key("app-meta/sync/tombstones.json") {
-                tree_nodes.push(serde_json::json!({
-                    "path": "app-meta/sync/tombstones.json",
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": serde_json::Value::Null
-                }));
-            }
-            let tombstones_path = "app-meta/sync/tombstones.json";
-            let _ = std::fs::remove_file(workspace_path.join(tombstones_path));
-        }
-
-        // 5. Create new tree & commit if there are changes
-        #[allow(unused_assignments)]
-        let mut new_commit_sha = String::new();
-
-        if !tree_nodes.is_empty() {
-            tree_payload["tree"] = serde_json::json!(tree_nodes);
-
-            // create tree
-            let tree_url = format!("{}/git/trees", api_base);
-            let resp = client.post(&tree_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&tree_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() != 201 {
-                let status = resp.status().as_u16();
-                let err_text = resp.text().unwrap_or_default();
-                let clean_err = err_text.replace(&token, "***TOKEN***");
-
-                result.error = Some(format!("create tree failed: {} {}", status, clean_err));
-                result.user_message = Some(format!("GitHub API 同步创建 Tree 失败: {} {}", status, clean_err));
-
-                Self::save_sync_attempt_state(workspace_path, &result);
-                return Ok(result);
-            }
-            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-            let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
-
-            // create commit
-            let commit_url = format!("{}/git/commits", api_base);
-            let mut commit_payload = serde_json::json!({
-                "message": format!("WriterApp Sync via GitHub API: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
-                "tree": new_tree_sha
-            });
-            if !latest_commit_sha.is_empty() {
-                commit_payload["parents"] = serde_json::json!(vec![latest_commit_sha.clone()]);
-            }
-
-            let resp = client.post(&commit_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&commit_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() != 201 {
-                let status = resp.status().as_u16();
-                let err_text = resp.text().unwrap_or_default();
-                let clean_err = err_text.replace(&token, "***TOKEN***");
-
-                result.error = Some(format!("create commit failed: {} {}", status, clean_err));
-                result.user_message = Some(format!("GitHub API 同步创建 Commit 失败: {} {}", status, clean_err));
-
-                Self::save_sync_attempt_state(workspace_path, &result);
-                return Ok(result);
-            }
-            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-            new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
-
-            // update ref
-            if !latest_commit_sha.is_empty() {
-                let ref_url = format!("{}/git/refs/heads/{}", api_base, config.branch);
-                let ref_payload = serde_json::json!({
-                    "sha": new_commit_sha,
-                    "force": false
-                });
-                let resp = client.patch(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-                if resp.status().as_u16() == 422 { // Unprocessable Entity typically means fast-forward failed
-                     result.error = Some("conflict: fast-forward failed".to_string());
-                     result.user_message = Some("远端存在新提交，无法推送（冲突）。请先同步或手动处理。".to_string());
-                     Self::save_sync_attempt_state(workspace_path, &result);
-                     return Ok(result);
-                }
-                if resp.status().as_u16() != 200 {
-                    let status = resp.status().as_u16();
-                    let err_text = resp.text().unwrap_or_default();
-                    let clean_err = err_text.replace(&token, "***TOKEN***");
-                    result.error = Some(format!("update ref failed: {} {}", status, clean_err));
-                    result.user_message = Some(format!("GitHub API 同步更新引用失败: {} {}", status, clean_err));
-                    Self::save_sync_attempt_state(workspace_path, &result);
-                    return Ok(result);
-                }
-            } else {
-                let ref_url = format!("{}/git/refs", api_base);
-                let ref_payload = serde_json::json!({
-                    "ref": format!("refs/heads/{}", config.branch),
-                    "sha": new_commit_sha
-                });
-                let resp = client.post(&ref_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").json(&ref_payload).send().map_err(|e| crate::Error::Other(e.to_string()))?;
-                if resp.status().as_u16() != 201 {
-                let status = resp.status().as_u16();
-                let err_text = resp.text().unwrap_or_default();
-                let clean_err = err_text.replace(&token, "***TOKEN***");
-                result.error = Some(format!("create ref failed: {} {}", status, clean_err));
-                result.user_message = Some(format!("GitHub API 同步创建引用失败: {} {}", status, clean_err));
-                    Self::save_sync_attempt_state(workspace_path, &result);
-                    return Ok(result);
-                }
-            }
-        } else {
-            // No tree changes - no commit needed. May still have downloads/local trash moves.
-            // known_files will be updated below alongside the commit path.
-            // Set new_commit_sha to latest_commit_sha for state tracking.
-            new_commit_sha = latest_commit_sha.clone();
-        }
-
-        // Update successful result (always runs regardless of tree_nodes)
-        result.status = SyncStatus::Success;
-        result.uploaded_files = to_upload.clone();
-        result.downloaded_files = to_download.clone();
-        result.ignored_files = ignored;
-        if !new_commit_sha.is_empty() {
-            result.commit_hash = Some(new_commit_sha.clone());
-        }
-        result.first_sync_mode = if is_first_sync {
-             if latest_commit_sha.is_empty() { FirstSyncMode::InitExistingWorkspace } else { FirstSyncMode::AlreadyGitRepo }
-        } else {
-             FirstSyncMode::NotAttempted
-        };
-        let has_changes = !to_upload.is_empty() || !to_download.is_empty() || !to_delete_remote.is_empty() || !to_delete_local.is_empty();
-        result.user_message = if is_first_sync {
-            Some("已初始化远端分支并完成首次同步。".to_string())
-        } else if !has_changes {
-            Some("双向同步完成，无变化。".to_string())
-        } else {
-            Some(format!("双向同步完成。上传: {}, 下载: {}, 远端删除: {}, 本地移入回收站: {} (网络模式: {})。",
-                to_upload.len(), to_download.len(), to_delete_remote.len(), to_delete_local.len(), mode))
-        };
-
-        state.last_sync_time = Some(chrono::Utc::now().timestamp());
-        if !new_commit_sha.is_empty() && new_commit_sha != latest_commit_sha {
-            state.last_synced_commit = Some(new_commit_sha);
-        }
-
-        // Re-scan to update known_files
-        if let Ok(entries) = SyncService::scan_workspace_for_sync(workspace_path) {
-            state.known_files.clear();
-            for e in entries {
-                if e.sync_kind == SyncKind::Upload {
-                    let full_path = workspace_path.join(&e.relative_path);
-                    if let Ok(content) = std::fs::read(&full_path) {
-                        let git_hash = SyncService::compute_git_hash(&content);
-                        state.known_files.insert(e.relative_path, git_hash);
-                    }
-                }
-            }
-
-            // Add tombstones and trash payload to known_files manually so they don't get deleted later
-            if !state.tombstones.is_empty() {
-                let tombstones_path = "app-meta/sync/tombstones.json";
-                if let Ok(content) = std::fs::read(workspace_path.join(tombstones_path)) {
-                    state.known_files.insert(tombstones_path.to_string(), SyncService::compute_git_hash(&content));
-                }
-            }
-            for t in &state.tombstones {
-                if let Ok(content) = std::fs::read(workspace_path.join(&t.trash_path)) {
-                    state.known_files.insert(t.trash_path.clone(), SyncService::compute_git_hash(&content));
-                }
-            }
-        }
-        let _ = SyncService::save_sync_state(workspace_path, &state);
-
-        Self::save_sync_attempt_state(workspace_path, &result);
-
-        Ok(result)
+        SyncService::perform_lww_sync(workspace_path, config, secrets)
     }
 }
 
@@ -2503,6 +1962,26 @@ impl SyncPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestFileRecord {
+    pub path: String,
+    pub content_hash: String,
+    pub updated_at_ms: i64,
+    pub device_id: String,
+    pub op: String, // "upsert" or "delete"
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+}
+
+fn default_schema_version() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncManifest {
+    pub files: Vec<ManifestFileRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tombstone {
     pub original_path: String,
     pub trash_path: String,
@@ -2527,6 +2006,10 @@ pub struct SyncState {
     pub tombstones: Vec<Tombstone>,
     #[serde(default)]
     pub deleted_files: std::collections::HashSet<String>,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default)]
+    pub known_files_updated_at: std::collections::HashMap<String, i64>,
 }
 
 impl Default for SyncState {
@@ -2542,6 +2025,8 @@ impl Default for SyncState {
             conflicts: Vec::new(),
             tombstones: Vec::new(),
             deleted_files: std::collections::HashSet::new(),
+            device_id: uuid::Uuid::new_v4().to_string(),
+            known_files_updated_at: std::collections::HashMap::new(),
         }
     }
 }
@@ -2762,6 +2247,50 @@ fn classify_error_with_proxy(err_msg: &str, result: &SyncDiagnosticsResult) -> S
         return "repo_not_found_or_no_permission".to_string();
     }
     "proxy_connect_failed".to_string()
+}
+
+fn fetch_and_reset_local_repo(
+    workspace_path: &Path,
+    config: &SyncConfig,
+    token: &str,
+    new_commit_sha: &str,
+) -> crate::Result<()> {
+    if let Ok(repo) = git2::Repository::open(workspace_path) {
+        let mut remote = repo.find_remote("origin").or_else(|_| {
+            repo.remote("origin", &config.remote_url)
+        }).map_err(|e| crate::Error::Other(e.to_string()))?;
+
+        let mut fetch_opts = git2::FetchOptions::new();
+        if !token.is_empty() {
+            let mut callbacks = git2::RemoteCallbacks::new();
+            let token_clone = token.to_string();
+            callbacks.credentials(move |_url, username_from_url, _allowed_types| {
+                let user = username_from_url.unwrap_or("x-access-token");
+                git2::Cred::userpass_plaintext(user, &token_clone)
+            });
+            fetch_opts.remote_callbacks(callbacks);
+        }
+
+        if config.proxy_enabled {
+            if let Ok(proxy_opts) = Git2Backend::build_proxy_options(Some(config)) {
+                fetch_opts.proxy_options(proxy_opts);
+            }
+        }
+
+        let refspec = format!("refs/heads/{}:refs/remotes/origin/{}", config.branch, config.branch);
+        remote.fetch(&[refspec], Some(&mut fetch_opts), None).map_err(|e| crate::Error::Other(e.to_string()))?;
+
+        let commit_oid = git2::Oid::from_str(new_commit_sha).map_err(|e| crate::Error::Other(e.to_string()))?;
+        let commit_obj = repo.find_commit(commit_oid).map_err(|e| crate::Error::Other(e.to_string()))?;
+
+        repo.reset(commit_obj.as_object(), git2::ResetType::Mixed, None).map_err(|e| crate::Error::Other(e.to_string()))?;
+
+        let branch_ref_name = format!("refs/heads/{}", config.branch);
+        repo.reference(&branch_ref_name, commit_oid, true, "LWW sync update").map_err(|e| crate::Error::Other(e.to_string()))?;
+
+        let _ = repo.set_head(&format!("refs/heads/{}", config.branch));
+    }
+    Ok(())
 }
 
 impl SyncService {
@@ -3298,6 +2827,650 @@ fn semantic_merge_json(
         Self::build_sync_plan_from_workspace(workspace_path)
         // Note: Full dry-run combining remote diffs is not currently supported without
         // network access inside the dry-run invocation, so it operates locally for now.
+    }
+
+    pub fn check_dirty_repo_blocked(workspace_path: &Path) -> crate::Result<Option<Vec<String>>> {
+        if let Ok(repo) = git2::Repository::open(workspace_path) {
+            let mut opts = git2::StatusOptions::new();
+            opts.include_untracked(true);
+            let mut dirty = Vec::new();
+            if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
+                for entry in statuses.iter() {
+                    if let Some(path) = entry.path() {
+                        if !Self::is_blacklisted_path(path) && !Self::is_whitelisted_path(path) {
+                            let status = entry.status();
+                            if status.is_wt_modified() || status.is_index_modified() ||
+                               status.is_wt_new() || status.is_index_new() ||
+                               status.is_wt_deleted() || status.is_index_deleted() {
+                                dirty.push(path.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            if !dirty.is_empty() {
+                return Ok(Some(dirty));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn perform_lww_sync(
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        let mut result = SyncResult::success();
+        result.status = SyncStatus::Idle;
+
+        if !config.enabled {
+            result.status = SyncStatus::Success;
+            return Ok(result);
+        }
+
+        if config.remote_url.is_empty() {
+            return Ok(SyncResult::error(
+                SyncStatus::Error("Remote URL is empty".to_string()),
+                FirstSyncMode::NotAttempted,
+                Some("远程仓库地址为空。".to_string()),
+                "Remote URL is empty".to_string(),
+            ));
+        }
+
+        let token = secrets.token.clone().unwrap_or_default();
+        if token.is_empty() {
+            return Ok(SyncResult::error(
+                SyncStatus::Error("No token provided".to_string()),
+                FirstSyncMode::NotAttempted,
+                Some("缺少 GitHub Token。".to_string()),
+                "No token provided".to_string(),
+            ));
+        }
+
+        // Check for dirty non-whitelisted changes
+        if let Some(dirty_files) = Self::check_dirty_repo_blocked(workspace_path)? {
+            return Ok(SyncResult::error(
+                SyncStatus::DirtyRepoBlocked,
+                FirstSyncMode::NotAttempted,
+                Some(format!(
+                    "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件:\n{}",
+                    dirty_files.join("\n")
+                )),
+                "Dirty repo blocked: non-whitelisted files modified".to_string(),
+            ));
+        }
+
+        // Load or initialize local state
+        let mut state = Self::load_sync_state(workspace_path)?;
+        if state.device_id.is_empty() {
+            state.device_id = uuid::Uuid::new_v4().to_string();
+            Self::save_sync_state(workspace_path, &state)?;
+        }
+
+        // Build http client using build_auto_client
+        let api_base = GitHubApiBackend::api_base_url(&config.remote_url);
+        let probed_res = GitHubApiBackend::build_auto_client(config, secrets, Some(workspace_path));
+        let (client, mode, probe_summary) = match probed_res {
+            Ok((p, summary)) => (p.client, p.mode, summary),
+            Err(e) => {
+                result.error = Some(e.to_string());
+                result.user_message = Some(format!("网络探测失败: {}", e));
+                result.status = SyncStatus::RecoverableError(e.to_string());
+                return Ok(result);
+            }
+        };
+        result.chosen_network_mode = Some(mode.clone());
+        result.network_probe_summary = probe_summary;
+
+        // Perform the synchronization in a retry loop (OCC)
+        let max_retries = 2;
+        let mut attempt = 0;
+        loop {
+            match Self::execute_lww_sync_attempt(
+                workspace_path,
+                config,
+                &token,
+                &api_base,
+                &client,
+                &mode,
+                &mut state,
+                &mut result,
+            ) {
+                Ok(res) => return Ok(res),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        result.status = SyncStatus::RecoverableError(e.to_string());
+                        result.error = Some(e.to_string());
+                        result.user_message = Some(format!("同步失败，已重试 {} 次。错误: {}", max_retries, e));
+                        return Ok(result);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+    }
+
+    fn execute_lww_sync_attempt(
+        workspace_path: &Path,
+        config: &SyncConfig,
+        token: &str,
+        api_base: &str,
+        client: &reqwest::blocking::Client,
+        mode: &str,
+        state: &mut SyncState,
+        result: &mut SyncResult,
+    ) -> crate::Result<SyncResult> {
+        let branch_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
+        let resp = client.get(&branch_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
+
+        let mut latest_commit_sha = String::new();
+        let mut base_tree_sha = String::new();
+        let mut remote_tree_files = std::collections::HashMap::new();
+
+        if resp.status().as_u16() == 200 {
+            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+            latest_commit_sha = json["object"]["sha"].as_str().unwrap_or_default().to_string();
+
+            // get commit
+            let commit_url = format!("{}/git/commits/{}", api_base, latest_commit_sha);
+            let resp = client.get(&commit_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "WriterApp/1.0")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() == 200 {
+                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                base_tree_sha = json["tree"]["sha"].as_str().unwrap_or_default().to_string();
+            }
+
+            // get tree recursively
+            if !base_tree_sha.is_empty() {
+                let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, base_tree_sha);
+                let resp = client.get(&tree_url)
+                    .header("Authorization", format!("Bearer {}", token))
+                    .header("User-Agent", "WriterApp/1.0")
+                    .header("Accept", "application/vnd.github+json")
+                    .send()
+                    .map_err(|e| crate::Error::Other(e.to_string()))?;
+                if resp.status().as_u16() == 200 {
+                    let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                    if let Some(tree) = json["tree"].as_array() {
+                        for item in tree {
+                            if item["type"].as_str() == Some("blob") {
+                                if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
+                                    remote_tree_files.insert(path.to_string(), sha.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut remote_manifest = SyncManifest::default();
+        if remote_tree_files.contains_key("app-meta/sync/manifest.sync.json") {
+            let manifest_url = format!("{}/contents/app-meta/sync/manifest.sync.json?ref={}", api_base, config.branch);
+            let resp = client.get(&manifest_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "WriterApp/1.0")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().is_success() {
+                let json: serde_json::Value = resp.json().unwrap_or_default();
+                if let Some(content_b64) = json["content"].as_str() {
+                    let content_b64 = content_b64.replace("\n", "");
+                    use base64::Engine;
+                    if let Ok(content_bytes) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
+                        if let Ok(manifest) = serde_json::from_slice::<SyncManifest>(&content_bytes) {
+                            remote_manifest = manifest;
+                        }
+                    }
+                }
+            }
+        }
+
+        let local_entries = Self::scan_workspace_for_sync(workspace_path)?;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut local_records = std::collections::HashMap::new();
+
+        // 1. Existing local files
+        for entry in &local_entries {
+            if entry.sync_kind == SyncKind::Upload {
+                let path = entry.relative_path.clone();
+                let local_hash = entry.file_hash.clone();
+                
+                let updated_at_ms;
+                let op = "upsert".to_string();
+
+                if let Some(known_hash) = state.known_files.get(&path) {
+                    if *known_hash == local_hash {
+                        updated_at_ms = state.known_files_updated_at.get(&path).cloned().unwrap_or(0);
+                    } else {
+                        let modified_ms = std::fs::metadata(workspace_path.join(&path))
+                            .and_then(|m| m.modified())
+                            .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(now_ms);
+                        updated_at_ms = modified_ms;
+                    }
+                } else {
+                    let modified_ms = std::fs::metadata(workspace_path.join(&path))
+                        .and_then(|m| m.modified())
+                        .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(now_ms);
+                    updated_at_ms = modified_ms;
+                }
+
+                local_records.insert(path.clone(), ManifestFileRecord {
+                    path,
+                    content_hash: local_hash,
+                    updated_at_ms,
+                    device_id: state.device_id.clone(),
+                    op,
+                    schema_version: 1,
+                });
+            }
+        }
+
+        // 2. Local deletions (in known_files but missing from workspace)
+        for (path, _known_hash) in &state.known_files {
+            if !local_records.contains_key(path) {
+                if !Self::is_whitelisted_path(path) || Self::is_blacklisted_path(path) {
+                    continue;
+                }
+                if !workspace_path.join(path).exists() {
+                    let mut updated_at_ms = now_ms;
+                    if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path) {
+                        updated_at_ms = tombstone.deleted_at * 1000;
+                    }
+                    
+                    local_records.insert(path.clone(), ManifestFileRecord {
+                        path: path.clone(),
+                        content_hash: String::new(),
+                        updated_at_ms,
+                        device_id: state.device_id.clone(),
+                        op: "delete".to_string(),
+                        schema_version: 1,
+                    });
+                }
+            }
+        }
+
+        let mut remote_records = std::collections::HashMap::new();
+        for rec in remote_manifest.files {
+            remote_records.insert(rec.path.clone(), rec);
+        }
+        
+        for (path, sha) in &remote_tree_files {
+            if !remote_records.contains_key(path) {
+                if !Self::is_whitelisted_path(path) || Self::is_blacklisted_path(path) {
+                    continue;
+                }
+                remote_records.insert(path.clone(), ManifestFileRecord {
+                    path: path.clone(),
+                    content_hash: sha.clone(),
+                    updated_at_ms: 0,
+                    device_id: "remote".to_string(),
+                    op: "upsert".to_string(),
+                    schema_version: 1,
+                });
+            }
+        }
+
+        let mut merged_manifest_files = std::collections::HashMap::new();
+        let mut to_download = Vec::new();
+        let mut to_upload = Vec::new();
+        let mut to_delete_local = Vec::new();
+        let mut local_deletes_count = Vec::new();
+        let mut remote_deletes_count = Vec::new();
+        let mut overwritten_files = Vec::new();
+
+        let all_paths: std::collections::HashSet<String> = local_records.keys().cloned()
+            .chain(remote_records.keys().cloned()).collect();
+
+        for path in all_paths {
+            let local_opt = local_records.get(&path);
+            let remote_opt = remote_records.get(&path);
+
+            match (local_opt, remote_opt) {
+                (Some(local_rec), None) => {
+                    merged_manifest_files.insert(path.clone(), local_rec.clone());
+                    if local_rec.op == "upsert" {
+                        to_upload.push(path);
+                    }
+                }
+                (None, Some(remote_rec)) => {
+                    merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                    if remote_rec.op == "upsert" {
+                        to_download.push(path);
+                    } else if remote_rec.op == "delete" {
+                        to_delete_local.push(path.clone());
+                        remote_deletes_count.push(path);
+                    }
+                }
+                (Some(local_rec), Some(remote_rec)) => {
+                    let mut remote_wins = false;
+                    if remote_rec.updated_at_ms > local_rec.updated_at_ms {
+                        remote_wins = true;
+                    } else if remote_rec.updated_at_ms == local_rec.updated_at_ms {
+                        if remote_rec.device_id > local_rec.device_id {
+                            remote_wins = true;
+                        }
+                    }
+
+                    if remote_wins {
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        if remote_rec.op == "upsert" {
+                            if local_rec.op == "delete" || local_rec.content_hash != remote_rec.content_hash {
+                                overwritten_files.push(path.clone());
+                                to_download.push(path);
+                            }
+                        } else if remote_rec.op == "delete" {
+                            if local_rec.op == "upsert" {
+                                overwritten_files.push(path.clone());
+                            }
+                            to_delete_local.push(path.clone());
+                            remote_deletes_count.push(path);
+                        }
+                    } else {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        if local_rec.op == "upsert" {
+                            if remote_rec.op == "delete" || remote_rec.content_hash != local_rec.content_hash {
+                                overwritten_files.push(path.clone());
+                                to_upload.push(path);
+                            }
+                        } else if local_rec.op == "delete" {
+                            if remote_rec.op == "upsert" {
+                                overwritten_files.push(path.clone());
+                            }
+                            local_deletes_count.push(path);
+                        }
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+
+        // Delete local files
+        for path in &to_delete_local {
+            let full_path = workspace_path.join(path);
+            if full_path.exists() {
+                let filename = full_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let trash_dir = workspace_path.join("app-meta/sync/trash");
+                let _ = std::fs::create_dir_all(&trash_dir);
+                let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), filename));
+                let _ = std::fs::rename(&full_path, &trash_path);
+            }
+        }
+
+        // Download remote files
+        for path in &to_download {
+            let api_content_url = format!("{}/contents/{}?ref={}", api_base, path, config.branch);
+            let dl_resp = client.get(&api_content_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "WriterApp/1.0")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+            if dl_resp.status().is_success() {
+                let json: serde_json::Value = dl_resp.json().unwrap_or_default();
+                if let Some(content_b64) = json["content"].as_str() {
+                    let content_b64 = content_b64.replace("\n", "");
+                    use base64::Engine;
+                    if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
+                        let full_path = workspace_path.join(path);
+                        if let Some(parent) = full_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                        if std::fs::write(&tmp_path, content).is_ok() {
+                            let _ = std::fs::rename(tmp_path, &full_path);
+                        }
+                    }
+                }
+            } else {
+                return Err(crate::Error::Other(format!("Failed to download file {}: {}", path, dl_resp.status())));
+            }
+        }
+
+        let mut tree_nodes = vec![];
+
+        // Upload whitelisted files
+        for path in &to_upload {
+            let full_path = workspace_path.join(path);
+            if !full_path.exists() { continue; }
+
+            let content = std::fs::read(&full_path).map_err(|e| crate::Error::Other(format!("读取文件失败 {}: {}", path, e)))?;
+
+            let blob_url = format!("{}/git/blobs", api_base);
+            let blob_payload = serde_json::json!({
+                "content": base64::engine::general_purpose::STANDARD.encode(&content),
+                "encoding": "base64"
+            });
+            let resp = client.post(&blob_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "WriterApp/1.0")
+                .header("Accept", "application/vnd.github+json")
+                .json(&blob_payload)
+                .send()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+            
+            if resp.status().as_u16() == 201 {
+                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                let sha = json["sha"].as_str().unwrap_or_default().to_string();
+                tree_nodes.push(serde_json::json!({
+                    "path": path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": sha
+                }));
+            } else {
+                return Err(crate::Error::Other(format!("Failed to upload blob for {}: {}", path, resp.status())));
+            }
+        }
+
+        let purge_time = now_ms - 30 * 24 * 3600 * 1000;
+        let mut manifest_files_vec: Vec<ManifestFileRecord> = merged_manifest_files.values().cloned().collect();
+        manifest_files_vec.retain(|rec| {
+            rec.op != "delete" || rec.updated_at_ms > purge_time
+        });
+
+        let sync_manifest = SyncManifest {
+            files: manifest_files_vec,
+        };
+        
+        let manifest_json = serde_json::to_string_pretty(&sync_manifest).unwrap_or_default();
+        let manifest_path = "app-meta/sync/manifest.sync.json";
+        let full_manifest_path = workspace_path.join(manifest_path);
+        if let Some(parent) = full_manifest_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&full_manifest_path, &manifest_json).map_err(|e| crate::Error::Other(format!("Failed to write manifest locally: {}", e)))?;
+
+        let blob_url = format!("{}/git/blobs", api_base);
+        let blob_payload = serde_json::json!({
+            "content": base64::engine::general_purpose::STANDARD.encode(manifest_json.as_bytes()),
+            "encoding": "base64"
+        });
+        let resp = client.post(&blob_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .json(&blob_payload)
+            .send()
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
+        let manifest_sha = if resp.status().as_u16() == 201 {
+            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+            json["sha"].as_str().unwrap_or_default().to_string()
+        } else {
+            return Err(crate::Error::Other(format!("Failed to upload manifest blob: {}", resp.status())));
+        };
+
+        tree_nodes.push(serde_json::json!({
+            "path": manifest_path,
+            "mode": "100644",
+            "type": "blob",
+            "sha": manifest_sha
+        }));
+
+        for (path, remote_rec) in &remote_records {
+            if let Some(merged_rec) = merged_manifest_files.get(path) {
+                if merged_rec.op == "delete" && remote_rec.op == "upsert" {
+                    tree_nodes.push(serde_json::json!({
+                        "path": path,
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": serde_json::Value::Null
+                    }));
+                }
+            }
+        }
+
+        let mut tree_payload = serde_json::json!({
+            "tree": tree_nodes
+        });
+        if !base_tree_sha.is_empty() {
+            tree_payload["base_tree"] = serde_json::json!(base_tree_sha);
+        }
+
+        let tree_url = format!("{}/git/trees", api_base);
+        let resp = client.post(&tree_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .json(&tree_payload)
+            .send()
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::Other(format!("Failed to create tree: {}", resp.status())));
+        }
+        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+        let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
+
+        let commit_url = format!("{}/git/commits", api_base);
+        let mut commit_payload = serde_json::json!({
+            "message": format!("WriterApp LWW Sync: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
+            "tree": new_tree_sha
+        });
+        if !latest_commit_sha.is_empty() {
+            commit_payload["parents"] = serde_json::json!(vec![latest_commit_sha.clone()]);
+        }
+        let resp = client.post(&commit_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .json(&commit_payload)
+            .send()
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::Other(format!("Failed to create commit: {}", resp.status())));
+        }
+        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+        let new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
+
+        if !latest_commit_sha.is_empty() {
+            let ref_url = format!("{}/git/refs/heads/{}", api_base, config.branch);
+            let ref_payload = serde_json::json!({
+                "sha": new_commit_sha,
+                "force": false
+            });
+            let resp = client.patch(&ref_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "WriterApp/1.0")
+                .header("Accept", "application/vnd.github+json")
+                .json(&ref_payload)
+                .send()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+            if resp.status().as_u16() == 422 || resp.status().as_u16() == 409 {
+                return Err(crate::Error::Other("occ_conflict".to_string()));
+            }
+            if !resp.status().is_success() {
+                return Err(crate::Error::Other(format!("Failed to update ref: {}", resp.status())));
+            }
+        } else {
+            let ref_url = format!("{}/git/refs", api_base);
+            let ref_payload = serde_json::json!({
+                "ref": format!("refs/heads/{}", config.branch),
+                "sha": new_commit_sha
+            });
+            let resp = client.post(&ref_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "WriterApp/1.0")
+                .header("Accept", "application/vnd.github+json")
+                .json(&ref_payload)
+                .send()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+            if !resp.status().is_success() {
+                return Err(crate::Error::Other(format!("Failed to create ref: {}", resp.status())));
+            }
+        }
+
+        state.last_sync_time = Some(chrono::Utc::now().timestamp());
+        state.last_synced_commit = Some(new_commit_sha.clone());
+        state.last_error = None;
+        state.last_successful_network_mode = Some(mode.to_string());
+        
+        let post_local_entries = Self::scan_workspace_for_sync(workspace_path)?;
+        state.known_files.clear();
+        state.known_files_updated_at.clear();
+        for entry in post_local_entries {
+            if entry.sync_kind == SyncKind::Upload {
+                state.known_files.insert(entry.relative_path.clone(), entry.file_hash.clone());
+                
+                let matched_rec = merged_manifest_files.get(&entry.relative_path);
+                let t = matched_rec.map(|r| r.updated_at_ms).unwrap_or_else(|| {
+                    std::fs::metadata(workspace_path.join(&entry.relative_path))
+                        .and_then(|m| m.modified())
+                        .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(now_ms)
+                });
+                state.known_files_updated_at.insert(entry.relative_path, t);
+            }
+        }
+        
+        state.tombstones.retain(|t| {
+            t.purge_after > chrono::Utc::now().timestamp()
+        });
+        
+        Self::save_sync_state(workspace_path, state)?;
+
+        let has_changes = !to_upload.is_empty() || !to_download.is_empty() || !local_deletes_count.is_empty() || !remote_deletes_count.is_empty();
+        result.status = if has_changes { SyncStatus::LatestWinsApplied } else { SyncStatus::NoChanges };
+        result.uploaded_files = to_upload;
+        result.downloaded_files = to_download;
+        result.local_deletes = local_deletes_count;
+        result.remote_deletes = remote_deletes_count;
+        result.overwritten_files = overwritten_files;
+        result.commit_hash = Some(new_commit_sha.clone());
+        result.first_sync_mode = if latest_commit_sha.is_empty() {
+            FirstSyncMode::InitExistingWorkspace
+        } else {
+            FirstSyncMode::AlreadyGitRepo
+        };
+        
+        result.user_message = Some(format!(
+            "双向同步完成。上传: {}, 下载: {}, 本地删除: {}, 远端删除: {}, 覆盖: {} (网络模式: {})。",
+            result.uploaded_files.len(),
+            result.downloaded_files.len(),
+            result.local_deletes.len(),
+            result.remote_deletes.len(),
+            result.overwritten_files.len(),
+            mode
+        ));
+
+        let _ = fetch_and_reset_local_repo(workspace_path, config, token, &new_commit_sha);
+
+        Ok(result.clone())
     }
 
     pub fn perform_sync(
@@ -3911,6 +4084,7 @@ fn semantic_merge_json(
         let ignored_patterns = [
             "app-meta/settings/settings.local.json",
             "app-meta/sync/sync_secrets.local.json",
+            "app-meta/sync/state.local.json",
             "sqlite_cache",
             "tmp",
             "backups",
@@ -3950,6 +4124,9 @@ fn semantic_merge_json(
             return true;
         }
         if rel_path == "app-meta/settings/settings.sync.json" {
+            return true;
+        }
+        if rel_path == "app-meta/sync/manifest.sync.json" {
             return true;
         }
 
@@ -4121,24 +4298,42 @@ fn semantic_merge_json(
     }
 
     pub fn load_sync_state(workspace_path: &Path) -> crate::Result<SyncState> {
-        let state_path = workspace_path.join("app-meta/sync/sync_state.json");
+        let state_path = workspace_path.join("app-meta/sync/state.local.json");
         if !state_path.exists() {
-            return Ok(SyncState::default());
+            // Try to migrate if the old sync_state.json exists
+            let old_path = workspace_path.join("app-meta/sync/sync_state.json");
+            if old_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&old_path) {
+                    if let Ok(mut state) = serde_json::from_str::<SyncState>(&content) {
+                        if state.device_id.is_empty() {
+                            state.device_id = uuid::Uuid::new_v4().to_string();
+                        }
+                        let _ = Self::save_sync_state(workspace_path, &state);
+                        let _ = std::fs::remove_file(old_path);
+                        return Ok(state);
+                    }
+                }
+            }
+
+            let mut default_state = SyncState::default();
+            default_state.device_id = uuid::Uuid::new_v4().to_string();
+            return Ok(default_state);
         }
 
         let content = std::fs::read_to_string(state_path)?;
-        let state: SyncState = serde_json::from_str(&content).unwrap_or_default();
+        let mut state: SyncState = serde_json::from_str(&content).unwrap_or_default();
+        if state.device_id.is_empty() {
+            state.device_id = uuid::Uuid::new_v4().to_string();
+            let _ = Self::save_sync_state(workspace_path, &state);
+        }
         Ok(state)
     }
 
     pub fn save_sync_state(workspace_path: &Path, state: &SyncState) -> crate::Result<()> {
-        let state_path = workspace_path.join("app-meta/sync/sync_state.json");
+        let state_path = workspace_path.join("app-meta/sync/state.local.json");
         if let Some(parent) = state_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-
-        // Ensure we don't save token or private keys! Wait, the SyncState model doesn't even have token/private key fields
-        // which prevents accidental leakage natively.
 
         let content = serde_json::to_string_pretty(state).map_err(|e| {
             crate::Error::Io(std::io::Error::new(
@@ -4147,7 +4342,6 @@ fn semantic_merge_json(
             ))
         })?;
 
-        // Atomic save wrapper or direct save since it's just sync state
         let tmp_path = state_path.with_extension("tmp");
         std::fs::write(&tmp_path, content)?;
         std::fs::rename(tmp_path, state_path)?;
@@ -4485,6 +4679,8 @@ mod tests {
             conflicts: vec![],
             tombstones: Vec::new(),
             deleted_files: std::collections::HashSet::new(),
+            device_id: String::new(),
+            known_files_updated_at: std::collections::HashMap::new(),
         };
         let config_str = serde_json::to_string(&config).unwrap();
         let state_str = serde_json::to_string(&state).unwrap();
@@ -4593,10 +4789,12 @@ mod tests {
             conflicts: vec![],
             tombstones: Vec::new(),
             deleted_files: std::collections::HashSet::new(),
+            device_id: String::new(),
+            known_files_updated_at: std::collections::HashMap::new(),
         };
 
         SyncService::save_sync_state(dir.path(), &state).unwrap();
-        let state_path = dir.path().join("app-meta/sync/sync_state.json");
+        let state_path = dir.path().join("app-meta/sync/state.local.json");
         let state_content = std::fs::read_to_string(state_path).unwrap();
 
         assert!(state_content.contains("https://example.com/repo.git"));
@@ -4822,7 +5020,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join("app-meta/sync");
         std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(state_dir.join("sync_state.json"), "{}").unwrap();
+        std::fs::write(state_dir.join("state.local.json"), "{}").unwrap();
 
         let config = SyncConfig {
             proxy_enabled: false,
@@ -4903,8 +5101,8 @@ mod tests {
             }
         }
 
-        std::fs::remove_file(state_dir.join("sync_state.json")).unwrap();
-        std::fs::create_dir(state_dir.join("sync_state.json")).unwrap();
+        std::fs::remove_file(state_dir.join("state.local.json")).unwrap();
+        std::fs::create_dir(state_dir.join("state.local.json")).unwrap();
 
         let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackendOk).unwrap();
         assert!(matches!(res.status, SyncStatus::FatalError(_)));
@@ -5421,5 +5619,335 @@ mod tests {
         // 3. Local settings file is intact and not corrupted with remote change
         let content_after = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content_after, local_content);
+    }
+
+    fn start_mock_github_api(
+        initial_manifest: Option<SyncManifest>,
+        initial_files: std::collections::HashMap<String, String>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+        std::sync::Arc<std::sync::Mutex<String>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::net::TcpListener;
+        use std::io::{Read, Write};
+        use std::thread;
+        use std::sync::{Arc, Mutex};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let addr = format!("http://127.0.0.1:{}", port);
+        
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
+
+        let files = Arc::new(Mutex::new(initial_files));
+        let files_clone = files.clone();
+
+        let manifest_str = if let Some(m) = initial_manifest {
+            serde_json::to_string(&m).unwrap()
+        } else {
+            String::new()
+        };
+        let manifest = Arc::new(Mutex::new(manifest_str));
+        let manifest_clone = manifest.clone();
+
+        listener.set_nonblocking(true).unwrap();
+
+        let handle = thread::spawn(move || {
+            while !shutdown_clone.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buffer = [0; 65536];
+                        if let Ok(bytes_read) = stream.read(&mut buffer) {
+                            let req = String::from_utf8_lossy(&buffer[..bytes_read]);
+                            let first_line = req.lines().next().unwrap_or("");
+                            let parts: Vec<&str> = first_line.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                let method = parts[0];
+                                let path = parts[1];
+
+                                let mut response_body = String::new();
+                                let mut status_line = "HTTP/1.1 200 OK";
+
+                                if path.contains("/rate_limit") {
+                                    response_body = r#"{"resources":{}}"#.to_string();
+                                } else if path.contains("/git/ref/heads/main") {
+                                    let m = manifest_clone.lock().unwrap();
+                                    if m.is_empty() {
+                                        status_line = "HTTP/1.1 404 Not Found";
+                                        response_body = r#"{"message":"Not Found"}"#.to_string();
+                                    } else {
+                                        response_body = r#"{"object":{"sha":"mock_commit_sha"}}"#.to_string();
+                                    }
+                                } else if path.contains("/git/commits/mock_commit_sha") {
+                                    response_body = r#"{"tree":{"sha":"mock_tree_sha"}}"#.to_string();
+                                } else if path.contains("/git/trees/mock_tree_sha") {
+                                    let mut tree_list = Vec::new();
+                                    let m = manifest_clone.lock().unwrap();
+                                    if !m.is_empty() {
+                                        tree_list.push(serde_json::json!({
+                                            "path": "app-meta/sync/manifest.sync.json",
+                                            "type": "blob",
+                                            "sha": "manifest_blob_sha"
+                                        }));
+                                        let fls = files_clone.lock().unwrap();
+                                        for filename in fls.keys() {
+                                            tree_list.push(serde_json::json!({
+                                                "path": filename,
+                                                "type": "blob",
+                                                "sha": format!("{}_sha", filename)
+                                            }));
+                                        }
+                                    }
+                                    response_body = serde_json::json!({ "tree": tree_list }).to_string();
+                                } else if path.contains("/contents/app-meta/sync/manifest.sync.json") {
+                                    let m = manifest_clone.lock().unwrap();
+                                    if m.is_empty() {
+                                        status_line = "HTTP/1.1 404 Not Found";
+                                    } else {
+                                        let encoded = base64::engine::general_purpose::STANDARD.encode(m.as_bytes());
+                                        response_body = serde_json::json!({
+                                            "content": encoded,
+                                            "encoding": "base64"
+                                        }).to_string();
+                                    }
+                                } else if path.contains("/contents/") {
+                                    if let Some(idx) = path.find("/contents/") {
+                                        let file_path = &path[idx + 10..];
+                                        let file_path = file_path.split('?').next().unwrap_or(file_path);
+                                        let fls = files_clone.lock().unwrap();
+                                        if let Some(content) = fls.get(file_path) {
+                                            let encoded = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+                                            response_body = serde_json::json!({
+                                                "content": encoded,
+                                                "encoding": "base64"
+                                            }).to_string();
+                                        } else {
+                                            status_line = "HTTP/1.1 404 Not Found";
+                                        }
+                                    }
+                                } else if method == "POST" && path.contains("/git/blobs") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    if let Some(body_start) = req.find("\r\n\r\n") {
+                                        let body = &req[body_start + 4..];
+                                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                                            if let Some(b64_content) = val["content"].as_str() {
+                                                if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(b64_content) {
+                                                    if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
+                                                        if decoded_str.contains("manifest.sync.json") || decoded_str.contains("\"files\":") {
+                                                            let mut m = manifest_clone.lock().unwrap();
+                                                            *m = decoded_str;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    response_body = r#"{"sha":"mock_blob_sha"}"#.to_string();
+                                } else if method == "POST" && path.contains("/git/trees") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    if let Some(body_start) = req.find("\r\n\r\n") {
+                                        let body = &req[body_start + 4..];
+                                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                                            if let Some(tree_nodes) = val["tree"].as_array() {
+                                                let mut fls = files_clone.lock().unwrap();
+                                                for node in tree_nodes {
+                                                    if let Some(n_path) = node["path"].as_str() {
+                                                        if node["sha"].is_null() {
+                                                            fls.remove(n_path);
+                                                        } else {
+                                                            if !fls.contains_key(n_path) && n_path != "app-meta/sync/manifest.sync.json" {
+                                                                fls.insert(n_path.to_string(), "dummy content".to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    response_body = r#"{"sha":"mock_tree_sha"}"#.to_string();
+                                } else if method == "POST" && path.contains("/git/commits") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    response_body = r#"{"sha":"mock_commit_sha"}"#.to_string();
+                                } else if method == "POST" && path.contains("/git/refs") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    response_body = r#"{}"#.to_string();
+                                } else if method == "PATCH" && path.contains("/git/refs/heads/main") {
+                                    response_body = r#"{}"#.to_string();
+                                }
+
+                                let response = format!(
+                                    "{}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                                    status_line,
+                                    response_body.len(),
+                                    response_body
+                                );
+                                let _ = stream.write_all(response.as_bytes());
+                            }
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+
+        (addr, shutdown, files, manifest, handle)
+    }
+
+    #[test]
+    fn test_perform_lww_sync_first_download() {
+        let dir = tempdir().unwrap();
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert("projects/p1/project.json".to_string(), "remote content".to_string());
+        
+        let initial_manifest = SyncManifest {
+            files: vec![
+                ManifestFileRecord {
+                    path: "projects/p1/project.json".to_string(),
+                    content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
+                    updated_at_ms: 1000,
+                    device_id: "device_remote".to_string(),
+                    op: "upsert".to_string(),
+                    schema_version: 1,
+                }
+            ]
+        };
+
+        let (mock_url, shutdown, _files, _manifest, server_thread) = start_mock_github_api(
+            Some(initial_manifest),
+            initial_files,
+        );
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert!(res.downloaded_files.contains(&"projects/p1/project.json".to_string()));
+        assert!(res.downloaded_files.contains(&"app-meta/sync/manifest.sync.json".to_string()));
+
+        let local_file_path = dir.path().join("projects/p1/project.json");
+        assert!(local_file_path.exists());
+        let local_content = std::fs::read_to_string(local_file_path).unwrap();
+        assert_eq!(local_content, "remote content");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_perform_lww_sync_timestamp_wins() {
+        let dir = tempdir().unwrap();
+
+        let local_p1 = dir.path().join("projects/p1/project.json");
+        std::fs::create_dir_all(local_p1.parent().unwrap()).unwrap();
+        std::fs::write(&local_p1, "local newer content").unwrap();
+
+        let local_p2 = dir.path().join("projects/p2/project.json");
+        std::fs::create_dir_all(local_p2.parent().unwrap()).unwrap();
+        std::fs::write(&local_p2, "local older content").unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state.known_files.insert("projects/p1/project.json".to_string(), format!("{:x}", md5::compute("local base".as_bytes())));
+        state.known_files_updated_at.insert("projects/p1/project.json".to_string(), 1000);
+        state.known_files.insert("projects/p2/project.json".to_string(), format!("{:x}", md5::compute("local older content".as_bytes())));
+        state.known_files_updated_at.insert("projects/p2/project.json".to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert("projects/p1/project.json".to_string(), "remote older content".to_string());
+        initial_files.insert("projects/p2/project.json".to_string(), "remote newer content".to_string());
+
+        let initial_manifest = SyncManifest {
+            files: vec![
+                ManifestFileRecord {
+                    path: "projects/p1/project.json".to_string(),
+                    content_hash: format!("{:x}", md5::compute("remote older content".as_bytes())),
+                    updated_at_ms: 2000,
+                    device_id: "device_remote".to_string(),
+                    op: "upsert".to_string(),
+                    schema_version: 1,
+                },
+                ManifestFileRecord {
+                    path: "projects/p2/project.json".to_string(),
+                    content_hash: format!("{:x}", md5::compute("remote newer content".as_bytes())),
+                    updated_at_ms: 4000,
+                    device_id: "device_remote".to_string(),
+                    op: "upsert".to_string(),
+                    schema_version: 1,
+                }
+            ]
+        };
+
+        let (mock_url, shutdown, _files_map, manifest_str, server_thread) = start_mock_github_api(
+            Some(initial_manifest),
+            initial_files,
+        );
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        
+        assert!(res.uploaded_files.contains(&"projects/p1/project.json".to_string()));
+        assert!(res.downloaded_files.contains(&"projects/p2/project.json".to_string()));
+
+        let content_p2 = std::fs::read_to_string(&local_p2).unwrap();
+        assert_eq!(content_p2, "remote newer content");
+
+        let final_m_str = manifest_str.lock().unwrap().clone();
+        assert!(!final_m_str.is_empty());
+        let final_m: SyncManifest = serde_json::from_str(&final_m_str).unwrap();
+        let p1_rec = final_m.files.iter().find(|f| f.path == "projects/p1/project.json").unwrap();
+        assert_eq!(p1_rec.device_id, "device_local");
+        assert_eq!(p1_rec.op, "upsert");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
     }
 }

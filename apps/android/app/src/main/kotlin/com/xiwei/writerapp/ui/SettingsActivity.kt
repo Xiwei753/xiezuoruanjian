@@ -648,13 +648,16 @@ class SettingsActivity : AppCompatActivity() {
                                     .setMessage(msgBuilder.toString().trim())
                                     .setPositiveButton(getString(R.string.action_ok), null)
                                     .show()
-                            } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success || syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered) {
-                                val successMsg = if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered) {
+                            } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success ||
+                                       syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered ||
+                                       syncResult.status == com.xiwei.writerapp.model.SyncStatus.NoChanges ||
+                                       syncResult.status == com.xiwei.writerapp.model.SyncStatus.LatestWinsApplied) {
+                                val successMsg = syncResult.userMessage ?: if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered) {
                                     "同步成功 (已关联并恢复缺失的分支)"
                                 } else {
                                     getString(R.string.sync_success)
                                 }
-                                Toast.makeText(this@SettingsActivity, successMsg, Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@SettingsActivity, successMsg, Toast.LENGTH_LONG).show()
                             } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.DirtyRepoBlocked) {
                                 AlertDialog.Builder(this@SettingsActivity)
                                     .setTitle("同步被阻止")

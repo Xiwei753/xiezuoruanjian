@@ -1896,6 +1896,20 @@ impl AppBackend {
                             );
                             ("success".to_string(), m)
                         }
+                        writer_core::sync_service::SyncStatus::LatestWinsApplied => {
+                            let m = format!(
+                                "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件",
+                                result.uploaded_files.len(),
+                                result.downloaded_files.len(),
+                                result.local_deletes.len(),
+                                result.remote_deletes.len(),
+                                result.overwritten_files.len()
+                            );
+                            ("success".to_string(), m)
+                        }
+                        writer_core::sync_service::SyncStatus::NoChanges => {
+                            ("success".to_string(), "同步完成：本地和远端均已是最新状态，无须更新。".to_string())
+                        }
                         writer_core::sync_service::SyncStatus::ConfiguredUntested => {
                             ("configured_untested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
                         }
