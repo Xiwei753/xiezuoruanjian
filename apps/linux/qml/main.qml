@@ -315,7 +315,7 @@ ApplicationWindow {
                 Component.onCompleted: {
                     if (appState.selected && appState.selected.chapterId) {
                         var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
-                        console.log("[LinuxEditorLoad] onCompleted loading content, len=" + content.length);
+                        window.debugLog("editor", "on_completed_load", "len=" + content.length);
                         editorPage.loadContent(content);
                     }
                 }
@@ -326,10 +326,10 @@ ApplicationWindow {
                 function onChapter_path_changed() {
                     if (appState.selected && appState.selected.chapterId) {
                         var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
-                        console.log("[LinuxEditorLoad] loading chapter content: projectId=" + appState.selected.projectId + ", volumeId=" + appState.selected.volumeId + ", chapterId=" + appState.selected.chapterId + ", len=" + content.length);
+                        window.debugLog("editor", "chapter_path_changed_load", "projectId=" + appState.selected.projectId + ", volumeId=" + appState.selected.volumeId + ", chapterId=" + appState.selected.chapterId + ", len=" + content.length);
                         editorPage.loadContent(content);
                     } else {
-                        console.log("[LinuxEditorLoad] clearing editor content");
+                        window.debugLog("editor", "chapter_path_changed_clear", "");
                         editorPage.clearText();
                     }
                 }

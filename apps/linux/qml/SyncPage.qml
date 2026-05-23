@@ -6,6 +6,9 @@ import QtQuick.Window 2.15
 Rectangle {
     id: root
     implicitHeight: mainCol.implicitHeight + 32
+    property int lastSyncResultLen: -1
+    property double lastSyncStatusLogTime: 0
+
     Connections {
         target: root.backendRef
         function onSync_action_completed() {
@@ -18,9 +21,20 @@ Rectangle {
             }
         }
         function onSync_status_changed() {
-            if (typeof window !== "undefined" && typeof window.debugLog === "function") {
-                var resLen = root.backendRef ? root.backendRef.sync_action_result.length : 0;
-                window.debugLog("sync", "status_changed_callback", "resultLength=" + resLen);
+            var resLen = root.backendRef ? root.backendRef.sync_action_result.length : 0;
+            var now = Date.now();
+            var shouldLog = true;
+            if (resLen === root.lastSyncResultLen) {
+                if (now - root.lastSyncStatusLogTime < 5000) {
+                    shouldLog = false;
+                }
+            }
+            if (shouldLog) {
+                root.lastSyncResultLen = resLen;
+                root.lastSyncStatusLogTime = now;
+                if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                    window.debugLog("sync", "status_changed_callback", "resultLength=" + resLen);
+                }
             }
             if (root.backendRef) {
                 syncResultArea.text = root.backendRef.sync_action_result;

@@ -8,6 +8,7 @@ Rectangle {
 
     property var backendRef: null
     property var appTheme: null
+    property double lastTextChangeLogTime: 0
     readonly property string text: editorArea.text
 
     signal contentChanged()
@@ -91,8 +92,12 @@ Rectangle {
                         bottomPadding: root.appTheme ? root.appTheme.sp4 : 4
 
                         onTextChanged: {
-                            if (typeof window !== "undefined" && typeof window.debugLog === "function") {
-                                window.debugLog("editor", "content_changed", "len=" + editorArea.text.length);
+                            var now = Date.now();
+                            if (now - root.lastTextChangeLogTime > 2000) {
+                                root.lastTextChangeLogTime = now;
+                                if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                                    window.debugLog("editor", "content_changed", "len=" + editorArea.text.length);
+                                }
                             }
                             root.contentChanged()
                         }

@@ -13,11 +13,34 @@ use std::collections::HashSet;
 
 use writer_core::facade::WriterCore;
 
+#[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
+enum DebugLevel {
+    Error = 1,
+    Warn = 2,
+    Info = 3,
+    Debug = 4,
+    Trace = 5,
+}
+
+impl DebugLevel {
+    fn from_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "error" => DebugLevel::Error,
+            "warn" => DebugLevel::Warn,
+            "info" => DebugLevel::Info,
+            "debug" => DebugLevel::Debug,
+            "trace" => DebugLevel::Trace,
+            _ => DebugLevel::Info,
+        }
+    }
+}
+
 struct DebugConfig {
     enabled: bool,
     qml_enabled: bool,
     modules: HashSet<String>,
     all_modules: bool,
+    level: DebugLevel,
 }
 
 static DEBUG_CONFIG: OnceLock<DebugConfig> = OnceLock::new();
@@ -27,6 +50,8 @@ fn get_debug_config() -> &'static DebugConfig {
         let enabled = std::env::var("WRITER_DEBUG").map(|v| v == "1").unwrap_or(false);
         let qml_enabled = std::env::var("WRITER_DEBUG_QML").map(|v| v == "1").unwrap_or(false);
         let modules_env = std::env::var("WRITER_DEBUG_MODULES").unwrap_or_default();
+        let level_env = std::env::var("WRITER_DEBUG_LEVEL").unwrap_or_else(|_| "info".to_string());
+        let level = DebugLevel::from_str(&level_env);
         let mut modules = HashSet::new();
         let mut all_modules = false;
         if modules_env.eq_ignore_ascii_case("all") {
@@ -48,6 +73,7 @@ fn get_debug_config() -> &'static DebugConfig {
             qml_enabled,
             modules,
             all_modules,
+            level,
         }
     })
 }
@@ -68,23 +94,30 @@ fn debug_module_enabled(module: &str) -> bool {
     cfg.modules.contains(&module.to_lowercase())
 }
 
+fn debug_level_enabled(module: &str, level: DebugLevel) -> bool {
+    if !debug_module_enabled(module) {
+        return false;
+    }
+    level <= get_debug_config().level
+}
+
 #[allow(dead_code)]
 fn debug_log_static(module: &str, event: &str, message: &str) {
-    if debug_module_enabled(module) {
+    if debug_level_enabled(module, DebugLevel::Info) {
         println!("[WriterDebug][static][module={}][event={}] {}", module, event, message);
     }
 }
 
 #[allow(dead_code)]
 fn debug_warn_static(module: &str, event: &str, message: &str) {
-    if debug_module_enabled(module) {
+    if debug_level_enabled(module, DebugLevel::Warn) {
         eprintln!("[WriterDebug][WARN][static][module={}][event={}] {}", module, event, message);
     }
 }
 
 #[allow(dead_code)]
 fn debug_error_static(module: &str, event: &str, message: &str) {
-    if debug_module_enabled(module) {
+    if debug_level_enabled(module, DebugLevel::Error) {
         eprintln!("[WriterDebug][ERROR][static][module={}][event={}] {}", module, event, message);
     }
 }
@@ -465,7 +498,15 @@ impl AppBackend {
         let m = module.to_string();
         let ev = event.to_string();
         let msg = message.to_string();
-        if debug_module_enabled(&m) {
+        let lvl_enum = match lvl.to_lowercase().as_str() {
+            "error" => DebugLevel::Error,
+            "warn" => DebugLevel::Warn,
+            "info" => DebugLevel::Info,
+            "debug" => DebugLevel::Debug,
+            "trace" => DebugLevel::Trace,
+            _ => DebugLevel::Info,
+        };
+        if debug_level_enabled(&m, lvl_enum) {
             let ws_exists = self.current_has_workspace;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
@@ -473,9 +514,9 @@ impl AppBackend {
             
             let prefix = format!("[WriterDebug][qml][module={}][event={}]", m, ev);
             let state = format!("[workspace_exists={}][proj={}][vol={}][chap={}]", ws_exists, proj, vol, chap);
-            if lvl == "warn" {
+            if lvl_enum == DebugLevel::Warn {
                 eprintln!("{}[WARN]{} {}", prefix, state, msg);
-            } else if lvl == "error" {
+            } else if lvl_enum == DebugLevel::Error {
                 eprintln!("{}[ERROR]{} {}", prefix, state, msg);
             } else {
                 println!("{}{} {}", prefix, state, msg);
@@ -484,7 +525,7 @@ impl AppBackend {
     }
 
     fn debug_log(&self, module: &str, event: &str, message: &str) {
-        if debug_module_enabled(module) {
+        if debug_level_enabled(module, DebugLevel::Info) {
             let ws_exists = self.current_has_workspace;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
@@ -497,7 +538,7 @@ impl AppBackend {
     }
 
     fn debug_warn(&self, module: &str, event: &str, message: &str) {
-        if debug_module_enabled(module) {
+        if debug_level_enabled(module, DebugLevel::Warn) {
             let ws_exists = self.current_has_workspace;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
@@ -510,7 +551,7 @@ impl AppBackend {
     }
 
     fn debug_error(&self, module: &str, event: &str, message: &str) {
-        if debug_module_enabled(module) {
+        if debug_level_enabled(module, DebugLevel::Error) {
             let ws_exists = self.current_has_workspace;
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
