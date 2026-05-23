@@ -51,9 +51,16 @@ Dialog {
                         return 0;
                     }
                     onActivated: {
+                        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                            window.debugLog("settings", "theme_changed", "mode=" + currentText);
+                        }
                         if (!root.backendRef) return;
                         root.backendRef.setting_theme_mode = currentText;
-                        if (root.backendRef.save_local_settings()) root.settingsChanged();
+                        var success = root.backendRef.save_local_settings();
+                        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                            window.debugLog("settings", "save_theme_result", "success=" + success);
+                        }
+                        if (success) root.settingsChanged();
                     }
                 }
             }
@@ -75,9 +82,16 @@ Dialog {
                     from: 10
                     to: 40
                     onValueChanged: {
+                        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                            window.debugLog("settings", "font_size_changed", "size=" + value);
+                        }
                         if (!root.backendRef) return;
                         root.backendRef.setting_font_size = value;
-                        if (root.backendRef.save_local_settings()) root.settingsChanged();
+                        var success = root.backendRef.save_local_settings();
+                        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                            window.debugLog("settings", "save_font_result", "success=" + success);
+                        }
+                        if (success) root.settingsChanged();
                     }
                 }
             }
@@ -90,9 +104,16 @@ Dialog {
                     id: autoSaveSwitch
                     checked: (root.backendRef ? root.backendRef.setting_auto_save_enabled : false)
                     onCheckedChanged: {
+                        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                            window.debugLog("settings", "autosave_changed", "enabled=" + checked);
+                        }
                         if (!root.backendRef) return;
                         root.backendRef.setting_auto_save_enabled = checked;
-                        if (root.backendRef.save_local_settings()) root.settingsChanged();
+                        var success = root.backendRef.save_local_settings();
+                        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                            window.debugLog("settings", "save_autosave_result", "success=" + success);
+                        }
+                        if (success) root.settingsChanged();
                     }
                 }
             }

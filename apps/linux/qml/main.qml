@@ -12,6 +12,29 @@ ApplicationWindow {
     title: "Writer"
     color: theme.bgDark
 
+    function generateActionId() {
+        return Math.random().toString(36).substring(2, 8);
+    }
+
+    function debugLog(module, event, message) {
+        if (backend.debug_qml_enabled) {
+            backend.log_qml("info", module, event, message);
+        }
+    }
+
+    function debugWarn(module, event, message) {
+        if (backend.debug_qml_enabled) {
+            backend.log_qml("warn", module, event, message);
+        }
+    }
+
+    function debugError(module, event, message) {
+        if (backend.debug_qml_enabled) {
+            backend.log_qml("error", module, event, message);
+        }
+    }
+
+
     property var appState: ({
         hasWorkspace: false,
         workspacePath: "",
@@ -82,11 +105,16 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        window.debugLog("app", "qml_completed", "QML components fully loaded");
         backend.query_system_color_scheme();
         backend.try_restore_last_workspace();
         var stateStr = backend.refresh_app_state_json();
-        var stateObj = JSON.parse(stateStr);
-        applyState(stateObj);
+        try {
+            var stateObj = JSON.parse(stateStr);
+            applyState(stateObj);
+        } catch (e) {
+            window.debugError("app", "app_state_parse_failed", "error: " + e + ", raw: " + stateStr);
+        }
     }
 
     function applyState(state) {
@@ -160,26 +188,37 @@ ApplicationWindow {
                 text: "新建作品"
                 visible: appState.hasWorkspace
                 onClicked: {
-                    console.log("[LinuxCreateProjectQml] open dialog");
+                    window.debugLog("project", "create_project_dialog_open", "");
                     createProjectDialog.open();
                 }
             }
 
             Button {
                 text: "设置"
-                onClicked: settingsDialog.open()
+                onClicked: {
+                    window.debugLog("settings", "settings_dialog_open", "");
+                    settingsDialog.open();
+                }
             }
 
             Button {
                 text: "同步"
-                onClicked: syncPageDialog.open()
+                onClicked: {
+                    window.debugLog("sync", "sync_dialog_open", "");
+                    syncPageDialog.open();
+                }
             }
 
             Button {
                 text: "切换工作区"
                 onClicked: {
+                    window.debugLog("workspace", "switch_workspace_clicked", "");
                     backend.switch_workspace();
-                    applyState(JSON.parse(backend.refresh_app_state_json()));
+                    try {
+                        applyState(JSON.parse(backend.refresh_app_state_json()));
+                    } catch (e) {
+                        window.debugError("workspace", "switch_workspace_parse_failed", "error: " + e);
+                    }
                 }
             }
         }
@@ -211,10 +250,18 @@ ApplicationWindow {
                 }
                 
                 onItemActivated: function(type, projectId, volumeId, chapterId) {
-                    var stateStr = backend.select_tree_item_json(type, projectId, volumeId, chapterId);
-                    var res = JSON.parse(stateStr);
-                    if (res.success) {
-                        applyState(res.state);
+                    var actionId = window.generateActionId();
+                    window.debugLog("tree", "item_activated", "[actionId=" + actionId + "] type=" + type + ", projectId=" + projectId + ", volumeId=" + volumeId + ", chapterId=" + chapterId);
+                    var stateStr = backend.select_tree_item_json(type, projectId, volumeId, chapterId, actionId);
+                    try {
+                        var res = JSON.parse(stateStr);
+                        if (res.success) {
+                            applyState(res.state);
+                        } else {
+                            window.debugError("tree", "item_activation_failed", "[actionId=" + actionId + "] success=false returned");
+                        }
+                    } catch(e) {
+                        window.debugError("tree", "item_activation_parse_failed", "[actionId=" + actionId + "] error: " + e + ", raw: " + stateStr);
                     }
                 }
                 
@@ -340,7 +387,7 @@ ApplicationWindow {
                             text: "新建卷"
                             visible: appState.selected && appState.selected.projectId && !appState.selected.volumeId
                             onClicked: {
-                                console.log("[LinuxCreateVolumeQml] open dialog via dashboard");
+                                window.debugLog("volume", "create_volume_dialog_open", "open dialog via dashboard");
                                 inputDialog.actionType = "volume";
                                 inputDialog.projectId = appState.selected.projectId;
                                 inputDialog.title = "新建卷";
@@ -369,7 +416,7 @@ ApplicationWindow {
                                     }
                                 }
                                 if (volId) {
-                                    console.log("[LinuxCreateChapterQml] open dialog via dashboard: projectId=" + projId + ", volumeId=" + volId);
+                                    window.debugLog("chapter", "create_chapter_dialog_open", "open dialog via dashboard: projectId=" + projId + ", volumeId=" + volId);
                                     inputDialog.actionType = "chapter";
                                     inputDialog.projectId = projId;
                                     inputDialog.volumeId = volId;
@@ -447,15 +494,16 @@ ApplicationWindow {
         id: createProjectDialog
         theme: theme
         onSubmitProject: function(title) {
+            var actionId = window.generateActionId();
             var trimmedTitle = title ? title.trim() : "";
             var isEmpty = (trimmedTitle === "");
-            console.log("[LinuxCreateProjectQml] submit titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
+            window.debugLog("project", "create_project_submit", "[actionId=" + actionId + "] titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
             
             var stateStr = "";
             try {
-                stateStr = backend.create_project_json(title);
+                stateStr = backend.create_project_json(title, actionId);
             } catch (e) {
-                console.error("[LinuxCreateProjectQml] backend call failed: " + e);
+                window.debugError("project", "create_project_failed", "[actionId=" + actionId + "] backend call failed: " + e);
                 errorDialog.message = "后端调用失败: " + e;
                 errorDialog.open();
                 return;
@@ -465,13 +513,13 @@ ApplicationWindow {
             try {
                 res = JSON.parse(stateStr);
             } catch (e) {
-                console.error("[LinuxCreateProjectQml] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
+                window.debugError("project", "create_project_parse_failed", "[actionId=" + actionId + "] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
                 errorDialog.message = "解析后端返回数据失败";
                 errorDialog.open();
                 return;
             }
 
-            console.log("[LinuxCreateProjectQml] backend returned success=" + res.success + ", userMessage=" + (res.userMessage || res.message || ""));
+            window.debugLog("project", "create_project_received", "[actionId=" + actionId + "] success=" + res.success + ", userMessage=" + (res.userMessage || res.message || ""));
             
             if (res.success) {
                 applyState(res.state);
@@ -479,7 +527,6 @@ ApplicationWindow {
             } else {
                 errorDialog.message = res.userMessage || res.message || "创建失败";
                 errorDialog.open();
-                console.error("创建失败:", res.userMessage || res.message);
             }
         }
     }
@@ -523,21 +570,33 @@ ApplicationWindow {
                 Button {
                     text: "删除"
                     onClicked: {
+                        var actionId = window.generateActionId();
                         var resStr = "";
                         if (confirmDialog.actionType === "delete_project") {
-                            resStr = backend.delete_project_json(confirmDialog.contextData.projectId);
+                            window.debugLog("project", "delete_project_submit", "[actionId=" + actionId + "] projectId=" + confirmDialog.contextData.projectId);
+                            resStr = backend.delete_project_json(confirmDialog.contextData.projectId, actionId);
                         } else if (confirmDialog.actionType === "delete_volume") {
-                            resStr = backend.delete_volume_json(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId);
+                            window.debugLog("volume", "delete_volume_submit", "[actionId=" + actionId + "] projectId=" + confirmDialog.contextData.projectId + ", volumeId=" + confirmDialog.contextData.volumeId);
+                            resStr = backend.delete_volume_json(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId, actionId);
                         } else if (confirmDialog.actionType === "delete_chapter") {
-                            resStr = backend.delete_chapter_json(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId, confirmDialog.contextData.chapterId);
+                            window.debugLog("chapter", "delete_chapter_submit", "[actionId=" + actionId + "] projectId=" + confirmDialog.contextData.projectId + ", volumeId=" + confirmDialog.contextData.volumeId + ", chapterId=" + confirmDialog.contextData.chapterId);
+                            resStr = backend.delete_chapter_json(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId, confirmDialog.contextData.chapterId, actionId);
                         }
                         
                         if (resStr) {
-                            var res = JSON.parse(resStr);
-                            if (res.success) {
-                                applyState(res.state);
-                            } else {
-                                errorDialog.message = res.message || "删除失败";
+                            try {
+                                var res = JSON.parse(resStr);
+                                if (res.success) {
+                                    window.debugLog(confirmDialog.actionType.replace("delete_", ""), "delete_success", "[actionId=" + actionId + "]");
+                                    applyState(res.state);
+                                } else {
+                                    window.debugError(confirmDialog.actionType.replace("delete_", ""), "delete_failed", "[actionId=" + actionId + "] error=" + (res.message || ""));
+                                    errorDialog.message = res.message || "删除失败";
+                                    errorDialog.open();
+                                }
+                            } catch (e) {
+                                window.debugError(confirmDialog.actionType.replace("delete_", ""), "delete_parse_failed", "[actionId=" + actionId + "] error=" + e + ", raw=" + resStr);
+                                errorDialog.message = "解析后端返回数据失败";
                                 errorDialog.open();
                             }
                         }
@@ -645,13 +704,14 @@ ApplicationWindow {
                 onClicked: {
                     var title = inputField.text.trim();
                     if (title !== "") {
+                        var actionId = window.generateActionId();
                         if (inputDialog.actionType === "volume") {
-                            console.log("[LinuxCreateVolumeQml] submit: projectId=" + inputDialog.projectId + ", title=" + title);
+                            window.debugLog("volume", "create_volume_submit", "[actionId=" + actionId + "] projectId=" + inputDialog.projectId + ", title=" + title);
                             var stateStr = "";
                             try {
-                                stateStr = backend.create_volume_json(inputDialog.projectId, title);
+                                stateStr = backend.create_volume_json(inputDialog.projectId, title, actionId);
                             } catch (e) {
-                                console.error("[LinuxCreateVolumeQml] backend call failed: " + e);
+                                window.debugError("volume", "create_volume_failed", "[actionId=" + actionId + "] backend call failed: " + e);
                                 errorDialog.message = "后端调用失败: " + e;
                                 errorDialog.open();
                                 inputDialog.close();
@@ -662,14 +722,14 @@ ApplicationWindow {
                             try {
                                 res = JSON.parse(stateStr);
                             } catch (e) {
-                                console.error("[LinuxCreateVolumeQml] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
+                                window.debugError("volume", "create_volume_parse_failed", "[actionId=" + actionId + "] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
                                 errorDialog.message = "解析后端返回数据失败";
                                 errorDialog.open();
                                 inputDialog.close();
                                 return;
                             }
 
-                            console.log("[LinuxCreateVolumeQml] backend returned success=" + res.success + ", message=" + (res.message || ""));
+                            window.debugLog("volume", "create_volume_received", "[actionId=" + actionId + "] success=" + res.success + ", message=" + (res.message || ""));
                             if (res.success) {
                                 applyState(res.state);
                             } else {
@@ -677,12 +737,12 @@ ApplicationWindow {
                                 errorDialog.open();
                             }
                         } else if (inputDialog.actionType === "chapter") {
-                            console.log("[LinuxCreateChapterQml] submit: projectId=" + inputDialog.projectId + ", volumeId=" + inputDialog.volumeId + ", title=" + title);
+                            window.debugLog("chapter", "create_chapter_submit", "[actionId=" + actionId + "] projectId=" + inputDialog.projectId + ", volumeId=" + inputDialog.volumeId + ", title=" + title);
                             var stateStr = "";
                             try {
-                                stateStr = backend.create_chapter_json(inputDialog.projectId, inputDialog.volumeId, title);
+                                stateStr = backend.create_chapter_json(inputDialog.projectId, inputDialog.volumeId, title, actionId);
                             } catch (e) {
-                                console.error("[LinuxCreateChapterQml] backend call failed: " + e);
+                                window.debugError("chapter", "create_chapter_failed", "[actionId=" + actionId + "] backend call failed: " + e);
                                 errorDialog.message = "后端调用失败: " + e;
                                 errorDialog.open();
                                 inputDialog.close();
@@ -693,14 +753,14 @@ ApplicationWindow {
                             try {
                                 res = JSON.parse(stateStr);
                             } catch (e) {
-                                console.error("[LinuxCreateChapterQml] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
+                                window.debugError("chapter", "create_chapter_parse_failed", "[actionId=" + actionId + "] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
                                 errorDialog.message = "解析后端返回数据失败";
                                 errorDialog.open();
                                 inputDialog.close();
                                 return;
                             }
 
-                            console.log("[LinuxCreateChapterQml] backend returned success=" + res.success + ", message=" + (res.message || ""));
+                            window.debugLog("chapter", "create_chapter_received", "[actionId=" + actionId + "] success=" + res.success + ", message=" + (res.message || ""));
                             if (res.success) {
                                 applyState(res.state);
                             } else {

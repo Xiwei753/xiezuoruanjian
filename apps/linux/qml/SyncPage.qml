@@ -9,11 +9,19 @@ Rectangle {
     Connections {
         target: root.backendRef
         function onSync_action_completed() {
+            if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                var resLen = root.backendRef ? root.backendRef.sync_action_result.length : 0;
+                window.debugLog("sync", "action_completed_callback", "resultLength=" + resLen);
+            }
             if (root.backendRef) {
                 syncResultArea.text = root.backendRef.sync_action_result;
             }
         }
         function onSync_status_changed() {
+            if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                var resLen = root.backendRef ? root.backendRef.sync_action_result.length : 0;
+                window.debugLog("sync", "status_changed_callback", "resultLength=" + resLen);
+            }
             if (root.backendRef) {
                 syncResultArea.text = root.backendRef.sync_action_result;
             }
@@ -100,6 +108,10 @@ Rectangle {
             Button {
                 text: "保存配置"
                 onClicked: {
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        var hasNewToken = tokenField.text.trim().length > 0;
+                        window.debugLog("sync", "save_config_clicked", "url=" + urlField.text + ", branch=" + branchField.text + ", hasNewToken=" + hasNewToken);
+                    }
                     if (!root.backendRef) return;
                     root.backendRef.sync_remote_url = urlField.text;
                     root.backendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main";
@@ -109,13 +121,21 @@ Rectangle {
                     }
                     root.backendRef.sync_enabled = true;
                     root.backendRef.sync_backend_type = "git";
-                    if (root.backendRef.save_sync_config()) root.settingsChanged();
+                    
+                    var success = root.backendRef.save_sync_config();
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        window.debugLog("sync", "save_config_finished", "success=" + success);
+                    }
+                    if (success) root.settingsChanged();
                 }
             }
 
             Button {
                 text: "执行同步"
                 onClicked: {
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        window.debugLog("sync", "perform_sync_clicked", "");
+                    }
                     syncResultArea.text = "正在同步...";
                     if (root.backendRef) root.backendRef.perform_sync();
                 }
@@ -124,6 +144,9 @@ Rectangle {
             Button {
                 text: "运行诊断"
                 onClicked: {
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        window.debugLog("sync", "perform_diagnostics_clicked", "");
+                    }
                     syncResultArea.text = "正在诊断...";
                     if (root.backendRef) root.backendRef.perform_sync_diagnostics();
                 }

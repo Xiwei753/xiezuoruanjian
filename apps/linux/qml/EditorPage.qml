@@ -12,8 +12,18 @@ Rectangle {
 
     signal contentChanged()
 
-    function clearText() { editorArea.text = "" }
-    function loadContent(content) { editorArea.text = content }
+    function clearText() {
+        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+            window.debugLog("editor", "clear_text", "");
+        }
+        editorArea.text = ""
+    }
+    function loadContent(content) {
+        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+            window.debugLog("editor", "load_content", "len=" + (content ? content.length : 0));
+        }
+        editorArea.text = content
+    }
     function forceEditorFocus() { editorArea.forceActiveFocus() }
 
     Rectangle {
@@ -81,6 +91,9 @@ Rectangle {
                         bottomPadding: root.appTheme ? root.appTheme.sp4 : 4
 
                         onTextChanged: {
+                            if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                                window.debugLog("editor", "content_changed", "len=" + editorArea.text.length);
+                            }
                             root.contentChanged()
                         }
                     }

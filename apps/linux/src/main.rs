@@ -8,8 +8,87 @@ use std::io::Write;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::sync::OnceLock;
+use std::collections::HashSet;
 
 use writer_core::facade::WriterCore;
+
+struct DebugConfig {
+    enabled: bool,
+    qml_enabled: bool,
+    modules: HashSet<String>,
+    all_modules: bool,
+}
+
+static DEBUG_CONFIG: OnceLock<DebugConfig> = OnceLock::new();
+
+fn get_debug_config() -> &'static DebugConfig {
+    DEBUG_CONFIG.get_or_init(|| {
+        let enabled = std::env::var("WRITER_DEBUG").map(|v| v == "1").unwrap_or(false);
+        let qml_enabled = std::env::var("WRITER_DEBUG_QML").map(|v| v == "1").unwrap_or(false);
+        let modules_env = std::env::var("WRITER_DEBUG_MODULES").unwrap_or_default();
+        let mut modules = HashSet::new();
+        let mut all_modules = false;
+        if modules_env.eq_ignore_ascii_case("all") {
+            all_modules = true;
+        } else {
+            for m in modules_env.split(',') {
+                let trimmed = m.trim().to_lowercase();
+                if !trimmed.is_empty() {
+                    if trimmed == "all" {
+                        all_modules = true;
+                    } else {
+                        modules.insert(trimmed);
+                    }
+                }
+            }
+        }
+        DebugConfig {
+            enabled,
+            qml_enabled,
+            modules,
+            all_modules,
+        }
+    })
+}
+
+#[allow(dead_code)]
+fn debug_enabled() -> bool {
+    get_debug_config().enabled
+}
+
+fn debug_module_enabled(module: &str) -> bool {
+    let cfg = get_debug_config();
+    if !cfg.enabled {
+        return false;
+    }
+    if cfg.all_modules {
+        return true;
+    }
+    cfg.modules.contains(&module.to_lowercase())
+}
+
+#[allow(dead_code)]
+fn debug_log_static(module: &str, event: &str, message: &str) {
+    if debug_module_enabled(module) {
+        println!("[WriterDebug][static][module={}][event={}] {}", module, event, message);
+    }
+}
+
+#[allow(dead_code)]
+fn debug_warn_static(module: &str, event: &str, message: &str) {
+    if debug_module_enabled(module) {
+        eprintln!("[WriterDebug][WARN][static][module={}][event={}] {}", module, event, message);
+    }
+}
+
+#[allow(dead_code)]
+fn debug_error_static(module: &str, event: &str, message: &str) {
+    if debug_module_enabled(module) {
+        eprintln!("[WriterDebug][ERROR][static][module={}][event={}] {}", module, event, message);
+    }
+}
+
 use writer_core::sync_service::{SyncConfig, SyncSecrets};
 
 qmetaobject::qrc!(qml_resources, "/" {
@@ -267,6 +346,9 @@ struct AppBackend {
     query_system_color_scheme: qt_method!(fn(&mut self)),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
+    debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
+    debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
+    log_qml: qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
 
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
     create_new_chapter:
@@ -299,13 +381,13 @@ struct AppBackend {
     get_tree_model: qt_method!(fn(&self) -> QJsonArray),
     get_tree_model_json: qt_method!(fn(&self) -> QString),
     refresh_app_state_json: qt_method!(fn(&mut self) -> QString),
-    create_project_json: qt_method!(fn(&mut self, title: QString) -> QString),
-    create_volume_json: qt_method!(fn(&mut self, project_id: QString, title: QString) -> QString),
-    create_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString) -> QString),
-    select_tree_item_json: qt_method!(fn(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString) -> QString),
-    delete_project_json: qt_method!(fn(&mut self, project_id: QString) -> QString),
-    delete_volume_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString) -> QString),
-    delete_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString),
+    create_project_json: qt_method!(fn(&mut self, title: QString, action_id: QString) -> QString),
+    create_volume_json: qt_method!(fn(&mut self, project_id: QString, title: QString, action_id: QString) -> QString),
+    create_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString, action_id: QString) -> QString),
+    select_tree_item_json: qt_method!(fn(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString),
+    delete_project_json: qt_method!(fn(&mut self, project_id: QString, action_id: QString) -> QString),
+    delete_volume_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString),
+    delete_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString),
 
     refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
@@ -370,15 +452,94 @@ struct AppBackend {
 }
 
 impl AppBackend {
+    fn debug_qml_enabled(&self) -> bool {
+        get_debug_config().qml_enabled
+    }
+
+    fn debug_module_enabled_qml(&self, module: QString) -> bool {
+        debug_module_enabled(&module.to_string())
+    }
+
+    fn log_qml(&self, level: QString, module: QString, event: QString, message: QString) {
+        let lvl = level.to_string();
+        let m = module.to_string();
+        let ev = event.to_string();
+        let msg = message.to_string();
+        if debug_module_enabled(&m) {
+            let ws_exists = self.current_has_workspace;
+            let proj = self.selected_project_id.as_deref().unwrap_or("none");
+            let vol = self.selected_volume_id.as_deref().unwrap_or("none");
+            let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
+            
+            let prefix = format!("[WriterDebug][qml][module={}][event={}]", m, ev);
+            let state = format!("[workspace_exists={}][proj={}][vol={}][chap={}]", ws_exists, proj, vol, chap);
+            if lvl == "warn" {
+                eprintln!("{}[WARN]{} {}", prefix, state, msg);
+            } else if lvl == "error" {
+                eprintln!("{}[ERROR]{} {}", prefix, state, msg);
+            } else {
+                println!("{}{} {}", prefix, state, msg);
+            }
+        }
+    }
+
+    fn debug_log(&self, module: &str, event: &str, message: &str) {
+        if debug_module_enabled(module) {
+            let ws_exists = self.current_has_workspace;
+            let proj = self.selected_project_id.as_deref().unwrap_or("none");
+            let vol = self.selected_volume_id.as_deref().unwrap_or("none");
+            let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
+            println!(
+                "[WriterDebug][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                module, event, ws_exists, proj, vol, chap, message
+            );
+        }
+    }
+
+    fn debug_warn(&self, module: &str, event: &str, message: &str) {
+        if debug_module_enabled(module) {
+            let ws_exists = self.current_has_workspace;
+            let proj = self.selected_project_id.as_deref().unwrap_or("none");
+            let vol = self.selected_volume_id.as_deref().unwrap_or("none");
+            let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
+            eprintln!(
+                "[WriterDebug][WARN][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                module, event, ws_exists, proj, vol, chap, message
+            );
+        }
+    }
+
+    fn debug_error(&self, module: &str, event: &str, message: &str) {
+        if debug_module_enabled(module) {
+            let ws_exists = self.current_has_workspace;
+            let proj = self.selected_project_id.as_deref().unwrap_or("none");
+            let vol = self.selected_volume_id.as_deref().unwrap_or("none");
+            let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
+            eprintln!(
+                "[WriterDebug][ERROR][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                module, event, ws_exists, proj, vol, chap, message
+            );
+        }
+    }
+
     fn handle_sync_outcome(&mut self, outcome: SyncTaskOutcome) {
+        let status = outcome.sync_status.clone();
+        let result_trunc = if outcome.action_result.chars().count() > 1000 {
+            outcome.action_result.chars().take(1000).collect::<String>() + "..."
+        } else {
+            outcome.action_result.clone()
+        };
+        let sanitized_result = mask_sync_error(&result_trunc);
+        self.debug_log("sync", "sync_outcome_received", &format!("status={}, result={}", status, sanitized_result));
+
         self.current_sync_status = outcome.sync_status.clone();
         self.current_sync_action_result = outcome.action_result.clone();
         self.sync_status_changed();
         self.sync_action_completed();
 
-        let status = outcome.sync_status.as_str();
+        let status_str = outcome.sync_status.as_str();
 
-        if status == "success" {
+        if status_str == "success" {
             let pending_path = self.current_pending_github_init_path.clone();
             if !pending_path.is_empty() {
                 self.current_pending_github_init_path.clear();
@@ -389,7 +550,7 @@ impl AppBackend {
             }
         }
 
-        if (status == "success" || status == "conflict" || status == "unrelated_histories") && self.has_workspace() {
+        if (status_str == "success" || status_str == "conflict" || status_str == "unrelated_histories") && self.has_workspace() {
             self.reload_tree();
             self.trigger_projects_reloaded();
         }
@@ -777,11 +938,15 @@ impl AppBackend {
     fn set_setting_smooth_cursor_enabled(&mut self, val: bool) { self.current_setting_smooth_cursor_enabled = val; self.settings_changed(); }
 
     fn try_restore_last_workspace(&mut self) {
+        self.debug_log("workspace", "try_restore_last_workspace_start", "");
         if let Some(path) = writer_core::app_config::get_last_workspace_path() {
+            self.debug_log("workspace", "try_restore_last_workspace_path_found", &format!("path={}", path));
             let path_obj = std::path::Path::new(&path);
             if path_obj.exists() && path_obj.is_dir() {
                 let core = WriterCore::new(&path);
-                if core.validate_workspace().unwrap_or(false) {
+                let val_res = core.validate_workspace().unwrap_or(false);
+                self.debug_log("workspace", "try_restore_last_workspace_validate", &format!("path={}, is_valid={}", path, val_res));
+                if val_res {
                     self.core = Some(Rc::new(RefCell::new(core)));
                     self.current_workspace = path.clone();
                     self.current_has_workspace = true;
@@ -792,11 +957,15 @@ impl AppBackend {
                     self.load_local_settings();
                     self.workspace_opened();
                     self.workspace_state_changed();
+                    self.debug_log("workspace", "try_restore_last_workspace_success", &format!("path={}", path));
                     return;
                 }
             }
             // Restore failed: clear the invalid lastWorkspacePath to avoid being stuck
+            self.debug_warn("workspace", "try_restore_last_workspace_failed_clearing", &format!("path={}", path));
             let _ = writer_core::app_config::clear_last_workspace_path();
+        } else {
+            self.debug_log("workspace", "try_restore_last_workspace_no_path", "");
         }
         // No valid workspace to restore
         self.current_has_workspace = false;
@@ -815,30 +984,43 @@ impl AppBackend {
     }
 
     fn internal_open_workspace(&mut self, path: &str, initialize: bool) {
+        self.debug_log("workspace", "internal_open_workspace_start", &format!("path={}, initialize={}", path, initialize));
         let path_obj = std::path::Path::new(path);
         if !path_obj.exists() || !path_obj.is_dir() {
-            self.set_error(&format!("路径不存在或不是目录: {}", path));
+            let err_msg = format!("路径不存在或不是目录: {}", path);
+            self.set_error(&err_msg);
+            self.debug_error("workspace", "internal_open_workspace_failed", &err_msg);
             return;
         }
 
         let core = WriterCore::new(path);
         let is_valid = core.validate_workspace().unwrap_or(false);
+        self.debug_log("workspace", "internal_open_workspace_validate", &format!("path={}, is_valid={}", path, is_valid));
 
         if !is_valid && !initialize {
-            self.set_error("不是有效工作区。请选择其他目录，或使用「新建工作区」初始化该目录。");
+            let err_msg = "不是有效工作区。请选择其他目录，或使用「新建工作区」初始化该目录。";
+            self.set_error(err_msg);
+            self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
             return;
         }
 
         if !is_valid && initialize {
+            self.debug_log("workspace", "internal_open_workspace_creating", path);
             if let Err(e) = core.create_workspace() {
-                self.set_error(&format!("无法创建工作区: {}", e));
+                let err_msg = format!("无法创建工作区: {}", e);
+                self.set_error(&err_msg);
+                self.debug_error("workspace", "internal_open_workspace_failed", &err_msg);
                 return;
             }
         }
 
         let core = WriterCore::new(path);
-        if !core.validate_workspace().unwrap_or(false) {
-            self.set_error("工作区验证失败");
+        let val_res = core.validate_workspace().unwrap_or(false);
+        self.debug_log("workspace", "internal_open_workspace_revalidate", &format!("path={}, is_valid={}", path, val_res));
+        if !val_res {
+            let err_msg = "工作区验证失败";
+            self.set_error(err_msg);
+            self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
             return;
         }
 
@@ -859,21 +1041,29 @@ impl AppBackend {
         self.workspace_state_changed();
 
         let _ = writer_core::app_config::set_last_workspace_path(path);
+        self.debug_log("workspace", "internal_open_workspace_success", &format!("path={}", path));
     }
 
     fn create_new_workspace(&mut self) {
+        self.debug_log("workspace", "create_new_workspace_clicked", "");
         if let Some(path) = FileDialog::new().pick_folder() {
             self.internal_open_workspace(&path.to_string_lossy(), true);
+        } else {
+            self.debug_log("workspace", "create_new_workspace_cancelled", "");
         }
     }
 
     fn open_existing_workspace(&mut self) {
+        self.debug_log("workspace", "open_existing_workspace_clicked", "");
         if let Some(path) = FileDialog::new().pick_folder() {
             self.internal_open_workspace(&path.to_string_lossy(), false);
+        } else {
+            self.debug_log("workspace", "open_existing_workspace_cancelled", "");
         }
     }
 
     fn close_workspace(&mut self) {
+        self.debug_log("workspace", "close_workspace_start", "");
         // Clear core
         self.core = None;
         // Clear workspace state
@@ -896,6 +1086,7 @@ impl AppBackend {
         self.workspace_state_changed();
         self.trigger_projects_reloaded();
         self.sync_status_changed();
+        self.debug_log("workspace", "close_workspace_success", "");
     }
 
     fn clear_last_workspace(&mut self) {
@@ -1154,10 +1345,13 @@ impl AppBackend {
     }
 
     fn load_local_settings(&mut self) {
+        self.debug_log("settings", "load_local_settings_start", "");
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
 
-            if let Ok(settings) = core.load_local_settings() {
+            let local_load = core.load_local_settings();
+            self.debug_log("settings", "load_local_settings_result", &format!("success={}", local_load.is_ok()));
+            if let Ok(settings) = local_load {
                 self.current_setting_line_spacing = settings.editor_line_spacing_multiplier;
                 self.current_setting_auto_save_enabled = settings.auto_save_enabled;
                 self.current_setting_auto_save_delay_ms = settings.auto_save_delay_ms as u32;
@@ -1167,7 +1361,9 @@ impl AppBackend {
                 self.current_setting_smooth_cursor_enabled = settings.editor_smooth_cursor_enabled;
             }
 
-            if let Ok(sync_settings) = core.load_syncable_settings() {
+            let syncable_load = core.load_syncable_settings();
+            self.debug_log("settings", "load_syncable_settings_result", &format!("success={}", syncable_load.is_ok()));
+            if let Ok(sync_settings) = syncable_load {
                 self.current_setting_font_size = sync_settings.font_size as f32;
                 if self.current_setting_font_size <= 0.0 {
                     if let Ok(local) = core.load_local_settings() {
@@ -1189,10 +1385,14 @@ impl AppBackend {
             }
 
             self.settings_changed();
+            self.debug_log("settings", "load_local_settings_success", &format!("fontSize={}, themeMode={}", self.current_setting_font_size, self.current_setting_theme_mode));
+        } else {
+            self.debug_warn("settings", "load_local_settings_failed", "core_not_initialized");
         }
     }
 
     fn save_local_settings(&mut self) -> bool {
+        self.debug_log("settings", "save_local_settings_start", "");
         let mut error_msg: Option<String> = None;
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
@@ -1206,7 +1406,9 @@ impl AppBackend {
             local.editor_typing_animation_enabled = self.current_setting_typing_animation_enabled;
             local.editor_smooth_cursor_enabled = self.current_setting_smooth_cursor_enabled;
 
-            if let Err(e) = core.save_local_settings(&local) {
+            let local_save = core.save_local_settings(&local);
+            self.debug_log("settings", "save_local_settings_result", &format!("success={}", local_save.is_ok()));
+            if let Err(e) = local_save {
                 error_msg = Some(format!("保存本地设置失败: {}", e));
             }
 
@@ -1214,24 +1416,32 @@ impl AppBackend {
             syncable.font_size = self.current_setting_font_size as f64;
             syncable.theme_mode = self.current_setting_theme_mode.clone();
 
-            if let Err(e) = core.save_syncable_settings(&syncable) {
+            let syncable_save = core.save_syncable_settings(&syncable);
+            self.debug_log("settings", "save_syncable_settings_result", &format!("success={}", syncable_save.is_ok()));
+            if let Err(e) = syncable_save {
                 error_msg = Some(format!("保存同步设置失败: {}", e));
             }
+        } else {
+            error_msg = Some("Core 未初始化".to_string());
         }
 
         if let Some(msg) = error_msg {
             self.set_error(&msg);
+            self.debug_error("settings", "save_local_settings_failed", &msg);
             false
         } else {
+            self.debug_log("settings", "save_local_settings_success", "");
             true
         }
     }
 
     fn perform_sync_diagnostics(&mut self) {
+        self.debug_log("sync", "perform_sync_diagnostics_start", "");
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
             self.current_sync_action_result = "请先打开工作区".to_string();
             self.sync_action_completed();
+            self.debug_error("sync", "perform_sync_diagnostics_failed", "workspace_empty");
             return;
         }
 
@@ -1283,6 +1493,7 @@ impl AppBackend {
 
 
     fn load_sync_config(&mut self) {
+        self.debug_log("sync", "load_sync_config_start", "");
         if self.core.is_some() {
             // Extract config data without holding Ref borrow, then update self
             let (config_opt, token_opt) = {
@@ -1324,13 +1535,22 @@ impl AppBackend {
             }
             self.refresh_sync_status_from_config();
             self.sync_config_changed();
+            let token_present = !self.current_sync_token.is_empty();
+            let masked_url = mask_sync_error(&self.current_sync_remote_url);
+            self.debug_log(
+                "sync",
+                "load_sync_config_success",
+                &format!("enabled={}, remote_url={}, branch={}, token_present={}", self.current_sync_enabled, masked_url, self.current_sync_branch, token_present)
+            );
         } else {
             // No workspace open - ensure branch defaults to main
             self.current_sync_branch = "main".to_string();
+            self.debug_warn("sync", "load_sync_config_failed", "core_not_initialized");
         }
     }
 
     fn save_sync_config(&mut self) -> bool {
+        self.debug_log("sync", "save_sync_config_start", "");
         let mut error_msg: Option<String> = None;
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
@@ -1395,18 +1615,28 @@ impl AppBackend {
             } else if let Err(e) = core.save_sync_secrets(&s) {
                 error_msg = Some(format!("保存同步凭证失败: {}", e));
             }
+        } else {
+            error_msg = Some("Core 未初始化".to_string());
         }
 
         if let Some(msg) = error_msg {
             self.set_error(&msg);
-            self.current_sync_action_result = msg;
+            self.current_sync_action_result = msg.clone();
             self.sync_action_completed();
+            self.debug_error("sync", "save_sync_config_failed", &msg);
             return false;
         }
 
         self.refresh_sync_status_from_config();
         self.current_sync_action_result = "配置保存成功".to_string();
         self.sync_action_completed();
+        let token_present = !self.current_sync_token.is_empty();
+        let masked_url = mask_sync_error(&self.current_sync_remote_url);
+        self.debug_log(
+            "sync",
+            "save_sync_config_success",
+            &format!("enabled={}, remote_url={}, branch={}, token_present={}", self.current_sync_enabled, masked_url, self.current_sync_branch, token_present)
+        );
         true
     }
 
@@ -1498,10 +1728,18 @@ impl AppBackend {
     }
 
     fn perform_sync(&mut self) {
+        let token_present = !self.current_sync_token.is_empty();
+        let masked_url = mask_sync_error(&self.current_sync_remote_url);
+        self.debug_log(
+            "sync",
+            "perform_sync_start",
+            &format!("remote_url={}, branch={}, token_present={}", masked_url, self.current_sync_branch, token_present)
+        );
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
             self.current_sync_action_result = "请先打开工作区".to_string();
             self.sync_action_completed();
+            self.debug_error("sync", "perform_sync_failed", "workspace_empty");
             return;
         }
 
@@ -1510,6 +1748,7 @@ impl AppBackend {
             self.current_sync_action_result = "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
+            self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
             return;
         }
 
@@ -1518,6 +1757,7 @@ impl AppBackend {
             self.current_sync_action_result = "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
+            self.debug_error("sync", "perform_sync_failed", "token_empty");
             return;
         }
 
@@ -1750,6 +1990,7 @@ impl AppBackend {
     }
 
     fn reload_tree(&mut self) {
+        let before_count = self.cached_tree.len();
         let mut list = QJsonArray::default();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
@@ -1812,6 +2053,8 @@ impl AppBackend {
             }
         }
         self.cached_tree = list;
+        let after_count = self.cached_tree.len();
+        self.debug_log("tree", "reload_tree", &format!("before_count={}, after_count={}", before_count, after_count));
     }
 
     fn build_tree_model_json(&self) -> serde_json::Value {
@@ -1902,17 +2145,23 @@ impl AppBackend {
         state.to_string().into()
     }
 
-    fn create_project_json(&mut self, title: QString) -> QString {
+    fn create_project_json(&mut self, title: QString, action_id: QString) -> QString {
         let title_str = title.to_string();
+        let action_id_str = action_id.to_string();
         let trimmed_empty = title_str.trim().is_empty();
         let core_exists = self.core.is_some();
-        println!(
-            "[LinuxCreateProject] create_project_json called: title_raw={:?}, is_title_trimmed_empty={}, current_workspace={:?}, current_has_workspace={}, core_exists={}",
-            title_str,
-            trimmed_empty,
-            self.current_workspace,
-            self.current_has_workspace,
-            core_exists
+        self.debug_log(
+            "project",
+            "create_project_start",
+            &format!(
+                "[actionId={}] title_raw={:?}, is_title_trimmed_empty={}, current_workspace={:?}, current_has_workspace={}, core_exists={}",
+                action_id_str,
+                title_str,
+                trimmed_empty,
+                self.current_workspace,
+                self.current_has_workspace,
+                core_exists
+            )
         );
 
         let build_err = |msg: &str| -> String {
@@ -1928,12 +2177,14 @@ impl AppBackend {
         if title_str.trim().is_empty() {
             let msg = "作品名不能为空";
             self.set_error(msg);
+            self.debug_error("project", "create_project_failed", &format!("[actionId={}] error: {}", action_id_str, msg));
             return build_err(msg).into();
         }
 
         if !self.current_has_workspace || self.current_workspace.is_empty() {
             let msg = "未打开工作区，无法创建作品。请先新建或打开一个工作区。";
             self.set_error(msg);
+            self.debug_error("project", "create_project_failed", &format!("[actionId={}] error: {}", action_id_str, msg));
             return build_err(msg).into();
         }
 
@@ -1949,12 +2200,17 @@ impl AppBackend {
                     let ws_path = Path::new(&self.current_workspace);
                     let manifest_exists = ws_path.join("workspace_manifest.json").exists();
                     let projects_exists = ws_path.join("projects").exists();
-                    println!(
-                        "[LinuxCreateProject] validate_workspace failed: workspace={:?}, manifest_exists={}, projects_exists={}, validate_workspace_result={:?}",
-                        self.current_workspace,
-                        manifest_exists,
-                        projects_exists,
-                        other
+                    self.debug_warn(
+                        "project",
+                        "create_project_validate_workspace_failed",
+                        &format!(
+                            "[actionId={}] workspace={:?}, manifest_exists={}, projects_exists={}, validate_workspace_result={:?}",
+                            action_id_str,
+                            self.current_workspace,
+                            manifest_exists,
+                            projects_exists,
+                            other
+                        )
                     );
                     let msg = format!("无法重新打开工作区: {}", self.current_workspace);
                     self.set_error(&msg);
@@ -1964,10 +2220,15 @@ impl AppBackend {
         }
 
         if let Some(core_ref) = &self.core {
-            println!(
-                "[LinuxCreateProject] calling core.create_project: title={:?}, workspace={:?}",
-                title_str,
-                self.current_workspace
+            self.debug_log(
+                "project",
+                "create_project_calling_core",
+                &format!(
+                    "[actionId={}] title={:?}, workspace={:?}",
+                    action_id_str,
+                    title_str,
+                    self.current_workspace
+                )
             );
             let result = {
                 let core = core_ref.borrow();
@@ -2005,14 +2266,19 @@ impl AppBackend {
                     self.reload_tree();
                     let tree_len_after = self.cached_tree.len();
 
-                    println!(
-                        "[LinuxCreateProject] create_project success: project_id={:?}, project_title={:?}, list_projects_readback={}, list_volumes_readback={}, cached_tree_before={}, cached_tree_after={}",
-                        proj.id,
-                        proj.title,
-                        readback_proj,
-                        readback_vol,
-                        tree_len_before,
-                        tree_len_after
+                    self.debug_log(
+                        "project",
+                        "create_project_success",
+                        &format!(
+                            "[actionId={}] project_id={:?}, project_title={:?}, list_projects_readback={}, list_volumes_readback={}, cached_tree_before={}, cached_tree_after={}",
+                            action_id_str,
+                            proj.id,
+                            proj.title,
+                            readback_proj,
+                            readback_vol,
+                            tree_len_before,
+                            tree_len_after
+                        )
                     );
 
                     self.trigger_projects_reloaded();
@@ -2031,29 +2297,48 @@ impl AppBackend {
                 Err(e) => {
                     let err_display = format!("{}", e);
                     let msg = format!("创建作品失败: {}", e);
-                    println!(
-                        "[LinuxCreateProject] create_project failed: error_type_or_display={:?}, raw_error={:?}, userMessage={:?}",
-                        err_display,
-                        err_display,
-                        msg
+                    self.debug_error(
+                        "project",
+                        "create_project_failed",
+                        &format!(
+                            "[actionId={}] error_type_or_display={:?}, raw_error={:?}, userMessage={:?}",
+                            action_id_str,
+                            err_display,
+                            err_display,
+                            msg
+                        )
                     );
-                    eprintln!("[create_project_json] error: {}", msg);
                     self.set_error(&msg);
                     build_err(&msg).into()
                 }
             }
         } else {
             let msg = "Core 未初始化";
-            println!(
-                "[LinuxCreateProject] core_initialized is false"
+            self.debug_error(
+                "project",
+                "create_project_failed",
+                &format!("[actionId={}] core_initialized is false", action_id_str)
             );
             self.set_error(msg);
             build_err(msg).into()
         }
     }
 
-    fn create_volume_json(&mut self, project_id: QString, title: QString) -> QString {
+    fn create_volume_json(&mut self, project_id: QString, title: QString, action_id: QString) -> QString {
+        let action_id_str = action_id.to_string();
+        self.debug_log(
+            "volume",
+            "create_volume_start",
+            &format!("[actionId={}] project_id={}, title={}", action_id_str, project_id.to_string(), title.to_string())
+        );
+        let err_before = self.current_error_message.clone();
         self.create_new_volume(project_id.clone(), title.clone());
+        let success = self.current_error_message == err_before;
+        if success {
+            self.debug_log("volume", "create_volume_success", &format!("[actionId={}] created successfully", action_id_str));
+        } else {
+            self.debug_error("volume", "create_volume_failed", &format!("[actionId={}] error: {}", action_id_str, self.current_error_message));
+        }
         let final_res = serde_json::json!({
             "success": true,
             "message": "创建卷成功",
@@ -2062,8 +2347,21 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    fn create_chapter_json(&mut self, project_id: QString, volume_id: QString, title: QString) -> QString {
+    fn create_chapter_json(&mut self, project_id: QString, volume_id: QString, title: QString, action_id: QString) -> QString {
+        let action_id_str = action_id.to_string();
+        self.debug_log(
+            "chapter",
+            "create_chapter_start",
+            &format!("[actionId={}] project_id={}, volume_id={}, title={}", action_id_str, project_id.to_string(), volume_id.to_string(), title.to_string())
+        );
+        let err_before = self.current_error_message.clone();
         self.create_new_chapter(project_id.clone(), volume_id.clone(), title.clone());
+        let success = self.current_error_message == err_before;
+        if success {
+            self.debug_log("chapter", "create_chapter_success", &format!("[actionId={}] created successfully", action_id_str));
+        } else {
+            self.debug_error("chapter", "create_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, self.current_error_message));
+        }
         let final_res = serde_json::json!({
             "success": true,
             "message": "创建章节成功",
@@ -2072,14 +2370,20 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    fn select_tree_item_json(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString) -> QString {
+    fn select_tree_item_json(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString {
         let t = item_type.to_string();
-        println!(
-            "[LinuxTree] select_tree_item_json: type={:?}, project_id={:?}, volume_id={:?}, chapter_id={:?}",
-            t,
-            project_id.to_string(),
-            volume_id.to_string(),
-            chapter_id.to_string()
+        let action_id_str = action_id.to_string();
+        self.debug_log(
+            "tree",
+            "select_item_start",
+            &format!(
+                "[actionId={}] type={}, project_id={}, volume_id={}, chapter_id={}",
+                action_id_str,
+                t,
+                project_id.to_string(),
+                volume_id.to_string(),
+                chapter_id.to_string()
+            )
         );
         if t == "project" {
             self.select_project(project_id);
@@ -2088,6 +2392,7 @@ impl AppBackend {
         } else if t == "chapter" {
             self.select_chapter(project_id, volume_id, chapter_id);
         }
+        self.debug_log("tree", "select_item_success", &format!("[actionId={}] selection completed", action_id_str));
         let final_res = serde_json::json!({
             "success": true,
             "message": "选择成功",
@@ -2095,11 +2400,25 @@ impl AppBackend {
         });
         final_res.to_string().into()
     }
-    fn delete_project_json(&mut self, project_id: QString) -> QString {
+
+    fn delete_project_json(&mut self, project_id: QString, action_id: QString) -> QString {
+        let action_id_str = action_id.to_string();
+        self.debug_log(
+            "project",
+            "delete_project_start",
+            &format!("[actionId={}] project_id={}", action_id_str, project_id.to_string())
+        );
         self.error_message = "".into();
         self.delete_project(project_id);
         let success = self.error_message.to_string().is_empty();
-        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
+        let msg = if success {
+            self.debug_log("project", "delete_project_success", &format!("[actionId={}] project deleted successfully", action_id_str));
+            "删除成功".to_string()
+        } else {
+            let err = self.error_message.to_string();
+            self.debug_error("project", "delete_project_failed", &format!("[actionId={}] error: {}", action_id_str, err));
+            err
+        };
         let final_res = serde_json::json!({
             "success": success,
             "message": msg,
@@ -2108,11 +2427,24 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    fn delete_volume_json(&mut self, project_id: QString, volume_id: QString) -> QString {
+    fn delete_volume_json(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString {
+        let action_id_str = action_id.to_string();
+        self.debug_log(
+            "volume",
+            "delete_volume_start",
+            &format!("[actionId={}] project_id={}, volume_id={}", action_id_str, project_id.to_string(), volume_id.to_string())
+        );
         self.error_message = "".into();
         self.delete_volume(project_id, volume_id);
         let success = self.error_message.to_string().is_empty();
-        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
+        let msg = if success {
+            self.debug_log("volume", "delete_volume_success", &format!("[actionId={}] volume deleted successfully", action_id_str));
+            "删除成功".to_string()
+        } else {
+            let err = self.error_message.to_string();
+            self.debug_error("volume", "delete_volume_failed", &format!("[actionId={}] error: {}", action_id_str, err));
+            err
+        };
         let final_res = serde_json::json!({
             "success": success,
             "message": msg,
@@ -2121,11 +2453,24 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString {
+    fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString {
+        let action_id_str = action_id.to_string();
+        self.debug_log(
+            "chapter",
+            "delete_chapter_start",
+            &format!("[actionId={}] project_id={}, volume_id={}, chapter_id={}", action_id_str, project_id.to_string(), volume_id.to_string(), chapter_id.to_string())
+        );
         self.error_message = "".into();
         self.delete_chapter(project_id, volume_id, chapter_id);
         let success = self.error_message.to_string().is_empty();
-        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
+        let msg = if success {
+            self.debug_log("chapter", "delete_chapter_success", &format!("[actionId={}] chapter deleted successfully", action_id_str));
+            "删除成功".to_string()
+        } else {
+            let err = self.error_message.to_string();
+            self.debug_error("chapter", "delete_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, err));
+            err
+        };
         let final_res = serde_json::json!({
             "success": success,
             "message": msg,
@@ -2414,23 +2759,35 @@ impl AppBackend {
         volume_id: QString,
         chapter_id: QString,
     ) -> QString {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        self.debug_log("chapter", "get_chapter_content_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            if let Ok(content) = core.read_chapter(
-                &project_id.to_string(),
-                &volume_id.to_string(),
-                &chapter_id.to_string(),
-            ) {
-                return content.content.into();
+            match core.read_chapter(&p, &v, &c) {
+                Ok(content) => {
+                    self.debug_log("chapter", "get_chapter_content_success", &format!("len={}", content.content.len()));
+                    return content.content.into();
+                }
+                Err(e) => {
+                    self.debug_error("chapter", "get_chapter_content_failed", &format!("error={}", e));
+                }
             }
+        } else {
+            self.debug_error("chapter", "get_chapter_content_failed", "core_not_initialized");
         }
         "".into()
     }
 
     fn save_current_chapter(&mut self, content: QString) {
+        let text_str = content.to_string();
+        let len = text_str.len();
+        self.debug_log("chapter", "save_current_chapter_start", &format!("len={}", len));
         if !self.selected_chapter_exists() {
             self.clear_editor_state();
             self.set_error("当前章节已不存在，已停止保存。");
+            self.debug_error("chapter", "save_current_chapter_failed", "chapter_not_exists");
             return;
         }
 
@@ -2441,8 +2798,9 @@ impl AppBackend {
             &self.selected_chapter_id,
         ) {
             let core = core_ref.borrow();
-            core.write_chapter(p, v, c, &content.to_string())
+            core.write_chapter(p, v, c, &text_str)
         } else {
+            self.debug_error("chapter", "save_current_chapter_failed", "selection_missing");
             return;
         };
 
@@ -2450,9 +2808,12 @@ impl AppBackend {
             Ok(_) => {
                 self.current_save_status = "已保存".to_string();
                 self.save_status_changed();
+                self.debug_log("chapter", "save_current_chapter_success", &format!("len={}", len));
             }
             Err(e) => {
-                self.set_error(&format!("保存失败: {}", e));
+                let err_msg = format!("保存失败: {}", e);
+                self.set_error(&err_msg);
+                self.debug_error("chapter", "save_current_chapter_failed", &err_msg);
             }
         }
     }
@@ -2472,15 +2833,18 @@ extern "C" fn qml_load_error_handler(
             QtMsgType::QtCriticalMsg => "CRITICAL",
             _ => "INFO",
         }, s);
+        debug_warn_static("app", "qml_warning_critical", &s);
         if s.contains("qrc:/main.qml") {
             QML_LOAD_FAILED.store(true, Ordering::SeqCst);
         }
     } else {
         eprintln!("[Qt DEBUG] {}", s);
+        debug_log_static("app", "qml_debug", &s);
     }
 }
 
 fn main() {
+    debug_log_static("app", "app_startup", "Writer application starting...");
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     qmetaobject::qml_register_type::<AppBackend>(
@@ -2491,7 +2855,7 @@ fn main() {
     );
 
     let qml_path = "qrc:/main.qml";
-    eprintln!("[Linux] Loading QML entry: {}", qml_path);
+    debug_log_static("app", "qml_loading", &format!("Loading QML entry: {}", qml_path));
 
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
@@ -2499,11 +2863,11 @@ fn main() {
     install_message_handler(prev_handler);
 
     if QML_LOAD_FAILED.load(Ordering::SeqCst) {
-        eprintln!("[Linux] ERROR: QQmlApplicationEngine failed to load {}", qml_path);
+        debug_error_static("app", "qml_load_failed", &format!("QQmlApplicationEngine failed to load {}", qml_path));
         std::process::exit(1);
     }
 
-    eprintln!("[Linux] QML engine started, entering event loop");
+    debug_log_static("app", "event_loop_enter", "QML engine started, entering event loop");
     engine.exec();
 }
 
@@ -2533,7 +2897,7 @@ mod tests {
 
         // Create 3 projects
         for i in 1..=3 {
-            let res_json = backend.create_project_json(format!("Test Project {}", i).into());
+            let res_json = backend.create_project_json(format!("Test Project {}", i).into(), "".into());
             let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
             assert_eq!(res["success"], true);
         }
@@ -2558,7 +2922,7 @@ mod tests {
         items.push(QJsonValue::from(QString::from(test_tree.to_string())));
         backend.cached_tree = QJsonArray::from(items);
 
-        let res_json = backend.create_project_json("Test Project".into());
+        let res_json = backend.create_project_json("Test Project".into(), "".into());
         let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
 
         assert_eq!(res["success"], false);
@@ -2572,7 +2936,7 @@ mod tests {
         backend.current_workspace = "/tmp".to_string();
         backend.current_has_workspace = true;
 
-        let res_json = backend.create_project_json("   ".into());
+        let res_json = backend.create_project_json("   ".into(), "".into());
         let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
 
         assert_eq!(res["success"], false);

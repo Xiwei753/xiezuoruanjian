@@ -28,6 +28,9 @@ Rectangle {
                 treeModel.append(items[i]);
             }
         }
+        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+            window.debugLog("tree", "tree_model_updated", "count=" + treeModel.count);
+        }
     }
 
     ScrollView {
@@ -45,7 +48,7 @@ Rectangle {
                 width: ListView.view.width
                 height: 32
                 
-                                property var itemData: {
+                property var itemData: {
                     var out = {
                         "id": model.id || "",
                         "type": model.type || "",
@@ -113,8 +116,14 @@ Rectangle {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onClicked: function(mouse) {
                         if (mouse.button === Qt.LeftButton) {
+                            if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                                window.debugLog("tree", "item_clicked", "type=" + delegateRect.itemData.type + ", id=" + delegateRect.itemData.id + ", title=" + delegateRect.itemData.title);
+                            }
                             root.itemActivated(delegateRect.itemData.type, delegateRect.itemData.projectIdForAction, delegateRect.itemData.volumeIdForAction, delegateRect.itemData.chapterIdForAction);
                         } else if (mouse.button === Qt.RightButton) {
+                            if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                                window.debugLog("tree", "context_menu_open", "type=" + delegateRect.itemData.type + ", id=" + delegateRect.itemData.id + ", title=" + delegateRect.itemData.title);
+                            }
                             contextMenu.itemData = delegateRect.itemData;
                             contextMenu.popup();
                         }
@@ -141,6 +150,9 @@ Rectangle {
             visible: contextMenu.itemData && contextMenu.itemData.type === "project"
             onTriggered: {
                 if (contextMenu.itemData) {
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        window.debugLog("volume", "menu_create_volume_triggered", "projectId=" + contextMenu.itemData.id);
+                    }
                     root.createVolume(contextMenu.itemData.id);
                 }
             }
@@ -150,6 +162,9 @@ Rectangle {
             visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
             onTriggered: {
                 if (contextMenu.itemData) {
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        window.debugLog("chapter", "menu_create_chapter_triggered", "projectId=" + contextMenu.itemData.projectId + ", volumeId=" + contextMenu.itemData.id);
+                    }
                     root.createChapter(contextMenu.itemData.projectId, contextMenu.itemData.id);
                 }
             }
@@ -162,7 +177,16 @@ Rectangle {
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
-                    if (!data || !data.id) { root.showError("重命名失败：缺失节点 ID"); return; }
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        window.debugLog("tree", "menu_rename_triggered", "type=" + data.type + ", id=" + data.id + ", title=" + data.title);
+                    }
+                    if (!data || !data.id) {
+                        if (typeof window !== "undefined" && typeof window.debugError === "function") {
+                            window.debugError("tree", "rename_failed", "missing id");
+                        }
+                        root.showError("重命名失败：缺失节点 ID");
+                        return;
+                    }
                     root.renameItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }
@@ -173,9 +197,30 @@ Rectangle {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
                     if (!data) return;
-                    if (data.type === "project" && !data.projectIdForAction) { root.showError("删除失败：缺失项目 ID"); return; }
-                    if (data.type === "volume" && (!data.projectIdForAction || !data.volumeIdForAction)) { root.showError("删除失败：缺失卷的归属 ID"); return; }
-                    if (data.type === "chapter" && (!data.projectIdForAction || !data.volumeIdForAction || !data.chapterIdForAction)) { root.showError("删除失败：缺失章节的归属 ID"); return; }
+                    if (typeof window !== "undefined" && typeof window.debugLog === "function") {
+                        window.debugLog("tree", "menu_delete_triggered", "type=" + data.type + ", id=" + data.id + ", title=" + data.title);
+                    }
+                    if (data.type === "project" && !data.projectIdForAction) {
+                        if (typeof window !== "undefined" && typeof window.debugError === "function") {
+                            window.debugError("tree", "delete_failed", "missing project id");
+                        }
+                        root.showError("删除失败：缺失项目 ID");
+                        return;
+                    }
+                    if (data.type === "volume" && (!data.projectIdForAction || !data.volumeIdForAction)) {
+                        if (typeof window !== "undefined" && typeof window.debugError === "function") {
+                            window.debugError("tree", "delete_failed", "missing volume ids");
+                        }
+                        root.showError("删除失败：缺失卷的归属 ID");
+                        return;
+                    }
+                    if (data.type === "chapter" && (!data.projectIdForAction || !data.volumeIdForAction || !data.chapterIdForAction)) {
+                        if (typeof window !== "undefined" && typeof window.debugError === "function") {
+                            window.debugError("tree", "delete_failed", "missing chapter ids");
+                        }
+                        root.showError("删除失败：缺失章节的归属 ID");
+                        return;
+                    }
                     root.deleteItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
                 }
             }
