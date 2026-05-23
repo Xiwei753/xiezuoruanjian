@@ -5,6 +5,9 @@ This repository uses a single-repository, multi-client, shared-core architecture
 > **Note:** For specific technical constraints and architecture route guidelines, please see the [Technical Route & Architecture Constraints](TECHNICAL_ROUTE.md) and the [Cross-Platform Capability Contract & Core-First Architecture Constraints](CROSS_PLATFORM_CAPABILITY_CONTRACT.md). These root documents govern the overall route and cross-platform capability alignment, while directory-level documents govern specific implementation boundaries.
 
 ## Core-First & Capability Contract
+
+> **Capability Alignment Status:** Please check the [Cross-Platform Capability Matrix](CAPABILITY_MATRIX.md) to understand the current alignment status between Rust Core, Android JNI, and Linux backend, and the roadmap for refactoring bifurcated logic back into the core.
+
 To prevent platform duplication and state bifurcation between different clients (such as Android and Linux), the repository enforces a **Core-First Architecture**:
 - **Single Source of Truth**: `core/writer_core` is the sole owner of business logic, state mutations, and validation rules.
 - **Pure Adapters**: The Android JNI layer and Linux Qt/QML backend act strictly as thin adapters translating Core data envelopes to UI views. They are forbidden from implementing separate business rules or modifying workspace files directly.
