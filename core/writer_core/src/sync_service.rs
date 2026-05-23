@@ -258,9 +258,21 @@ pub fn mask_token(s: &str) -> String {
 pub enum SyncStatus {
     Idle,
     Syncing,
-    Error(String),
-    Conflict,
     Success,
+    ConfiguredUntested,
+    Conflict,
+    RecoverableError(String),
+    FatalError(String),
+    DirtyRepoBlocked,
+    BranchMissingRecovered,
+    Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettingConflictDetail {
+    pub key: String,
+    pub local_value: serde_json::Value,
+    pub remote_value: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -405,6 +417,7 @@ pub struct SyncResult {
     pub user_message: Option<String>,
     pub chosen_network_mode: Option<String>,
     pub network_probe_summary: Vec<NetworkProbeResult>,
+    pub settings_conflicts: Option<Vec<SettingConflictDetail>>,
 }
 
 impl SyncResult {
@@ -423,6 +436,7 @@ impl SyncResult {
             user_message: None,
             chosen_network_mode: None,
             network_probe_summary: Vec::new(),
+            settings_conflicts: None,
         }
     }
 
@@ -446,6 +460,7 @@ impl SyncResult {
             user_message,
             chosen_network_mode: None,
             network_probe_summary: Vec::new(),
+            settings_conflicts: None,
         }
     }
 
@@ -468,6 +483,7 @@ impl SyncResult {
             user_message,
             chosen_network_mode: None,
             network_probe_summary: Vec::new(),
+            settings_conflicts: None,
         }
     }
 }
@@ -717,6 +733,23 @@ impl GitBackend for Git2Backend {
                     ))
                 })?;
 
+        // Handle unborn local repository
+        if repo.head().is_err() {
+            let commit_obj = repo.find_commit(fetch_commit.id()).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?;
+            repo.checkout_tree(commit_obj.as_object(), Some(git2::build::CheckoutBuilder::default().force())).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?;
+            repo.branch(branch, &commit_obj, true).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?;
+            repo.set_head(&format!("refs/heads/{}", branch)).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            })?;
+            return Ok(());
+        }
+
         let analysis = repo
             .merge_analysis(&[&fetch_commit])
             .map_err(|e: git2::Error| {
@@ -909,6 +942,93 @@ impl GitBackend for Git2Backend {
                     e.to_string(),
                 ))
             })?;
+
+            // Settings semantic merge conflict resolution
+            let mut settings_conflict_details = None;
+            let mut resolved_settings = false;
+            if index.has_conflicts() {
+                if let Ok(mut conflicts) = index.conflicts() {
+                    let mut settings_conflict = None;
+                    for conflict in conflicts.by_ref() {
+                        if let Ok(c) = conflict {
+                            let path_opt = c.our.as_ref().map(|o| String::from_utf8_lossy(&o.path).to_string())
+                                .or_else(|| c.their.as_ref().map(|t| String::from_utf8_lossy(&t.path).to_string()))
+                                .or_else(|| c.ancestor.as_ref().map(|a| String::from_utf8_lossy(&a.path).to_string()));
+                            if let Some(p) = path_opt {
+                                if p == "app-meta/settings/settings.sync.json" {
+                                    settings_conflict = Some(c);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(c) = settings_conflict {
+                        let base_json = c.ancestor.as_ref()
+                            .and_then(|entry| repo.find_blob(entry.id).ok())
+                            .and_then(|blob| {
+                                let s = std::str::from_utf8(blob.content()).ok()?;
+                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s).ok()
+                            })
+                            .unwrap_or_default();
+
+                        let local_json = c.our.as_ref()
+                            .and_then(|entry| repo.find_blob(entry.id).ok())
+                            .and_then(|blob| {
+                                let s = std::str::from_utf8(blob.content()).ok()?;
+                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s).ok()
+                            })
+                            .unwrap_or_default();
+
+                        let remote_json = c.their.as_ref()
+                            .and_then(|entry| repo.find_blob(entry.id).ok())
+                            .and_then(|blob| {
+                                let s = std::str::from_utf8(blob.content()).ok()?;
+                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s).ok()
+                            })
+                            .unwrap_or_default();
+
+                        match SyncService::semantic_merge_json(&base_json, &local_json, &remote_json) {
+                            Ok(merged_map) => {
+                                let merged_value = serde_json::Value::Object(merged_map);
+                                let merged_str = serde_json::to_string_pretty(&merged_value).unwrap_or_default();
+                                
+                                let settings_path = local_repo_path.join("app-meta/settings/settings.sync.json");
+                                if let Some(parent) = settings_path.parent() {
+                                    std::fs::create_dir_all(parent).ok();
+                                }
+                                let _ = std::fs::write(&settings_path, &merged_str);
+
+                                if let Ok(mut mut_index) = repo.index() {
+                                    if mut_index.add_path(Path::new("app-meta/settings/settings.sync.json")).is_ok() {
+                                        let _ = mut_index.write();
+                                        resolved_settings = true;
+                                    }
+                                }
+                            }
+                            Err(key_conflicts) => {
+                                settings_conflict_details = Some(key_conflicts);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if resolved_settings {
+                if let Ok(reloaded) = repo.index() {
+                    index = reloaded;
+                }
+            }
+
+            if let Some(details) = settings_conflict_details {
+                let _ = repo.cleanup_state();
+                let payload = serde_json::to_string(&details).unwrap_or_default();
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("settings_conflict_payload:{}", payload),
+                )));
+            }
+
             if index.has_conflicts() {
                 // Return an error for conflicts with a special prefix that can be parsed
                 return Err(crate::Error::Io(std::io::Error::new(
@@ -2954,6 +3074,129 @@ impl SyncService {
         Ok(result)
     }
 
+fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::Result<()> {
+    let branch_ref_name = format!("refs/heads/{}", branch);
+    
+    // 1. Clean up any leftover merge/rebase/etc. states first to ensure clean execution.
+    let _ = repo.cleanup_state();
+
+    if repo.find_reference(&branch_ref_name).is_ok() {
+        // Branch exists, make sure HEAD points to it (symbolically or directly)
+        let _ = repo.set_head(&branch_ref_name);
+        return Ok(());
+    }
+
+    // Branch does not exist. Check if HEAD exists and points to a valid commit
+    if let Ok(head_ref) = repo.head() {
+        if let Ok(commit) = head_ref.peel_to_commit() {
+            // Create branch pointing to this commit
+            repo.branch(branch, &commit, false).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to create branch '{}': {}", branch, e),
+                ))
+            })?;
+            repo.set_head(&branch_ref_name).map_err(|e| {
+                crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to set HEAD to '{}': {}", branch, e),
+                ))
+            })?;
+            return Ok(());
+        }
+    }
+
+    // HEAD is unborn/empty (no commits yet). Set HEAD symbolically.
+    // The first commit will automatically create this branch.
+    repo.set_head(&branch_ref_name).map_err(|e| {
+        crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to set symbolic HEAD to '{}': {}", branch, e),
+        ))
+    })?;
+
+    Ok(())
+}
+
+fn semantic_merge_json(
+    base: &serde_json::Map<String, serde_json::Value>,
+    local: &serde_json::Map<String, serde_json::Value>,
+    remote: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>, Vec<SettingConflictDetail>> {
+    let mut merged = serde_json::Map::new();
+    let mut conflicts = Vec::new();
+
+    // Collect all keys from all three maps
+    let mut keys: std::collections::HashSet<&String> = base.keys().collect();
+    keys.extend(local.keys());
+    keys.extend(remote.keys());
+
+    for key in keys {
+        let base_val = base.get(key);
+        let local_val = local.get(key);
+        let remote_val = remote.get(key);
+
+        match (base_val, local_val, remote_val) {
+            (None, None, None) => {}
+            (_, Some(l), None) => {
+                if base_val == Some(l) {
+                    // Deleted in remote, unmodified in local
+                } else {
+                    conflicts.push(SettingConflictDetail {
+                        key: key.clone(),
+                        local_value: l.clone(),
+                        remote_value: serde_json::Value::Null,
+                    });
+                }
+            }
+            (_, None, Some(r)) => {
+                if base_val == Some(r) {
+                    // Deleted in local, unmodified in remote
+                } else {
+                    conflicts.push(SettingConflictDetail {
+                        key: key.clone(),
+                        local_value: serde_json::Value::Null,
+                        remote_value: r.clone(),
+                    });
+                }
+            }
+            (Some(b), Some(l), Some(r)) => {
+                if l == r {
+                    merged.insert(key.clone(), l.clone());
+                } else if l == b {
+                    merged.insert(key.clone(), r.clone());
+                } else if r == b {
+                    merged.insert(key.clone(), l.clone());
+                } else {
+                    conflicts.push(SettingConflictDetail {
+                        key: key.clone(),
+                        local_value: l.clone(),
+                        remote_value: r.clone(),
+                    });
+                }
+            }
+            (None, Some(l), Some(r)) => {
+                if l == r {
+                    merged.insert(key.clone(), l.clone());
+                } else {
+                    conflicts.push(SettingConflictDetail {
+                        key: key.clone(),
+                        local_value: l.clone(),
+                        remote_value: r.clone(),
+                    });
+                }
+            }
+            (Some(_b), None, None) => {}
+        }
+    }
+
+    if !conflicts.is_empty() {
+        Err(conflicts)
+    } else {
+        Ok(merged)
+    }
+}
+
     pub fn perform_sync_dry_run(
         workspace_path: &Path,
         config: &SyncConfig,
@@ -3107,6 +3350,18 @@ impl SyncService {
             }
         }
 
+        // Ensure local branch ref is initialized and clean states before staging/pulling
+        if let Ok(repo) = git2::Repository::open(workspace_path) {
+            if let Err(e) = Self::ensure_local_branch_exists(&repo, &config.branch) {
+                return Ok(SyncResult::error(
+                    SyncStatus::Error(e.to_string()),
+                    result.first_sync_mode,
+                    Some("初始化本地分支失败。".to_string()),
+                    e.to_string(),
+                ));
+            }
+        }
+
         // Auto commit local whitelisted changes
         if let Ok(status_list) = backend.status(workspace_path) {
             let mut paths_to_stage = Vec::new();
@@ -3138,6 +3393,31 @@ impl SyncService {
         if let Some(e) = pull_failed {
             let e_str = e.to_string(); // we should not to_lowercase before matching payload
             
+            if e_str.contains("settings_conflict_payload:") {
+                let payload_str = e_str.split("settings_conflict_payload:").nth(1).unwrap_or("").trim();
+                let details: Option<Vec<SettingConflictDetail>> = serde_json::from_str(payload_str).ok();
+                let mut res = SyncResult::error(
+                    SyncStatus::Conflict,
+                    result.first_sync_mode,
+                    Some("同步冲突，已停止，未覆盖任何文件".to_string()),
+                    "Settings semantic merge conflict".to_string(),
+                );
+                res.settings_conflicts = details;
+                let summary = SyncConflictSummary {
+                    status: "conflict".to_string(),
+                    local_dirty: true,
+                    remote_changed: true,
+                    conflicted_files: vec!["app-meta/settings/settings.sync.json".to_string()],
+                    blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。".to_string(),
+                    safe_next_steps: vec![
+                        "手动检查本地与远端设置。".to_string(),
+                        "重新保存设置以覆盖或重新同步。".to_string(),
+                    ],
+                };
+                res.conflict_summary = Some(summary);
+                return Ok(res);
+            }
+
             if e_str.contains("checkout_conflict_payload:") {
                 let payload_str = e_str.split("checkout_conflict_payload:").nth(1).unwrap_or("").trim();
                 let summary: Option<SyncConflictSummary> = serde_json::from_str(payload_str).ok();

@@ -1,7 +1,40 @@
+import java.io.ByteArrayOutputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+fun queryGitCommitCount(): Int {
+    return try {
+        val stdout = ByteArrayOutputStream()
+        project.exec {
+            commandLine("git", "rev-list", "--count", "HEAD")
+            standardOutput = stdout
+        }
+        stdout.toString().trim().toInt()
+    } catch (e: Exception) {
+        1
+    }
+}
+
+fun queryGitCommitShortSha(): String {
+    return try {
+        val stdout = ByteArrayOutputStream()
+        project.exec {
+            commandLine("git", "rev-parse", "--short", "HEAD")
+            standardOutput = stdout
+        }
+        stdout.toString().trim()
+    } catch (e: Exception) {
+        "unknown"
+    }
+}
+
+val gitCommitCount = queryGitCommitCount()
+val gitCommitSha = queryGitCommitShortSha()
+val appVersionCode = gitCommitCount
+val appVersionName = "0.1.1"
 
 android {
     namespace = "com.xiwei.writerapp"
@@ -23,8 +56,8 @@ android {
         applicationId = "com.xiwei.writerapp"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -58,6 +91,27 @@ android {
     }
     kotlinOptions {
         jvmTarget = "1.8"
+    }
+
+    applicationVariants.all {
+        val variant = this
+        variant.outputs.all {
+            val output = this
+            if (output is com.android.build.gradle.api.ApkVariantOutput) {
+                val abi = output.filters.find { it.filterType == "ABI" }?.identifier ?: "all"
+                variant.packageApplicationProvider.configure {
+                    doLast {
+                        val defaultApk = output.outputFile
+                        if (defaultApk.exists()) {
+                            val customName = "xiezuoruanjian-${variant.name}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
+                            val destFile = File(defaultApk.parentFile, customName)
+                            defaultApk.copyTo(destFile, overwrite = true)
+                            println("Successfully copied custom-named APK to ${destFile.absolutePath}")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

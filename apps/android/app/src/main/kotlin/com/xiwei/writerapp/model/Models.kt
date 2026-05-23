@@ -154,7 +154,12 @@ enum class SyncStatus {
     @SerializedName("idle") Idle,
     @SerializedName("syncing") Syncing,
     @SerializedName("success") Success,
+    @SerializedName("configured_untested") ConfiguredUntested,
     @SerializedName("conflict") Conflict,
+    @SerializedName("recoverable_error") RecoverableError,
+    @SerializedName("fatal_error") FatalError,
+    @SerializedName("dirty_repo_blocked") DirtyRepoBlocked,
+    @SerializedName("branch_missing_recovered") BranchMissingRecovered,
     @SerializedName("error") Error
 }
 
@@ -170,17 +175,23 @@ class SyncStatusDeserializer : JsonDeserializer<SyncStatus> {
                 "idle" -> SyncStatus.Idle
                 "syncing" -> SyncStatus.Syncing
                 "success" -> SyncStatus.Success
+                "configured_untested" -> SyncStatus.ConfiguredUntested
                 "conflict" -> SyncStatus.Conflict
+                "dirty_repo_blocked" -> SyncStatus.DirtyRepoBlocked
+                "branch_missing_recovered" -> SyncStatus.BranchMissingRecovered
                 else -> SyncStatus.Error
             }
         }
         if (json.isJsonObject) {
             val obj = json.asJsonObject
-            if (obj.has("error")) {
+            if (obj.has("error") || obj.has("Error")) {
                 return SyncStatus.Error
             }
-            if (obj.has("Error")) {
-                return SyncStatus.Error
+            if (obj.has("recoverable_error") || obj.has("RecoverableError")) {
+                return SyncStatus.RecoverableError
+            }
+            if (obj.has("fatal_error") || obj.has("FatalError")) {
+                return SyncStatus.FatalError
             }
         }
         return SyncStatus.Error
@@ -226,7 +237,24 @@ data class SyncResult(
     @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
     @SerializedName("user_message") val userMessage: String? = null,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
-    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
+    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList(),
+    @SerializedName("conflict_summary") val conflictSummary: SyncConflictSummary? = null,
+    @SerializedName("settings_conflicts") val settingsConflicts: List<SettingConflictDetail>? = emptyList()
+)
+
+data class SettingConflictDetail(
+    val key: String,
+    @SerializedName("local_value") val localValue: JsonElement,
+    @SerializedName("remote_value") val remoteValue: JsonElement
+)
+
+data class SyncConflictSummary(
+    val status: String,
+    @SerializedName("local_dirty") val localDirty: Boolean,
+    @SerializedName("remote_changed") val remoteChanged: Boolean,
+    @SerializedName("conflicted_files") val conflictedFiles: List<String>,
+    @SerializedName("blocked_reason") val blockedReason: String,
+    @SerializedName("safe_next_steps") val safeNextSteps: List<String>
 )
 
 

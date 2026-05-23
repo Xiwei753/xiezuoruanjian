@@ -1896,6 +1896,9 @@ impl AppBackend {
                             );
                             ("success".to_string(), m)
                         }
+                        writer_core::sync_service::SyncStatus::ConfiguredUntested => {
+                            ("configured_untested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
+                        }
                         writer_core::sync_service::SyncStatus::Conflict => {
                             let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
                             if let Some(summary) = &result.conflict_summary {
@@ -1922,11 +1925,34 @@ impl AppBackend {
                             let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
                             debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
                             
+                            let detail_str = if let Some(ref details) = result.settings_conflicts {
+                                let mut lines = vec![];
+                                for d in details {
+                                    lines.push(format!("  • 键名: {}, 本地值: {:?}, 远程值: {:?}", d.key, d.local_value, d.remote_value));
+                                }
+                                format!("\n\n具体设置冲突:\n{}", lines.join("\n"))
+                            } else {
+                                "".to_string()
+                            };
+
                             let m = format!(
-                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
+                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。{}\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
+                                detail_str,
                                 file_str
                             );
                             ("conflict".to_string(), m)
+                        }
+                        writer_core::sync_service::SyncStatus::RecoverableError(ref e) => {
+                            ("recoverable_error".to_string(), format!("可恢复的同步错误:\n{}\n请检查后重试。", mask_sync_error(e)))
+                        }
+                        writer_core::sync_service::SyncStatus::FatalError(ref e) => {
+                            ("fatal_error".to_string(), format!("严重同步错误:\n{}\n建议备份数据并重新配置。", mask_sync_error(e)))
+                        }
+                        writer_core::sync_service::SyncStatus::DirtyRepoBlocked => {
+                            ("dirty_repo_blocked".to_string(), "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件。".to_string())
+                        }
+                        writer_core::sync_service::SyncStatus::BranchMissingRecovered => {
+                            ("branch_missing_recovered".to_string(), "同步成功 (分支已恢复)\n已自动恢复并关联本地与远端分支。".to_string())
                         }
                         writer_core::sync_service::SyncStatus::Error(ref e) => {
                             let cat = sync_error_category(e);

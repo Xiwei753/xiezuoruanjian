@@ -38,6 +38,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var sbAutoSaveDelay: Slider
     private lateinit var spinnerTheme: Spinner
     private lateinit var tvWorkspacePath: TextView
+    private lateinit var tvVersionInfo: TextView
 
     // Sync Views
     private lateinit var switchEnableSync: MaterialSwitch
@@ -130,6 +131,7 @@ class SettingsActivity : AppCompatActivity() {
         tvSmoothCursorDurationValue = findViewById(R.id.tvSmoothCursorDurationValue)
 
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
+        tvVersionInfo = findViewById(R.id.tvVersionInfo)
 
         switchEnableSync = findViewById(R.id.switchEnableSync)
         etGithubRepo = findViewById(R.id.etGithubRepo)
@@ -285,6 +287,20 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         tvWorkspacePath.text = WorkspaceManager.getWorkspaceDir(this).absolutePath
+
+        try {
+            val packageInfo = packageManager.getPackageInfo(packageName, 0)
+            val vName = packageInfo.versionName
+            val vCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                packageInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo.versionCode.toLong()
+            }
+            tvVersionInfo.text = "v$vName (Build $vCode) Android Native 客户端"
+        } catch (e: Exception) {
+            tvVersionInfo.text = "Android Native 客户端"
+        }
 
         btnDryRun.setOnClickListener {
             handleDryRun()
@@ -581,7 +597,79 @@ class SettingsActivity : AppCompatActivity() {
                     is NativeResult.Success -> {
                         val syncResult = result.data
                         if (syncResult != null) {
-                            if (syncResult.userMessage != null) {
+                            if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Conflict) {
+                                val summary = syncResult.conflictSummary
+                                val settingConflicts = syncResult.settingsConflicts
+                                val msgBuilder = StringBuilder()
+                                
+                                if (summary != null) {
+                                    msgBuilder.append(summary.blockedReason).append("\n\n")
+                                    if (summary.conflictedFiles.isNotEmpty()) {
+                                        msgBuilder.append("冲突文件:\n")
+                                        for (file in summary.conflictedFiles) {
+                                            msgBuilder.append("  - ").append(file).append("\n")
+                                        }
+                                        msgBuilder.append("\n")
+                                    }
+                                } else {
+                                    msgBuilder.append("同步中检测到冲突。\n\n")
+                                    if (syncResult.conflicts.isNotEmpty()) {
+                                        msgBuilder.append("冲突文件:\n")
+                                        for (c in syncResult.conflicts) {
+                                            msgBuilder.append("  - ").append(c.localPath).append("\n")
+                                        }
+                                        msgBuilder.append("\n")
+                                    }
+                                }
+
+                                if (!settingConflicts.isNullOrEmpty()) {
+                                    msgBuilder.append("具体设置冲突:\n")
+                                    for (sc in settingConflicts) {
+                                        msgBuilder.append("  • 键名: ").append(sc.key)
+                                            .append(", 本地值: ").append(sc.localValue)
+                                            .append(", 远程值: ").append(sc.remoteValue).append("\n")
+                                    }
+                                    msgBuilder.append("\n")
+                                }
+
+                                if (summary != null && summary.safeNextSteps.isNotEmpty()) {
+                                    msgBuilder.append("安全建议:\n")
+                                    for (step in summary.safeNextSteps) {
+                                        msgBuilder.append("• ").append(step).append("\n")
+                                    }
+                                } else {
+                                    msgBuilder.append("安全建议:\n")
+                                    msgBuilder.append("• 备份当前工作区。\n")
+                                    msgBuilder.append("• 确认诊断状态或手动合并后重新同步。")
+                                }
+
+                                AlertDialog.Builder(this@SettingsActivity)
+                                    .setTitle("同步冲突")
+                                    .setMessage(msgBuilder.toString().trim())
+                                    .setPositiveButton(getString(R.string.action_ok), null)
+                                    .show()
+                            } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success || syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered) {
+                                val successMsg = if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered) {
+                                    "同步成功 (已关联并恢复缺失的分支)"
+                                } else {
+                                    getString(R.string.sync_success)
+                                }
+                                Toast.makeText(this@SettingsActivity, successMsg, Toast.LENGTH_SHORT).show()
+                            } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.DirtyRepoBlocked) {
+                                AlertDialog.Builder(this@SettingsActivity)
+                                    .setTitle("同步被阻止")
+                                    .setMessage("同步被阻止：本地仓库有未提交的改动，且非安全设置文件，请先提交或备份改动后再试。")
+                                    .setPositiveButton(getString(R.string.action_ok), null)
+                                    .show()
+                            } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.RecoverableError || syncResult.status == com.xiwei.writerapp.model.SyncStatus.FatalError || syncResult.status == com.xiwei.writerapp.model.SyncStatus.Error) {
+                                val title = if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.RecoverableError) "可恢复错误" else "同步失败"
+                                val errMsg = syncResult.userMessage ?: syncResult.error ?: "未知同步错误"
+                                AlertDialog.Builder(this@SettingsActivity)
+                                    .setTitle(title)
+                                    .setMessage(errMsg)
+                                    .setPositiveButton(getString(R.string.action_ok), null)
+                                    .show()
+                            } else if (syncResult.userMessage != null) {
                                 AlertDialog.Builder(this@SettingsActivity)
                                     .setMessage(syncResult.userMessage)
                                     .setPositiveButton(getString(R.string.action_ok), null)
@@ -596,10 +684,6 @@ class SettingsActivity : AppCompatActivity() {
                                     .setMessage(syncResult.error)
                                     .setPositiveButton(getString(R.string.action_ok), null)
                                     .show()
-                            } else if (syncResult.conflicts.isNotEmpty()) {
-                                Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_conflict), Toast.LENGTH_LONG).show()
-                            } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success) {
-                                Toast.makeText(this@SettingsActivity, getString(R.string.sync_success), Toast.LENGTH_SHORT).show()
                             }
                         }
                     }

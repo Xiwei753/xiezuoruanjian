@@ -21,13 +21,40 @@ Dialog {
         radius: 8
     }
 
+    function updateValues() {
+        if (!root.backendRef) return;
+        fontSpin.value = root.backendRef.setting_font_size;
+        autoSaveSwitch.checked = root.backendRef.setting_auto_save_enabled;
+        
+        var mode = root.backendRef.setting_theme_mode;
+        if (mode === "light") themeCombo.currentIndex = 1;
+        else if (mode === "dark") themeCombo.currentIndex = 2;
+        else themeCombo.currentIndex = 0;
+    }
+
+    onOpened: {
+        updateValues();
+    }
+
+    onBackendRefChanged: {
+        updateValues();
+    }
+
+    Connections {
+        target: root.backendRef
+        function onSettings_changed() {
+            root.updateValues();
+        }
+    }
+
     ScrollView {
+        id: settingsScroll
         anchors.fill: parent
         anchors.margins: 16
-        contentWidth: width
+        clip: true
 
         Column {
-            width: parent.width
+            width: settingsScroll.availableWidth
             spacing: 16
 
             Text {
@@ -45,11 +72,7 @@ Dialog {
                     id: themeCombo
                     width: 150
                     model: ["system", "light", "dark"]
-                    currentIndex: {
-                        if ((root.backendRef ? root.backendRef.setting_theme_mode : 'system') === "light") return 1;
-                        if ((root.backendRef ? root.backendRef.setting_theme_mode : 'system') === "dark") return 2;
-                        return 0;
-                    }
+                    currentIndex: 0
                     onActivated: {
                         if (typeof window !== "undefined" && typeof window.debugLog === "function") {
                             window.debugLog("settings", "theme_changed", "mode=" + currentText);
@@ -78,10 +101,10 @@ Dialog {
                 Text { text: "字号"; color: theme ? theme.textMain : "#E0E0E0"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter; width: 100 }
                 SpinBox {
                     id: fontSpin
-                    value: (root.backendRef ? root.backendRef.setting_font_size : 16)
+                    value: 16
                     from: 10
                     to: 40
-                    onValueChanged: {
+                    onValueModified: {
                         if (typeof window !== "undefined" && typeof window.debugLog === "function") {
                             window.debugLog("settings", "font_size_changed", "size=" + value);
                         }
@@ -102,8 +125,8 @@ Dialog {
                 Text { text: "自动保存"; color: theme ? theme.textMain : "#E0E0E0"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter; width: 100 }
                 Switch {
                     id: autoSaveSwitch
-                    checked: (root.backendRef ? root.backendRef.setting_auto_save_enabled : false)
-                    onCheckedChanged: {
+                    checked: false
+                    onToggled: {
                         if (typeof window !== "undefined" && typeof window.debugLog === "function") {
                             window.debugLog("settings", "autosave_changed", "enabled=" + checked);
                         }
