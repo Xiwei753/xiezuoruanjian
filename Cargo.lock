@@ -1235,6 +1235,7 @@ dependencies = [
  "qt-build-utils",
  "rfd",
  "serde_json",
+ "tempfile",
  "writer_core",
 ]
 
