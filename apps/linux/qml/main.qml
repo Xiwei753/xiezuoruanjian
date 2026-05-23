@@ -134,7 +134,10 @@ ApplicationWindow {
             Button {
                 text: "新建作品"
                 visible: appState.hasWorkspace
-                onClicked: createProjectDialog.open()
+                onClicked: {
+                    console.log("[LinuxCreateProjectQml] open dialog");
+                    createProjectDialog.open();
+                }
             }
 
             Button {
@@ -311,19 +314,36 @@ ApplicationWindow {
     CreateProjectDialog {
         id: createProjectDialog
         theme: theme
-        onAccepted: function(title) {
+        onSubmitProject: function(title) {
             var trimmedTitle = title ? title.trim() : "";
             var isEmpty = (trimmedTitle === "");
-            console.log("[LinuxCreateProject] create project button clicked: titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
-            var stateStr = backend.create_project_json(title);
-            var res = JSON.parse(stateStr);
-            console.log("[LinuxCreateProject] backend returned: success=" + res.success + 
-                        ", message=" + (res.message || "") + 
-                        ", userMessage=" + (res.userMessage || "") + 
-                        ", changedEntities=" + JSON.stringify(res.changedEntities || []));
+            console.log("[LinuxCreateProjectQml] submit titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
+            
+            var stateStr = "";
+            try {
+                stateStr = backend.create_project_json(title);
+            } catch (e) {
+                console.error("[LinuxCreateProjectQml] backend call failed: " + e);
+                errorDialog.message = "后端调用失败: " + e;
+                errorDialog.open();
+                return;
+            }
+
+            var res;
+            try {
+                res = JSON.parse(stateStr);
+            } catch (e) {
+                console.error("[LinuxCreateProjectQml] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
+                errorDialog.message = "解析后端返回数据失败";
+                errorDialog.open();
+                return;
+            }
+
+            console.log("[LinuxCreateProjectQml] backend returned success=" + res.success + ", userMessage=" + (res.userMessage || res.message || ""));
+            
             if (res.success) {
                 applyState(res.state);
-                close();
+                createProjectDialog.close();
             } else {
                 errorDialog.message = res.userMessage || res.message || "创建失败";
                 errorDialog.open();

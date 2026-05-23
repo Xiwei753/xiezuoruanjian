@@ -10,7 +10,7 @@ Dialog {
     standardButtons: Dialog.Ok | Dialog.Cancel
 
     property var theme: null
-    signal accepted(string title)
+    signal submitProject(string title)
 
     width: 400
 
@@ -54,6 +54,6 @@ Dialog {
     }
 
     onAccepted: {
-        root.accepted(titleField.text.trim());
+        root.submitProject(titleField.text.trim());
     }
 }
