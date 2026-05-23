@@ -72,7 +72,7 @@ Rectangle {
                 property bool isSelected: root.selectedId !== "" && root.selectedId === model.id
                 property bool isHovered: hoverArea.containsMouse
                 
-                color: isSelected ? (theme ? theme.sidebarHover : "#404040") :
+                color: isSelected ? (theme ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.15) : "#404040") :
                        isHovered ? (theme ? theme.sidebarHover : "#383838") : "transparent"
 
                 RowLayout {

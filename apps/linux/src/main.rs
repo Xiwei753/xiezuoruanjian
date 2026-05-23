@@ -2074,6 +2074,13 @@ impl AppBackend {
 
     fn select_tree_item_json(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString) -> QString {
         let t = item_type.to_string();
+        println!(
+            "[LinuxTree] select_tree_item_json: type={:?}, project_id={:?}, volume_id={:?}, chapter_id={:?}",
+            t,
+            project_id.to_string(),
+            volume_id.to_string(),
+            chapter_id.to_string()
+        );
         if t == "project" {
             self.select_project(project_id);
         } else if t == "volume" {
@@ -2379,6 +2386,8 @@ impl AppBackend {
 
     fn select_project(&mut self, project_id: QString) {
         self.selected_project_id = Some(project_id.to_string());
+        self.selected_volume_id = None;
+        self.selected_chapter_id = None;
         self.selected_item_changed();
         self.chapter_path_changed();
     }
@@ -2386,6 +2395,7 @@ impl AppBackend {
     fn select_volume(&mut self, project_id: QString, volume_id: QString) {
         self.selected_project_id = Some(project_id.to_string());
         self.selected_volume_id = Some(volume_id.to_string());
+        self.selected_chapter_id = None;
         self.selected_item_changed();
         self.chapter_path_changed();
     }

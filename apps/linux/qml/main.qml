@@ -104,6 +104,31 @@ ApplicationWindow {
         }
     }
 
+    function getSelectedItemTitle() {
+        if (!appState || !appState.selected || !appState.tree) return "";
+        var sel = appState.selected;
+        var targetId = sel.chapterId || sel.volumeId || sel.projectId || "";
+        if (!targetId) return "";
+        for (var i = 0; i < appState.tree.length; i++) {
+            if (appState.tree[i].id === targetId) {
+                return appState.tree[i].title;
+            }
+        }
+        return "";
+    }
+
+    function getProjectVolumes(projectId) {
+        var vols = [];
+        if (!appState || !appState.tree) return vols;
+        for (var i = 0; i < appState.tree.length; i++) {
+            var item = appState.tree[i];
+            if (item.type === "volume" && item.projectId === projectId) {
+                vols.push(item);
+            }
+        }
+        return vols;
+    }
+
     // Header
     header: Rectangle {
         height: 48
@@ -180,7 +205,10 @@ ApplicationWindow {
                     errorDialog.open();
                 }
                 theme: theme
-                selectedId: ""
+                selectedId: {
+                    if (!appState || !appState.selected) return "";
+                    return appState.selected.chapterId || appState.selected.volumeId || appState.selected.projectId || "";
+                }
                 
                 onItemActivated: function(type, projectId, volumeId, chapterId) {
                     var stateStr = backend.select_tree_item_json(type, projectId, volumeId, chapterId);
@@ -235,10 +263,13 @@ ApplicationWindow {
                 anchors.fill: parent
                 appTheme: theme
                 backendRef: backend
+                visible: appState.selected && appState.selected.chapterId
                 // Simplified editor integration
                 Component.onCompleted: {
                     if (appState.selected && appState.selected.chapterId) {
-                        editorPage.text = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
+                        var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
+                        console.log("[LinuxEditorLoad] onCompleted loading content, len=" + content.length);
+                        editorPage.loadContent(content);
                     }
                 }
             }
@@ -247,9 +278,12 @@ ApplicationWindow {
                 target: backend
                 function onChapter_path_changed() {
                     if (appState.selected && appState.selected.chapterId) {
-                        editorPage.text = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
+                        var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
+                        console.log("[LinuxEditorLoad] loading chapter content: projectId=" + appState.selected.projectId + ", volumeId=" + appState.selected.volumeId + ", chapterId=" + appState.selected.chapterId + ", len=" + content.length);
+                        editorPage.loadContent(content);
                     } else {
-                        editorPage.text = "";
+                        console.log("[LinuxEditorLoad] clearing editor content");
+                        editorPage.clearText();
                     }
                 }
             }
@@ -261,6 +295,104 @@ ApplicationWindow {
                         backend.save_current_chapter(editorPage.text);
                         applyState(JSON.parse(backend.refresh_app_state_json()));
                     }
+                }
+            }
+
+            // Overview Dashboard shown when a project or volume (but not chapter) is selected
+            Rectangle {
+                anchors.fill: parent
+                color: "transparent"
+                visible: appState.hasWorkspace && (!appState.selected || !appState.selected.chapterId) && (appState.selected && (appState.selected.projectId || appState.selected.volumeId))
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    spacing: 24
+                    width: Math.min(parent.width - 48, 600)
+
+                    Text {
+                        text: getSelectedItemTitle()
+                        color: theme.textMain
+                        font.pixelSize: theme.fontXxl
+                        font.bold: true
+                        horizontalAlignment: Text.AlignHCenter
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                    }
+
+                    Text {
+                        text: {
+                            if (!appState.selected) return "";
+                            if (appState.selected.volumeId) return "当前选中：分卷";
+                            if (appState.selected.projectId) return "当前选中：作品";
+                            return "";
+                        }
+                        color: theme.textDim
+                        font.pixelSize: theme.fontLg
+                        horizontalAlignment: Text.AlignHCenter
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        spacing: 16
+                        Layout.alignment: Qt.AlignHCenter
+
+                        Button {
+                            text: "新建卷"
+                            visible: appState.selected && appState.selected.projectId && !appState.selected.volumeId
+                            onClicked: {
+                                console.log("[LinuxCreateVolumeQml] open dialog via dashboard");
+                                inputDialog.actionType = "volume";
+                                inputDialog.projectId = appState.selected.projectId;
+                                inputDialog.title = "新建卷";
+                                inputDialog.open();
+                            }
+                        }
+
+                        Button {
+                            text: "新建章节"
+                            visible: {
+                                if (!appState.selected) return false;
+                                if (appState.selected.volumeId) return true;
+                                if (appState.selected.projectId) {
+                                    var vols = getProjectVolumes(appState.selected.projectId);
+                                    return vols.length > 0;
+                                }
+                                return false;
+                            }
+                            onClicked: {
+                                var projId = appState.selected.projectId;
+                                var volId = appState.selected.volumeId;
+                                if (!volId) {
+                                    var vols = getProjectVolumes(projId);
+                                    if (vols.length > 0) {
+                                        volId = vols[0].id;
+                                    }
+                                }
+                                if (volId) {
+                                    console.log("[LinuxCreateChapterQml] open dialog via dashboard: projectId=" + projId + ", volumeId=" + volId);
+                                    inputDialog.actionType = "chapter";
+                                    inputDialog.projectId = projId;
+                                    inputDialog.volumeId = volId;
+                                    inputDialog.title = "新建章节";
+                                    inputDialog.open();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback empty view when absolutely nothing is selected
+            Rectangle {
+                anchors.fill: parent
+                color: "transparent"
+                visible: appState.hasWorkspace && (!appState.selected || (!appState.selected.projectId && !appState.selected.volumeId && !appState.selected.chapterId))
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "请在左侧选择或创建一个作品/章节"
+                    color: theme.textDim
+                    font.pixelSize: theme.fontLg
                 }
             }
         }
@@ -514,11 +646,67 @@ ApplicationWindow {
                     var title = inputField.text.trim();
                     if (title !== "") {
                         if (inputDialog.actionType === "volume") {
-                            var stateStr = backend.create_volume_json(inputDialog.projectId, title);
-                            applyState(JSON.parse(stateStr).state);
+                            console.log("[LinuxCreateVolumeQml] submit: projectId=" + inputDialog.projectId + ", title=" + title);
+                            var stateStr = "";
+                            try {
+                                stateStr = backend.create_volume_json(inputDialog.projectId, title);
+                            } catch (e) {
+                                console.error("[LinuxCreateVolumeQml] backend call failed: " + e);
+                                errorDialog.message = "后端调用失败: " + e;
+                                errorDialog.open();
+                                inputDialog.close();
+                                return;
+                            }
+
+                            var res;
+                            try {
+                                res = JSON.parse(stateStr);
+                            } catch (e) {
+                                console.error("[LinuxCreateVolumeQml] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
+                                errorDialog.message = "解析后端返回数据失败";
+                                errorDialog.open();
+                                inputDialog.close();
+                                return;
+                            }
+
+                            console.log("[LinuxCreateVolumeQml] backend returned success=" + res.success + ", message=" + (res.message || ""));
+                            if (res.success) {
+                                applyState(res.state);
+                            } else {
+                                errorDialog.message = res.message || "创建卷失败";
+                                errorDialog.open();
+                            }
                         } else if (inputDialog.actionType === "chapter") {
-                            var stateStr = backend.create_chapter_json(inputDialog.projectId, inputDialog.volumeId, title);
-                            applyState(JSON.parse(stateStr).state);
+                            console.log("[LinuxCreateChapterQml] submit: projectId=" + inputDialog.projectId + ", volumeId=" + inputDialog.volumeId + ", title=" + title);
+                            var stateStr = "";
+                            try {
+                                stateStr = backend.create_chapter_json(inputDialog.projectId, inputDialog.volumeId, title);
+                            } catch (e) {
+                                console.error("[LinuxCreateChapterQml] backend call failed: " + e);
+                                errorDialog.message = "后端调用失败: " + e;
+                                errorDialog.open();
+                                inputDialog.close();
+                                return;
+                            }
+
+                            var res;
+                            try {
+                                res = JSON.parse(stateStr);
+                            } catch (e) {
+                                console.error("[LinuxCreateChapterQml] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
+                                errorDialog.message = "解析后端返回数据失败";
+                                errorDialog.open();
+                                inputDialog.close();
+                                return;
+                            }
+
+                            console.log("[LinuxCreateChapterQml] backend returned success=" + res.success + ", message=" + (res.message || ""));
+                            if (res.success) {
+                                applyState(res.state);
+                            } else {
+                                errorDialog.message = res.message || "创建章节失败";
+                                errorDialog.open();
+                            }
                         }
                     }
                     inputDialog.close();
