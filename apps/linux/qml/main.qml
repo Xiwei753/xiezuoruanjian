@@ -312,8 +312,15 @@ ApplicationWindow {
         id: createProjectDialog
         theme: theme
         onAccepted: function(title) {
+            var trimmedTitle = title ? title.trim() : "";
+            var isEmpty = (trimmedTitle === "");
+            console.log("[LinuxCreateProject] create project button clicked: titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
             var stateStr = backend.create_project_json(title);
             var res = JSON.parse(stateStr);
+            console.log("[LinuxCreateProject] backend returned: success=" + res.success + 
+                        ", message=" + (res.message || "") + 
+                        ", userMessage=" + (res.userMessage || "") + 
+                        ", changedEntities=" + JSON.stringify(res.changedEntities || []));
             if (res.success) {
                 applyState(res.state);
                 close();

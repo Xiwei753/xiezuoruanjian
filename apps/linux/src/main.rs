@@ -1904,6 +1904,16 @@ impl AppBackend {
 
     fn create_project_json(&mut self, title: QString) -> QString {
         let title_str = title.to_string();
+        let trimmed_empty = title_str.trim().is_empty();
+        let core_exists = self.core.is_some();
+        println!(
+            "[LinuxCreateProject] create_project_json called: title_raw={:?}, is_title_trimmed_empty={}, current_workspace={:?}, current_has_workspace={}, core_exists={}",
+            title_str,
+            trimmed_empty,
+            self.current_workspace,
+            self.current_has_workspace,
+            core_exists
+        );
 
         let build_err = |msg: &str| -> String {
             serde_json::json!({
@@ -1929,15 +1939,36 @@ impl AppBackend {
 
         if self.core.is_none() {
             let new_core = WriterCore::new(&self.current_workspace);
-            if !new_core.validate_workspace().unwrap_or(false) {
-                let msg = format!("无法重新打开工作区: {}", self.current_workspace);
-                self.set_error(&msg);
-                return build_err(&msg).into();
+            let val_res = new_core.validate_workspace();
+            match val_res {
+                Ok(true) => {
+                    self.core = Some(Rc::new(RefCell::new(new_core)));
+                }
+                other => {
+                    use std::path::Path;
+                    let ws_path = Path::new(&self.current_workspace);
+                    let manifest_exists = ws_path.join("workspace_manifest.json").exists();
+                    let projects_exists = ws_path.join("projects").exists();
+                    println!(
+                        "[LinuxCreateProject] validate_workspace failed: workspace={:?}, manifest_exists={}, projects_exists={}, validate_workspace_result={:?}",
+                        self.current_workspace,
+                        manifest_exists,
+                        projects_exists,
+                        other
+                    );
+                    let msg = format!("无法重新打开工作区: {}", self.current_workspace);
+                    self.set_error(&msg);
+                    return build_err(&msg).into();
+                }
             }
-            self.core = Some(Rc::new(RefCell::new(new_core)));
         }
 
         if let Some(core_ref) = &self.core {
+            println!(
+                "[LinuxCreateProject] calling core.create_project: title={:?}, workspace={:?}",
+                title_str,
+                self.current_workspace
+            );
             let result = {
                 let core = core_ref.borrow();
                 core.create_project(&title_str)
@@ -1961,7 +1992,29 @@ impl AppBackend {
                         self.selected_volume_id = Some(vol_id.clone());
                     }
 
+                    let readback_proj = {
+                        let core = core_ref.borrow();
+                        core.list_projects().map(|list| list.iter().any(|p| p.id == proj.id)).unwrap_or(false)
+                    };
+                    let readback_vol = {
+                        let core = core_ref.borrow();
+                        core.list_volumes(&proj.id).map(|list| !list.is_empty()).unwrap_or(false)
+                    };
+
+                    let tree_len_before = self.cached_tree.len();
                     self.reload_tree();
+                    let tree_len_after = self.cached_tree.len();
+
+                    println!(
+                        "[LinuxCreateProject] create_project success: project_id={:?}, project_title={:?}, list_projects_readback={}, list_volumes_readback={}, cached_tree_before={}, cached_tree_after={}",
+                        proj.id,
+                        proj.title,
+                        readback_proj,
+                        readback_vol,
+                        tree_len_before,
+                        tree_len_after
+                    );
+
                     self.trigger_projects_reloaded();
 
                     let state_val: serde_json::Value = serde_json::from_str(&self.refresh_app_state_json().to_string()).unwrap_or_default();
@@ -1976,7 +2029,14 @@ impl AppBackend {
                     final_res.to_string().into()
                 }
                 Err(e) => {
+                    let err_display = format!("{}", e);
                     let msg = format!("创建作品失败: {}", e);
+                    println!(
+                        "[LinuxCreateProject] create_project failed: error_type_or_display={:?}, raw_error={:?}, userMessage={:?}",
+                        err_display,
+                        err_display,
+                        msg
+                    );
                     eprintln!("[create_project_json] error: {}", msg);
                     self.set_error(&msg);
                     build_err(&msg).into()
@@ -1984,6 +2044,9 @@ impl AppBackend {
             }
         } else {
             let msg = "Core 未初始化";
+            println!(
+                "[LinuxCreateProject] core_initialized is false"
+            );
             self.set_error(msg);
             build_err(msg).into()
         }
