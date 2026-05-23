@@ -652,10 +652,15 @@ class SettingsActivity : AppCompatActivity() {
                                        syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered ||
                                        syncResult.status == com.xiwei.writerapp.model.SyncStatus.NoChanges ||
                                        syncResult.status == com.xiwei.writerapp.model.SyncStatus.LatestWinsApplied) {
-                                val successMsg = syncResult.userMessage ?: if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered) {
-                                    "同步成功 (已关联并恢复缺失的分支)"
+                                val successMsg = syncResult.userMessage ?: if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.NoChanges) {
+                                    "同步完成：本地和远端均已是最新状态。"
                                 } else {
-                                    getString(R.string.sync_success)
+                                    val title = if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered) {
+                                        "同步成功 (已关联并恢复缺失的分支)"
+                                    } else {
+                                        getString(R.string.sync_success)
+                                    }
+                                    "$title\n上传: ${syncResult.uploadedFiles.size} 下载: ${syncResult.downloadedFiles.size} 本地删除: ${syncResult.localDeletes.size} 远端删除: ${syncResult.remoteDeletes.size} 覆盖: ${syncResult.overwrittenFiles.size}"
                                 }
                                 Toast.makeText(this@SettingsActivity, successMsg, Toast.LENGTH_LONG).show()
                             } else if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.DirtyRepoBlocked) {

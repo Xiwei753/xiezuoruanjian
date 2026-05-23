@@ -15,7 +15,7 @@ pub enum BackendType {
 
 impl Default for BackendType {
     fn default() -> Self {
-        BackendType::Git
+        BackendType::GithubApi
     }
 }
 
@@ -166,6 +166,20 @@ pub fn detect_transport(remote_url: &str) -> SyncTransport {
         SyncTransport::HttpsToken
     } else {
         SyncTransport::HttpsToken
+    }
+}
+
+pub fn is_github_https_remote(remote_url: &str) -> bool {
+    let sanitized = sanitize_remote_url(remote_url).sanitized_url;
+    let lower = sanitized.to_lowercase();
+    lower.starts_with("https://github.com/") || lower.starts_with("http://github.com/")
+}
+
+pub fn resolved_backend_type(config: &SyncConfig) -> BackendType {
+    if config.backend_type == BackendType::Git && is_github_https_remote(&config.remote_url) {
+        BackendType::GithubApi
+    } else {
+        config.backend_type.clone()
     }
 }
 
@@ -1775,6 +1789,10 @@ impl SyncBackend for GitHubApiBackend {
     }
 
     fn sync(&self, workspace_path: &Path, config: &SyncConfig, secrets: &SyncSecrets) -> crate::Result<SyncResult> {
+        eprintln!(
+            "[sync] backend_type=github_api sync_mode=lww_manifest entry=GitHubApiBackend::sync remote_url={}",
+            mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
+        );
         SyncService::perform_lww_sync(workspace_path, config, secrets)
     }
 }
@@ -2860,6 +2878,10 @@ fn semantic_merge_json(
         config: &SyncConfig,
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncResult> {
+        eprintln!(
+            "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync workspace={}",
+            workspace_path.display()
+        );
         let mut result = SyncResult::success();
         result.status = SyncStatus::Idle;
 
@@ -5850,11 +5872,145 @@ mod tests {
         let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
         assert!(res.downloaded_files.contains(&"projects/p1/project.json".to_string()));
         assert!(res.downloaded_files.contains(&"app-meta/sync/manifest.sync.json".to_string()));
+        assert!(res.uploaded_files.is_empty());
+        assert!(res.local_deletes.is_empty());
+        assert!(res.remote_deletes.is_empty());
+        assert!(res.overwritten_files.is_empty());
 
         let local_file_path = dir.path().join("projects/p1/project.json");
         assert!(local_file_path.exists());
         let local_content = std::fs::read_to_string(local_file_path).unwrap();
         assert_eq!(local_content, "remote content");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_perform_lww_sync_local_delete_generates_manifest_delete() {
+        let dir = tempdir().unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert("projects/p1/project.json".to_string(), "old_hash".to_string());
+        state
+            .known_files_updated_at
+            .insert("projects/p1/project.json".to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert("projects/p1/project.json".to_string(), "remote content".to_string());
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
+                updated_at_ms: 900,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert!(res.local_deletes.contains(&"projects/p1/project.json".to_string()));
+
+        let final_m: SyncManifest =
+            serde_json::from_str(&manifest_str.lock().unwrap().clone()).unwrap();
+        let rec = final_m
+            .files
+            .iter()
+            .find(|f| f.path == "projects/p1/project.json")
+            .unwrap();
+        assert_eq!(rec.op, "delete");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_perform_lww_sync_remote_delete_removes_local_file() {
+        let dir = tempdir().unwrap();
+        let local_path = dir.path().join("projects/p1/project.json");
+        std::fs::create_dir_all(local_path.parent().unwrap()).unwrap();
+        std::fs::write(&local_path, "local content").unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state.known_files.insert(
+            "projects/p1/project.json".to_string(),
+            format!("{:x}", md5::compute("local content".as_bytes())),
+        );
+        state
+            .known_files_updated_at
+            .insert("projects/p1/project.json".to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: String::new(),
+                updated_at_ms: 3000,
+                device_id: "device_remote".to_string(),
+                op: "delete".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), std::collections::HashMap::new());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert!(res
+            .remote_deletes
+            .contains(&"projects/p1/project.json".to_string()));
+        assert!(!local_path.exists());
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();

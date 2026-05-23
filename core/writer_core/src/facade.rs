@@ -669,7 +669,8 @@ impl WriterCore {
         config: &crate::sync_service::SyncConfig,
     ) -> crate::error::Result<crate::sync_service::SyncDiagnosticsResult> {
         let secrets = self.load_sync_secrets().unwrap_or_default();
-        let backend = crate::sync_service::create_sync_backend(&config.backend_type);
+        let backend_type = crate::sync_service::resolved_backend_type(config);
+        let backend = crate::sync_service::create_sync_backend(&backend_type);
         backend.diagnose(config, &secrets)
     }
 
@@ -685,7 +686,8 @@ impl WriterCore {
         config: &crate::sync_service::SyncConfig,
     ) -> crate::error::Result<crate::sync_service::SyncResult> {
         let secrets = self.load_sync_secrets().unwrap_or_default();
-        let backend = crate::sync_service::create_sync_backend(&config.backend_type);
+        let backend_type = crate::sync_service::resolved_backend_type(config);
+        let backend = crate::sync_service::create_sync_backend(&backend_type);
         backend.sync(&self.workspace_path, config, &secrets)
     }
 
@@ -734,7 +736,7 @@ impl WriterCore {
         if !config_path.exists() {
             return Ok(crate::sync_service::SyncConfig {
                 enabled: false,
-                backend_type: crate::sync_service::BackendType::Git,
+                backend_type: crate::sync_service::BackendType::GithubApi,
                 remote_url: String::new(),
                 transport: crate::sync_service::SyncTransport::HttpsToken,
                 branch: "main".to_string(),
@@ -750,13 +752,30 @@ impl WriterCore {
             });
         }
         let content = std::fs::read_to_string(&config_path)?;
-        let config: crate::sync_service::SyncConfig =
+        let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
+        let mut config: crate::sync_service::SyncConfig =
             serde_json::from_str(&content).map_err(|e| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     e.to_string(),
                 ))
             })?;
+
+        let backend_missing = raw
+            .as_object()
+            .map(|obj| !obj.contains_key("backend_type"))
+            .unwrap_or(false);
+        let should_migrate = crate::sync_service::is_github_https_remote(&config.remote_url)
+            && (backend_missing || config.backend_type == crate::sync_service::BackendType::Git);
+        if should_migrate {
+            config.backend_type = crate::sync_service::BackendType::GithubApi;
+            self.save_sync_config(&config)?;
+        }
         Ok(config)
     }
 
@@ -960,6 +979,7 @@ mod tests {
         // Load non-existent should give default
         let config = core.load_sync_config().unwrap();
         assert!(!config.enabled);
+        assert_eq!(config.backend_type, crate::sync_service::BackendType::GithubApi);
 
         // Save new config
         let mut new_config = config.clone();
@@ -986,6 +1006,42 @@ mod tests {
         let mut bad_config = loaded.clone();
         bad_config.remote_url = "".to_string();
         assert!(!core.validate_sync_config(&bad_config).unwrap());
+    }
+
+    #[test]
+    fn test_load_sync_config_migrates_git_backend_for_github_https_remote() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let config_path = temp_dir
+            .path()
+            .join("app-meta/sync/sync_config.json");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            r#"{
+  "enabled": true,
+  "backend_type": "git",
+  "remote_url": "https://github.com/test/repo.git",
+  "transport": "https_token",
+  "branch": "main",
+  "auto_sync": false,
+  "sync_interval_seconds": 300,
+  "proxy_enabled": false,
+  "proxy_type": "auto",
+  "proxy_host": "127.0.0.1",
+  "proxy_port": 7890,
+  "username": ""
+}"#,
+        )
+        .unwrap();
+
+        let loaded = core.load_sync_config().unwrap();
+        assert_eq!(loaded.backend_type, crate::sync_service::BackendType::GithubApi);
+
+        let persisted = core.load_sync_config().unwrap();
+        assert_eq!(persisted.backend_type, crate::sync_service::BackendType::GithubApi);
     }
 
     #[test]

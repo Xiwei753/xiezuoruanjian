@@ -1233,7 +1233,7 @@ impl AppBackend {
 
         let config = SyncConfig {
             enabled: true,
-            backend_type: BackendType::Git,
+            backend_type: BackendType::GithubApi,
             remote_url: sanitized_url.clone(),
             transport: writer_core::sync_service::SyncTransport::HttpsToken,
             branch: branch.to_string(),
@@ -1653,7 +1653,7 @@ impl AppBackend {
                 .load_sync_config()
                 .unwrap_or(writer_core::sync_service::SyncConfig {
                     enabled: false,
-                    backend_type: writer_core::sync_service::BackendType::Git,
+                    backend_type: writer_core::sync_service::BackendType::GithubApi,
                     remote_url: "".to_string(),
                     transport: writer_core::sync_service::SyncTransport::HttpsToken,
                     branch: "main".to_string(),
@@ -1677,7 +1677,7 @@ impl AppBackend {
                 "webdav" => writer_core::sync_service::BackendType::WebDav,
                 "s3" => writer_core::sync_service::BackendType::S3,
                 "local_folder" => writer_core::sync_service::BackendType::LocalFolder,
-                _ => writer_core::sync_service::BackendType::Git,
+                _ => writer_core::sync_service::BackendType::GithubApi,
             };
             c.remote_url = parsed.sanitized_url.clone();
             c.branch = if self.current_sync_branch.is_empty() { "main".to_string() } else { self.current_sync_branch.clone() };
@@ -1884,6 +1884,19 @@ impl AppBackend {
                     return;
                 }
             };
+            let resolved_backend = writer_core::sync_service::resolved_backend_type(&config);
+            let backend_label = match resolved_backend {
+                writer_core::sync_service::BackendType::GithubApi => "github_api",
+                writer_core::sync_service::BackendType::Git => "git",
+                writer_core::sync_service::BackendType::WebDav => "webdav",
+                writer_core::sync_service::BackendType::S3 => "s3",
+                writer_core::sync_service::BackendType::LocalFolder => "local_folder",
+            };
+            debug_log_static(
+                "sync",
+                "perform_sync_backend",
+                &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
+            );
 
             match core.perform_sync(&config) {
                 Ok(result) => {

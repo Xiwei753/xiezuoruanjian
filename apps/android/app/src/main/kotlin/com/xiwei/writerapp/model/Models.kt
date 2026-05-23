@@ -103,7 +103,7 @@ data class SyncConfig(
     fun normalize(): SyncConfig {
         return copy(
             enabled = enabled ?: false,
-            backendType = backendType ?: BackendType.Git,
+            backendType = backendType ?: BackendType.GithubApi,
             remoteUrl = remoteUrl ?: "",
             transport = transport ?: SyncTransport.HttpsToken,
             branch = if (branch.isNullOrEmpty()) "main" else branch,
@@ -234,6 +234,9 @@ data class SyncResult(
     val status: SyncStatus,
     @SerializedName("uploaded_files") val uploadedFiles: List<String> = emptyList(),
     @SerializedName("downloaded_files") val downloadedFiles: List<String> = emptyList(),
+    @SerializedName("local_deletes") val localDeletes: List<String> = emptyList(),
+    @SerializedName("remote_deletes") val remoteDeletes: List<String> = emptyList(),
+    @SerializedName("overwritten_files") val overwrittenFiles: List<String> = emptyList(),
     @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList(),
     val conflicts: List<SyncConflict> = emptyList(),
     @SerializedName("commit_hash") val commitHash: String? = null,
