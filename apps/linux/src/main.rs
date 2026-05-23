@@ -365,6 +365,7 @@ struct AppBackend {
     save_sync_config: qt_method!(fn(&mut self) -> bool),
     perform_sync_dry_run: qt_method!(fn(&mut self)),
     perform_sync: qt_method!(fn(&mut self)),
+    open_workspace_dir: qt_method!(fn(&mut self)),
 
     try_restore_last_workspace: qt_method!(fn(&mut self)),
     create_new_workspace: qt_method!(fn(&mut self)),
@@ -1375,7 +1376,8 @@ impl AppBackend {
                             display_files.join("\n  - ")
                         };
                         
-                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error=None", files.len()));
+                        let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
+                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
                         
                         let m = format!(
                             "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
@@ -1387,16 +1389,39 @@ impl AppBackend {
                         }
                     } else {
                         let err = result.error.unwrap_or_default();
+                        let cat = sync_error_category(&err);
+                        let action_result = if cat == "conflict" {
+                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err)));
+                            format!(
+                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
+                                mask_sync_error(&err)
+                            )
+                        } else {
+                            format!("同步失败: {}", mask_sync_error(&err))
+                        };
                         SyncTaskOutcome {
-                            sync_status: sync_error_category(&err),
-                            action_result: format!("同步失败: {}", mask_sync_error(&err)),
+                            sync_status: cat,
+                            action_result,
                         }
                     }
                 }
-                Err(e) => SyncTaskOutcome {
-                    sync_status: sync_error_category(&e.to_string()),
-                    action_result: format!("同步失败: {}", mask_sync_error(&e.to_string())),
-                },
+                Err(e) => {
+                    let err_str = e.to_string();
+                    let cat = sync_error_category(&err_str);
+                    let action_result = if cat == "conflict" {
+                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err_str)));
+                        format!(
+                            "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
+                            mask_sync_error(&err_str)
+                        )
+                    } else {
+                        format!("同步失败: {}", mask_sync_error(&err_str))
+                    };
+                    SyncTaskOutcome {
+                        sync_status: cat,
+                        action_result,
+                    }
+                }
             }
         } else if is_git_repo() {
             // Has git repo but no workspace — error, user should open as workspace
@@ -1894,7 +1919,8 @@ impl AppBackend {
                                 display_files.join("\n  - ")
                             };
                             
-                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error=None", files.len()));
+                            let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
+                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
                             
                             let m = format!(
                                 "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
@@ -1904,7 +1930,15 @@ impl AppBackend {
                         }
                         writer_core::sync_service::SyncStatus::Error(ref e) => {
                             let cat = sync_error_category(e);
-                            let m = format!("同步失败:\n{}", mask_sync_error(e));
+                            let m = if cat == "conflict" {
+                                debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(e)));
+                                format!(
+                                    "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
+                                    mask_sync_error(e)
+                                )
+                            } else {
+                                format!("同步失败:\n{}", mask_sync_error(e))
+                            };
                             (cat, m)
                         }
                         writer_core::sync_service::SyncStatus::Idle => {
@@ -1921,13 +1955,33 @@ impl AppBackend {
                     });
                 }
                 Err(e) => {
+                    let err_str = e.to_string();
+                    let cat = sync_error_category(&err_str);
+                    let action_result = if cat == "conflict" {
+                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err_str)));
+                        format!(
+                            "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
+                            mask_sync_error(&err_str)
+                        )
+                    } else {
+                        format!("同步操作失败:\n{}", mask_sync_error(&err_str))
+                    };
                     callback(SyncTaskOutcome {
-                        sync_status: sync_error_category(&e.to_string()),
-                        action_result: format!("同步操作失败:\n{}", mask_sync_error(&e.to_string())),
+                        sync_status: cat,
+                        action_result,
                     });
                 }
             }
         });
+    }
+
+    fn open_workspace_dir(&mut self) {
+        let path = self.current_workspace.clone();
+        if !path.is_empty() {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&path)
+                .spawn();
+        }
     }
 
         fn workspace_path(&self) -> QString {

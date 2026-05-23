@@ -462,6 +462,8 @@ impl SyncResult {
             conflicts,
             commit_hash: None,
             error: Some(error),
+            error_category: None,
+            conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
             user_message,
             chosen_network_mode: None,
@@ -737,9 +739,23 @@ impl GitBackend for Git2Backend {
                     if status.is_index_new() || status.is_index_deleted() || status.is_index_modified() {
                         // Index has conflicts or unmerged entries
                         if status.is_conflicted() {
+                            let conflicts = collect_index_conflicts(&repo);
+                            let summary = SyncConflictSummary {
+                                status: "conflict".to_string(),
+                                local_dirty: true,
+                                remote_changed: true,
+                                conflicted_files: conflicts,
+                                blocked_reason: "本地 Git 暂存区存在未解决的冲突，请先解决冲突。".to_string(),
+                                safe_next_steps: vec![
+                                    "备份当前工作区。".to_string(),
+                                    "运行诊断确认网络/认证没问题。".to_string(),
+                                    "手动处理冲突后重新同步。".to_string(),
+                                ],
+                            };
+                            let payload = serde_json::to_string(&summary).unwrap_or_default();
                             return Err(crate::Error::Io(std::io::Error::new(
                                 std::io::ErrorKind::Other,
-                                format!("Index has conflicts in: {}. Please resolve before pulling.", path),
+                                format!("checkout_conflict_payload:{}", payload),
                             )));
                         }
                     }
@@ -752,10 +768,22 @@ impl GitBackend for Git2Backend {
                 }
             }
             if !blocking_files.is_empty() {
+                let summary = SyncConflictSummary {
+                    status: "conflict".to_string(),
+                    local_dirty: true,
+                    remote_changed: true,
+                    conflicted_files: blocking_files.clone(),
+                    blocked_reason: format!("本地工作区有 {} 个未跟踪文件会阻止远端 checkout。", blocking_files.len()),
+                    safe_next_steps: vec![
+                        "备份当前工作区。".to_string(),
+                        "运行诊断确认网络/认证没问题。".to_string(),
+                        "手动处理冲突后重新同步。".to_string(),
+                    ],
+                };
+                let payload = serde_json::to_string(&summary).unwrap_or_default();
                 return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    format!("local_blocking_file: 本地工作区有 {} 个未跟踪文件会阻止远端 checkout: {}. 请先处理这些文件。",
-                        blocking_files.len(), blocking_files.join(", ")),
+                    format!("checkout_conflict_payload:{}", payload),
                 )));
             }
         }
@@ -771,7 +799,8 @@ impl GitBackend for Git2Backend {
             let cp_clone = conflicted_paths.clone();
             
             let mut dry_run_builder = git2::build::CheckoutBuilder::default();
-            dry_run_builder.notify(git2::CheckoutNotificationType::CONFLICT, move |_, path, _, _, _| {
+            dry_run_builder.notify_on(git2::CheckoutNotificationType::CONFLICT);
+            dry_run_builder.notify(move |_, path, _, _, _| {
                 if let Some(p) = path {
                     if let Some(s) = p.to_str() {
                         cp_clone.borrow_mut().push(s.to_string());
@@ -799,10 +828,11 @@ impl GitBackend for Git2Backend {
                             local_dirty: true,
                             remote_changed: true,
                             conflicted_files: paths,
-                            blocked_reason: "Checkout conflict prevents syncing.".to_string(),
+                            blocked_reason: "本地未提交的改动与远端更新冲突，Git 无法安全检出。".to_string(),
                             safe_next_steps: vec![
-                                "Backup current workspace".to_string(),
-                                "Resolve conflicts manually".to_string(),
+                                "备份当前工作区。".to_string(),
+                                "运行诊断确认网络/认证没问题。".to_string(),
+                                "手动处理冲突后重新同步。".to_string(),
                             ],
                         };
                         let payload = serde_json::to_string(&summary).unwrap_or_default();
@@ -857,13 +887,21 @@ impl GitBackend for Git2Backend {
             })?;
         } else if analysis.0.is_normal() {
             let mut merge_opts = git2::MergeOptions::new();
-            repo.merge(&[&fetch_commit], Some(&mut merge_opts), None)
-                .map_err(|e: git2::Error| {
-                    crate::Error::Io(std::io::Error::new(
+            if let Err(e) = repo.merge(&[&fetch_commit], Some(&mut merge_opts), None) {
+                let err_msg = e.to_string();
+                if e.code() == git2::ErrorCode::Conflict || e.class() == git2::ErrorClass::Checkout || err_msg.contains("conflict") || err_msg.contains("Conflict") {
+                    let summary = build_conflict_summary(&repo, Some(fetch_commit.id()), "本地未提交的改动或冲突阻止了合并操作。");
+                    let payload = serde_json::to_string(&summary).unwrap_or_default();
+                    return Err(crate::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
+                        format!("checkout_conflict_payload:{}", payload),
+                    )));
+                }
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    err_msg,
+                )));
+            }
 
             let mut index = repo.index().map_err(|e: git2::Error| {
                 crate::Error::Io(std::io::Error::new(
@@ -2297,6 +2335,128 @@ impl Default for SyncState {
     }
 }
 
+fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true);
+    let mut local_dirty = false;
+    let mut dirty_files = Vec::new();
+    if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
+        for entry in statuses.iter() {
+            if let Some(path) = entry.path() {
+                if SyncService::is_blacklisted_path(path) || !SyncService::is_whitelisted_path(path) {
+                    continue;
+                }
+                let status = entry.status();
+                if status.is_wt_modified() || status.is_index_modified() ||
+                   status.is_wt_new() || status.is_index_new() ||
+                   status.is_wt_deleted() || status.is_index_deleted() {
+                    local_dirty = true;
+                    dirty_files.push(path.to_string());
+                }
+            }
+        }
+    }
+    (local_dirty, dirty_files)
+}
+
+fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
+    let mut conflicted = Vec::new();
+    if let Ok(index) = repo.index() {
+        if index.has_conflicts() {
+            if let Ok(conflicts) = index.conflicts() {
+                for conflict in conflicts.flatten() {
+                    let mut best_path = None;
+                    if let Some(our) = &conflict.our {
+                        best_path = Some(String::from_utf8_lossy(&our.path).to_string());
+                    } else if let Some(their) = &conflict.their {
+                        best_path = Some(String::from_utf8_lossy(&their.path).to_string());
+                    } else if let Some(ancestor) = &conflict.ancestor {
+                        best_path = Some(String::from_utf8_lossy(&ancestor.path).to_string());
+                    }
+                    if let Some(path) = best_path {
+                        if !SyncService::is_blacklisted_path(&path) && SyncService::is_whitelisted_path(&path) {
+                            conflicted.push(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    conflicted.sort();
+    conflicted.dedup();
+    conflicted
+}
+
+fn build_conflict_summary(
+    repo: &git2::Repository,
+    fetch_commit_id: Option<git2::Oid>,
+    blocked_reason: &str,
+) -> SyncConflictSummary {
+    let (local_dirty, dirty_files) = collect_git_status_summary(repo);
+    
+    let mut remote_changed = false;
+    if let Some(remote_oid) = fetch_commit_id {
+        if let Ok(head) = repo.head() {
+            if let Some(local_oid) = head.target() {
+                if local_oid != remote_oid {
+                    remote_changed = true;
+                }
+            }
+        } else {
+            remote_changed = true;
+        }
+    }
+
+    let mut conflicted_files = Vec::new();
+    if let Some(remote_oid) = fetch_commit_id {
+        if let Ok(commit) = repo.find_commit(remote_oid) {
+            if let Ok(tree) = commit.tree() {
+                let paths = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                let cp_clone = paths.clone();
+                let mut dry_run_builder = git2::build::CheckoutBuilder::default();
+                dry_run_builder.notify_on(git2::CheckoutNotificationType::CONFLICT);
+                dry_run_builder.notify(move |_, path, _, _, _| {
+                    if let Some(p) = path {
+                        if let Some(s) = p.to_str() {
+                            cp_clone.borrow_mut().push(s.to_string());
+                        }
+                    }
+                    true
+                });
+                dry_run_builder.dry_run();
+                let _ = repo.checkout_tree(tree.as_object(), Some(&mut dry_run_builder));
+                conflicted_files = paths.borrow().clone();
+            }
+        }
+    }
+
+    let index_conflicts = collect_index_conflicts(repo);
+    conflicted_files.extend(index_conflicts);
+
+    conflicted_files.retain(|path| {
+        !SyncService::is_blacklisted_path(path) && SyncService::is_whitelisted_path(path)
+    });
+    conflicted_files.sort();
+    conflicted_files.dedup();
+
+    if conflicted_files.is_empty() && local_dirty {
+        conflicted_files = dirty_files;
+    }
+
+    SyncConflictSummary {
+        status: "conflict".to_string(),
+        local_dirty,
+        remote_changed,
+        conflicted_files,
+        blocked_reason: blocked_reason.to_string(),
+        safe_next_steps: vec![
+            "备份当前工作区。".to_string(),
+            "运行诊断确认网络/认证没问题。".to_string(),
+            "手动处理冲突后重新同步。".to_string(),
+        ],
+    }
+}
+
 pub struct SyncService {
     pub config: Option<SyncConfig>,
     pub status: SyncStatus,
@@ -2994,13 +3154,19 @@ impl SyncService {
 
             let e_str_lower = e_str.to_lowercase();
             // Checkout conflict / local blocking file (fallback)
-            if e_str_lower.contains("checkout_conflict") || e_str_lower.contains("local_blocking_file") {
-                return Ok(SyncResult::error(
+            if e_str_lower.contains("checkout_conflict") || e_str_lower.contains("local_blocking_file") || e_str_lower.contains("conflict prevents checkout") {
+                let mut res = SyncResult::error(
                     SyncStatus::Conflict,
                     result.first_sync_mode,
                     Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
                     format!("Pull failed: {}", e),
-                ));
+                );
+                if let Ok(repo) = git2::Repository::open(workspace_path) {
+                    let fetch_commit_id = repo.find_reference("FETCH_HEAD").ok().and_then(|r| r.target());
+                    let summary = build_conflict_summary(&repo, fetch_commit_id, "本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。");
+                    res.conflict_summary = Some(summary);
+                }
+                return Ok(res);
             }
             if e_str_lower.contains("unrelated")
                 || e_str_lower.contains("merge")
@@ -3160,6 +3326,34 @@ impl SyncService {
                         None => Some(err_msg),
                     };
                 }
+
+                let (local_dirty, _) = collect_git_status_summary(&repo);
+                let fetch_commit_id = repo.find_reference("FETCH_HEAD").ok().and_then(|r| r.target());
+                let mut remote_changed = false;
+                if let Some(remote_oid) = fetch_commit_id {
+                    if let Ok(head) = repo.head() {
+                        if let Some(local_oid) = head.target() {
+                            if local_oid != remote_oid {
+                                remote_changed = true;
+                            }
+                        }
+                    }
+                }
+                
+                let conflicted_files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
+                
+                result.conflict_summary = Some(SyncConflictSummary {
+                    status: "conflict".to_string(),
+                    local_dirty,
+                    remote_changed,
+                    conflicted_files,
+                    blocked_reason: "自动合并失败，本地和远端都修改了同一批同步文件。".to_string(),
+                    safe_next_steps: vec![
+                        "备份当前工作区。".to_string(),
+                        "运行诊断确认网络/认证没问题。".to_string(),
+                        "手动处理冲突后重新同步。".to_string(),
+                    ],
+                });
 
                 return Ok(result);
             } else {

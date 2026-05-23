@@ -165,6 +165,26 @@ Rectangle {
                     if (root.backendRef) root.backendRef.perform_sync_diagnostics();
                 }
             }
+
+            Button {
+                text: "打开工作区目录"
+                visible: root.backendRef && root.backendRef.has_workspace
+                onClicked: {
+                    if (root.backendRef) {
+                        root.backendRef.open_workspace_dir();
+                    }
+                }
+            }
+
+            Button {
+                text: "复制冲突信息"
+                visible: root.backendRef && root.backendRef.sync_status === "conflict"
+                onClicked: {
+                    if (root.backendRef) {
+                        root.backendRef.copy_text_to_clipboard(syncResultArea.text);
+                    }
+                }
+            }
         }
 
         Rectangle {
