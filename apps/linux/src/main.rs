@@ -97,6 +97,71 @@ fn sync_error_category(msg: &str) -> String {
     "error".to_string()
 }
 
+fn determine_diagnostics_status(result: &writer_core::sync_service::SyncDiagnosticsResult) -> &'static str {
+    if !result.success {
+        match result.error_category.as_str() {
+            "token_missing" => "configured_untested",
+            "empty_url" => "not_configured",
+            cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
+            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => "network_failed",
+            "repo_not_found_or_no_permission" => "auth_failed",
+            _ => "error",
+        }
+    } else {
+        "configured_untested"
+    }
+}
+
+fn format_proxy_diagnostics(msg: &mut String, result: &writer_core::sync_service::SyncDiagnosticsResult) {
+    if result.proxy_used && result.proxy_type != "none" {
+        if result.proxy_type == "auto" {
+            msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
+        } else {
+            let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
+            msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
+            if protocol == "http" || protocol == "socks5h" {
+                msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
+                if protocol == "http" {
+                    msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
+                }
+            }
+        }
+        msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
+    }
+}
+
+fn format_diagnostics_message(result: &writer_core::sync_service::SyncDiagnosticsResult) -> String {
+    let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
+
+    msg.push_str(&format!("\n后端类型: {}", result.backend_type));
+    msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
+
+    if !result.remote_url_sanitized.is_empty() {
+        msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
+    }
+    msg.push_str(&format!("\nTransport: {}", result.transport));
+
+    format_proxy_diagnostics(&mut msg, result);
+
+    msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
+    msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
+    msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
+    msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
+
+    if !result.error_category.is_empty() && result.error_category != "none" {
+        msg.push_str(&format!("\n错误分类: {}", result.error_category));
+    }
+
+    if !result.user_message.is_empty() {
+        msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
+    }
+    if let Some(err) = &result.raw_error {
+        msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(err)));
+    }
+
+    msg
+}
+
 fn save_sync_configs(path: &str, config: &SyncConfig, secrets: &SyncSecrets) -> Result<(), String> {
     let core = WriterCore::new(path);
     core.save_sync_config(config).map_err(|e| format!("保存同步配置失败: {}", e))?;
@@ -1197,60 +1262,8 @@ impl AppBackend {
 
             match core.perform_sync_diagnostics(&config) {
                 Ok(result) => {
-                    let status = if !result.success {
-                        match result.error_category.as_str() {
-                            "token_missing" => "configured_untested",
-                            "empty_url" => "not_configured",
-                            cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
-                            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => "network_failed",
-                            "repo_not_found_or_no_permission" => "auth_failed",
-                            _ => "error",
-                        }
-                    } else {
-                        "configured_untested"
-                    };
-
-                    let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
-
-                    msg.push_str(&format!("\n后端类型: {}", result.backend_type));
-                    msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
-
-                    if !result.remote_url_sanitized.is_empty() {
-                        msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
-                    }
-                    msg.push_str(&format!("\nTransport: {}", result.transport));
-
-                    if result.proxy_used && result.proxy_type != "none" {
-                        if result.proxy_type == "auto" {
-                            msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
-                        } else {
-                            let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
-                            msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
-                            if protocol == "http" || protocol == "socks5h" {
-                                msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
-                                if protocol == "http" {
-                                    msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
-                                }
-                            }
-                        }
-                        msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
-                    }
-
-                    msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
-                    msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
-                    msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
-                    msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
-
-                    if !result.error_category.is_empty() && result.error_category != "none" {
-                        msg.push_str(&format!("\n错误分类: {}", result.error_category));
-                    }
-
-                    if !result.user_message.is_empty() {
-                        msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
-                    }
-                    if let Some(err) = result.raw_error {
-                        msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(&err)));
-                    }
+                    let status = determine_diagnostics_status(&result);
+                    let msg = format_diagnostics_message(&result);
 
                     callback(SyncTaskOutcome {
                         sync_status: status.to_string(),
