@@ -4,12 +4,59 @@ set -euo pipefail
 # Style settings
 export QT_QUICK_CONTROLS_STYLE=Basic
 
-# Debug settings
+show_usage() {
+    echo "Usage:"
+    echo "  bash start"
+    echo "  bash start debug"
+    echo "  bash start debug sync"
+    echo "  bash start debug trace"
+    echo "  bash start debug qt"
+}
+
+# Default values if not set in environment
+WRITER_DEBUG_MODULES_DEFAULT="app,workspace,tree,project,volume,chapter,sync,settings"
+WRITER_DEBUG_LEVEL_DEFAULT="info"
+WRITER_DEBUG_QT_VERBOSE_DEFAULT="0"
+
+has_args=false
+while [ $# -gt 0 ]; do
+    has_args=true
+    case "$1" in
+        sync)
+            export WRITER_DEBUG_MODULES="sync"
+            ;;
+        tree)
+            export WRITER_DEBUG_MODULES="tree,project,volume,chapter,editor"
+            ;;
+        ui)
+            export WRITER_DEBUG_MODULES="app,workspace,tree,settings"
+            ;;
+        all)
+            export WRITER_DEBUG_MODULES="all"
+            ;;
+        trace)
+            export WRITER_DEBUG_LEVEL="trace"
+            export WRITER_DEBUG_MODULES="all"
+            ;;
+        qt)
+            export WRITER_DEBUG_QT_VERBOSE="1"
+            ;;
+        *)
+            echo "Error: Unknown debug parameter '$1'" >&2
+            show_usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+# If no arguments or if variables not specified, use defaults but do NOT override already set env variables
+export WRITER_DEBUG_MODULES="${WRITER_DEBUG_MODULES:-$WRITER_DEBUG_MODULES_DEFAULT}"
+export WRITER_DEBUG_LEVEL="${WRITER_DEBUG_LEVEL:-$WRITER_DEBUG_LEVEL_DEFAULT}"
+export WRITER_DEBUG_QT_VERBOSE="${WRITER_DEBUG_QT_VERBOSE:-$WRITER_DEBUG_QT_VERBOSE_DEFAULT}"
+
 export WRITER_DEBUG=1
 export WRITER_DEBUG_QML=1
-export WRITER_DEBUG_MODULES="${WRITER_DEBUG_MODULES:-app,workspace,tree,project,volume,chapter,sync,settings}"
-export WRITER_DEBUG_LEVEL="${WRITER_DEBUG_LEVEL:-info}"
-export WRITER_DEBUG_QT_VERBOSE="${WRITER_DEBUG_QT_VERBOSE:-0}"
 export RUST_BACKTRACE=full
 export RUST_LOG="${RUST_LOG:-warn}"
 
@@ -25,8 +72,12 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Ensure logs directory exists
+# Ensure logs directory exists and is writable
 mkdir -p logs
+if [ ! -w logs ]; then
+    echo "Error: Logs directory 'logs/' is not writable." >&2
+    exit 1
+fi
 
 # Clean up older log files (keep 20 most recent)
 if [ -d logs ]; then
@@ -65,10 +116,11 @@ generate_summary() {
 trap generate_summary EXIT
 
 echo "=== Debug Configuration ==="
-echo "WRITER_DEBUG: $WRITER_DEBUG"
-echo "WRITER_DEBUG_MODULES: $WRITER_DEBUG_MODULES"
-echo "WRITER_DEBUG_LEVEL: $WRITER_DEBUG_LEVEL"
+echo "Launch mode: debug"
+echo "Debug modules: $WRITER_DEBUG_MODULES"
+echo "Debug level: $WRITER_DEBUG_LEVEL"
 echo "RUST_LOG: $RUST_LOG"
+echo "Qt verbose: $( [ "${WRITER_DEBUG_QT_VERBOSE:-0}" = "1" ] && echo "enabled" || echo "disabled" )"
 echo "QT_LOGGING_RULES: $QT_LOGGING_RULES"
 echo "Log file path: $LOG_FILE"
 if [ "${WRITER_DEBUG_QT_VERBOSE:-0}" = "0" ]; then
