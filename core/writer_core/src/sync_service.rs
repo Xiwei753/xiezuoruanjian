@@ -695,6 +695,35 @@ impl GitBackend for Git2Backend {
                 e.to_string(),
             ))
         })?;
+
+        // Record transaction anchors
+        let is_unborn = repo.head().is_err();
+        let original_head_ref_name = repo.head().ok().and_then(|r| r.name().map(String::from));
+        let original_head_oid = repo.head().ok().and_then(|r| r.target());
+        let original_index_bytes = std::fs::read(repo.path().join("index")).ok();
+
+        let rollback = |repo: &git2::Repository| {
+            let _ = repo.cleanup_state();
+            if !is_unborn {
+                if let Some(oid) = original_head_oid {
+                    if let Ok(obj) = repo.find_object(oid, None) {
+                        let mut cb = git2::build::CheckoutBuilder::default();
+                        cb.force();
+                        let _ = repo.reset(&obj, git2::ResetType::Hard, Some(&mut cb));
+                    }
+                }
+            }
+            if let Some(ref bytes) = original_index_bytes {
+                let _ = std::fs::write(repo.path().join("index"), bytes);
+                if let Ok(mut index) = repo.index() {
+                    let _ = index.read(true);
+                }
+            }
+            if let Some(ref ref_name) = original_head_ref_name {
+                let _ = repo.set_head(ref_name);
+            }
+        };
+
         let mut remote = repo.find_remote("origin").map_err(|e: git2::Error| {
             crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -707,18 +736,18 @@ impl GitBackend for Git2Backend {
         fetch_options.remote_callbacks(Self::build_callbacks(auth, username_override));
         fetch_options.proxy_options(Self::build_proxy_options(proxy_config)?);
 
-        remote
-            .fetch(&[branch], Some(&mut fetch_options), None)
-            .map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+        if let Err(e) = remote.fetch(&[branch], Some(&mut fetch_options), None) {
+            rollback(&repo);
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )));
+        }
 
         let fetch_head = repo
             .find_reference("FETCH_HEAD")
             .map_err(|e: git2::Error| {
+                rollback(&repo);
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     e.to_string(),
@@ -727,6 +756,7 @@ impl GitBackend for Git2Backend {
         let fetch_commit =
             repo.reference_to_annotated_commit(&fetch_head)
                 .map_err(|e: git2::Error| {
+                    rollback(&repo);
                     crate::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         e.to_string(),
@@ -735,24 +765,32 @@ impl GitBackend for Git2Backend {
 
         // Handle unborn local repository
         if repo.head().is_err() {
-            let commit_obj = repo.find_commit(fetch_commit.id()).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?;
-            repo.checkout_tree(commit_obj.as_object(), Some(git2::build::CheckoutBuilder::default().force())).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?;
-            repo.branch(branch, &commit_obj, true).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?;
-            repo.set_head(&format!("refs/heads/{}", branch)).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?;
+            let commit_obj = match repo.find_commit(fetch_commit.id()) {
+                Ok(c) => c,
+                Err(e) => {
+                    rollback(&repo);
+                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                }
+            };
+            if let Err(e) = repo.checkout_tree(commit_obj.as_object(), Some(git2::build::CheckoutBuilder::default().force())) {
+                rollback(&repo);
+                return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+            }
+            if let Err(e) = repo.branch(branch, &commit_obj, true) {
+                rollback(&repo);
+                return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+            }
+            if let Err(e) = repo.set_head(&format!("refs/heads/{}", branch)) {
+                rollback(&repo);
+                return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+            }
             return Ok(());
         }
 
         let analysis = repo
             .merge_analysis(&[&fetch_commit])
             .map_err(|e: git2::Error| {
+                rollback(&repo);
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     e.to_string(),
@@ -772,6 +810,7 @@ impl GitBackend for Git2Backend {
                     if status.is_index_new() || status.is_index_deleted() || status.is_index_modified() {
                         // Index has conflicts or unmerged entries
                         if status.is_conflicted() {
+                            rollback(&repo);
                             let conflicts = collect_index_conflicts(&repo);
                             let summary = SyncConflictSummary {
                                 status: "conflict".to_string(),
@@ -801,6 +840,7 @@ impl GitBackend for Git2Backend {
                 }
             }
             if !blocking_files.is_empty() {
+                rollback(&repo);
                 let summary = SyncConflictSummary {
                     status: "conflict".to_string(),
                     local_dirty: true,
@@ -842,85 +882,93 @@ impl GitBackend for Git2Backend {
                 true
             });
             dry_run_builder.dry_run();
-            let fetch_tree = repo.find_commit(fetch_commit.id()).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?.tree().map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?;
-            match repo.checkout_tree(
+            let fetch_tree = match repo.find_commit(fetch_commit.id()).and_then(|c| c.tree()) {
+                Ok(t) => t,
+                Err(e) => {
+                    rollback(&repo);
+                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                }
+            };
+            if let Err(e) = repo.checkout_tree(
                 fetch_tree.as_object(),
                 Some(&mut dry_run_builder),
             ) {
-                Ok(_) => {},
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("conflict") || err_msg.contains("Conflict") {
-                        let paths = conflicted_paths.borrow().clone();
-                        let summary = crate::sync_service::SyncConflictSummary {
-                            status: "conflict".to_string(),
-                            local_dirty: true,
-                            remote_changed: true,
-                            conflicted_files: paths,
-                            blocked_reason: "本地未提交的改动与远端更新冲突，Git 无法安全检出。".to_string(),
-                            safe_next_steps: vec![
-                                "备份当前工作区。".to_string(),
-                                "运行诊断确认网络/认证没问题。".to_string(),
-                                "手动处理冲突后重新同步。".to_string(),
-                            ],
-                        };
-                        let payload = serde_json::to_string(&summary).unwrap_or_default();
-                        return Err(crate::Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("checkout_conflict_payload:{}", payload),
-                        )));
-                    }
+                rollback(&repo);
+                let err_msg = e.to_string();
+                if err_msg.contains("conflict") || err_msg.contains("Conflict") {
+                    let paths = conflicted_paths.borrow().clone();
+                    let summary = crate::sync_service::SyncConflictSummary {
+                        status: "conflict".to_string(),
+                        local_dirty: true,
+                        remote_changed: true,
+                        conflicted_files: paths,
+                        blocked_reason: "本地未提交的改动与远端更新冲突，Git 无法安全检出。".to_string(),
+                        safe_next_steps: vec![
+                            "备份当前工作区。".to_string(),
+                            "运行诊断确认网络/认证没问题。".to_string(),
+                            "手动处理冲突后重新同步。".to_string(),
+                        ],
+                    };
+                    let payload = serde_json::to_string(&summary).unwrap_or_default();
                     return Err(crate::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        format!("checkout dry-run failed: {}", err_msg),
+                        format!("checkout_conflict_payload:{}", payload),
                     )));
                 }
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("checkout dry-run failed: {}", err_msg),
+                )));
             }
 
             // Step 2: Actual checkout (safe) - still no ref/head change yet
-            let fetch_tree2 = repo.find_commit(fetch_commit.id()).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?.tree().map_err(|e| {
-                crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-            })?;
-            repo.checkout_tree(
+            let fetch_tree2 = match repo.find_commit(fetch_commit.id()).and_then(|c| c.tree()) {
+                Ok(t) => t,
+                Err(e) => {
+                    rollback(&repo);
+                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                }
+            };
+            if let Err(e) = repo.checkout_tree(
                 fetch_tree2.as_object(),
                 Some(git2::build::CheckoutBuilder::default().safe()),
-            ).map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
+            ) {
+                rollback(&repo);
+                return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     e.to_string(),
-                ))
-            })?;
+                )));
+            }
 
             // Step 3: Only after successful checkout, update ref and head
-            let mut reference = repo.find_reference(&refname).map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
-            reference
-                .set_target(fetch_commit.id(), "Fast-Forward")
-                .map_err(|e: git2::Error| {
-                    crate::Error::Io(std::io::Error::new(
+            let mut reference = match repo.find_reference(&refname) {
+                Ok(r) => r,
+                Err(e) => {
+                    rollback(&repo);
+                    return Err(crate::Error::Io(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         e.to_string(),
-                    ))
-                })?;
-            repo.set_head(&refname).map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
+                    )));
+                }
+            };
+            if let Err(e) = reference.set_target(fetch_commit.id(), "Fast-Forward") {
+                rollback(&repo);
+                return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     e.to_string(),
-                ))
-            })?;
+                )));
+            }
+            if let Err(e) = repo.set_head(&refname) {
+                rollback(&repo);
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                )));
+            }
         } else if analysis.0.is_normal() {
             let mut merge_opts = git2::MergeOptions::new();
             if let Err(e) = repo.merge(&[&fetch_commit], Some(&mut merge_opts), None) {
+                rollback(&repo);
                 let err_msg = e.to_string();
                 if e.code() == git2::ErrorCode::Conflict || e.class() == git2::ErrorClass::Checkout || err_msg.contains("conflict") || err_msg.contains("Conflict") {
                     let summary = build_conflict_summary(&repo, Some(fetch_commit.id()), "本地未提交的改动或冲突阻止了合并操作。");
@@ -936,12 +984,13 @@ impl GitBackend for Git2Backend {
                 )));
             }
 
-            let mut index = repo.index().map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+            let mut index = match repo.index() {
+                Ok(i) => i,
+                Err(e) => {
+                    rollback(&repo);
+                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                }
+            };
 
             // Settings semantic merge conflict resolution
             let mut settings_conflict_details = None;
@@ -1021,7 +1070,7 @@ impl GitBackend for Git2Backend {
             }
 
             if let Some(details) = settings_conflict_details {
-                let _ = repo.cleanup_state();
+                rollback(&repo);
                 let payload = serde_json::to_string(&details).unwrap_or_default();
                 return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -1030,72 +1079,73 @@ impl GitBackend for Git2Backend {
             }
 
             if index.has_conflicts() {
+                rollback(&repo);
                 // Return an error for conflicts with a special prefix that can be parsed
                 return Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "SyncConflict_Detected".to_string(),
                 )));
             } else {
-                let oid = index.write_tree().map_err(|e: git2::Error| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
-                let signature = git2::Signature::now("Sync User", "sync@writer.app").map_err(
-                    |e: git2::Error| {
-                        crate::Error::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            e.to_string(),
-                        ))
-                    },
-                )?;
-                let tree = repo.find_tree(oid).map_err(|e: git2::Error| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
-                let head_ref = repo.head().map_err(|e| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
-                let head_commit = head_ref.peel_to_commit().map_err(|e| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
-                let fetch_commit_obj = repo.find_commit(fetch_commit.id()).map_err(|e| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
-                repo.commit(
+                let oid = match index.write_tree() {
+                    Ok(o) => o,
+                    Err(e) => {
+                        rollback(&repo);
+                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    }
+                };
+                let signature = match git2::Signature::now("Sync User", "sync@writer.app") {
+                    Ok(s) => s,
+                    Err(e) => {
+                        rollback(&repo);
+                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    }
+                };
+                let tree = match repo.find_tree(oid) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        rollback(&repo);
+                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    }
+                };
+                let head_ref = match repo.head() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        rollback(&repo);
+                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    }
+                };
+                let head_commit = match head_ref.peel_to_commit() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        rollback(&repo);
+                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    }
+                };
+                let fetch_commit_obj = match repo.find_commit(fetch_commit.id()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        rollback(&repo);
+                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    }
+                };
+                if let Err(e) = repo.commit(
                     Some("HEAD"),
                     &signature,
                     &signature,
                     "Merge remote-tracking branch",
                     &tree,
                     &[&head_commit, &fetch_commit_obj],
-                )
-                .map_err(|e: git2::Error| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
-                repo.cleanup_state().map_err(|e| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
+                ) {
+                    rollback(&repo);
+                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                }
+                if let Err(e) = repo.cleanup_state() {
+                    rollback(&repo);
+                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                }
             }
         } else {
+            rollback(&repo);
             return Err(crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Unable to pull: remote branch is unrelated or unable to merge",
@@ -1233,6 +1283,47 @@ impl GitBackend for Git2Backend {
                 e.to_string(),
             ))
         })?;
+
+        // 1. Check index conflicts
+        if let Ok(index) = repo.index() {
+            if index.has_conflicts() {
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "fatal_error: Cannot push: index has unresolved conflicts.".to_string(),
+                )));
+            }
+        }
+
+        let branch_ref_name = format!("refs/heads/{}", branch);
+        let branch_exists = repo.find_reference(&branch_ref_name).is_ok();
+
+        // 2. Check HEAD commit
+        let head_ref = repo.head();
+        let head_commit = head_ref.as_ref().ok().and_then(|r| r.peel_to_commit().ok());
+
+        match (branch_exists, head_commit) {
+            (true, Some(_)) => {
+                // Normal case: branch ref exists, HEAD points to a commit.
+            }
+            (false, Some(commit)) => {
+                // Branch ref doesn't exist but HEAD has a commit. Reconstruct it.
+                repo.branch(branch, &commit, false).map_err(|e| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("fatal_error: Failed to reconstruct branch ref: {}", e),
+                    ))
+                })?;
+                let _ = repo.set_head(&branch_ref_name);
+            }
+            (_, None) => {
+                // HEAD unborn / no commits.
+                return Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "recoverable_error: HEAD is unborn and has no commit.".to_string(),
+                )));
+            }
+        }
+
         let mut remote = repo.find_remote("origin").map_err(|e: git2::Error| {
             crate::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -3251,6 +3342,19 @@ fn semantic_merge_json(
             e
         };
 
+        let classify_error = |e_str: &str| -> SyncStatus {
+            let lower = e_str.to_lowercase();
+            if lower.contains("recoverable_error") {
+                SyncStatus::RecoverableError(e_str.replace("recoverable_error:", "").trim().to_string())
+            } else if lower.contains("fatal_error") {
+                SyncStatus::FatalError(e_str.replace("fatal_error:", "").trim().to_string())
+            } else if lower.contains("auth") || lower.contains("token") || lower.contains("credential") || lower.contains("proxy") || lower.contains("resolve") || lower.contains("network") || lower.contains("unborn") || lower.contains("timeout") || lower.contains("connect") || lower.contains("could not resolve") {
+                SyncStatus::RecoverableError(e_str.to_string())
+            } else {
+                SyncStatus::FatalError(e_str.to_string())
+            }
+        };
+
         let token_from_parsed = parsed.extracted_token;
         let token = secrets.token.clone().or(token_from_parsed).unwrap_or_default();
         if token.is_empty() {
@@ -3351,13 +3455,42 @@ fn semantic_merge_json(
         }
 
         // Ensure local branch ref is initialized and clean states before staging/pulling
+        let mut branch_recovered = false;
         if let Ok(repo) = git2::Repository::open(workspace_path) {
+            let branch_ref_name = format!("refs/heads/{}", config.branch);
+            let branch_exists = repo.find_reference(&branch_ref_name).is_ok();
+            let head_commit = repo.head().ok().and_then(|r| r.peel_to_commit().ok());
+            if !branch_exists && head_commit.is_some() {
+                branch_recovered = true;
+            }
+
             if let Err(e) = Self::ensure_local_branch_exists(&repo, &config.branch) {
                 return Ok(SyncResult::error(
-                    SyncStatus::Error(e.to_string()),
+                    classify_error(&e.to_string()),
                     result.first_sync_mode,
                     Some("初始化本地分支失败。".to_string()),
                     e.to_string(),
+                ));
+            }
+        }
+
+        // Check for dirty non-whitelisted changes
+        if let Ok(status_list) = backend.status(workspace_path) {
+            let mut dirty_non_whitelisted = Vec::new();
+            for p in &status_list {
+                if !SyncService::is_blacklisted_path(p) && !SyncService::is_whitelisted_path(p) {
+                    dirty_non_whitelisted.push(p.clone());
+                }
+            }
+            if !dirty_non_whitelisted.is_empty() {
+                return Ok(SyncResult::error(
+                    SyncStatus::DirtyRepoBlocked,
+                    result.first_sync_mode,
+                    Some(format!(
+                        "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件:\n{}",
+                        dirty_non_whitelisted.join("\n")
+                    )),
+                    "Dirty repo blocked: non-whitelisted files modified".to_string(),
                 ));
             }
         }
@@ -3372,14 +3505,20 @@ fn semantic_merge_json(
             }
             if !paths_to_stage.is_empty() {
                 if let Err(e) = backend.stage_paths(workspace_path, &paths_to_stage) {
-                    result.status = SyncStatus::Error(e.to_string());
-                    result.error = Some(e.to_string());
-                    return Ok(result);
+                    return Ok(SyncResult::error(
+                        classify_error(&e.to_string()),
+                        result.first_sync_mode,
+                        Some("暂存本地更改失败。".to_string()),
+                        e.to_string(),
+                    ));
                 }
                 if let Err(e) = backend.commit(workspace_path, "Auto sync local changes") {
-                    result.status = SyncStatus::Error(e.to_string());
-                    result.error = Some(e.to_string());
-                    return Ok(result);
+                    return Ok(SyncResult::error(
+                        classify_error(&e.to_string()),
+                        result.first_sync_mode,
+                        Some("提交本地更改失败。".to_string()),
+                        e.to_string(),
+                    ));
                 }
             }
         }
@@ -3452,7 +3591,7 @@ fn semantic_merge_json(
                 || e_str_lower.contains("merge")
                 || e_str_lower.contains("no common ancestor")
             {
-                let status = SyncStatus::Error(format!("Pull failed: {}", e));
+                let status = classify_error(&e.to_string());
                 let user_msg = if result.first_sync_mode == FirstSyncMode::InitExistingWorkspace {
                     "远端仓库不是空仓库，且和本地作品历史不一致。推荐使用空 GitHub 私人仓库。"
                 } else {
@@ -3474,7 +3613,7 @@ fn semantic_merge_json(
                     && result.first_sync_mode != FirstSyncMode::AlreadyGitRepo
                 {
                     return Ok(SyncResult::error(
-                        SyncStatus::Error(format!("Pull failed: {}", e)),
+                        classify_error(&e.to_string()),
                         result.first_sync_mode,
                         Some("拉取失败，远程分支不存在。".to_string()),
                         format!("Pull failed: {}", e),
@@ -3490,6 +3629,7 @@ fn semantic_merge_json(
                 let repo = match git2::Repository::open(workspace_path) {
                     Ok(r) => r,
                     Err(e) => {
+                        result.status = classify_error(&e.to_string());
                         result.error = Some(e.to_string());
                         return Ok(result);
                     }
@@ -3498,6 +3638,7 @@ fn semantic_merge_json(
                 let index = match repo.index() {
                     Ok(i) => i,
                     Err(e) => {
+                        result.status = classify_error(&e.to_string());
                         result.error = Some(e.to_string());
                         return Ok(result);
                     }
@@ -3507,6 +3648,7 @@ fn semantic_merge_json(
                     let conflicts = match index.conflicts() {
                         Ok(c) => c,
                         Err(e) => {
+                            result.status = classify_error(&e.to_string());
                             result.error = Some(e.to_string());
                             return Ok(result);
                         }
@@ -3527,6 +3669,7 @@ fn semantic_merge_json(
                             let real_path = match best_path {
                                 Some(p) => p,
                                 None => {
+                                    result.status = SyncStatus::Conflict;
                                     result.error = Some("Sync Conflict: unknown path".to_string());
                                     result.user_message = Some(
                                         "存在无法识别路径的冲突文件，需要手动处理。".to_string(),
@@ -3638,7 +3781,7 @@ fn semantic_merge_json(
                 return Ok(result);
             } else {
                 return Ok(SyncResult::error(
-                    SyncStatus::Error(format!("Pull failed: {}", e)),
+                    classify_error(&e.to_string()),
                     result.first_sync_mode,
                     Some(get_user_friendly_error(
                         &(format!("Pull failed: {}", e)).to_string(),
@@ -3652,7 +3795,7 @@ fn semantic_merge_json(
             Ok(p) => p,
             Err(e) => {
                 return Ok(SyncResult::error(
-                    SyncStatus::Error(e.to_string()),
+                    classify_error(&e.to_string()),
                     result.first_sync_mode,
                     Some(get_user_friendly_error(&(e.to_string()).to_string())),
                     e.to_string(),
@@ -3667,7 +3810,7 @@ fn semantic_merge_json(
         if !paths_to_stage.is_empty() {
             if let Err(e) = backend.stage_paths(workspace_path, &paths_to_stage) {
                 return Ok(SyncResult::error(
-                    SyncStatus::Error(format!("Stage failed: {}", e)),
+                    classify_error(&e.to_string()),
                     result.first_sync_mode,
                     Some(get_user_friendly_error(
                         &(format!("Stage failed: {}", e)).to_string(),
@@ -3695,7 +3838,7 @@ fn semantic_merge_json(
                 Ok(None) => {}
                 Err(e) => {
                     return Ok(SyncResult::error(
-                        SyncStatus::Error(format!("Commit failed: {}", e)),
+                        classify_error(&e.to_string()),
                         result.first_sync_mode,
                         Some(get_user_friendly_error(
                             &(format!("Commit failed: {}", e)).to_string(),
@@ -3711,7 +3854,7 @@ fn semantic_merge_json(
                 .map_err(map_git_error)
             {
                 return Ok(SyncResult::error(
-                    SyncStatus::Error(format!("Push failed: {}", e)),
+                    classify_error(&e.to_string()),
                     result.first_sync_mode,
                     Some(get_user_friendly_error(
                         &(format!("Push failed: {}", e)).to_string(),
@@ -3741,7 +3884,7 @@ fn semantic_merge_json(
         state.last_error = result.error.clone();
 
         if let Err(e) = Self::save_sync_state(workspace_path, &state) {
-            result.status = SyncStatus::Error(format!("Failed to save sync state: {}", e));
+            result.status = classify_error(&e.to_string());
             result.error = Some(format!("Failed to save sync state: {}", e));
             result.user_message = Some(
                 "同步操作完成，但同步状态保存失败，请不要连续同步，先检查存储权限。".to_string(),
@@ -3749,7 +3892,11 @@ fn semantic_merge_json(
             return Ok(result);
         }
 
-        result.status = SyncStatus::Success;
+        result.status = if branch_recovered {
+            SyncStatus::BranchMissingRecovered
+        } else {
+            SyncStatus::Success
+        };
         Ok(result)
     }
 
@@ -4760,7 +4907,7 @@ mod tests {
         std::fs::create_dir(state_dir.join("sync_state.json")).unwrap();
 
         let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackendOk).unwrap();
-        assert!(matches!(res.status, SyncStatus::Error(_)));
+        assert!(matches!(res.status, SyncStatus::FatalError(_)));
         assert!(res.user_message.unwrap().contains("同步状态保存失败"));
     }
 
@@ -5156,5 +5303,123 @@ mod tests {
         assert_eq!(res.status, SyncStatus::Success);
         assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
         assert!(res.user_message.unwrap().contains("已初始化远端分支并完成首次同步"));
+    }
+
+    #[test]
+    fn test_push_preflight_unborn_head() {
+        let dir = tempfile::tempdir().unwrap();
+        // Repository is initialized but has no commits (unborn HEAD)
+        let _repo = git2::Repository::init(dir.path()).unwrap();
+
+        let backend = Git2Backend;
+        let res = backend.push(dir.path(), "main", None, None);
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("recoverable_error") || err_msg.contains("unborn"));
+    }
+
+    #[test]
+    fn test_push_preflight_missing_branch_ref_recovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+
+        // Create a commit
+        let signature = git2::Signature::now("Test User", "test@test.com").unwrap();
+        let mut index = repo.index().unwrap();
+        let file_path = dir.path().join("app-meta/settings/settings.sync.json");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, "{}").unwrap();
+        index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        let commit_oid = repo.commit(Some("refs/heads/main"), &signature, &signature, "Initial commit", &tree, &[]).unwrap();
+
+        // Delete the branch reference, keeping HEAD detached pointing to the commit
+        repo.set_head_detached(commit_oid).unwrap();
+        let mut branch_ref = repo.find_reference("refs/heads/main").unwrap();
+        branch_ref.delete().unwrap();
+
+        // Now branch reference refs/heads/main does not exist, but HEAD points to a commit.
+        // We verify that calling Git2Backend::push reconstructs the branch ref successfully!
+        let backend = Git2Backend;
+        let res = backend.push(dir.path(), "main", None, None);
+        // Verify branch ref has been reconstructed!
+        assert!(repo.find_reference("refs/heads/main").is_ok());
+    }
+
+    #[test]
+    fn test_settings_semantic_merge_conflict_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+
+        // Set up local repository with a commit containing base settings.sync.json
+        let signature = git2::Signature::now("Test User", "test@test.com").unwrap();
+        let mut index = repo.index().unwrap();
+        let file_path = dir.path().join("app-meta/settings/settings.sync.json");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        
+        let base_content = r#"{"font_size": 12, "theme": "dark"}"#;
+        std::fs::write(&file_path, base_content).unwrap();
+        index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        let base_commit_oid = repo.commit(Some("refs/heads/main"), &signature, &signature, "Base commit", &tree, &[]).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+
+        // Clone local repo to remote right after base commit (so remote shares base commit OID and history)
+        let remote_dir = tempfile::tempdir().unwrap();
+        let remote_repo = git2::Repository::clone(dir.path().to_str().unwrap(), remote_dir.path()).unwrap();
+
+        // Now modify local settings.sync.json and commit it in local repo (local divergent change)
+        let local_content = r#"{"font_size": 16, "theme": "dark"}"#;
+        std::fs::write(&file_path, local_content).unwrap();
+        index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        let local_commit_oid = repo.commit(Some("refs/heads/main"), &signature, &signature, "Local commit", &tree, &[&repo.find_commit(base_commit_oid).unwrap()]).unwrap();
+
+        // In remote repo, modify settings.sync.json to a conflicting value and commit (remote divergent change)
+        let remote_file_path = remote_dir.path().join("app-meta/settings/settings.sync.json");
+        let remote_content = r#"{"font_size": 20, "theme": "dark"}"#;
+        std::fs::write(&remote_file_path, remote_content).unwrap();
+        let mut remote_index = remote_repo.index().unwrap();
+        remote_index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        remote_index.write().unwrap();
+        let remote_oid = remote_index.write_tree().unwrap();
+        let remote_tree = remote_repo.find_tree(remote_oid).unwrap();
+        let remote_base_commit = remote_repo.find_commit(base_commit_oid).unwrap();
+        let _remote_commit_oid = remote_repo.commit(
+            Some("refs/heads/main"),
+            &signature,
+            &signature,
+            "Remote commit",
+            &remote_tree,
+            &[&remote_base_commit],
+        ).unwrap();
+
+        // Add remote to local repo
+        let mut remote = repo.remote("origin", remote_dir.path().to_str().unwrap()).unwrap();
+        remote.fetch(&["main"], None, None).unwrap();
+
+        // Verify pull/merge fails with settings_conflict_payload
+        let backend = Git2Backend;
+        let res = backend.pull(dir.path(), "main", None, None);
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("settings_conflict_payload"));
+
+        // Verify that after transactional rollback:
+        // 1. Index has no conflicts
+        let index = repo.index().unwrap();
+        assert!(!index.has_conflicts());
+        // 2. HEAD points back to original local_commit_oid
+        let head = repo.head().unwrap();
+        assert_eq!(head.target().unwrap(), local_commit_oid);
+        // 3. Local settings file is intact and not corrupted with remote change
+        let content_after = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content_after, local_content);
     }
 }
