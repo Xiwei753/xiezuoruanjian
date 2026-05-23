@@ -381,6 +381,16 @@ impl SyncDiagnosticsResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConflictSummary {
+    pub status: String,
+    pub local_dirty: bool,
+    pub remote_changed: bool,
+    pub conflicted_files: Vec<String>,
+    pub blocked_reason: String,
+    pub safe_next_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub status: SyncStatus,
     pub uploaded_files: Vec<String>,
@@ -389,6 +399,8 @@ pub struct SyncResult {
     pub conflicts: Vec<SyncConflict>,
     pub commit_hash: Option<String>,
     pub error: Option<String>,
+    pub error_category: Option<String>,
+    pub conflict_summary: Option<SyncConflictSummary>,
     pub first_sync_mode: FirstSyncMode,
     pub user_message: Option<String>,
     pub chosen_network_mode: Option<String>,
@@ -405,6 +417,8 @@ impl SyncResult {
             conflicts: Vec::new(),
             commit_hash: None,
             error: None,
+            error_category: None,
+            conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
             user_message: None,
             chosen_network_mode: None,
@@ -426,6 +440,8 @@ impl SyncResult {
             conflicts: Vec::new(),
             commit_hash: None,
             error: Some(error),
+            error_category: None,
+            conflict_summary: None,
             first_sync_mode,
             user_message,
             chosen_network_mode: None,
@@ -751,7 +767,18 @@ impl GitBackend for Git2Backend {
             // This ensures that if checkout fails, HEAD/ref remain unchanged.
 
             // Step 1: Dry-run checkout to detect conflicts before making any changes
+            let conflicted_paths = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let cp_clone = conflicted_paths.clone();
+            
             let mut dry_run_builder = git2::build::CheckoutBuilder::default();
+            dry_run_builder.notify(git2::CheckoutNotificationType::CONFLICT, move |_, path, _, _, _| {
+                if let Some(p) = path {
+                    if let Some(s) = p.to_str() {
+                        cp_clone.borrow_mut().push(s.to_string());
+                    }
+                }
+                true
+            });
             dry_run_builder.dry_run();
             let fetch_tree = repo.find_commit(fetch_commit.id()).map_err(|e| {
                 crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
@@ -766,9 +793,22 @@ impl GitBackend for Git2Backend {
                 Err(e) => {
                     let err_msg = e.to_string();
                     if err_msg.contains("conflict") || err_msg.contains("Conflict") {
+                        let paths = conflicted_paths.borrow().clone();
+                        let summary = crate::sync_service::SyncConflictSummary {
+                            status: "conflict".to_string(),
+                            local_dirty: true,
+                            remote_changed: true,
+                            conflicted_files: paths,
+                            blocked_reason: "Checkout conflict prevents syncing.".to_string(),
+                            safe_next_steps: vec![
+                                "Backup current workspace".to_string(),
+                                "Resolve conflicts manually".to_string(),
+                            ],
+                        };
+                        let payload = serde_json::to_string(&summary).unwrap_or_default();
                         return Err(crate::Error::Io(std::io::Error::new(
                             std::io::ErrorKind::Other,
-                            format!("checkout_conflict: 本地工作区有文件会阻止远端更新. {}", err_msg),
+                            format!("checkout_conflict_payload:{}", payload),
                         )));
                     }
                     return Err(crate::Error::Io(std::io::Error::new(
@@ -2936,19 +2976,35 @@ impl SyncService {
             .map_err(map_git_error)
             .err();
         if let Some(e) = pull_failed {
-            let e_str = e.to_string().to_lowercase();
-            // Checkout conflict / local blocking file
-            if e_str.contains("checkout_conflict") || e_str.contains("local_blocking_file") {
+            let e_str = e.to_string(); // we should not to_lowercase before matching payload
+            
+            if e_str.contains("checkout_conflict_payload:") {
+                let payload_str = e_str.split("checkout_conflict_payload:").nth(1).unwrap_or("").trim();
+                let summary: Option<SyncConflictSummary> = serde_json::from_str(payload_str).ok();
+                
+                let mut res = SyncResult::error(
+                    SyncStatus::Conflict,
+                    result.first_sync_mode,
+                    Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
+                    format!("Pull failed due to conflict."),
+                );
+                res.conflict_summary = summary;
+                return Ok(res);
+            }
+
+            let e_str_lower = e_str.to_lowercase();
+            // Checkout conflict / local blocking file (fallback)
+            if e_str_lower.contains("checkout_conflict") || e_str_lower.contains("local_blocking_file") {
                 return Ok(SyncResult::error(
-                    SyncStatus::Error(format!("Pull failed: {}", e)),
+                    SyncStatus::Conflict,
                     result.first_sync_mode,
                     Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
                     format!("Pull failed: {}", e),
                 ));
             }
-            if e_str.contains("unrelated")
-                || e_str.contains("merge")
-                || e_str.contains("no common ancestor")
+            if e_str_lower.contains("unrelated")
+                || e_str_lower.contains("merge")
+                || e_str_lower.contains("no common ancestor")
             {
                 let status = SyncStatus::Error(format!("Pull failed: {}", e));
                 let user_msg = if result.first_sync_mode == FirstSyncMode::InitExistingWorkspace {
@@ -2964,9 +3020,9 @@ impl SyncService {
                     format!("Pull failed: {}", e),
                 ));
             }
-            if e_str.contains("ref not found")
-                || e_str.contains("couldn't find remote ref")
-                || (e_str.contains("remote branch") && e_str.contains("not found"))
+            if e_str_lower.contains("ref not found")
+                || e_str_lower.contains("couldn't find remote ref")
+                || (e_str_lower.contains("remote branch") && e_str_lower.contains("not found"))
             {
                 if result.first_sync_mode != FirstSyncMode::InitExistingWorkspace
                     && result.first_sync_mode != FirstSyncMode::AlreadyGitRepo

@@ -170,8 +170,9 @@ Rectangle {
         Rectangle {
             width: parent.width
             height: Math.max(120, Math.min(200, (Window.window ? Window.window.height : 768) - 500))
-            color: theme ? theme.bgDarker : "#121212"
-            border.color: theme ? theme.border : "#333333"
+            color: (root.backendRef && root.backendRef.sync_status === "conflict") ? "#331a1a" : (theme ? theme.bgDarker : "#121212")
+            border.color: (root.backendRef && root.backendRef.sync_status === "conflict") ? "#cc3333" : (theme ? theme.border : "#333333")
+            border.width: (root.backendRef && root.backendRef.sync_status === "conflict") ? 2 : 1
             radius: 4
             clip: true
 
@@ -183,7 +184,7 @@ Rectangle {
                     id: syncResultArea
                     width: logScroll.availableWidth
                     text: root.backendRef ? root.backendRef.sync_action_result : ''
-                    color: theme ? theme.textDim : "#A0A0A0"
+                    color: (root.backendRef && root.backendRef.sync_status === "conflict") ? "#ff9999" : (theme ? theme.textDim : "#A0A0A0")
                     font.family: "monospace"
                     readOnly: true
                     background: null

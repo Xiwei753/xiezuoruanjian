@@ -1353,9 +1353,37 @@ impl AppBackend {
                             },
                         }
                     } else if result.status == writer_core::sync_service::SyncStatus::Conflict {
+                        let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
+                        if let Some(summary) = &result.conflict_summary {
+                            for f in &summary.conflicted_files {
+                                files.push(f.clone());
+                            }
+                        }
+                        files.sort();
+                        files.dedup();
+                        
+                        let file_str = if files.is_empty() {
+                            "未能列出具体冲突文件".to_string()
+                        } else {
+                            let display_files = if files.len() > 100 {
+                                let mut subset = files[0..100].to_vec();
+                                subset.push(format!("...等共 {} 个文件", files.len()));
+                                subset
+                            } else {
+                                files.clone()
+                            };
+                            display_files.join("\n  - ")
+                        };
+                        
+                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error=None", files.len()));
+                        
+                        let m = format!(
+                            "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
+                            file_str
+                        );
                         SyncTaskOutcome {
                             sync_status: "conflict".to_string(),
-                            action_result: "同步冲突，需要手动处理".to_string(),
+                            action_result: m,
                         }
                     } else {
                         let err = result.error.unwrap_or_default();
@@ -1844,9 +1872,33 @@ impl AppBackend {
                             ("success".to_string(), m)
                         }
                         writer_core::sync_service::SyncStatus::Conflict => {
+                            let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
+                            if let Some(summary) = &result.conflict_summary {
+                                for f in &summary.conflicted_files {
+                                    files.push(f.clone());
+                                }
+                            }
+                            files.sort();
+                            files.dedup();
+                            
+                            let file_str = if files.is_empty() {
+                                "未能列出具体冲突文件".to_string()
+                            } else {
+                                let display_files = if files.len() > 100 {
+                                    let mut subset = files[0..100].to_vec();
+                                    subset.push(format!("...等共 {} 个文件", files.len()));
+                                    subset
+                                } else {
+                                    files.clone()
+                                };
+                                display_files.join("\n  - ")
+                            };
+                            
+                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error=None", files.len()));
+                            
                             let m = format!(
-                                "同步冲突\n冲突文件: {}",
-                                result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>().join(", ")
+                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
+                                file_str
                             );
                             ("conflict".to_string(), m)
                         }
