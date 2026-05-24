@@ -5,8 +5,8 @@ import QtQuick.Layouts 1.15
 Dialog {
     id: root
     modal: true
-    width: 560
-    height: 560
+    width: 640
+    height: 620
     anchors.centerIn: Overlay.overlay
     property var theme: null
     property var backendRef: null
@@ -15,16 +15,16 @@ Dialog {
 
     background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; border.width: 1; radius: dt ? dt.radiusMd : 12 }
 
+    function saveAndNotify() { if (!backendRef) return; backendRef.save_local_settings(); root.settingsChanged() }
     function updateValues() {
-        if (!backendRef) return;
-        fontValue.text = String(Math.round(backendRef.setting_font_size || 16));
-        lineSpacing.currentIndex = Math.abs((backendRef.setting_line_spacing || 1.5) - 1.25) < 0.01 ? 0 : Math.abs((backendRef.setting_line_spacing || 1.5) - 1.5) < 0.01 ? 1 : Math.abs((backendRef.setting_line_spacing || 1.5) - 1.75) < 0.01 ? 2 : 3;
-        autoSave.checked = backendRef.setting_auto_save_enabled;
-        anim.checked = backendRef.setting_typing_animation_enabled;
-        cursor.checked = backendRef.setting_smooth_cursor_enabled;
-        aiSwitch.checked = backendRef.ai_enabled;
-        var mode = backendRef.setting_theme_mode;
-        themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0);
+        if (!backendRef) return
+        autoSave.checked = backendRef.setting_auto_save_enabled
+        typingAnim.checked = backendRef.setting_typing_animation_enabled
+        smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
+        aiSwitch.checked = backendRef.ai_enabled
+        autoSaveDelay.currentIndex = Math.max(0, [1, 2, 3, 5, 10].indexOf(Number(backendRef.setting_auto_save_delay_seconds || 3)))
+        var mode = backendRef.setting_theme_mode
+        themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
     }
     onOpened: updateValues()
 
@@ -36,10 +36,7 @@ Dialog {
             anchors.leftMargin: dt ? dt.sp24 : 24
             anchors.rightMargin: dt ? dt.sp16 : 16
             Text { text: "设置"; color: dt ? dt.textPrimary : "#E2E4E9"; font.pixelSize: dt ? dt.fontLg : 16; font.weight: Font.Bold; Layout.fillWidth: true }
-            Rectangle { width: 40; height: 40; radius: dt ? dt.actionButtonRadius : 12; color: closeHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
-                Text { anchors.centerIn: parent; text: "X"; color: dt ? dt.textSecondary : "#9CA0AB" }
-                MouseArea { id: closeHover; anchors.fill: parent; hoverEnabled: true; onClicked: root.close() }
-            }
+            ToolButton { text: "x"; onClicked: root.close() }
         }
     }
 
@@ -53,75 +50,101 @@ Dialog {
             width: parent.width
             spacing: dt ? dt.cardGap : 16
 
-            SettingCard {
+            SettingsSection {
                 dt: root.dt
                 title: "外观"
                 Layout.fillWidth: true
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text { text: "主题模式"; color: dt ? dt.textPrimary : "#E2E4E9"; Layout.fillWidth: true }
-                    ComboBox {
+                SettingsRow {
+                    dt: root.dt
+                    title: "主题模式"
+                    description: "切换系统、浅色或深色"
+                    ModernComboBox {
                         id: themeCombo
-                        width: 150
+                        dt: root.dt
                         model: ["跟随系统", "浅色", "深色"]
-                        onActivated: {
-                            if (!backendRef) return;
-                            var modes = ["system", "light", "dark"];
-                            backendRef.setting_theme_mode = modes[currentIndex];
-                            backendRef.save_local_settings();
-                            root.settingsChanged();
+                        onActivated: function(index) {
+                            if (!backendRef) return
+                            backendRef.setting_theme_mode = ["system", "light", "dark"][index]
+                            root.saveAndNotify()
                         }
-                        background: Rectangle { radius: dt ? dt.radiusSm : 8; color: dt ? dt.surfaceVariant : "#242933"; border.width: 1; border.color: dt ? dt.controlBorder : "#3A3F49" }
                     }
                 }
             }
 
-            SettingCard {
+            SettingsSection {
                 dt: root.dt
-                title: "写作体验"
+                title: "编辑器行为"
                 Layout.fillWidth: true
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text { text: "字号"; color: dt ? dt.textPrimary : "#E2E4E9"; Layout.fillWidth: true }
-                    Rectangle { width: 32; height: 32; radius: 8; color: dt ? dt.surfaceVariant : "#242933"; border.width: 1; border.color: dt ? dt.controlBorder : "#3A3F49"
-                        Text { anchors.centerIn: parent; text: "-"; color: dt ? dt.textPrimary : "#E2E4E9" }
-                        MouseArea { anchors.fill: parent; onClicked: { var v = Math.max(10, Number(fontValue.text) - 1); fontValue.text = String(v); backendRef.setting_font_size = v; backendRef.save_local_settings(); root.settingsChanged(); } }
-                    }
-                    Text { id: fontValue; width: 34; horizontalAlignment: Text.AlignHCenter; color: dt ? dt.textPrimary : "#E2E4E9" }
-                    Rectangle { width: 32; height: 32; radius: 8; color: dt ? dt.surfaceVariant : "#242933"; border.width: 1; border.color: dt ? dt.controlBorder : "#3A3F49"
-                        Text { anchors.centerIn: parent; text: "+"; color: dt ? dt.textPrimary : "#E2E4E9" }
-                        MouseArea { anchors.fill: parent; onClicked: { var v = Math.min(40, Number(fontValue.text) + 1); fontValue.text = String(v); backendRef.setting_font_size = v; backendRef.save_local_settings(); root.settingsChanged(); } }
-                    }
+                SettingsRow {
+                    dt: root.dt
+                    title: "打字动画"
+                    description: "输入时显示动态效果"
+                    clickable: true
+                    onClicked: typingAnim.checked = !typingAnim.checked
+                    ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { backendRef.setting_typing_animation_enabled = v; root.saveAndNotify() } }
                 }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text { text: "行距"; color: dt ? dt.textPrimary : "#E2E4E9"; Layout.fillWidth: true }
-                    ComboBox {
-                        id: lineSpacing
-                        width: 140
-                        model: ["1.25 倍", "1.5 倍", "1.75 倍", "2.0 倍"]
-                        onActivated: { var vals = [1.25, 1.5, 1.75, 2.0]; backendRef.setting_line_spacing = vals[currentIndex]; backendRef.save_local_settings(); root.settingsChanged(); }
-                        background: Rectangle { radius: dt ? dt.radiusSm : 8; color: dt ? dt.surfaceVariant : "#242933"; border.width: 1; border.color: dt ? dt.controlBorder : "#3A3F49" }
-                    }
-                }
-                RowLayout { Layout.fillWidth: true; Text { text: "自动保存"; color: dt ? dt.textPrimary : "#E2E4E9"; Layout.fillWidth: true }
-                    ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { backendRef.setting_auto_save_enabled = v; backendRef.save_local_settings(); root.settingsChanged(); } }
-                }
-                RowLayout { Layout.fillWidth: true; Text { text: "打字动画"; color: dt ? dt.textPrimary : "#E2E4E9"; Layout.fillWidth: true }
-                    ModernSwitch { id: anim; dt: root.dt; onToggled: function(v) { backendRef.setting_typing_animation_enabled = v; backendRef.save_local_settings(); root.settingsChanged(); } }
-                }
-                RowLayout { Layout.fillWidth: true; Text { text: "平滑光标"; color: dt ? dt.textPrimary : "#E2E4E9"; Layout.fillWidth: true }
-                    ModernSwitch { id: cursor; dt: root.dt; onToggled: function(v) { backendRef.setting_smooth_cursor_enabled = v; backendRef.save_local_settings(); root.settingsChanged(); } }
+                SettingsRow {
+                    dt: root.dt
+                    title: "平滑光标"
+                    description: "光标移动更顺滑"
+                    clickable: true
+                    onClicked: smoothCursor.checked = !smoothCursor.checked
+                    ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { backendRef.setting_smooth_cursor_enabled = v; root.saveAndNotify() } }
                 }
             }
 
-            SettingCard {
+            SettingsSection {
+                dt: root.dt
+                title: "保存"
+                Layout.fillWidth: true
+                SettingsRow {
+                    dt: root.dt
+                    title: "自动保存"
+                    description: "编辑时自动保存到本地"
+                    clickable: true
+                    onClicked: autoSave.checked = !autoSave.checked
+                    ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { backendRef.setting_auto_save_enabled = v; root.saveAndNotify() } }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: "自动保存延迟"
+                    description: "停止输入后多久触发保存"
+                    ModernComboBox {
+                        id: autoSaveDelay
+                        dt: root.dt
+                        model: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒"]
+                        onActivated: function(index) { backendRef.setting_auto_save_delay_seconds = [1,2,3,5,10][index]; root.saveAndNotify() }
+                    }
+                }
+            }
+
+            SettingsSection {
+                dt: root.dt
+                title: "同步"
+                Layout.fillWidth: true
+                SettingsRow { dt: root.dt; title: "同步配置"; description: "在同步页面管理仓库与鉴权" }
+            }
+
+            SettingsSection {
+                dt: root.dt
+                title: "统计"
+                Layout.fillWidth: true
+                SettingsRow { dt: root.dt; title: "统计开关"; description: "统计功能入口（占位）" }
+                SettingsRow { dt: root.dt; title: "清理本地统计"; description: "清理入口（占位）" }
+            }
+
+            SettingsSection {
                 dt: root.dt
                 title: "AI"
                 Layout.fillWidth: true
                 visible: root.backendRef ? root.backendRef.ai_available : false
-                RowLayout { Layout.fillWidth: true; Text { text: "启用 AI 功能"; color: dt ? dt.textPrimary : "#E2E4E9"; Layout.fillWidth: true }
-                    ModernSwitch { id: aiSwitch; dt: root.dt; onToggled: function(v) { backendRef.ai_enabled = v; backendRef.save_local_settings(); root.settingsChanged(); } }
+                SettingsRow {
+                    dt: root.dt
+                    title: "启用 AI 功能"
+                    description: "控制 AI 功能入口显示"
+                    clickable: true
+                    onClicked: aiSwitch.checked = !aiSwitch.checked
+                    ModernSwitch { id: aiSwitch; dt: root.dt; onToggled: function(v) { backendRef.ai_enabled = v; root.saveAndNotify() } }
                 }
             }
         }

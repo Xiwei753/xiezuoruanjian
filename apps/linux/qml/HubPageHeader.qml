@@ -6,7 +6,8 @@ Item {
     property var dt: null
     property string title: ""
     property string subtitle: ""
-    default property alias actions: actionRow.data
+    property string actionText: ""
+    signal actionClicked()
 
     RowLayout {
         anchors.fill: parent
@@ -31,10 +32,29 @@ Item {
             }
         }
 
-        RowLayout {
-            id: actionRow
-            spacing: dt ? dt.sp10 : 10
-            Layout.alignment: Qt.AlignVCenter
+        Rectangle {
+            visible: root.actionText.length > 0
+            height: dt ? dt.actionButtonHeight : 40
+            width: actionLabel.implicitWidth + (dt ? dt.sp24 : 24)
+            radius: dt ? dt.actionButtonRadius : 12
+            color: actionHover.containsMouse ? (dt ? dt.accentHover : "#8E9EE8") : (dt ? dt.accent : "#7B8CDE")
+
+            Text {
+                id: actionLabel
+                anchors.centerIn: parent
+                text: root.actionText
+                color: "#FFFFFF"
+                font.pixelSize: dt ? dt.fontMd : 14
+                font.weight: Font.Medium
+            }
+
+            MouseArea {
+                id: actionHover
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.actionClicked()
+            }
         }
     }
 }

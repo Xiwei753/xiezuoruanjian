@@ -6,6 +6,8 @@
     <file alias="ProjectHomePage.qml">qml/ProjectHomePage.qml</file>
     <file alias="HubPageFrame.qml">qml/HubPageFrame.qml</file>
     <file alias="HubPageHeader.qml">qml/HubPageHeader.qml</file>
+    <file alias="HubContentGrid.qml">qml/HubContentGrid.qml</file>
+    <file alias="CardCollectionPage.qml">qml/CardCollectionPage.qml</file>
     <file alias="StarMapPreviewPage.qml">qml/StarMapPreviewPage.qml</file>
     <file alias="StarMapPage.qml">qml/StarMapPage.qml</file>
     <file alias="StarMapCard.qml">qml/StarMapCard.qml</file>
@@ -16,8 +18,12 @@
     <file alias="TopWritingToolbar.qml">qml/TopWritingToolbar.qml</file>
     <file alias="RightDrawer.qml">qml/RightDrawer.qml</file>
     <file alias="SettingsDialog.qml">qml/SettingsDialog.qml</file>
+    <file alias="SettingsSection.qml">qml/SettingsSection.qml</file>
     <file alias="SettingCard.qml">qml/SettingCard.qml</file>
     <file alias="ModernSwitch.qml">qml/ModernSwitch.qml</file>
+    <file alias="ModernComboBox.qml">qml/ModernComboBox.qml</file>
+    <file alias="DashboardGrid.qml">qml/DashboardGrid.qml</file>
+    <file alias="DashboardSection.qml">qml/DashboardSection.qml</file>
     <file alias="EditorPage.qml">qml/EditorPage.qml</file>
     <file alias="ActionRegistryPage.qml">qml/ActionRegistryPage.qml</file>
     <file alias="SyncPage.qml">qml/SyncPage.qml</file>

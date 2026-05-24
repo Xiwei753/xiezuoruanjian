@@ -74,11 +74,14 @@ QtObject {
     // --- Hub Layout ---
     property int pageMarginWide: 40
     property int pageMarginNarrow: 24
+    property int maxContentWidth: 1240
     property int pageHeaderHeight: 72
     property int cardGap: 16
     property int gridGap: 16
     property int actionButtonHeight: 40
     property int actionButtonRadius: 12
+    property int settingsRowHeight: 64
+    property int settingsControlHeight: 36
 
     // --- Controls ---
     property color controlBorder: isDark ? "#3A3F49" : "#D2CDC3"

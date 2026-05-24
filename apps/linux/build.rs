@@ -12,9 +12,15 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapPage.qml");
     println!("cargo:rerun-if-changed=qml/HubPageFrame.qml");
     println!("cargo:rerun-if-changed=qml/HubPageHeader.qml");
+    println!("cargo:rerun-if-changed=qml/HubContentGrid.qml");
+    println!("cargo:rerun-if-changed=qml/CardCollectionPage.qml");
     println!("cargo:rerun-if-changed=qml/StatCard.qml");
     println!("cargo:rerun-if-changed=qml/SettingCard.qml");
     println!("cargo:rerun-if-changed=qml/ModernSwitch.qml");
+    println!("cargo:rerun-if-changed=qml/ModernComboBox.qml");
+    println!("cargo:rerun-if-changed=qml/SettingsSection.qml");
+    println!("cargo:rerun-if-changed=qml/DashboardGrid.qml");
+    println!("cargo:rerun-if-changed=qml/DashboardSection.qml");
     // Components
     println!("cargo:rerun-if-changed=qml/AppButton.qml");
     println!("cargo:rerun-if-changed=qml/AppCard.qml");
