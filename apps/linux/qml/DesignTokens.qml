@@ -69,6 +69,7 @@ QtObject {
     property int sp32: 32
     property int sp40: 40
     property int sp48: 48
+    property int sp64: 64
 
     // --- Font ---
     property int fontXs: 11
@@ -104,4 +105,6 @@ QtObject {
     property color buttonHover: cardHover
     property color editorBg: editorBackground
     property color hover: cardHover
+    property color primary: accent
+    property color textDisabled: isDark ? "#4A4E58" : "#B0B3BA"
 }
