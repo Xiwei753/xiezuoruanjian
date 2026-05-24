@@ -68,6 +68,17 @@ android {
         }
     }
 
+    flavorDimensions += "ai"
+    productFlavors {
+        create("noAi") {
+            dimension = "ai"
+            isDefault = true
+        }
+        create("ai") {
+            dimension = "ai"
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             if (System.getenv("WRITER_ANDROID_KEYSTORE_PATH") != null && file(System.getenv("WRITER_ANDROID_KEYSTORE_PATH")).exists()) {
@@ -103,7 +114,8 @@ android {
                     doLast {
                         val defaultApk = output.outputFile
                         if (defaultApk.exists()) {
-                            val customName = "xiezuoruanjian-${variant.name}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
+                            val flavorName = variant.productFlavors.firstOrNull()?.name ?: variant.name
+                            val customName = "writer-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
                             val destFile = File(defaultApk.parentFile, customName)
                             defaultApk.copyTo(destFile, overwrite = true)
                             println("Successfully copied custom-named APK to ${destFile.absolutePath}")

@@ -31,6 +31,8 @@ pub struct LocalSettings {
     pub editor_typing_animation_enabled: bool,
     #[serde(default = "default_editor_smooth_cursor_enabled")]
     pub editor_smooth_cursor_enabled: bool,
+    #[serde(default)]
+    pub ai_enabled: bool,
 }
 
 fn default_editor_font_size() -> f32 {
@@ -74,6 +76,7 @@ impl Default for LocalSettings {
             window_height: 600.0,
             editor_typing_animation_enabled: default_editor_typing_animation_enabled(),
             editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
+            ai_enabled: false,
         }
     }
 }

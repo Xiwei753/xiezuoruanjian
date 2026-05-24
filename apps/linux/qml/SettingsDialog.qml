@@ -166,7 +166,8 @@ Dialog {
                         onToggled: {
                             if (!root.backendRef) return;
                             root.backendRef.ai_enabled = checked;
-                            root.settingsChanged();
+                            var success = root.backendRef.save_local_settings();
+                            if (success) root.settingsChanged();
                         }
                     }
                 }

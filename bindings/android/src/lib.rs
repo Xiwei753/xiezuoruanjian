@@ -1441,3 +1441,19 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_executeAct
     // ActionResult inside result already contains its own "success" flag which NativeCoreBridge will parse.
     result_to_jstring(&mut env, result)
 }
+
+// Check if AI is available (compile-time feature gate)
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_aiAvailableNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+) -> jboolean {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    if core.ai_available() { 1 } else { 0 }
+}

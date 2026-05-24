@@ -23,6 +23,7 @@ import com.xiwei.writerapp.model.SyncConfig
 import com.xiwei.writerapp.model.SyncTransport
 import com.xiwei.writerapp.model.SyncSecrets
 import com.xiwei.writerapp.data.NativeResult
+import com.xiwei.writerapp.data.NativeCoreBridge
 import com.xiwei.writerapp.model.FirstSyncMode
 import com.xiwei.writerapp.data.SyncSession
 
@@ -68,6 +69,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var tvTypingAnimationDurationValue: TextView
     private lateinit var sbSmoothCursorDuration: Slider
     private lateinit var tvSmoothCursorDurationValue: TextView
+
+    private lateinit var tvAiSection: TextView
+    private lateinit var switchAiEnabled: MaterialSwitch
 
     private lateinit var btnDryRun: MaterialButton
     private lateinit var btnTestConnection: MaterialButton
@@ -129,6 +133,9 @@ class SettingsActivity : AppCompatActivity() {
         tvTypingAnimationDurationValue = findViewById(R.id.tvTypingAnimationDurationValue)
         sbSmoothCursorDuration = findViewById(R.id.sbSmoothCursorDuration)
         tvSmoothCursorDurationValue = findViewById(R.id.tvSmoothCursorDurationValue)
+
+        tvAiSection = findViewById(R.id.tvAiSection)
+        switchAiEnabled = findViewById(R.id.switchAiEnabled)
 
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
         tvVersionInfo = findViewById(R.id.tvVersionInfo)
@@ -218,6 +225,24 @@ class SettingsActivity : AppCompatActivity() {
         switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
         sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
         sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
+
+        // AI settings - hide section if AI not available (compile-time)
+        val aiAvailable = try {
+            val bridge = NativeCoreBridge(this)
+            bridge.aiAvailable()
+        } catch (e: Exception) { false }
+        if (aiAvailable) {
+            tvAiSection.visibility = android.view.View.VISIBLE
+            switchAiEnabled.visibility = android.view.View.VISIBLE
+            switchAiEnabled.isChecked = currentSettings.aiEnabled
+            switchAiEnabled.setOnCheckedChangeListener { _, isChecked ->
+                currentSettings = currentSettings.copy(aiEnabled = isChecked)
+                saveAndFinish(false)
+            }
+        } else {
+            tvAiSection.visibility = android.view.View.GONE
+            switchAiEnabled.visibility = android.view.View.GONE
+        }
 
         // Initial texts
         tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
@@ -808,7 +833,8 @@ class SettingsActivity : AppCompatActivity() {
             editorTypingAnimationEnabled = switchTypingAnimation.isChecked,
             editorSmoothCursorEnabled = switchSmoothCursor.isChecked,
             editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
-            editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt()
+            editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),
+            aiEnabled = switchAiEnabled.isChecked
         )
 
         ErrorUtil.safeRun(this) {

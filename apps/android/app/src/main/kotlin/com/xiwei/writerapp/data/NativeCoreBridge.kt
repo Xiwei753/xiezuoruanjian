@@ -830,6 +830,17 @@ class NativeCoreBridge(context: Context) {
     private external fun bindMindMapAnchorJson(workspacePath: String, projectId: String, graphId: String, nodeId: String, anchorId: String, linkKind: String): String?
     private external fun saveMindMapLayoutJson(workspacePath: String, projectId: String, graphId: String, layoutJson: String): String?
 
+    private external fun aiAvailableNative(workspacePath: String): Boolean
+
+    fun aiAvailable(): Boolean {
+        if (!isLoaded) return false
+        return try {
+            aiAvailableNative(workspaceDir)
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
     fun createMindMapGraph(projectId: String, title: String): NativeResult<MindMapGraph> {
         if (!isLoaded) return NativeResult.NotLoaded
         try {

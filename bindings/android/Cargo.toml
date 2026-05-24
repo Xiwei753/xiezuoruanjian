@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+ai = ["writer_core/ai"]
+
 [dependencies]
 jni = "0.21.1"
 writer_core = { path = "../../core/writer_core" }

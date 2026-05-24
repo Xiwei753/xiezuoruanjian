@@ -1588,6 +1588,7 @@ impl AppBackend {
                 self.current_setting_auto_indent_width = settings.auto_indent_width;
                 self.current_setting_typing_animation_enabled = settings.editor_typing_animation_enabled;
                 self.current_setting_smooth_cursor_enabled = settings.editor_smooth_cursor_enabled;
+                self.current_ai_enabled = settings.ai_enabled;
             }
 
             let syncable_load = core.load_syncable_settings();
@@ -1634,6 +1635,7 @@ impl AppBackend {
             local.auto_indent_width = self.current_setting_auto_indent_width;
             local.editor_typing_animation_enabled = self.current_setting_typing_animation_enabled;
             local.editor_smooth_cursor_enabled = self.current_setting_smooth_cursor_enabled;
+            local.ai_enabled = self.current_ai_enabled;
 
             let local_save = core.save_local_settings(&local);
             self.debug_log("settings", "save_local_settings_result", &format!("success={}", local_save.is_ok()));

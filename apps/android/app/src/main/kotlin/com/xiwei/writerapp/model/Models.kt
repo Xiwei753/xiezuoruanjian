@@ -24,7 +24,8 @@ data class LocalSettings(
     val editorTypingAnimationEnabled: Boolean = true,
     val editorSmoothCursorEnabled: Boolean = true,
     val editorTypingAnimationDurationMs: Int = 100,
-    val editorSmoothCursorDurationMs: Int = 80
+    val editorSmoothCursorDurationMs: Int = 80,
+    val aiEnabled: Boolean = false
 )
 
 data class SyncableSettings(
