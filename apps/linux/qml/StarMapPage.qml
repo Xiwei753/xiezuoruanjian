@@ -23,6 +23,18 @@ Rectangle {
         } catch (e) {
             starmaps = [];
         }
+        refreshGridModel();
+    }
+
+    function refreshGridModel() {
+        var roots = getRootStarmaps();
+        gridModel.clear();
+        for (var i = 0; i < roots.length; i++) {
+            gridModel.append({
+                starmapObj: roots[i],
+                childCount: roots[i].child_starmap_count || 0
+            });
+        }
     }
 
     function getRootStarmaps() {
@@ -58,6 +70,8 @@ Rectangle {
     }
 
     Component.onCompleted: loadStarmaps()
+    onFilterProjectIdChanged: refreshGridModel()
+    onStarmapsChanged: refreshGridModel()
 
     ColumnLayout {
         anchors.fill: parent
@@ -187,7 +201,7 @@ Rectangle {
 
                         StarMapCard {
                             dt: root.dt
-                            starmapData: modelData
+                            starmapData: starmapObj
                             width: parent.width
                             height: parent.height - (childRepeater.count > 0 ? 60 : 0)
                             onClicked: function(starmapId) {
@@ -204,14 +218,14 @@ Rectangle {
                         Flow {
                             width: parent.width
                             spacing: dt ? dt.sp4 : 4
-                            visible: modelData.child_starmap_count > 0
+                            visible: childCount > 0
 
                             Repeater {
                                 id: childRepeater
                                 model: {
                                     var children = [];
                                     for (var i = 0; i < root.starmaps.length; i++) {
-                                        if (root.starmaps[i].parent_starmap_id === modelData.starmap_id) {
+                                        if (root.starmaps[i].parent_starmap_id === starmapObj.starmap_id) {
                                             children.push(root.starmaps[i]);
                                         }
                                     }
@@ -262,37 +276,42 @@ Rectangle {
         }
 
         // Empty state
-        ColumnLayout {
-            anchors.centerIn: parent
-            spacing: dt ? dt.sp16 : 16
-            visible: starmaps.length === 0
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: gridModel.count === 0
 
-            Rectangle {
-                width: 80; height: 80
-                radius: dt ? dt.radiusCard : 18
-                color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
-                Layout.alignment: Qt.AlignHCenter
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: dt ? dt.sp16 : 16
+
+                Rectangle {
+                    width: 80; height: 80
+                    radius: dt ? dt.radiusCard : 18
+                    color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
+                    Layout.alignment: Qt.AlignHCenter
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\u2B50"
+                        font.pixelSize: 36
+                    }
+                }
 
                 Text {
-                    anchors.centerIn: parent
-                    text: "\u2B50"
-                    font.pixelSize: 36
+                    text: "还没有星图"
+                    color: dt ? dt.textPrimary : "#E2E4E9"
+                    font.pixelSize: dt ? dt.fontLg : 16
+                    font.weight: Font.DemiBold
+                    Layout.alignment: Qt.AlignHCenter
                 }
-            }
 
-            Text {
-                text: "还没有星图"
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.fontLg : 16
-                font.weight: Font.DemiBold
-                Layout.alignment: Qt.AlignHCenter
-            }
-
-            Text {
-                text: "创建你的第一个星图，构建角色关系与故事脉络"
-                color: dt ? dt.textMuted : "#606470"
-                font.pixelSize: dt ? dt.fontSm : 12
-                Layout.alignment: Qt.AlignHCenter
+                Text {
+                    text: "创建你的第一个星图，构建角色关系与故事脉络"
+                    color: dt ? dt.textMuted : "#606470"
+                    font.pixelSize: dt ? dt.fontSm : 12
+                    Layout.alignment: Qt.AlignHCenter
+                }
             }
         }
     }

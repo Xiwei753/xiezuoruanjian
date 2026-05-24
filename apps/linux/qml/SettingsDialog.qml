@@ -100,6 +100,7 @@ Dialog {
     property var dt: theme
 
     ScrollView {
+        id: settingsScroll
         anchors.fill: parent
         anchors.margins: dt ? dt.sp20 : 20
         clip: true

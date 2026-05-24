@@ -248,7 +248,7 @@ ApplicationWindow {
                 inputDialog.actionType = "volume";
                 inputDialog.projectId = projectId;
                 inputDialog.volumeId = "";
-                inputDialog.title = "新建卷";
+                inputDialog.dialogTitle = "新建卷";
                 inputDialog.open();
             }
 
@@ -256,7 +256,7 @@ ApplicationWindow {
                 inputDialog.actionType = "chapter";
                 inputDialog.projectId = projectId;
                 inputDialog.volumeId = volumeId;
-                inputDialog.title = "新建章节";
+                inputDialog.dialogTitle = "新建章节";
                 inputDialog.open();
             }
         }
@@ -475,12 +475,12 @@ ApplicationWindow {
         property string actionType: ""
         property string projectId: ""
         property string volumeId: ""
-        property string title: "请输入"
+        property string dialogTitle: "请输入"
 
         modal: true
         width: 300
         anchors.centerIn: Overlay.overlay
-        title: inputDialog.title
+        title: inputDialog.dialogTitle
 
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd }
 

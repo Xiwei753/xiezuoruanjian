@@ -5,6 +5,8 @@
     <file alias="ProjectCard.qml">qml/ProjectCard.qml</file>
     <file alias="ProjectHomePage.qml">qml/ProjectHomePage.qml</file>
     <file alias="StarMapPreviewPage.qml">qml/StarMapPreviewPage.qml</file>
+    <file alias="StarMapPage.qml">qml/StarMapPage.qml</file>
+    <file alias="StarMapCard.qml">qml/StarMapCard.qml</file>
     <file alias="StatsPreviewPage.qml">qml/StatsPreviewPage.qml</file>
     <file alias="CreativeHub.qml">qml/CreativeHub.qml</file>
     <file alias="WritingWorkspace.qml">qml/WritingWorkspace.qml</file>
