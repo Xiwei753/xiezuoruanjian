@@ -8,7 +8,10 @@ use crate::sync;
 use crate::trash;
 use crate::volume::{self, Volume};
 use crate::workspace;
+use crate::writing_stats::api::StatsApi;
+use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use crate::action_registry::{ActionDescriptor, ActionResult, ActionRegistry};
 use serde_json::Value;
 
@@ -16,6 +19,7 @@ use serde_json::Value;
 /// This struct holds the workspace root and provides high-level methods.
 pub struct WriterCore {
     workspace_path: PathBuf,
+    stats_api: OnceLock<StatsApi>,
 }
 
 impl WriterCore {
@@ -23,7 +27,12 @@ impl WriterCore {
     pub fn new<P: AsRef<Path>>(workspace_path: P) -> Self {
         Self {
             workspace_path: workspace_path.as_ref().to_path_buf(),
+            stats_api: OnceLock::new(),
         }
+    }
+
+    fn get_stats_api(&self) -> &StatsApi {
+        self.stats_api.get_or_init(|| StatsApi::new(&self.workspace_path))
     }
 
     /// Access to the workspace path for internal modules
@@ -899,6 +908,100 @@ impl WriterCore {
         ordered_ids: &[String],
     ) -> crate::error::Result<()> {
         crate::chapter::reorder_chapters(&self.workspace_path, project_id, volume_id, ordered_ids)
+    }
+
+    // --- Writing Stats ---
+
+    pub fn record_writing_event(
+        &self,
+        device_id: &str,
+        platform_str: &str,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        source_str: &str,
+        inserted_chars: u32,
+        deleted_chars: u32,
+        pasted_chars: u32,
+        ai_inserted_chars: u32,
+        session_id: &str,
+    ) -> Result<()> {
+        let platform = match platform_str {
+            "android" => Platform::Android,
+            _ => Platform::Linux,
+        };
+        let source = match source_str {
+            "pasted" => EventSource::Pasted,
+            "deleted" => EventSource::Deleted,
+            "ai_inserted" => EventSource::AiInserted,
+            "sync_remote" => EventSource::SyncRemote,
+            _ => EventSource::HumanTyped,
+        };
+
+        let event = WritingInputEvent::new(
+            device_id,
+            platform,
+            project_id,
+            volume_id,
+            chapter_id,
+            source,
+            inserted_chars,
+            deleted_chars,
+            pasted_chars,
+            ai_inserted_chars,
+            session_id,
+        );
+
+        self.get_stats_api().record_event(event)
+    }
+
+    pub fn flush_writing_stats(&self) -> Result<()> {
+        self.get_stats_api().flush()
+    }
+
+    pub fn get_writing_stats_summary(&self, start_date: &str, end_date: &str) -> Result<Value> {
+        let range = DateRange {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        };
+        self.get_stats_api().get_stats_summary(&range)
+    }
+
+    pub fn get_writing_stats_by_project(&self, start_date: &str, end_date: &str) -> Result<Value> {
+        let range = DateRange {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        };
+        self.get_stats_api().get_stats_by_project(&range)
+    }
+
+    pub fn get_writing_stats_by_chapter(&self, start_date: &str, end_date: &str) -> Result<Value> {
+        let range = DateRange {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        };
+        self.get_stats_api().get_stats_by_chapter(&range)
+    }
+
+    pub fn get_writing_stats_by_device(&self, start_date: &str, end_date: &str) -> Result<Value> {
+        let range = DateRange {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        };
+        self.get_stats_api().get_stats_by_device(&range)
+    }
+
+    pub fn get_writing_speed_curve(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        bucket_minutes: u32,
+    ) -> Result<Value> {
+        let range = DateRange {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        };
+        self.get_stats_api().get_speed_curve(&range, bucket_minutes)
     }
 }
 

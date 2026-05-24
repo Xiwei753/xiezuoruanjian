@@ -45,6 +45,9 @@ ApplicationWindow {
         sync: { status: "not_configured" }
     })
 
+    property string previousEditorText: ""
+    property bool isLoadingChapter: false
+
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
     QtObject {
@@ -389,9 +392,12 @@ ApplicationWindow {
                 // Simplified editor integration
                 Component.onCompleted: {
                     if (appState.selected && appState.selected.chapterId) {
+                        isLoadingChapter = true;
                         var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
                         window.debugLog("editor", "on_completed_load", "len=" + content.length);
                         editorPage.loadContent(content);
+                        previousEditorText = content;
+                        isLoadingChapter = false;
                     }
                 }
             }
@@ -400,12 +406,16 @@ ApplicationWindow {
                 target: backend
                 function onChapter_path_changed() {
                     if (appState.selected && appState.selected.chapterId) {
+                        isLoadingChapter = true;
                         var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
                         window.debugLog("editor", "chapter_path_changed_load", "projectId=" + appState.selected.projectId + ", volumeId=" + appState.selected.volumeId + ", chapterId=" + appState.selected.chapterId + ", len=" + content.length);
                         editorPage.loadContent(content);
+                        previousEditorText = content;
+                        isLoadingChapter = false;
                     } else {
                         window.debugLog("editor", "chapter_path_changed_clear", "");
                         editorPage.clearText();
+                        previousEditorText = "";
                     }
                 }
             }
@@ -417,6 +427,43 @@ ApplicationWindow {
                         backend.save_current_chapter(editorPage.text);
                         applyState(JSON.parse(backend.refresh_app_state_json()));
                         saveAutoSyncTimer.restart();
+
+                        if (!isLoadingChapter && previousEditorText !== editorPage.text) {
+                            var oldLen = previousEditorText.length;
+                            var newLen = editorPage.text.length;
+                            var diff = newLen - oldLen;
+
+                            if (diff > 0) {
+                                var source = "human_typed";
+                                var inserted = diff;
+                                var deleted = 0;
+                                var pasted = 0;
+
+                                if (diff > 20) {
+                                    source = "pasted";
+                                    pasted = diff;
+                                    inserted = 0;
+                                }
+
+                                backend.report_writing_event(
+                                    appState.selected.projectId,
+                                    appState.selected.volumeId,
+                                    appState.selected.chapterId,
+                                    source,
+                                    inserted, deleted, pasted
+                                );
+                            } else if (diff < 0) {
+                                backend.report_writing_event(
+                                    appState.selected.projectId,
+                                    appState.selected.volumeId,
+                                    appState.selected.chapterId,
+                                    "deleted",
+                                    0, Math.abs(diff), 0
+                                );
+                            }
+
+                            previousEditorText = editorPage.text;
+                        }
                     }
                 }
             }

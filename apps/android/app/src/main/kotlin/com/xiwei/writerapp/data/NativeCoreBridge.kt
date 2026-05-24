@@ -85,6 +85,28 @@ class NativeCoreBridge(context: Context) {
     private external fun performSyncDryRun(workspacePath: String, configJson: String): String?
     private external fun performSync(workspacePath: String, configJson: String): String?
 
+    private external fun recordWritingEventNative(
+        workspacePath: String,
+        deviceId: String,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        source: String,
+        insertedChars: Int,
+        deletedChars: Int,
+        pastedChars: Int,
+        aiInsertedChars: Int,
+        sessionId: String
+    ): Boolean
+
+    private external fun flushWritingStatsNative(workspacePath: String)
+
+    private external fun getWritingStatsSummaryNative(
+        workspacePath: String,
+        startDate: String,
+        endDate: String
+    ): String?
+
 
     // Helper classes for parsing Rust JSON responses
     private data class RustResponse<T>(
@@ -375,6 +397,49 @@ class NativeCoreBridge(context: Context) {
                 return NativeResult.NotLoaded
             }
             return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun recordWritingEvent(
+        deviceId: String,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        source: String,
+        insertedChars: Int,
+        deletedChars: Int,
+        pastedChars: Int,
+        aiInsertedChars: Int,
+        sessionId: String
+    ): Boolean {
+        if (!isLoaded) return false
+        return try {
+            recordWritingEventNative(
+                workspaceDir, deviceId, projectId, volumeId, chapterId,
+                source, insertedChars, deletedChars, pastedChars, aiInsertedChars, sessionId
+            )
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    fun flushWritingStats() {
+        if (!isLoaded) return
+        try {
+            flushWritingStatsNative(workspaceDir)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+        }
+    }
+
+    fun getWritingStatsSummary(startDate: String, endDate: String): String? {
+        if (!isLoaded) return null
+        return try {
+            getWritingStatsSummaryNative(workspaceDir, startDate, endDate)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            null
         }
     }
 

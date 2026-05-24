@@ -80,6 +80,21 @@ class EditorViewModel(
     private var pendingSaveContent: String? = null
     private var autoSaveJob: kotlinx.coroutines.Job? = null
 
+    private val statsDeviceId: String by lazy {
+        val prefs = application.getSharedPreferences("writer_stats", android.content.Context.MODE_PRIVATE)
+        var id = prefs.getString("device_id", null)
+        if (id == null) {
+            id = "android-${java.util.UUID.randomUUID()}"
+            prefs.edit().putString("device_id", id).apply()
+        }
+        id
+    }
+
+    private var statsSessionId: String = java.util.UUID.randomUUID().toString()
+    private var statsLastEventMs: Long = 0
+    private var previousText: String = ""
+    private var isLoadingChapter = false
+
     fun initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
         this.projectId = projectId
         this.volumeId = volumeId
@@ -141,6 +156,7 @@ class EditorViewModel(
                 val meta = result.second
 
                 launch(kotlinx.coroutines.Dispatchers.Main) {
+                    isLoadingChapter = true
                     _uiState.value = _uiState.value.copy(
                         loading = false,
                         content = content,
@@ -148,6 +164,8 @@ class EditorViewModel(
                         editorEnabled = true,
                         saveStatus = SaveStatus.Idle
                     )
+                    previousText = content
+                    isLoadingChapter = false
                     initialWordCount = calculateWordCount(content)
                     sessionStartTime = System.currentTimeMillis()
                     updateStats(content)
@@ -178,6 +196,50 @@ class EditorViewModel(
 
         scheduleAutoSave(newContent)
         scheduleStatsUpdate(newContent)
+
+        if (!isLoadingChapter && previousText != newContent) {
+            reportWritingEvent(previousText, newContent)
+            previousText = newContent
+        }
+    }
+
+    private fun reportWritingEvent(oldText: String, newText: String) {
+        val pid = projectId ?: return
+        val vid = volumeId ?: return
+        val cid = chapterId ?: return
+
+        val nowMs = System.currentTimeMillis()
+        if (statsLastEventMs == 0L || (nowMs - statsLastEventMs) > 5 * 60 * 1000) {
+            statsSessionId = java.util.UUID.randomUUID().toString()
+        }
+        statsLastEventMs = nowMs
+
+        val oldLen = oldText.length
+        val newLen = newText.length
+        val diff = newLen - oldLen
+
+        if (diff > 0) {
+            var source = "human_typed"
+            var inserted = diff
+            var deleted = 0
+            var pasted = 0
+
+            if (diff > 20) {
+                source = "pasted"
+                pasted = diff
+                inserted = 0
+            }
+
+            workspaceRepository.recordWritingEvent(
+                statsDeviceId, pid, vid, cid,
+                source, inserted, deleted, pasted, 0, statsSessionId
+            )
+        } else if (diff < 0) {
+            workspaceRepository.recordWritingEvent(
+                statsDeviceId, pid, vid, cid,
+                "deleted", 0, Math.abs(diff), 0, 0, statsSessionId
+            )
+        }
     }
 
     private fun scheduleAutoSave(content: String) {

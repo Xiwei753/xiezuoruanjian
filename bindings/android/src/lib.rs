@@ -1457,3 +1457,113 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_aiAvailabl
     let core = WriterCore::new(&workspace_path);
     if core.ai_available() { 1 } else { 0 }
 }
+
+// Record Writing Event
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_recordWritingEventNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    device_id_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+    chapter_id_j: JString,
+    source_j: JString,
+    inserted_chars: jni::sys::jint,
+    deleted_chars: jni::sys::jint,
+    pasted_chars: jni::sys::jint,
+    ai_inserted_chars: jni::sys::jint,
+    session_id_j: JString,
+) -> jboolean {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let device_id = match jstring_to_string(&mut env, &device_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let chapter_id = match jstring_to_string(&mut env, &chapter_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let source = match jstring_to_string(&mut env, &source_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let session_id = match jstring_to_string(&mut env, &session_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    match core.record_writing_event(
+        &device_id,
+        "android",
+        &project_id,
+        &volume_id,
+        &chapter_id,
+        &source,
+        inserted_chars as u32,
+        deleted_chars as u32,
+        pasted_chars as u32,
+        ai_inserted_chars as u32,
+        &session_id,
+    ) {
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
+}
+
+// Flush Writing Stats
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_flushWritingStatsNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+) {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    let _ = core.flush_writing_stats();
+}
+
+// Get Writing Stats Summary
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWritingStatsSummaryNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    start_date_j: JString,
+    end_date_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(
+        &mut env,
+        core.get_writing_stats_summary(&start_date, &end_date),
+    )
+}

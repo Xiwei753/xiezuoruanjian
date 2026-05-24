@@ -78,6 +78,28 @@ class WorkspaceRepository(context: Context) {
         }
     }
 
+    fun recordWritingEvent(
+        deviceId: String,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        source: String,
+        insertedChars: Int,
+        deletedChars: Int,
+        pastedChars: Int,
+        aiInsertedChars: Int,
+        sessionId: String
+    ): Boolean {
+        return bridge.recordWritingEvent(
+            deviceId, projectId, volumeId, chapterId,
+            source, insertedChars, deletedChars, pastedChars, aiInsertedChars, sessionId
+        )
+    }
+
+    fun flushWritingStats() {
+        bridge.flushWritingStats()
+    }
+
     fun getProjectStats(projectId: String): ProjectStats {
         return when (val result = bridge.getProjectStats(projectId)) {
             is NativeResult.Success -> result.data

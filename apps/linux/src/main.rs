@@ -443,6 +443,9 @@ struct AppBackend {
         fn(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
     ),
     save_current_chapter: qt_method!(fn(&mut self, content: QString)),
+    report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
+    get_writing_stats_summary: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    flush_writing_stats: qt_method!(fn(&self)),
 
     has_selected_chapter: qt_method!(fn(&self) -> bool),
     selected_chapter_exists: qt_method!(fn(&self) -> bool),
@@ -464,6 +467,11 @@ struct AppBackend {
     selected_chapter_id: Option<String>,
 
     cached_tree: QJsonArray,
+
+    stats_device_id: String,
+    stats_session_id: String,
+    stats_last_event_ms: i64,
+    stats_previous_text: String,
 
     current_sync_enabled: bool,
     current_sync_backend_type: String,
@@ -3212,6 +3220,70 @@ impl AppBackend {
                 self.set_error(&err_msg);
                 self.debug_error("chapter", "save_current_chapter_failed", &err_msg);
             }
+        }
+    }
+
+    fn report_writing_event(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        source: QString,
+        inserted_chars: u32,
+        deleted_chars: u32,
+        pasted_chars: u32,
+    ) {
+        let pid = project_id.to_string();
+        let vid = volume_id.to_string();
+        let cid = chapter_id.to_string();
+        let src = source.to_string();
+
+        if self.stats_device_id.is_empty() {
+            self.stats_device_id = format!("linux-{}", uuid::Uuid::new_v4());
+        }
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if self.stats_last_event_ms == 0 || (now_ms - self.stats_last_event_ms) > 5 * 60 * 1000 {
+            self.stats_session_id = uuid::Uuid::new_v4().to_string();
+        }
+        self.stats_last_event_ms = now_ms;
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let _ = core.record_writing_event(
+                &self.stats_device_id,
+                "linux",
+                &pid,
+                &vid,
+                &cid,
+                &src,
+                inserted_chars,
+                deleted_chars,
+                pasted_chars,
+                0,
+                &self.stats_session_id,
+            );
+        }
+    }
+
+    fn get_writing_stats_summary(&self, start_date: QString, end_date: QString) -> QString {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_summary(&sd, &ed) {
+                Ok(val) => val.to_string().into(),
+                Err(_) => "{}".into(),
+            }
+        } else {
+            "{}".into()
+        }
+    }
+
+    fn flush_writing_stats(&self) {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let _ = core.flush_writing_stats();
         }
     }
 }

@@ -21,6 +21,7 @@ pub mod trash;
 pub mod volume;
 pub mod workspace;
 pub mod mind_map;
+pub mod writing_stats;
 
 pub use error::{Error, Result};
 
@@ -41,3 +42,5 @@ pub mod trash_tests;
 pub mod volume_tests;
 #[cfg(test)]
 pub mod workspace_tests;
+#[cfg(test)]
+pub mod writing_stats_tests;

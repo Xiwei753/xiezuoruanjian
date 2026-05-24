@@ -4070,6 +4070,8 @@ fn semantic_merge_json(
             "app-meta/sync/state.local.json",
             "app-meta/sync/sync_state.json",
             "app-meta/ai/",
+            "app-meta/stats/events.local/",
+            "app-meta/stats/cache/",
             "sqlite_cache",
             "tmp",
             "cache",
@@ -4157,6 +4159,10 @@ fn semantic_merge_json(
         }
 
         if rel_path.starts_with("app-meta/proofreading/") {
+            return true;
+        }
+
+        if rel_path.starts_with("app-meta/stats/daily/") {
             return true;
         }
 
