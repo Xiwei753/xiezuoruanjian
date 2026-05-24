@@ -128,6 +128,15 @@ use writer_core::sync_service::{SyncConfig, SyncSecrets};
 qmetaobject::qrc!(qml_resources, "/" {
     // Pages
     "qml/main.qml" as "main.qml",
+    "qml/DesignTokens.qml" as "DesignTokens.qml",
+    "qml/ProjectCard.qml" as "ProjectCard.qml",
+    "qml/ProjectHomePage.qml" as "ProjectHomePage.qml",
+    "qml/StarMapPreviewPage.qml" as "StarMapPreviewPage.qml",
+    "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
+    "qml/CreativeHub.qml" as "CreativeHub.qml",
+    "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
+    "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
+    "qml/RightDrawer.qml" as "RightDrawer.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
     "qml/EditorPage.qml" as "EditorPage.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
@@ -1249,6 +1258,7 @@ impl AppBackend {
 
     fn close_workspace(&mut self) {
         self.debug_log("workspace", "close_workspace_start", "");
+        self.flush_writing_stats();
         // Clear core
         self.core = None;
         // Clear workspace state
@@ -1597,6 +1607,11 @@ impl AppBackend {
                 self.current_setting_typing_animation_enabled = settings.editor_typing_animation_enabled;
                 self.current_setting_smooth_cursor_enabled = settings.editor_smooth_cursor_enabled;
                 self.current_ai_enabled = settings.ai_enabled;
+                if let Some(ref device_id) = settings.stats_device_id {
+                    if !device_id.is_empty() {
+                        self.stats_device_id = device_id.clone();
+                    }
+                }
             }
 
             let syncable_load = core.load_syncable_settings();
@@ -2050,6 +2065,8 @@ impl AppBackend {
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
         self.sync_status_changed();
+
+        self.flush_writing_stats();
         self.current_sync_action_result = if silent_success { "后台同步中...".to_string() } else { "正在同步...".to_string() };
 
         let qptr = QPointer::from(&*self);
@@ -3195,6 +3212,7 @@ impl AppBackend {
             Ok(receipt) => {
                 self.current_save_status = "已保存".to_string();
                 self.save_status_changed();
+                self.flush_writing_stats();
                 let p = self.selected_project_id.clone().unwrap_or_default();
                 let v = self.selected_volume_id.clone().unwrap_or_default();
                 let c = self.selected_chapter_id.clone().unwrap_or_default();
@@ -3240,6 +3258,12 @@ impl AppBackend {
 
         if self.stats_device_id.is_empty() {
             self.stats_device_id = format!("linux-{}", uuid::Uuid::new_v4());
+            if let Some(core_ref) = &self.core {
+                let core = core_ref.borrow();
+                let mut local = core.load_local_settings().unwrap_or_default();
+                local.stats_device_id = Some(self.stats_device_id.clone());
+                let _ = core.save_local_settings(&local);
+            }
         }
 
         let now_ms = chrono::Utc::now().timestamp_millis();

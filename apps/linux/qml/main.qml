@@ -10,7 +10,7 @@ ApplicationWindow {
     width: 1100
     height: 768
     title: "Writer"
-    color: theme.bgDark
+    color: designTokens.bg
 
     function generateActionId() {
         return Math.random().toString(36).substring(2, 8);
@@ -34,7 +34,6 @@ ApplicationWindow {
         }
     }
 
-
     property var appState: ({
         hasWorkspace: false,
         workspacePath: "",
@@ -45,62 +44,23 @@ ApplicationWindow {
         sync: { status: "not_configured" }
     })
 
-    property string previousEditorText: ""
     property bool isLoadingChapter: false
+    property string previousEditorText: ""
+    property bool writingMode: false
+    property string writingProjectId: ""
+    property string writingProjectTitle: ""
+    property string writingVolumeId: ""
+    property string writingChapterId: ""
+    property string writingChapterTitle: ""
 
-    SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
-
-    QtObject {
-        id: theme
-        // Keep spacing and font sizes to avoid rewriting geometry
-        property int sp4: 4
-        property int sp6: 6
-        property int sp8: 8
-        property int sp12: 12
-        property int sp16: 16
-        property int sp24: 24
-        property int sp32: 32
-
-        property int radiusSm: 4
-        property int radiusMd: 8
-        property int radiusLg: 12
-
-        property int fontXs: 11
-        property int fontSm: 12
-        property int fontMd: 14
-        property int fontLg: 16
-        property int fontXl: 18
-        property int fontXxl: 22
-
-        // Alias colors to system palette to provide seamless desktop integration
-        property color bg: sysPalette.window
-        property color bgDark: sysPalette.window
-        property color bgDarker: sysPalette.window
-        property color surface: sysPalette.base
-        property color surfaceAlt: sysPalette.base
-        property color border: sysPalette.mid
-        property color divider: sysPalette.midlight
-        property color primary: sysPalette.highlight
-        property color primaryHover: sysPalette.highlight
-        property color primaryText: sysPalette.highlightedText
-        property color textPrimary: sysPalette.text
-        property color textSecondary: sysPalette.text
-        property color danger: "#EF4444"
-        property color warning: "#F59E0B"
-        property color success: "#10B981"
-        property color hover: sysPalette.light
-        property color sidebarBg: sysPalette.window
-        property color sidebarHover: sysPalette.light
-        property color inputBg: sysPalette.base
-        property color textMain: sysPalette.windowText
-        property color textDim: sysPalette.text
-        property color accent: sysPalette.highlight
-        property color accentHover: sysPalette.highlight
-        property color buttonBg: sysPalette.button
-        property color buttonHover: sysPalette.light
-        property color editorBg: sysPalette.base
-
-
+    // Design tokens
+    DesignTokens {
+        id: designTokens
+        isDark: {
+            if (appState.settings && appState.settings.themeMode === "dark") return true;
+            if (appState.settings && appState.settings.themeMode === "light") return false;
+            return backend.system_color_scheme !== "light";
+        }
     }
 
     AppBackend {
@@ -126,6 +86,12 @@ ApplicationWindow {
         }
     }
 
+    onClosing: {
+        if (writingMode && writingChapterId) {
+            backend.flush_writing_stats();
+        }
+    }
+
     Timer {
         id: workspaceOpenAutoSyncTimer
         interval: 1500
@@ -148,32 +114,15 @@ ApplicationWindow {
         }
     }
 
-    Timer {
-        id: saveAutoSyncTimer
-        interval: 20000
-        repeat: false
-        onTriggered: {
-            if (!backend || !backend.has_workspace || !backend.sync_auto_sync || !backend.sync_enabled) return;
-            if (backend.sync_status === "syncing") return;
-            if (appState.selected && appState.selected.chapterId) {
-                backend.save_current_chapter(editorPage.text);
-            }
-            backend.request_auto_sync("auto_sync_after_save");
-        }
-    }
-
     function applyState(state) {
         if (!state) return;
         appState = state;
-        
-        // update tree
-        if (appState.tree) {
-            workspaceTree.items = appState.tree;
-        }
 
-        // update selected
-        if (appState.selected) {
-            workspaceTree.selectedId = appState.selected.chapterId || appState.selected.volumeId || appState.selected.projectId || "";
+        if (appState.tree && creativeHub) {
+            creativeHub.tree = appState.tree;
+        }
+        if (appState.tree && writingWorkspace) {
+            writingWorkspace.tree = appState.tree;
         }
     }
 
@@ -204,375 +153,104 @@ ApplicationWindow {
             }
         }
         function onClear_editor() {
-            if (editorPage) {
-                editorPage.clearText();
+            if (writingWorkspace) {
+                writingWorkspace.previousEditorText = "";
             }
+        }
+        function onSettings_changed() {
+            try {
+                applyState(JSON.parse(backend.refresh_app_state_json()));
+            } catch (e) {}
         }
     }
 
-    function getSelectedItemTitle() {
-        if (!appState || !appState.selected || !appState.tree) return "";
-        var sel = appState.selected;
-        var targetId = sel.chapterId || sel.volumeId || sel.projectId || "";
-        if (!targetId) return "";
-        for (var i = 0; i < appState.tree.length; i++) {
-            if (appState.tree[i].id === targetId) {
-                return appState.tree[i].title;
-            }
-        }
-        return "";
-    }
-
-    function getProjectVolumes(projectId) {
-        var vols = [];
-        if (!appState || !appState.tree) return vols;
-        for (var i = 0; i < appState.tree.length; i++) {
-            var item = appState.tree[i];
-            if (item.type === "volume" && item.projectId === projectId) {
-                vols.push(item);
-            }
-        }
-        return vols;
-    }
-
-    // Header
-    header: Rectangle {
-        height: 48
-        color: theme.bgDarker
-        border.color: theme.border
-        border.width: 1
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.margins: 8
-            spacing: 12
-
-            Text {
-                text: "Writer"
-                color: theme.accent
-                font.pixelSize: 20
-                font.bold: true
-            }
-
-            Text {
-                text: appState.workspacePath || "未打开工作区"
-                color: theme.textDim
-                font.pixelSize: 14
-                Layout.fillWidth: true
-                elide: Text.ElideRight
-            }
-
-            Button {
-                text: "新建作品"
-                visible: appState.hasWorkspace
-                onClicked: {
-                    window.debugLog("project", "create_project_dialog_open", "");
-                    createProjectDialog.open();
-                }
-            }
-
-            Button {
-                text: "设置"
-                onClicked: {
-                    window.debugLog("settings", "settings_dialog_open", "");
-                    settingsDialog.open();
-                }
-            }
-
-            Button {
-                text: "同步"
-                onClicked: {
-                    window.debugLog("sync", "sync_dialog_open", "");
-                    syncPageDialog.open();
-                }
-            }
-
-            Button {
-                text: "切换工作区"
-                onClicked: {
-                    window.debugLog("workspace", "switch_workspace_clicked", "");
-                    backend.switch_workspace();
-                    try {
-                        applyState(JSON.parse(backend.refresh_app_state_json()));
-                    } catch (e) {
-                        window.debugError("workspace", "switch_workspace_parse_failed", "error: " + e);
-                    }
-                }
-            }
-        }
-    }
-
-    // Central Content
-    RowLayout {
+    // === Main Content ===
+    Item {
         anchors.fill: parent
-        spacing: 0
 
-        // Left Sidebar
-        Rectangle {
-            Layout.preferredWidth: 260
-            Layout.fillHeight: true
-            color: theme.sidebarBg
-            visible: appState.hasWorkspace
+        // CreativeHub: shown when workspace open and not in writing mode
+        CreativeHub {
+            id: creativeHub
+            anchors.fill: parent
+            visible: appState.hasWorkspace && !writingMode
+            dt: designTokens
+            backendRef: backend
+            appState: window.appState
+            tree: window.appState.tree || []
+            aiCapable: backend.ai_available
+            aiEnabled: backend.ai_enabled
 
-            WorkspaceTree {
-                id: workspaceTree
-                anchors.fill: parent
-                onShowError: function(msg) {
-                    errorDialog.message = msg;
-                    errorDialog.open();
-                }
-                theme: theme
-                selectedId: {
-                    if (!appState || !appState.selected) return "";
-                    return appState.selected.chapterId || appState.selected.volumeId || appState.selected.projectId || "";
-                }
-                
-                onItemActivated: function(type, projectId, volumeId, chapterId) {
-                    var actionId = window.generateActionId();
-                    window.debugLog("tree", "item_activated", "[actionId=" + actionId + "] type=" + type + ", projectId=" + projectId + ", volumeId=" + volumeId + ", chapterId=" + chapterId);
-                    var stateStr = backend.select_tree_item_json(type, projectId, volumeId, chapterId, actionId);
-                    try {
-                        var res = JSON.parse(stateStr);
-                        if (res.success) {
-                            applyState(res.state);
-                        } else {
-                            window.debugError("tree", "item_activation_failed", "[actionId=" + actionId + "] success=false returned");
-                        }
-                    } catch(e) {
-                        window.debugError("tree", "item_activation_parse_failed", "[actionId=" + actionId + "] error: " + e + ", raw: " + stateStr);
-                    }
-                }
-                
-                onCreateVolume: function(projectId) {
-                    inputDialog.actionType = "volume";
-                    inputDialog.projectId = projectId;
-                    inputDialog.title = "新建卷";
-                    inputDialog.open();
-                }
-                
-                onCreateChapter: function(projectId, volumeId) {
-                    inputDialog.actionType = "chapter";
-                    inputDialog.projectId = projectId;
-                    inputDialog.volumeId = volumeId;
-                    inputDialog.title = "新建章节";
-                    inputDialog.open();
-                }
+            onOpenProject: function(projectId, projectTitle) {
+                window.writingProjectId = projectId;
+                window.writingProjectTitle = projectTitle;
+                window.writingMode = true;
+                window.debugLog("workspace", "enter_writing_mode", "projectId=" + projectId);
+            }
 
-                onDeleteItem: function(type, projectId, volumeId, chapterId, title) {
-                    confirmDialog.actionType = "delete_" + type;
-                    confirmDialog.contextData = {
-                        projectId: projectId,
-                        volumeId: volumeId,
-                        chapterId: chapterId,
-                        title: title
-                    };
-                    confirmDialog.open();
-                }
-                onRenameItem: function(type, projectId, volumeId, chapterId, currentTitle) {
-                    errorDialog.message = "重命名功能尚未实现";
-                    errorDialog.open();
+            onCreateProject: {
+                window.debugLog("project", "create_project_dialog_open", "");
+                createProjectDialog.open();
+            }
+
+            onOpenSettings: {
+                window.debugLog("settings", "settings_dialog_open", "");
+                settingsDialog.open();
+            }
+
+            onOpenSync: {
+                window.debugLog("sync", "sync_dialog_open", "");
+                syncPageDialog.open();
+            }
+
+            onSwitchWorkspace: {
+                window.debugLog("workspace", "switch_workspace_clicked", "");
+                backend.switch_workspace();
+                window.writingMode = false;
+                try {
+                    applyState(JSON.parse(backend.refresh_app_state_json()));
+                } catch (e) {
+                    window.debugError("workspace", "switch_workspace_parse_failed", "error: " + e);
                 }
             }
         }
 
-        // Right Editor
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            color: theme.bgDark
-            
-            visible: appState.hasWorkspace
+        // WritingWorkspace: shown when in writing mode
+        WritingWorkspace {
+            id: writingWorkspace
+            anchors.fill: parent
+            visible: appState.hasWorkspace && writingMode
+            dt: designTokens
+            backendRef: backend
+            appState: window.appState
+            tree: window.appState.tree || []
+            projectId: window.writingProjectId
+            projectTitle: window.writingProjectTitle
+            aiCapable: backend.ai_available
+            aiEnabled: backend.ai_enabled
 
-            EditorPage {
-                id: editorPage
-                anchors.fill: parent
-                appTheme: theme
-                backendRef: backend
-                visible: appState.selected && appState.selected.chapterId
-                // Simplified editor integration
-                Component.onCompleted: {
-                    if (appState.selected && appState.selected.chapterId) {
-                        isLoadingChapter = true;
-                        var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
-                        window.debugLog("editor", "on_completed_load", "len=" + content.length);
-                        editorPage.loadContent(content);
-                        previousEditorText = content;
-                        isLoadingChapter = false;
-                    }
-                }
-            }
-            
-            Connections {
-                target: backend
-                function onChapter_path_changed() {
-                    if (appState.selected && appState.selected.chapterId) {
-                        isLoadingChapter = true;
-                        var content = backend.get_chapter_content(appState.selected.projectId, appState.selected.volumeId, appState.selected.chapterId);
-                        window.debugLog("editor", "chapter_path_changed_load", "projectId=" + appState.selected.projectId + ", volumeId=" + appState.selected.volumeId + ", chapterId=" + appState.selected.chapterId + ", len=" + content.length);
-                        editorPage.loadContent(content);
-                        previousEditorText = content;
-                        isLoadingChapter = false;
-                    } else {
-                        window.debugLog("editor", "chapter_path_changed_clear", "");
-                        editorPage.clearText();
-                        previousEditorText = "";
-                    }
-                }
+            onBackToProjects: {
+                window.writingMode = false;
+                window.debugLog("workspace", "exit_writing_mode", "");
+                try {
+                    applyState(JSON.parse(backend.refresh_app_state_json()));
+                } catch (e) {}
             }
 
-            Connections {
-                target: editorPage
-                function onTextChanged() {
-                    if (appState.selected && appState.selected.chapterId) {
-                        backend.save_current_chapter(editorPage.text);
-                        applyState(JSON.parse(backend.refresh_app_state_json()));
-                        saveAutoSyncTimer.restart();
-
-                        if (!isLoadingChapter && previousEditorText !== editorPage.text) {
-                            var oldLen = previousEditorText.length;
-                            var newLen = editorPage.text.length;
-                            var diff = newLen - oldLen;
-
-                            if (diff > 0) {
-                                var source = "human_typed";
-                                var inserted = diff;
-                                var deleted = 0;
-                                var pasted = 0;
-
-                                if (diff > 20) {
-                                    source = "pasted";
-                                    pasted = diff;
-                                    inserted = 0;
-                                }
-
-                                backend.report_writing_event(
-                                    appState.selected.projectId,
-                                    appState.selected.volumeId,
-                                    appState.selected.chapterId,
-                                    source,
-                                    inserted, deleted, pasted
-                                );
-                            } else if (diff < 0) {
-                                backend.report_writing_event(
-                                    appState.selected.projectId,
-                                    appState.selected.volumeId,
-                                    appState.selected.chapterId,
-                                    "deleted",
-                                    0, Math.abs(diff), 0
-                                );
-                            }
-
-                            previousEditorText = editorPage.text;
-                        }
-                    }
-                }
+            onOpenSettings: {
+                settingsDialog.open();
             }
 
-            // Overview Dashboard shown when a project or volume (but not chapter) is selected
-            Rectangle {
-                anchors.fill: parent
-                color: "transparent"
-                visible: appState.hasWorkspace && (!appState.selected || !appState.selected.chapterId) && (appState.selected && (appState.selected.projectId || appState.selected.volumeId))
-
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    spacing: 24
-                    width: Math.min(parent.width - 48, 600)
-
-                    Text {
-                        text: getSelectedItemTitle()
-                        color: theme.textMain
-                        font.pixelSize: theme.fontXxl
-                        font.bold: true
-                        horizontalAlignment: Text.AlignHCenter
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                    }
-
-                    Text {
-                        text: {
-                            if (!appState.selected) return "";
-                            if (appState.selected.volumeId) return "当前选中：分卷";
-                            if (appState.selected.projectId) return "当前选中：作品";
-                            return "";
-                        }
-                        color: theme.textDim
-                        font.pixelSize: theme.fontLg
-                        horizontalAlignment: Text.AlignHCenter
-                        Layout.fillWidth: true
-                    }
-
-                    RowLayout {
-                        spacing: 16
-                        Layout.alignment: Qt.AlignHCenter
-
-                        Button {
-                            text: "新建卷"
-                            visible: appState.selected && appState.selected.projectId && !appState.selected.volumeId
-                            onClicked: {
-                                window.debugLog("volume", "create_volume_dialog_open", "open dialog via dashboard");
-                                inputDialog.actionType = "volume";
-                                inputDialog.projectId = appState.selected.projectId;
-                                inputDialog.title = "新建卷";
-                                inputDialog.open();
-                            }
-                        }
-
-                        Button {
-                            text: "新建章节"
-                            visible: {
-                                if (!appState.selected) return false;
-                                if (appState.selected.volumeId) return true;
-                                if (appState.selected.projectId) {
-                                    var vols = getProjectVolumes(appState.selected.projectId);
-                                    return vols.length > 0;
-                                }
-                                return false;
-                            }
-                            onClicked: {
-                                var projId = appState.selected.projectId;
-                                var volId = appState.selected.volumeId;
-                                if (!volId) {
-                                    var vols = getProjectVolumes(projId);
-                                    if (vols.length > 0) {
-                                        volId = vols[0].id;
-                                    }
-                                }
-                                if (volId) {
-                                    window.debugLog("chapter", "create_chapter_dialog_open", "open dialog via dashboard: projectId=" + projId + ", volumeId=" + volId);
-                                    inputDialog.actionType = "chapter";
-                                    inputDialog.projectId = projId;
-                                    inputDialog.volumeId = volId;
-                                    inputDialog.title = "新建章节";
-                                    inputDialog.open();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Fallback empty view when absolutely nothing is selected
-            Rectangle {
-                anchors.fill: parent
-                color: "transparent"
-                visible: appState.hasWorkspace && (!appState.selected || (!appState.selected.projectId && !appState.selected.volumeId && !appState.selected.chapterId))
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "请在左侧选择或创建一个作品/章节"
-                    color: theme.textDim
-                    font.pixelSize: theme.fontLg
-                }
+            onOpenSync: {
+                syncPageDialog.open();
             }
         }
 
+        // EmptyWorkspace: shown when no workspace
         EmptyWorkspace {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            anchors.fill: parent
             visible: !appState.hasWorkspace
             backendRef: backend
-            appTheme: theme
+            appTheme: designTokens
             onCreateWorkspace: {
                 backend.create_new_workspace();
                 applyState(JSON.parse(backend.refresh_app_state_json()));
@@ -584,44 +262,16 @@ ApplicationWindow {
         }
     }
 
-    // Footer
-    footer: Rectangle {
-        height: 28
-        color: theme.bgDarker
-        border.color: theme.border
-        border.width: 1
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.margins: 4
-            spacing: 8
-
-            Text {
-                text: appState.saveStatus || "就绪"
-                color: theme.textDim
-                font.pixelSize: 12
-            }
-            
-            Item { Layout.fillWidth: true }
-
-            Text {
-                text: "字数: " + backend.word_count
-                color: theme.textDim
-                font.pixelSize: 12
-            }
-        }
-    }
-
-    // Dialogs
+    // === Dialogs ===
     CreateProjectDialog {
         id: createProjectDialog
-        theme: theme
+        theme: designTokens
         onSubmitProject: function(title) {
             var actionId = window.generateActionId();
             var trimmedTitle = title ? title.trim() : "";
             var isEmpty = (trimmedTitle === "");
             window.debugLog("project", "create_project_submit", "[actionId=" + actionId + "] titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
-            
+
             var stateStr = "";
             try {
                 stateStr = backend.create_project_json(title, actionId);
@@ -643,7 +293,7 @@ ApplicationWindow {
             }
 
             window.debugLog("project", "create_project_received", "[actionId=" + actionId + "] success=" + res.success + ", userMessage=" + (res.userMessage || res.message || ""));
-            
+
             if (res.success) {
                 applyState(res.state);
                 createProjectDialog.close();
@@ -658,16 +308,17 @@ ApplicationWindow {
         id: confirmDialog
         property string actionType: ""
         property var contextData: ({})
+
         title: "确认删除"
         modal: true
         width: 400
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: theme.bgDark; border.color: theme.border; radius: 8; border.width: 1 }
+        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
 
         ColumnLayout {
             anchors.fill: parent
             spacing: 16
-            
+
             Text {
                 text: {
                     if (confirmDialog.actionType === "delete_project") return "您确定要删除作品「" + confirmDialog.contextData.title + "」及其所有分卷、章节吗？";
@@ -675,7 +326,7 @@ ApplicationWindow {
                     if (confirmDialog.actionType === "delete_chapter") return "您确定要删除章节「" + confirmDialog.contextData.title + "」吗？";
                     return "确定要删除吗？";
                 }
-                color: theme.textMain
+                color: designTokens.textPrimary
                 font.pixelSize: 14
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -705,7 +356,7 @@ ApplicationWindow {
                             window.debugLog("chapter", "delete_chapter_submit", "[actionId=" + actionId + "] projectId=" + confirmDialog.contextData.projectId + ", volumeId=" + confirmDialog.contextData.volumeId + ", chapterId=" + confirmDialog.contextData.chapterId);
                             resStr = backend.delete_chapter_json(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId, confirmDialog.contextData.chapterId, actionId);
                         }
-                        
+
                         if (resStr) {
                             try {
                                 var res = JSON.parse(resStr);
@@ -737,13 +388,13 @@ ApplicationWindow {
         modal: true
         width: 340
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: theme.bgDark; border.color: theme.border; radius: 8; border.width: 1 }
+        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
         ColumnLayout {
             anchors.fill: parent
             spacing: 16
             Text {
                 text: errorDialog.message
-                color: theme.textMain
+                color: designTokens.textPrimary
                 font.pixelSize: 14
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -758,7 +409,7 @@ ApplicationWindow {
 
     SettingsDialog {
         id: settingsDialog
-        theme: theme
+        theme: designTokens
         backendRef: backend
         onSettingsChanged: {
             applyState(JSON.parse(backend.refresh_app_state_json()));
@@ -772,8 +423,8 @@ ApplicationWindow {
         width: Math.max(360, Math.min(window.width - 80, 720))
         height: Math.max(420, Math.min(window.height - 120, 560))
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: theme.bgDark; border.color: theme.border; radius: 8; border.width: 1 }
-        
+        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
+
         header: null
 
         contentItem: ScrollView {
@@ -783,7 +434,7 @@ ApplicationWindow {
             bottomPadding: 16
             leftPadding: 16
             rightPadding: 16
-            
+
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
             ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
@@ -791,12 +442,10 @@ ApplicationWindow {
                 id: syncPage
                 width: syncDialogScroll.availableWidth
                 height: Math.max(syncDialogScroll.availableHeight, implicitHeight)
-                theme: theme
+                theme: designTokens
                 backendRef: backend
                 beforeSyncHook: function() {
-                    if (appState.selected && appState.selected.chapterId) {
-                        backend.save_current_chapter(editorPage.text);
-                    }
+                    backend.flush_writing_stats();
                 }
                 onSettingsChanged: {
                     applyState(JSON.parse(backend.refresh_app_state_json()));
@@ -810,22 +459,22 @@ ApplicationWindow {
         property string actionType: ""
         property string projectId: ""
         property string volumeId: ""
-        
+
         modal: true
         width: 300
         anchors.centerIn: Overlay.overlay
         title: "请输入"
-        
-        background: Rectangle { color: theme.bgDark; border.color: theme.border; radius: 4 }
-        
+
+        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd }
+
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
             TextField {
                 id: inputField
                 Layout.fillWidth: true
-                color: theme.textMain
-                background: Rectangle { color: theme.inputBg; border.color: theme.border }
+                color: designTokens.textPrimary
+                background: Rectangle { color: designTokens.paper; border.color: designTokens.border; radius: designTokens.radiusSm }
             }
             Button {
                 text: "确定"

@@ -33,6 +33,8 @@ pub struct LocalSettings {
     pub editor_smooth_cursor_enabled: bool,
     #[serde(default)]
     pub ai_enabled: bool,
+    #[serde(default)]
+    pub stats_device_id: Option<String>,
 }
 
 fn default_editor_font_size() -> f32 {
@@ -77,6 +79,7 @@ impl Default for LocalSettings {
             editor_typing_animation_enabled: default_editor_typing_animation_enabled(),
             editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
             ai_enabled: false,
+            stats_device_id: None,
         }
     }
 }

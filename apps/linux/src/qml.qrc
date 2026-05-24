@@ -1,10 +1,20 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource>
     <file alias="main.qml">qml/main.qml</file>
+    <file alias="DesignTokens.qml">qml/DesignTokens.qml</file>
+    <file alias="ProjectCard.qml">qml/ProjectCard.qml</file>
+    <file alias="ProjectHomePage.qml">qml/ProjectHomePage.qml</file>
+    <file alias="StarMapPreviewPage.qml">qml/StarMapPreviewPage.qml</file>
+    <file alias="StatsPreviewPage.qml">qml/StatsPreviewPage.qml</file>
+    <file alias="CreativeHub.qml">qml/CreativeHub.qml</file>
+    <file alias="WritingWorkspace.qml">qml/WritingWorkspace.qml</file>
+    <file alias="TopWritingToolbar.qml">qml/TopWritingToolbar.qml</file>
+    <file alias="RightDrawer.qml">qml/RightDrawer.qml</file>
     <file alias="SettingsDialog.qml">qml/SettingsDialog.qml</file>
     <file alias="EditorPage.qml">qml/EditorPage.qml</file>
     <file alias="ActionRegistryPage.qml">qml/ActionRegistryPage.qml</file>
     <file alias="SyncPage.qml">qml/SyncPage.qml</file>
+    <file alias="EmptyWorkspace.qml">qml/EmptyWorkspace.qml</file>
     <file alias="AppButton.qml">qml/AppButton.qml</file>
     <file alias="AppCard.qml">qml/AppCard.qml</file>
     <file alias="AppTextField.qml">qml/AppTextField.qml</file>
@@ -13,5 +23,7 @@
     <file alias="SidebarItem.qml">qml/SidebarItem.qml</file>
     <file alias="StatusPill.qml">qml/StatusPill.qml</file>
     <file alias="ToolbarButton.qml">qml/ToolbarButton.qml</file>
+    <file alias="WorkspaceTree.qml">qml/WorkspaceTree.qml</file>
+    <file alias="CreateProjectDialog.qml">qml/CreateProjectDialog.qml</file>
 </qresource>
 </RCC>
