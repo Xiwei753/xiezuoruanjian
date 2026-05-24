@@ -311,6 +311,7 @@ struct AppBackend {
     chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
 
     workspace_opened: qt_signal!(),
+    workspace_content_changed: qt_signal!(),
     workspace_state_changed: qt_signal!(),
     projects_reloaded: qt_signal!(),
     #[allow(non_snake_case)]
@@ -366,6 +367,7 @@ struct AppBackend {
     save_sync_config: qt_method!(fn(&mut self) -> bool),
     perform_sync_dry_run: qt_method!(fn(&mut self)),
     perform_sync: qt_method!(fn(&mut self)),
+    request_auto_sync: qt_method!(fn(&mut self, reason: QString)),
     maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
     open_workspace_dir: qt_method!(fn(&mut self)),
 
@@ -475,6 +477,8 @@ struct AppBackend {
     current_sync_status: String,
     current_sync_in_progress: bool,
     current_last_sync_time: i64,
+    current_last_auto_sync_reason: String,
+    current_last_auto_sync_started_at: i64,
 
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
@@ -618,6 +622,7 @@ impl AppBackend {
         self.reload_tree();
         let chapter_deleted = self.reconcile_selection_after_tree_reload();
         self.trigger_projects_reloaded();
+        self.workspace_content_changed();
         self.workspace_state_changed();
 
         if chapter_deleted {
@@ -628,6 +633,26 @@ impl AppBackend {
         }
 
         self.debug_log("sync", "sync_refresh_applied", "tree_reloaded=true");
+    }
+
+    fn can_start_auto_sync(&self, reason: &str, min_gap_secs: i64) -> bool {
+        if self.current_sync_in_progress {
+            return false;
+        }
+        if !self.current_has_workspace || !self.current_sync_enabled || !self.current_sync_auto_sync {
+            return false;
+        }
+        if self.current_sync_remote_url.is_empty() || self.current_sync_token.is_empty() {
+            return false;
+        }
+        let now = Self::now_epoch_seconds();
+        if self.current_last_auto_sync_reason == reason {
+            let elapsed = now.saturating_sub(self.current_last_auto_sync_started_at);
+            if elapsed < min_gap_secs {
+                return false;
+            }
+        }
+        true
     }
 
     fn reconcile_selection_after_tree_reload(&mut self) -> bool {
@@ -1088,8 +1113,8 @@ impl AppBackend {
                     self.load_sync_config();
                     self.load_local_settings();
                     self.workspace_opened();
+                    self.workspace_content_changed();
                     self.workspace_state_changed();
-                    self.schedule_auto_sync("auto_sync_on_workspace_restore", 1500);
                     self.debug_log("workspace", "try_restore_last_workspace_success", &format!("path={}", path));
                     return;
                 }
@@ -1171,8 +1196,8 @@ impl AppBackend {
         self.load_sync_config();
         self.load_local_settings();
         self.workspace_opened();
+        self.workspace_content_changed();
         self.workspace_state_changed();
-        self.schedule_auto_sync("auto_sync_on_workspace_open", 1500);
 
         let _ = writer_core::app_config::set_last_workspace_path(path);
         self.debug_log("workspace", "internal_open_workspace_success", &format!("path={}", path));
@@ -1917,6 +1942,11 @@ impl AppBackend {
         self.perform_sync_internal("manual", false);
     }
 
+    fn request_auto_sync(&mut self, reason: QString) {
+        let reason_str = reason.to_string();
+        self.trigger_auto_sync(&reason_str);
+    }
+
     fn maybe_auto_sync_on_foreground(&mut self) {
         if !self.current_has_workspace || !self.current_sync_auto_sync || self.current_sync_in_progress {
             return;
@@ -1928,24 +1958,27 @@ impl AppBackend {
             self.debug_log("sync", "auto_sync_skipped_foreground", &format!("elapsed={}s, min={}s", elapsed, interval_secs));
             return;
         }
-        self.schedule_auto_sync("auto_sync_on_foreground", 1200);
+        self.trigger_auto_sync("auto_sync_on_foreground");
     }
 
-    fn schedule_auto_sync(&mut self, reason: &str, _delay_ms: u64) {
-        if !self.current_has_workspace || !self.current_sync_enabled || !self.current_sync_auto_sync {
+    fn trigger_auto_sync(&mut self, reason: &str) {
+        if !self.can_start_auto_sync(reason, 60) {
+            self.debug_log("sync", "auto_sync_skipped", &format!("reason={}", reason));
             return;
         }
-        if self.current_sync_remote_url.is_empty() || self.current_sync_token.is_empty() {
-            return;
-        }
-        let reason_owned = reason.to_string();
-        self.debug_log("sync", &reason_owned, "triggered");
-        self.perform_sync_internal(&reason_owned, true);
+        self.current_last_auto_sync_reason = reason.to_string();
+        self.current_last_auto_sync_started_at = Self::now_epoch_seconds();
+        self.debug_log("sync", reason, "triggered");
+        self.perform_sync_internal(reason, true);
     }
 
     fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) {
         if self.current_sync_in_progress {
             self.debug_log("sync", "perform_sync_skipped", "sync already running");
+            if trigger == "manual" {
+                self.current_sync_action_result = "同步正在进行中，请稍候。".to_string();
+                self.sync_action_completed();
+            }
             return;
         }
         let token_present = !self.current_sync_token.is_empty();

@@ -129,7 +129,7 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             if (backend && backend.has_workspace && backend.sync_enabled && backend.sync_auto_sync && backend.sync_remote_url && backend.has_sync_token) {
-                backend.perform_sync();
+                backend.request_auto_sync("auto_sync_on_workspace_open");
             }
         }
     }
@@ -155,7 +155,7 @@ ApplicationWindow {
             if (appState.selected && appState.selected.chapterId) {
                 backend.save_current_chapter(editorPage.text);
             }
-            backend.perform_sync();
+            backend.request_auto_sync("auto_sync_after_save");
         }
     }
 
@@ -186,11 +186,18 @@ ApplicationWindow {
         function onWorkspace_state_changed() {
             try {
                 applyState(JSON.parse(backend.refresh_app_state_json()));
-                if (backend.has_workspace) {
-                    workspaceOpenAutoSyncTimer.restart();
-                }
             } catch (e) {
                 window.debugError("workspace", "workspace_state_changed_parse_failed", "error: " + e);
+            }
+        }
+        function onWorkspace_opened() {
+            workspaceOpenAutoSyncTimer.restart();
+        }
+        function onWorkspace_content_changed() {
+            try {
+                applyState(JSON.parse(backend.refresh_app_state_json()));
+            } catch (e) {
+                window.debugError("workspace", "workspace_content_changed_parse_failed", "error: " + e);
             }
         }
         function onClear_editor() {
