@@ -64,7 +64,7 @@ Rectangle {
 
                         Rectangle {
                             width: navLabel.implicitWidth + (dt ? dt.sp20 : 20)
-                            height: 32
+                            height: 36
                             radius: dt ? dt.radiusSm : 8
                             color: root.currentTab === modelData.idx ?
                                    (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") :
@@ -94,27 +94,49 @@ Rectangle {
 
                 Item { Layout.fillWidth: true }
 
-                // Right actions
+                // Right actions — enlarged buttons
                 Row {
                     spacing: dt ? dt.sp8 : 8
                     Layout.alignment: Qt.AlignVCenter
 
                     // Sync status indicator
                     Rectangle {
-                        width: 28; height: 28
+                        width: syncRow.implicitWidth + (dt ? dt.sp16 : 16)
+                        height: 40
                         radius: dt ? dt.radiusSm : 8
-                        color: syncHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                        color: syncHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
                         visible: root.appState && root.appState.sync && root.appState.sync.status !== "not_configured"
 
-                        Rectangle {
+                        Row {
+                            id: syncRow
                             anchors.centerIn: parent
-                            width: 8; height: 8; radius: 4
-                            color: {
-                                var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                                if (s === "success") return dt ? dt.success : "#5CB880";
-                                if (s === "syncing") return dt ? dt.warning : "#E0A840";
-                                if (s === "error" || s === "conflict") return dt ? dt.danger : "#E06060";
-                                return dt ? dt.textMuted : "#606470";
+                            spacing: dt ? dt.sp6 : 6
+
+                            Rectangle {
+                                width: 8; height: 8; radius: 4
+                                color: {
+                                    var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
+                                    if (s === "success") return dt ? dt.success : "#5CB880";
+                                    if (s === "syncing") return dt ? dt.warning : "#E0A840";
+                                    if (s === "error" || s === "conflict") return dt ? dt.danger : "#E06060";
+                                    return dt ? dt.textMuted : "#606470";
+                                }
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            Text {
+                                text: {
+                                    var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
+                                    if (s === "success") return "已同步";
+                                    if (s === "syncing") return "同步中";
+                                    if (s === "error") return "同步失败";
+                                    if (s === "conflict") return "冲突";
+                                    return "已配置";
+                                }
+                                color: dt ? dt.textSecondary : "#5C6070"
+                                font.pixelSize: dt ? dt.fontSm : 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: root.width > 700
                             }
                         }
 
@@ -129,9 +151,9 @@ Rectangle {
 
                     // Settings button
                     Rectangle {
-                        width: 28; height: 28
+                        width: 40; height: 40
                         radius: dt ? dt.radiusSm : 8
-                        color: settingsHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                        color: settingsHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
 
                         Text {
                             anchors.centerIn: parent
@@ -151,25 +173,26 @@ Rectangle {
 
                     // Workspace switch
                     Rectangle {
-                        width: switchRow.implicitWidth + (dt ? dt.sp12 : 12)
-                        height: 28
+                        width: switchRow.implicitWidth + (dt ? dt.sp16 : 16)
+                        height: 40
                         radius: dt ? dt.radiusSm : 8
-                        color: switchHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                        color: switchHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
 
                         Row {
                             id: switchRow
                             anchors.centerIn: parent
-                            spacing: dt ? dt.sp4 : 4
+                            spacing: dt ? dt.sp6 : 6
                             Text {
                                 text: "\uD83D\uDCC2"
-                                font.pixelSize: dt ? dt.fontSm : 12
+                                font.pixelSize: dt ? dt.fontMd : 14
                                 anchors.verticalCenter: parent.verticalCenter
                             }
                             Text {
-                                text: "切换"
+                                text: "切换工作区"
                                 color: dt ? dt.textSecondary : "#5C6070"
-                                font.pixelSize: dt ? dt.fontXs : 11
+                                font.pixelSize: dt ? dt.fontSm : 12
                                 anchors.verticalCenter: parent.verticalCenter
+                                visible: root.width > 700
                             }
                         }
 
@@ -210,7 +233,7 @@ Rectangle {
                 onCreateProject: root.createProject()
             }
 
-            StarMapPreviewPage {
+            StarMapPage {
                 dt: root.dt
                 backendRef: root.backendRef
                 appState: root.appState

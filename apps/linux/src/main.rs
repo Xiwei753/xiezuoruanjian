@@ -132,6 +132,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/ProjectCard.qml" as "ProjectCard.qml",
     "qml/ProjectHomePage.qml" as "ProjectHomePage.qml",
     "qml/StarMapPreviewPage.qml" as "StarMapPreviewPage.qml",
+    "qml/StarMapCard.qml" as "StarMapCard.qml",
+    "qml/StarMapPage.qml" as "StarMapPage.qml",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
@@ -455,7 +457,23 @@ struct AppBackend {
     save_current_chapter: qt_method!(fn(&mut self, content: QString)),
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
     get_writing_stats_summary: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_stats_by_project: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_stats_by_chapter: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_stats_by_device: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_speed_curve: qt_method!(fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString),
     flush_writing_stats: qt_method!(fn(&self)),
+
+    list_starmaps_json: qt_method!(fn(&self) -> QString),
+    list_starmaps_for_project_json: qt_method!(fn(&self, project_id: QString) -> QString),
+    get_starmap_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
+    create_starmap_json: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QString),
+    create_child_starmap_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
+    rename_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
+    delete_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
+    bind_starmap_to_project_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
+    set_main_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
+    get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
+    unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
 
     has_selected_chapter: qt_method!(fn(&self) -> bool),
     selected_chapter_exists: qt_method!(fn(&self) -> bool),
@@ -3311,6 +3329,216 @@ impl AppBackend {
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
             let _ = core.flush_writing_stats();
+        }
+    }
+
+    fn get_writing_stats_by_project(&self, start_date: QString, end_date: QString) -> QString {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_by_project(&sd, &ed) {
+                Ok(val) => val.to_string().into(),
+                Err(_) => "{}".into(),
+            }
+        } else {
+            "{}".into()
+        }
+    }
+
+    fn get_writing_stats_by_chapter(&self, start_date: QString, end_date: QString) -> QString {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_by_chapter(&sd, &ed) {
+                Ok(val) => val.to_string().into(),
+                Err(_) => "{}".into(),
+            }
+        } else {
+            "{}".into()
+        }
+    }
+
+    fn get_writing_stats_by_device(&self, start_date: QString, end_date: QString) -> QString {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_by_device(&sd, &ed) {
+                Ok(val) => val.to_string().into(),
+                Err(_) => "{}".into(),
+            }
+        } else {
+            "{}".into()
+        }
+    }
+
+    fn get_writing_speed_curve(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_speed_curve(&sd, &ed, bucket_minutes) {
+                Ok(val) => val.to_string().into(),
+                Err(_) => "{}".into(),
+            }
+        } else {
+            "{}".into()
+        }
+    }
+
+    // --- StarMap methods ---
+    fn list_starmaps_json(&self) -> QString {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.list_starmaps() {
+                Ok(list) => serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()).into(),
+                Err(_) => "[]".into(),
+            }
+        } else {
+            "[]".into()
+        }
+    }
+
+    fn list_starmaps_for_project_json(&self, project_id: QString) -> QString {
+        let pid = project_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.list_starmaps_for_project(&pid) {
+                Ok(list) => serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()).into(),
+                Err(_) => "[]".into(),
+            }
+        } else {
+            "[]".into()
+        }
+    }
+
+    fn get_starmap_json(&self, starmap_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_starmap(&sid) {
+                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
+                Err(_) => "{}".into(),
+            }
+        } else {
+            "{}".into()
+        }
+    }
+
+    fn create_starmap_json(&mut self, title: QString, description: QString, accent_color: QString) -> QString {
+        let t = title.to_string();
+        let d = description.to_string();
+        let ac = accent_color.to_string();
+        let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.create_starmap(&t, &d, color_ref) {
+                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn create_child_starmap_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
+        let pid = parent_id.to_string();
+        let t = title.to_string();
+        let d = description.to_string();
+        let ac = accent_color.to_string();
+        let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.create_child_starmap(&pid, &t, &d, color_ref) {
+                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn rename_starmap_json(&mut self, starmap_id: QString, new_title: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let t = new_title.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.rename_starmap(&sid, &t) {
+                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn delete_starmap_json(&mut self, starmap_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.delete_starmap(&sid) {
+                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn bind_starmap_to_project_json(&mut self, starmap_id: QString, project_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let pid = project_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.bind_starmap_to_project(&sid, &pid) {
+                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn set_main_starmap_json(&mut self, starmap_id: QString, project_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let pid = project_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.set_main_starmap_for_project(&sid, &pid) {
+                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn get_main_starmap_json(&self, project_id: QString) -> QString {
+        let pid = project_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_main_starmap_for_project(&pid) {
+                Ok(Some(meta)) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
+                Ok(None) => "{}".into(),
+                Err(_) => "{}".into(),
+            }
+        } else {
+            "{}".into()
+        }
+    }
+
+    fn unbind_starmap_json(&mut self, starmap_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.unbind_starmap_from_project(&sid) {
+                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
     }
 }

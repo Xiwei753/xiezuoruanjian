@@ -910,6 +910,51 @@ impl WriterCore {
         crate::chapter::reorder_chapters(&self.workspace_path, project_id, volume_id, ordered_ids)
     }
 
+    // --- StarMap ---
+    pub fn list_starmaps(&self) -> Result<Vec<crate::starmap::StarMapMeta>> {
+        crate::starmap::list_starmaps(&self.workspace_path)
+    }
+
+    pub fn list_starmaps_for_project(&self, project_id: &str) -> Result<Vec<crate::starmap::StarMapMeta>> {
+        crate::starmap::list_starmaps_for_project(&self.workspace_path, project_id)
+    }
+
+    pub fn get_starmap(&self, starmap_id: &str) -> Result<crate::starmap::StarMapMeta> {
+        crate::starmap::get_starmap(&self.workspace_path, starmap_id)
+    }
+
+    pub fn create_starmap(&self, title: &str, description: &str, accent_color: Option<&str>) -> Result<crate::starmap::StarMapMeta> {
+        crate::starmap::create_starmap(&self.workspace_path, title, description, accent_color)
+    }
+
+    pub fn create_child_starmap(&self, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> Result<crate::starmap::StarMapMeta> {
+        crate::starmap::create_child_starmap(&self.workspace_path, parent_id, title, description, accent_color)
+    }
+
+    pub fn rename_starmap(&self, starmap_id: &str, new_title: &str) -> Result<crate::starmap::StarMapMeta> {
+        crate::starmap::rename_starmap(&self.workspace_path, starmap_id, new_title)
+    }
+
+    pub fn delete_starmap(&self, starmap_id: &str) -> Result<()> {
+        crate::starmap::delete_starmap(&self.workspace_path, starmap_id)
+    }
+
+    pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
+        crate::starmap::bind_starmap_to_project(&self.workspace_path, starmap_id, project_id)
+    }
+
+    pub fn set_main_starmap_for_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
+        crate::starmap::set_main_starmap_for_project(&self.workspace_path, starmap_id, project_id)
+    }
+
+    pub fn get_main_starmap_for_project(&self, project_id: &str) -> Result<Option<crate::starmap::StarMapMeta>> {
+        crate::starmap::get_main_starmap_for_project(&self.workspace_path, project_id)
+    }
+
+    pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> Result<()> {
+        crate::starmap::unbind_starmap_from_project(&self.workspace_path, starmap_id)
+    }
+
     // --- Writing Stats ---
 
     pub fn record_writing_event(

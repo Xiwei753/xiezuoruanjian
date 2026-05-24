@@ -126,9 +126,10 @@ Rectangle {
                 clip: true
 
                 // Star Map tab
-                StarMapPreviewPage {
+                StarMapPage {
                     dt: root.dt
                     backendRef: root.backendRef
+                    appState: ({})
                     visible: root.currentTab === 0
                     anchors.fill: parent
                 }
@@ -141,7 +142,7 @@ Rectangle {
                     anchors.fill: parent
                 }
 
-                // Settings placeholder tab
+                // Settings tab - opens full settings dialog
                 Rectangle {
                     visible: root.currentTab === 3
                     anchors.fill: parent
@@ -151,11 +152,19 @@ Rectangle {
                         anchors.centerIn: parent
                         spacing: dt ? dt.sp16 : 16
 
-                        Text {
-                            text: "\u2699"
-                            font.pixelSize: 32
+                        Rectangle {
+                            width: 60; height: 60
+                            radius: dt ? dt.radiusMd : 12
+                            color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
                             Layout.alignment: Qt.AlignHCenter
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "\u2699"
+                                font.pixelSize: 28
+                            }
                         }
+
                         Text {
                             text: "写作设定"
                             color: dt ? dt.textPrimary : "#E2E4E9"
@@ -163,11 +172,47 @@ Rectangle {
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
+
                         Text {
-                            text: "可在顶部工具栏调整字号、行距等"
+                            text: "字号、行距、主题等设置"
                             color: dt ? dt.textMuted : "#606470"
                             font.pixelSize: dt ? dt.fontSm : 12
                             Layout.alignment: Qt.AlignHCenter
+                        }
+
+                        Rectangle {
+                            width: openSettingsBtn.implicitWidth + (dt ? dt.sp24 : 24)
+                            height: 36
+                            radius: dt ? dt.radiusSm : 8
+                            color: settingsBtnHover.containsMouse ? (dt ? dt.accentHover : "#8E9EE8") : (dt ? dt.accent : "#7B8CDE")
+                            Layout.alignment: Qt.AlignHCenter
+
+                            Row {
+                                id: openSettingsBtn
+                                anchors.centerIn: parent
+                                spacing: dt ? dt.sp6 : 6
+                                Text {
+                                    text: "\u2699"
+                                    font.pixelSize: dt ? dt.fontSm : 12
+                                    color: "#FFFFFF"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                                Text {
+                                    text: "打开设置"
+                                    color: "#FFFFFF"
+                                    font.pixelSize: dt ? dt.fontSm : 12
+                                    font.weight: Font.Medium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+
+                            MouseArea {
+                                id: settingsBtnHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.openSettings()
+                            }
                         }
                     }
                 }

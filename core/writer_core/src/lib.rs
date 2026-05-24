@@ -22,6 +22,7 @@ pub mod volume;
 pub mod workspace;
 pub mod mind_map;
 pub mod writing_stats;
+pub mod starmap;
 
 pub use error::{Error, Result};
 

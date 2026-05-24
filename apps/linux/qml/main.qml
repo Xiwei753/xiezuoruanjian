@@ -243,6 +243,22 @@ ApplicationWindow {
             onOpenSync: {
                 syncPageDialog.open();
             }
+
+            onCreateVolumeRequested: function(projectId) {
+                inputDialog.actionType = "volume";
+                inputDialog.projectId = projectId;
+                inputDialog.volumeId = "";
+                inputDialog.title = "新建卷";
+                inputDialog.open();
+            }
+
+            onCreateChapterRequested: function(projectId, volumeId) {
+                inputDialog.actionType = "chapter";
+                inputDialog.projectId = projectId;
+                inputDialog.volumeId = volumeId;
+                inputDialog.title = "新建章节";
+                inputDialog.open();
+            }
         }
 
         // EmptyWorkspace: shown when no workspace
@@ -459,20 +475,29 @@ ApplicationWindow {
         property string actionType: ""
         property string projectId: ""
         property string volumeId: ""
+        property string title: "请输入"
 
         modal: true
         width: 300
         anchors.centerIn: Overlay.overlay
-        title: "请输入"
+        title: inputDialog.title
 
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd }
 
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
+
+            Text {
+                text: inputDialog.actionType === "volume" ? "卷名称" : "章节名称"
+                color: designTokens.textSecondary
+                font.pixelSize: 12
+            }
+
             TextField {
                 id: inputField
                 Layout.fillWidth: true
+                placeholderText: inputDialog.actionType === "volume" ? "例如：第一卷" : "例如：第一章"
                 color: designTokens.textPrimary
                 background: Rectangle { color: designTokens.paper; border.color: designTokens.border; radius: designTokens.radiusSm }
             }

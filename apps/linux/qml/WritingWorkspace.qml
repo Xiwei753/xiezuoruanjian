@@ -23,6 +23,55 @@ Rectangle {
     signal backToProjects()
     signal openSettings()
     signal openSync()
+    signal createVolumeRequested(string projectId)
+    signal createChapterRequested(string projectId, string volumeId)
+
+    function populateTreeModel() {
+        treeModel.clear();
+        if (!tree) return;
+        for (var i = 0; i < tree.length; i++) {
+            var item = tree[i];
+            if (item.type === "project" && item.id === root.projectId) {
+                treeModel.append({
+                    "itemId": item.id || "",
+                    "itemType": item.type || "",
+                    "itemTitle": item.title || "",
+                    "itemProjectId": item.id || "",
+                    "itemVolumeId": ""
+                });
+                // Add volumes for this project
+                for (var j = 0; j < tree.length; j++) {
+                    var vol = tree[j];
+                    if (vol.type === "volume" && vol.projectId === item.id) {
+                        treeModel.append({
+                            "itemId": vol.id || "",
+                            "itemType": "volume",
+                            "itemTitle": vol.title || "",
+                            "itemProjectId": vol.projectId || "",
+                            "itemVolumeId": vol.id || ""
+                        });
+                        // Add chapters for this volume
+                        for (var k = 0; k < tree.length; k++) {
+                            var chap = tree[k];
+                            if (chap.type === "chapter" && chap.volumeId === vol.id && chap.projectId === vol.projectId) {
+                                treeModel.append({
+                                    "itemId": chap.id || "",
+                                    "itemType": "chapter",
+                                    "itemTitle": chap.title || "",
+                                    "itemProjectId": chap.projectId || "",
+                                    "itemVolumeId": chap.volumeId || ""
+                                });
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    onTreeChanged: populateTreeModel()
+    Component.onCompleted: populateTreeModel()
 
     color: dt ? dt.bg : "#111318"
 
@@ -99,6 +148,7 @@ Rectangle {
             onFirstLineIndentToggled: firstLineIndent = !firstLineIndent
             onFormatOneClick: { /* placeholder */ }
             onLinkToStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
+            onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
         }
 
         // Main content area
@@ -212,24 +262,113 @@ Rectangle {
                                             Layout.fillWidth: true
                                             elide: Text.ElideRight
                                         }
+
+                                        // "+" button for volumes (create chapter)
+                                        Rectangle {
+                                            visible: model.itemType === "volume"
+                                            width: 20; height: 20
+                                            radius: 10
+                                            color: addChapterHover.containsMouse ? (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") : "transparent"
+
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "+"
+                                                color: dt ? dt.textMuted : "#606470"
+                                                font.pixelSize: dt ? dt.fontSm : 12
+                                                font.weight: Font.Bold
+                                            }
+
+                                            MouseArea {
+                                                id: addChapterHover
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.createChapterRequested(model.itemProjectId || "", model.itemId)
+                                            }
+                                        }
                                     }
 
                                     MouseArea {
                                         id: delegateHover
                                         anchors.fill: parent
                                         hoverEnabled: true
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: {
-                                            if (model.itemType === "chapter") {
-                                                root.chapterId = model.itemId;
-                                                root.volumeId = model.itemVolumeId;
-                                                root.chapterTitle = model.itemTitle;
-                                                root.loadChapterContent();
+                                        onClicked: function(mouse) {
+                                            if (mouse.button === Qt.LeftButton) {
+                                                if (model.itemType === "chapter") {
+                                                    root.chapterId = model.itemId;
+                                                    root.volumeId = model.itemVolumeId;
+                                                    root.chapterTitle = model.itemTitle;
+                                                    root.loadChapterContent();
+                                                }
+                                            } else if (mouse.button === Qt.RightButton) {
+                                                treeContextMenu.itemType = model.itemType;
+                                                treeContextMenu.itemId = model.itemId;
+                                                treeContextMenu.itemTitle = model.itemTitle;
+                                                treeContextMenu.itemProjectId = model.itemProjectId || "";
+                                                treeContextMenu.itemVolumeId = model.itemVolumeId || "";
+                                                treeContextMenu.popup();
                                             }
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // "+" button for project (create volume)
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 36
+                        Layout.leftMargin: dt ? dt.sp8 : 8
+                        Layout.rightMargin: dt ? dt.sp8 : 8
+                        radius: dt ? dt.radiusSm : 8
+                        color: addVolumeHover.containsMouse ? (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") : "transparent"
+
+                        RowLayout {
+                            anchors.centerIn: parent
+                            spacing: dt ? dt.sp4 : 4
+                            Text {
+                                text: "+"
+                                color: dt ? dt.accent : "#7B8CDE"
+                                font.pixelSize: dt ? dt.fontMd : 14
+                                font.weight: Font.Bold
+                            }
+                            Text {
+                                text: "新建卷"
+                                color: dt ? dt.accent : "#7B8CDE"
+                                font.pixelSize: dt ? dt.fontSm : 12
+                            }
+                        }
+
+                        MouseArea {
+                            id: addVolumeHover
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.createVolumeRequested(root.projectId)
+                        }
+                    }
+
+                    // Tree context menu
+                    Menu {
+                        id: treeContextMenu
+                        property string itemType: ""
+                        property string itemId: ""
+                        property string itemTitle: ""
+                        property string itemProjectId: ""
+                        property string itemVolumeId: ""
+
+                        MenuItem {
+                            text: "新建卷"
+                            visible: treeContextMenu.itemType === "project"
+                            onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.projectId)
+                        }
+                        MenuItem {
+                            text: "新建章节"
+                            visible: treeContextMenu.itemType === "volume"
+                            onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
                         }
                     }
                 }
