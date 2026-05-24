@@ -75,8 +75,11 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: dt ? dt.sp32 : 32
-        spacing: 0
+        anchors.leftMargin: root.width >= 980 ? (dt ? dt.pageMarginWide : 40) : (dt ? dt.pageMarginNarrow : 24)
+        anchors.rightMargin: root.width >= 980 ? (dt ? dt.pageMarginWide : 40) : (dt ? dt.pageMarginNarrow : 24)
+        anchors.topMargin: root.width >= 980 ? (dt ? dt.pageMarginWide : 40) : (dt ? dt.pageMarginNarrow : 24)
+        anchors.bottomMargin: dt ? dt.sp24 : 24
+        spacing: dt ? dt.sp16 : 16
 
         // Header
         RowLayout {
@@ -85,7 +88,7 @@ Rectangle {
 
             Column {
                 Layout.fillWidth: true
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt ? dt.sp6 : 6
 
                 Text {
                     text: "星图"
@@ -140,9 +143,9 @@ Rectangle {
 
             // Create starmap button
             Rectangle {
-                width: createRow.implicitWidth + (dt ? dt.sp16 : 16)
-                height: 36
-                radius: dt ? dt.radiusSm : 8
+                width: createRow.implicitWidth + (dt ? dt.sp24 : 24)
+                height: dt ? dt.actionButtonHeight : 40
+                radius: dt ? dt.actionButtonRadius : 12
                 color: createHover.containsMouse ? (dt ? dt.accentHover : "#8E9EE8") : (dt ? dt.accent : "#7B8CDE")
 
                 Row {
@@ -159,7 +162,7 @@ Rectangle {
                     Text {
                         text: "新建星图"
                         color: "#FFFFFF"
-                        font.pixelSize: dt ? dt.fontSm : 12
+                        font.pixelSize: dt ? dt.fontMd : 14
                         font.weight: Font.Medium
                         anchors.verticalCenter: parent.verticalCenter
                     }
@@ -175,8 +178,6 @@ Rectangle {
             }
         }
 
-        Item { Layout.preferredHeight: dt ? dt.sp24 : 24 }
-
         // Starmap grid
         ScrollView {
             Layout.fillWidth: true
@@ -187,16 +188,16 @@ Rectangle {
             GridView {
                 id: grid
                 width: parent ? parent.width : 0
-                cellWidth: 290
+                cellWidth: root.computeCellWidth()
                 cellHeight: 260
                 model: ListModel { id: gridModel }
                 delegate: Item {
-                    width: grid.cellWidth
+                    width: grid.cellWidth - (dt ? dt.gridGap : 16)
                     height: grid.cellHeight
 
                     Column {
                         anchors.fill: parent
-                        anchors.margins: dt ? dt.sp8 : 8
+                        anchors.margins: (dt ? dt.gridGap : 16) / 2
                         spacing: dt ? dt.sp8 : 8
 
                         StarMapCard {
@@ -319,6 +320,14 @@ Rectangle {
     // Refresh when visible
     onVisibleChanged: {
         if (visible) loadStarmaps();
+    }
+
+    function computeCellWidth() {
+        var gap = dt ? dt.gridGap : 16;
+        var w = root.width - ((root.width >= 980 ? (dt ? dt.pageMarginWide : 40) : (dt ? dt.pageMarginNarrow : 24)) * 2);
+        var minCardWidth = 280;
+        var cols = Math.max(1, Math.floor((w + gap) / (minCardWidth + gap)));
+        return Math.floor((w - (cols - 1) * gap) / cols) + gap;
     }
 
     // Create starmap dialog

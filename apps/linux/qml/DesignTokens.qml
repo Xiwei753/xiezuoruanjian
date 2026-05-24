@@ -71,6 +71,22 @@ QtObject {
     property int sp48: 48
     property int sp64: 64
 
+    // --- Hub Layout ---
+    property int pageMarginWide: 40
+    property int pageMarginNarrow: 24
+    property int pageHeaderHeight: 72
+    property int cardGap: 16
+    property int gridGap: 16
+    property int actionButtonHeight: 40
+    property int actionButtonRadius: 12
+
+    // --- Controls ---
+    property color controlBorder: isDark ? "#3A3F49" : "#D2CDC3"
+    property color surfaceVariant: isDark ? "#242933" : "#F1EEE7"
+    property color switchTrackOn: isDark ? "#6679D8" : "#5B6BC0"
+    property color switchTrackOff: isDark ? "#303543" : "#E1DBD0"
+    property color switchThumb: isDark ? "#EEF1FB" : "#FFFFFF"
+
     // --- Font ---
     property int fontXs: 11
     property int fontSm: 12

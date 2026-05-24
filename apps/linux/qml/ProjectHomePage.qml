@@ -52,31 +52,20 @@ Rectangle {
         return 0;
     }
 
-    ColumnLayout {
+    HubPageFrame {
         anchors.fill: parent
-        anchors.margins: dt ? dt.sp32 : 32
-        spacing: 0
+        dt: root.dt
 
-        // Header row
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: dt ? dt.sp16 : 16
+        headerData: [ HubPageHeader {
+            dt: root.dt
+            title: "作品"
+            subtitle: projectModel.count > 0 ? (projectModel.count + " 部作品") : "开始你的创作之旅"
 
-            Text {
-                text: "作品"
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.fontTitle : 26
-                font.weight: Font.Bold
-            }
-
-            Item { Layout.fillWidth: true }
-
-            // New project button
             Rectangle {
                 width: newBtnRow.implicitWidth + (dt ? dt.sp24 : 24)
-                height: 36
-                radius: dt ? dt.radiusMd : 12
-                color: dt ? dt.accent : "#7B8CDE"
+                height: dt ? dt.actionButtonHeight : 40
+                radius: dt ? dt.actionButtonRadius : 12
+                color: newProjectHover.containsMouse ? (dt ? dt.accentHover : "#8E9EE8") : (dt ? dt.accent : "#7B8CDE")
 
                 Row {
                     id: newBtnRow
@@ -100,28 +89,14 @@ Rectangle {
                 }
 
                 MouseArea {
+                    id: newProjectHover
                     anchors.fill: parent
+                    hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.createProject()
                 }
             }
-        }
-
-        // Subtitle
-        Text {
-            Layout.fillWidth: true
-            Layout.topMargin: dt ? dt.sp8 : 8
-            text: {
-                var projects = getProjects();
-                if (projects.length === 0) return "开始你的创作之旅";
-                return projects.length + " 部作品";
-            }
-            color: dt ? dt.textSecondary : "#9CA0AB"
-            font.pixelSize: dt ? dt.fontMd : 14
-        }
-
-        // Spacer
-        Item { Layout.preferredHeight: dt ? dt.sp24 : 24 }
+        } ]
 
         // Project grid
         ScrollView {
@@ -134,12 +109,14 @@ Rectangle {
                 id: grid
                 anchors.fill: parent
                 cellWidth: root.computeCellWidth()
-                cellHeight: 210
+                cellHeight: 214
+                leftMargin: 0
+                rightMargin: 0
                 model: ListModel { id: projectModel }
                 delegate: ProjectCard {
                     dt: root.dt
-                    width: grid.cellWidth - dt.sp16
-                    height: grid.cellHeight - dt.sp16
+                    width: grid.cellWidth - (dt ? dt.gridGap : 16)
+                    height: grid.cellHeight - (dt ? dt.gridGap : 16)
                     projectId: model.projectId
                     title: model.projectTitle
                     wordCount: model.projectWordCount
@@ -191,12 +168,12 @@ Rectangle {
     }
 
     function computeCellWidth() {
-        var w = root.width - (dt ? dt.sp64 : 64);
-        if (w < 300) return Math.max(w, 200);
-        if (w < 600) return Math.floor(w / 2);
-        if (w < 900) return Math.floor(w / 3);
-        if (w < 1200) return Math.floor(w / 4);
-        return Math.floor(w / 5);
+        var gap = dt ? dt.gridGap : 16;
+        var margin = root.width >= 980 ? (dt ? dt.pageMarginWide : 40) : (dt ? dt.pageMarginNarrow : 24);
+        var w = root.width - margin * 2;
+        var minCardWidth = 280;
+        var cols = Math.max(1, Math.floor((w + gap) / (minCardWidth + gap)));
+        return Math.floor((w - (cols - 1) * gap) / cols) + gap;
     }
 
     function refreshProjects() {
