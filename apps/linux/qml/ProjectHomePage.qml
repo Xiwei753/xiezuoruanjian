@@ -157,30 +157,35 @@ Rectangle {
         }
 
         // Empty state
-        ColumnLayout {
-            anchors.centerIn: parent
-            spacing: dt ? dt.sp16 : 16
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             visible: projectModel.count === 0
 
-            Text {
-                text: "\uD83D\uDCD6"
-                font.pixelSize: 48
-                Layout.alignment: Qt.AlignHCenter
-            }
+            ColumnLayout {
+                anchors.centerIn: parent
+                spacing: dt ? dt.sp16 : 16
 
-            Text {
-                text: "暂无作品"
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.fontXl : 18
-                font.weight: Font.DemiBold
-                Layout.alignment: Qt.AlignHCenter
-            }
+                Text {
+                    text: "\uD83D\uDCD6"
+                    font.pixelSize: 48
+                    Layout.alignment: Qt.AlignHCenter
+                }
 
-            Text {
-                text: "点击「新建作品」开始创作"
-                color: dt ? dt.textSecondary : "#9CA0AB"
-                font.pixelSize: dt ? dt.fontMd : 14
-                Layout.alignment: Qt.AlignHCenter
+                Text {
+                    text: "暂无作品"
+                    color: dt ? dt.textPrimary : "#E2E4E9"
+                    font.pixelSize: dt ? dt.fontXl : 18
+                    font.weight: Font.DemiBold
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                Text {
+                    text: "点击「新建作品」开始创作"
+                    color: dt ? dt.textSecondary : "#9CA0AB"
+                    font.pixelSize: dt ? dt.fontMd : 14
+                    Layout.alignment: Qt.AlignHCenter
+                }
             }
         }
     }

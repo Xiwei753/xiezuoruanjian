@@ -368,9 +368,10 @@ struct AppBackend {
     system_color_scheme: qt_property!(QString; READ system_color_scheme NOTIFY system_color_scheme_changed),
     system_color_scheme_changed: qt_signal!(),
 
-    ai_available: qt_property!(bool; READ ai_available),
+    ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
     ai_enabled_changed: qt_signal!(),
+    ai_available_changed: qt_signal!(),
 
     load_local_settings: qt_method!(fn(&mut self)),
     save_local_settings: qt_method!(fn(&mut self) -> bool),
@@ -1147,6 +1148,7 @@ impl AppBackend {
                     self.reload_tree();
                     self.load_sync_config();
                     self.load_local_settings();
+                    self.ai_available_changed();
                     self.workspace_opened();
                     self.workspace_content_changed();
                     self.workspace_state_changed();
@@ -1167,6 +1169,7 @@ impl AppBackend {
         self.workspace_state_changed();
         // Load app-level theme mode even without workspace
         self.load_app_theme_mode();
+        self.ai_available_changed();
     }
 
     fn load_app_theme_mode(&mut self) {

@@ -41,19 +41,19 @@ Rectangle {
                 // Logo
                 Row {
                     spacing: dt ? dt.sp10 : 10
+                    Layout.alignment: Qt.AlignVCenter
                     Text {
                         text: "Writer"
                         color: dt ? dt.accent : "#7B8CDE"
                         font.pixelSize: dt ? dt.fontXl : 18
                         font.weight: Font.Bold
-                        anchors.verticalCenter: parent.verticalCenter
                     }
                 }
 
                 // Navigation tabs
                 Row {
                     spacing: dt ? dt.sp4 : 4
-                    anchors.verticalCenter: parent.verticalCenter
+                    Layout.alignment: Qt.AlignVCenter
 
                     Repeater {
                         model: [
@@ -97,7 +97,7 @@ Rectangle {
                 // Right actions
                 Row {
                     spacing: dt ? dt.sp8 : 8
-                    anchors.verticalCenter: parent.verticalCenter
+                    Layout.alignment: Qt.AlignVCenter
 
                     // Sync status indicator
                     Rectangle {
