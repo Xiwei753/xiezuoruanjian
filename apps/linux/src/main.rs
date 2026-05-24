@@ -359,6 +359,10 @@ struct AppBackend {
     system_color_scheme: qt_property!(QString; READ system_color_scheme NOTIFY system_color_scheme_changed),
     system_color_scheme_changed: qt_signal!(),
 
+    ai_available: qt_property!(bool; READ ai_available),
+    ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
+    ai_enabled_changed: qt_signal!(),
+
     load_local_settings: qt_method!(fn(&mut self)),
     save_local_settings: qt_method!(fn(&mut self) -> bool),
     perform_sync_diagnostics: qt_method!(fn(&mut self)),
@@ -482,6 +486,7 @@ struct AppBackend {
 
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
+    current_ai_enabled: bool,
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
     current_setting_auto_save_enabled: bool,
@@ -750,6 +755,19 @@ impl AppBackend {
 
     fn system_color_scheme(&self) -> QString {
         self.current_system_color_scheme.clone().into()
+    }
+
+    fn ai_available(&self) -> bool {
+        cfg!(feature = "ai")
+    }
+
+    fn ai_enabled(&self) -> bool {
+        self.current_ai_enabled
+    }
+
+    fn set_ai_enabled(&mut self, val: bool) {
+        self.current_ai_enabled = val;
+        self.ai_enabled_changed();
     }
 
     fn pending_github_init_path(&self) -> QString {

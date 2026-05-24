@@ -3,6 +3,10 @@ name = "linux"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+ai = ["writer_core/ai"]
+
 [dependencies]
 writer_core = { path = "../../core/writer_core" }
 arboard = "3.4.1"

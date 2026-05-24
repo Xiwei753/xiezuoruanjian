@@ -596,6 +596,12 @@ impl WriterCore {
         crate::settings_registry::SettingsRegistry::default_registry()
     }
 
+    // --- Capabilities ---
+    pub fn ai_available(&self) -> bool {
+        cfg!(feature = "ai")
+    }
+
+    #[cfg(feature = "ai")]
     // --- AI Service ---
     pub fn build_ai_context(
         &self,
@@ -605,6 +611,7 @@ impl WriterCore {
         ai.build_ai_context(reference)
     }
 
+    #[cfg(feature = "ai")]
     pub fn get_ai_request_payload(
         &self,
         conversation: &crate::ai_service::AiConversation,

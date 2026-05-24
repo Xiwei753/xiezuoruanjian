@@ -4069,6 +4069,7 @@ fn semantic_merge_json(
             "app-meta/sync/sync_secrets.local.json",
             "app-meta/sync/state.local.json",
             "app-meta/sync/sync_state.json",
+            "app-meta/ai/",
             "sqlite_cache",
             "tmp",
             "cache",
@@ -4414,6 +4415,15 @@ mod tests {
         assert!(SyncService::is_blacklisted_path("app-meta/sync/state.local.json"));
         assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
         assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp"));
+    }
+
+    #[test]
+    fn test_ai_paths_blacklisted() {
+        assert!(SyncService::is_blacklisted_path("app-meta/ai/secrets.local.json"));
+        assert!(SyncService::is_blacklisted_path("app-meta/ai/config.local.json"));
+        assert!(SyncService::is_blacklisted_path("app-meta/ai/conversations.local/chat.json"));
+        assert!(SyncService::is_blacklisted_path("app-meta/ai/cache/model_cache.bin"));
+        assert!(SyncService::is_blacklisted_path("app-meta/ai/"));
     }
 
     #[test]

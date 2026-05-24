@@ -1,5 +1,6 @@
 pub(crate) mod delete_guard;
 pub mod action_registry;
+#[cfg(feature = "ai")]
 pub mod ai_service;
 pub mod app_config;
 pub mod graph_service;

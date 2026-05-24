@@ -3,6 +3,10 @@ name = "writer_core"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+ai = []
+
 [dependencies]
 walkdir = "2.3"
 serde = { version = "1.0", features = ["derive"] }

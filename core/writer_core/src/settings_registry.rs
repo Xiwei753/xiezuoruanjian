@@ -71,7 +71,8 @@ impl SettingsRegistry {
     }
 
     pub fn default_registry() -> Self {
-        let items = vec![
+        #[allow(unused_mut)]
+        let mut items = vec![
             SettingItem {
                 id: "editor.font_size".to_string(),
                 title: "字体大小".to_string(),
@@ -87,24 +88,6 @@ impl SettingsRegistry {
                 max_value: Some(72.0),
                 step_value: Some(1.0),
                 ui_control_suggestion: Some("slider".to_string()),
-                requires_restart: false,
-                is_experimental: false,
-            },
-            SettingItem {
-                id: "ai.deepseek.api_key".to_string(),
-                title: "DeepSeek API 密钥".to_string(),
-                description: "用于调用 DeepSeek 服务的凭证".to_string(),
-                category: SettingCategory::DeepSeekAi,
-                sub_category: SettingSubCategory::Network,
-                value_type: SettingValueType::String,
-                default_value: SettingValue::String("".to_string()),
-                current_value: None,
-                is_syncable: false,
-                is_sensitive: true,
-                min_value: None,
-                max_value: None,
-                step_value: None,
-                ui_control_suggestion: Some("password".to_string()),
                 requires_restart: false,
                 is_experimental: false,
             },
@@ -127,6 +110,31 @@ impl SettingsRegistry {
                 is_experimental: false,
             },
         ];
+
+        #[cfg(feature = "ai")]
+        {
+            items.insert(
+                1,
+                SettingItem {
+                    id: "ai.deepseek.api_key".to_string(),
+                    title: "DeepSeek API 密钥".to_string(),
+                    description: "用于调用 DeepSeek 服务的凭证".to_string(),
+                    category: SettingCategory::DeepSeekAi,
+                    sub_category: SettingSubCategory::Network,
+                    value_type: SettingValueType::String,
+                    default_value: SettingValue::String("".to_string()),
+                    current_value: None,
+                    is_syncable: false,
+                    is_sensitive: true,
+                    min_value: None,
+                    max_value: None,
+                    step_value: None,
+                    ui_control_suggestion: Some("password".to_string()),
+                    requires_restart: false,
+                    is_experimental: false,
+                },
+            );
+        }
 
         Self { items }
     }

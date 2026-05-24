@@ -30,6 +30,10 @@ Dialog {
         if (mode === "light") themeCombo.currentIndex = 1;
         else if (mode === "dark") themeCombo.currentIndex = 2;
         else themeCombo.currentIndex = 0;
+
+        if (root.backendRef.ai_available) {
+            aiSwitch.checked = root.backendRef.ai_enabled;
+        }
     }
 
     onOpened: {
@@ -137,6 +141,33 @@ Dialog {
                             window.debugLog("settings", "save_autosave_result", "success=" + success);
                         }
                         if (success) root.settingsChanged();
+                    }
+                }
+            }
+
+            Column {
+                width: parent.width
+                visible: root.backendRef ? root.backendRef.ai_available : false
+
+                Text {
+                    text: "AI"
+                    color: theme ? theme.accent : "#82AAFF"
+                    font.pixelSize: 16
+                    font.bold: true
+                }
+
+                Row {
+                    spacing: 16
+                    width: parent.width
+                    Text { text: "启用 AI"; color: theme ? theme.textMain : "#E0E0E0"; font.pixelSize: 14; anchors.verticalCenter: parent.verticalCenter; width: 100 }
+                    Switch {
+                        id: aiSwitch
+                        checked: false
+                        onToggled: {
+                            if (!root.backendRef) return;
+                            root.backendRef.ai_enabled = checked;
+                            root.settingsChanged();
+                        }
                     }
                 }
             }
