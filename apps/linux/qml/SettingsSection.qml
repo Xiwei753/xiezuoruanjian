@@ -11,8 +11,10 @@ Rectangle {
     color: dt ? dt.card : "#1E2128"
     border.color: dt ? dt.border : "#2A2E36"
     border.width: 1
+    implicitHeight: contentCol.implicitHeight
 
     ColumnLayout {
+        id: contentCol
         anchors.fill: parent
         anchors.margins: dt ? dt.sp16 : 16
         spacing: dt ? dt.sp10 : 10

@@ -16,6 +16,8 @@ Item {
     property string emptyIcon: ""
     signal actionClicked()
 
+    readonly property real cardWidth: hubContent.cardWidth
+
     HubPageFrame {
         anchors.fill: parent
         dt: root.dt
@@ -31,6 +33,7 @@ Item {
         ]
 
         HubContentGrid {
+            id: hubContent
             dt: root.dt
             Layout.fillWidth: true
             Layout.fillHeight: true

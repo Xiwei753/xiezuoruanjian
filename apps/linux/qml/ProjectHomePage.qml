@@ -59,7 +59,7 @@ Rectangle {
 
         delegate: ProjectCard {
             dt: root.dt
-            width: 280
+            width: GridView.view.gridRoot.cardWidth
             height: 198
             projectId: model.projectId
             title: model.projectTitle

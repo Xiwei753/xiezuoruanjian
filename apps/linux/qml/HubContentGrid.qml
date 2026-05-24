@@ -1,5 +1,4 @@
 import QtQuick 2.15
-import QtQuick.Controls 2.15
 
 Item {
     id: root
@@ -22,23 +21,25 @@ Item {
         return Math.floor((Math.max(1, width) - allGap) / columns)
     }
     readonly property real cellWidth: cardWidth + gridGap
+    readonly property real cellHeight: cardHeight + gridGap
+    readonly property int itemCount: model && model.count !== undefined ? model.count : 0
+    readonly property int rowCount: itemCount > 0 ? Math.ceil(itemCount / columns) : 0
+    readonly property real computedHeight: rowCount * cellHeight
 
-    ScrollView {
+    implicitHeight: computedHeight
+
+    GridView {
+        id: gridView
         anchors.fill: parent
+        gridRoot: root
         clip: true
-        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-
-        GridView {
-            id: gridView
-            width: root.width
-            implicitHeight: contentHeight
-            model: root.model
-            delegate: root.delegate
-            interactive: false
-            cellWidth: root.cellWidth
-            cellHeight: root.cardHeight + root.gridGap
-            boundsBehavior: Flickable.StopAtBounds
-        }
+        model: root.model
+        delegate: root.delegate
+        interactive: contentHeight > height
+        cellWidth: root.cellWidth
+        cellHeight: root.cellHeight
+        implicitHeight: root.computedHeight
+        boundsBehavior: Flickable.StopAtBounds
     }
 
     Item {

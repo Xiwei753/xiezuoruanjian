@@ -49,80 +49,71 @@ Rectangle {
         dt: root.dt
         headerData: [ HubPageHeader { dt: root.dt; title: "统计"; subtitle: "追踪你的写作节奏与习惯" } ]
 
-        ScrollView {
+        DashboardGrid {
+            id: dashboard
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
+            dt: root.dt
 
-            DashboardGrid {
-                id: dashboard
-                width: root.width - ((dt ? dt.pageMarginNarrow : 24) * 2)
-                dt: root.dt
+            GridLayout {
+                Layout.fillWidth: true
+                columns: dashboard.wide ? 4 : (dashboard.medium ? 2 : 1)
+                columnSpacing: dashboard.gap
+                rowSpacing: dashboard.gap
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "今日纯输入"; value: formatNum(val(todayStats, "total_human_typed_chars")); caption: "字" }
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本周纯输入"; value: formatNum(val(weekStats, "total_human_typed_chars")); caption: "字" }
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本月纯输入"; value: formatNum(val(monthStats, "total_human_typed_chars")); caption: "字" }
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本周活跃时长"; value: formatDuration(val(weekStats, "total_active_seconds")); caption: "活跃写作" }
+            }
 
-                GridLayout {
+            GridLayout {
+                Layout.fillWidth: true
+                columns: dashboard.wide ? 3 : (dashboard.medium ? 2 : 1)
+                columnSpacing: dashboard.gap
+                rowSpacing: dashboard.gap
+
+                DashboardSection {
+                    dt: root.dt
+                    title: "速度曲线"
                     Layout.fillWidth: true
-                    columns: dashboard.wide ? 4 : (dashboard.medium ? 2 : 1)
-                    columnSpacing: dashboard.gap
-                    rowSpacing: dashboard.gap
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "今日纯输入"; value: formatNum(val(todayStats, "total_human_typed_chars")); caption: "字" }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本周纯输入"; value: formatNum(val(weekStats, "total_human_typed_chars")); caption: "字" }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本月纯输入"; value: formatNum(val(monthStats, "total_human_typed_chars")); caption: "字" }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本周活跃时长"; value: formatDuration(val(weekStats, "total_active_seconds")); caption: "活跃写作" }
+                    Layout.columnSpan: dashboard.wide ? 2 : 1
+                    Text { text: speedCurve.length > 0 ? ("已记录 " + speedCurve.length + " 段") : "暂无数据"; color: dt ? dt.textPrimary : "#E2E4E9" }
                 }
 
-                GridLayout {
+                DashboardSection {
+                    dt: root.dt
+                    title: "设备统计"
                     Layout.fillWidth: true
-                    columns: dashboard.wide ? 3 : (dashboard.medium ? 2 : 1)
-                    columnSpacing: dashboard.gap
-                    rowSpacing: dashboard.gap
-
-                    DashboardSection {
-                        dt: root.dt
-                        title: "速度曲线"
-                        Layout.fillWidth: true
-                        Layout.columnSpan: dashboard.wide ? 2 : 1
-                        implicitHeight: 220
-                        Text { text: speedCurve.length > 0 ? ("已记录 " + speedCurve.length + " 段") : "暂无数据"; color: dt ? dt.textPrimary : "#E2E4E9" }
+                    Repeater {
+                        model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: "暂无数据", typed_chars: 0 }]
+                        delegate: Text { text: (modelData.device_name || "未知设备") + "  " + formatNum(modelData.typed_chars || 0); color: dt ? dt.textSecondary : "#9CA0AB" }
                     }
+                }
+            }
 
-                    DashboardSection {
-                        dt: root.dt
-                        title: "设备统计"
-                        Layout.fillWidth: true
-                        implicitHeight: 220
-                        Repeater {
-                            model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: "暂无数据", typed_chars: 0 }]
-                            delegate: Text { text: (modelData.device_name || "未知设备") + "  " + formatNum(modelData.typed_chars || 0); color: dt ? dt.textSecondary : "#9CA0AB" }
-                        }
+            GridLayout {
+                Layout.fillWidth: true
+                columns: dashboard.wide || dashboard.medium ? 2 : 1
+                columnSpacing: dashboard.gap
+                rowSpacing: dashboard.gap
+
+                DashboardSection {
+                    dt: root.dt
+                    title: "作品排行"
+                    Layout.fillWidth: true
+                    Repeater {
+                        model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: "暂无数据", human_typed_chars: 0 }]
+                        delegate: Text { text: (index + 1) + ". " + (modelData.project_title || "未命名") + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E4E9" }
                     }
                 }
 
-                GridLayout {
+                DashboardSection {
+                    dt: root.dt
+                    title: "章节排行"
                     Layout.fillWidth: true
-                    columns: dashboard.wide || dashboard.medium ? 2 : 1
-                    columnSpacing: dashboard.gap
-                    rowSpacing: dashboard.gap
-
-                    DashboardSection {
-                        dt: root.dt
-                        title: "作品排行"
-                        Layout.fillWidth: true
-                        implicitHeight: 240
-                        Repeater {
-                            model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: "暂无数据", human_typed_chars: 0 }]
-                            delegate: Text { text: (index + 1) + ". " + (modelData.project_title || "未命名") + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E4E9" }
-                        }
-                    }
-
-                    DashboardSection {
-                        dt: root.dt
-                        title: "章节排行"
-                        Layout.fillWidth: true
-                        implicitHeight: 240
-                        Repeater {
-                            model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: "暂无数据", human_typed_chars: 0 }]
-                            delegate: Text { text: (index + 1) + ". " + (modelData.chapter_title || "未命名") + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E4E9" }
-                        }
+                    Repeater {
+                        model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: "暂无数据", human_typed_chars: 0 }]
+                        delegate: Text { text: (index + 1) + ". " + (modelData.chapter_title || "未命名") + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E4E9" }
                     }
                 }
             }

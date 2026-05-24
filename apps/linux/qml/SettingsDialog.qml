@@ -80,7 +80,8 @@ Dialog {
                     title: "打字动画"
                     description: "输入时显示动态效果"
                     clickable: true
-                    onClicked: typingAnim.checked = !typingAnim.checked
+                    onClicked: { typingAnim.checked = !typingAnim.checked; root.saveAndNotify() }
+                    onSaveRequested: root.saveAndNotify()
                     ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { backendRef.setting_typing_animation_enabled = v; root.saveAndNotify() } }
                 }
                 SettingsRow {
@@ -88,7 +89,8 @@ Dialog {
                     title: "平滑光标"
                     description: "光标移动更顺滑"
                     clickable: true
-                    onClicked: smoothCursor.checked = !smoothCursor.checked
+                    onClicked: { smoothCursor.checked = !smoothCursor.checked; root.saveAndNotify() }
+                    onSaveRequested: root.saveAndNotify()
                     ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { backendRef.setting_smooth_cursor_enabled = v; root.saveAndNotify() } }
                 }
             }
@@ -102,7 +104,8 @@ Dialog {
                     title: "自动保存"
                     description: "编辑时自动保存到本地"
                     clickable: true
-                    onClicked: autoSave.checked = !autoSave.checked
+                    onClicked: { autoSave.checked = !autoSave.checked; root.saveAndNotify() }
+                    onSaveRequested: root.saveAndNotify()
                     ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { backendRef.setting_auto_save_enabled = v; root.saveAndNotify() } }
                 }
                 SettingsRow {
@@ -143,7 +146,8 @@ Dialog {
                     title: "启用 AI 功能"
                     description: "控制 AI 功能入口显示"
                     clickable: true
-                    onClicked: aiSwitch.checked = !aiSwitch.checked
+                    onClicked: { aiSwitch.checked = !aiSwitch.checked; root.saveAndNotify() }
+                    onSaveRequested: root.saveAndNotify()
                     ModernSwitch { id: aiSwitch; dt: root.dt; onToggled: function(v) { backendRef.ai_enabled = v; root.saveAndNotify() } }
                 }
             }

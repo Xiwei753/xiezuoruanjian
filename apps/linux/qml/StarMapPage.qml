@@ -59,7 +59,7 @@ Rectangle {
         onActionClicked: createStarmapDialog.open()
 
         delegate: Item {
-            width: 280
+            width: GridView.view.gridRoot.cardWidth
             height: 244
 
             Column {
