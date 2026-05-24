@@ -7,6 +7,14 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/EditorPage.qml");
     println!("cargo:rerun-if-changed=qml/ActionRegistryPage.qml");
     println!("cargo:rerun-if-changed=qml/SyncPage.qml");
+    println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
+    println!("cargo:rerun-if-changed=qml/StatsPreviewPage.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapPage.qml");
+    println!("cargo:rerun-if-changed=qml/HubPageFrame.qml");
+    println!("cargo:rerun-if-changed=qml/HubPageHeader.qml");
+    println!("cargo:rerun-if-changed=qml/StatCard.qml");
+    println!("cargo:rerun-if-changed=qml/SettingCard.qml");
+    println!("cargo:rerun-if-changed=qml/ModernSwitch.qml");
     // Components
     println!("cargo:rerun-if-changed=qml/AppButton.qml");
     println!("cargo:rerun-if-changed=qml/AppCard.qml");

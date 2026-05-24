@@ -131,15 +131,20 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/DesignTokens.qml" as "DesignTokens.qml",
     "qml/ProjectCard.qml" as "ProjectCard.qml",
     "qml/ProjectHomePage.qml" as "ProjectHomePage.qml",
+    "qml/HubPageFrame.qml" as "HubPageFrame.qml",
+    "qml/HubPageHeader.qml" as "HubPageHeader.qml",
     "qml/StarMapPreviewPage.qml" as "StarMapPreviewPage.qml",
     "qml/StarMapCard.qml" as "StarMapCard.qml",
     "qml/StarMapPage.qml" as "StarMapPage.qml",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
+    "qml/StatCard.qml" as "StatCard.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
+    "qml/SettingCard.qml" as "SettingCard.qml",
+    "qml/ModernSwitch.qml" as "ModernSwitch.qml",
     "qml/EditorPage.qml" as "EditorPage.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
     "qml/SyncPage.qml" as "SyncPage.qml",
@@ -3544,6 +3549,7 @@ impl AppBackend {
 }
 
 static QML_LOAD_FAILED: AtomicBool = AtomicBool::new(false);
+static QML_HUB_HEADER_MISSING: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn qml_load_error_handler(
     msg_type: QtMsgType,
@@ -3561,9 +3567,26 @@ extern "C" fn qml_load_error_handler(
         if s.contains("qrc:/main.qml") {
             QML_LOAD_FAILED.store(true, Ordering::SeqCst);
         }
+        if s.contains("qrc:/HubPageHeader.qml") && s.contains("No such file") {
+            QML_HUB_HEADER_MISSING.store(true, Ordering::SeqCst);
+        }
     } else {
         eprintln!("[Qt DEBUG] {}", s);
         debug_log_static("app", "qml_debug", &s);
+    }
+}
+
+fn probe_hub_header_resource() {
+    QML_HUB_HEADER_MISSING.store(false, Ordering::SeqCst);
+    let prev_handler = install_message_handler(Some(qml_load_error_handler));
+    let mut probe_engine = QmlEngine::new();
+    probe_engine.load_file("qrc:/HubPageHeader.qml".into());
+    install_message_handler(prev_handler);
+
+    if QML_HUB_HEADER_MISSING.load(Ordering::SeqCst) {
+        debug_error_static("app", "qml_resource_probe", "qrc:/HubPageHeader.qml missing from embedded qrc");
+    } else {
+        debug_log_static("app", "qml_resource_probe", "qrc:/HubPageHeader.qml exists in embedded qrc");
     }
 }
 
@@ -3571,6 +3594,7 @@ fn main() {
     debug_log_static("app", "app_startup", "Writer application starting...");
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
+    probe_hub_header_resource();
     qmetaobject::qml_register_type::<AppBackend>(
         CStr::from_bytes_with_nul(b"WriterApp\0").unwrap(),
         1,
