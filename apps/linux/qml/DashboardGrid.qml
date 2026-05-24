@@ -7,5 +7,6 @@ ColumnLayout {
     readonly property bool wide: width >= 1120
     readonly property bool medium: width >= 760 && width < 1120
     property int gap: dt ? dt.gridGap : 16
+    Layout.fillWidth: true
     spacing: gap
 }

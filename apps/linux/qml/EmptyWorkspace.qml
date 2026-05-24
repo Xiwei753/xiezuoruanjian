@@ -17,9 +17,11 @@ Item {
     }
 
     ColumnLayout {
-        anchors.centerIn: parent
         spacing: root.appTheme ? root.appTheme.sp24 : 24
         width: Math.min(parent.width - 80, 480)
+        height: implicitHeight
+        x: Math.max(0, Math.floor((parent.width - width) / 2))
+        y: Math.max(0, Math.floor((parent.height - height) / 2))
 
         // Icon
         Rectangle {

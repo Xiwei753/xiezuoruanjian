@@ -34,6 +34,24 @@ ApplicationWindow {
         }
     }
 
+    function openSettingsDialog() {
+        if (!settingsDialogLoader.active) {
+            settingsDialogLoader.active = true;
+        }
+        if (settingsDialogLoader.item) {
+            settingsDialogLoader.item.open();
+        }
+    }
+
+    function openSyncDialog() {
+        if (!syncDialogLoader.active) {
+            syncDialogLoader.active = true;
+        }
+        if (syncDialogLoader.item) {
+            syncDialogLoader.item.open();
+        }
+    }
+
     property var appState: ({
         hasWorkspace: false,
         workspacePath: "",
@@ -118,11 +136,11 @@ ApplicationWindow {
         if (!state) return;
         appState = state;
 
-        if (appState.tree && creativeHub) {
-            creativeHub.tree = appState.tree;
+        if (appState.tree && creativeHubLoader.item) {
+            creativeHubLoader.item.tree = appState.tree;
         }
-        if (appState.tree && writingWorkspace) {
-            writingWorkspace.tree = appState.tree;
+        if (appState.tree && writingWorkspaceLoader.item) {
+            writingWorkspaceLoader.item.tree = appState.tree;
         }
     }
 
@@ -153,8 +171,8 @@ ApplicationWindow {
             }
         }
         function onClear_editor() {
-            if (writingWorkspace) {
-                writingWorkspace.previousEditorText = "";
+            if (writingWorkspaceLoader.item) {
+                writingWorkspaceLoader.item.previousEditorText = "";
             }
         }
         function onSettings_changed() {
@@ -169,95 +187,99 @@ ApplicationWindow {
         anchors.fill: parent
 
         // CreativeHub: shown when workspace open and not in writing mode
-        CreativeHub {
-            id: creativeHub
+        Loader {
+            id: creativeHubLoader
             anchors.fill: parent
-            visible: appState.hasWorkspace && !writingMode
-            dt: designTokens
-            backendRef: backend
-            appState: window.appState
-            tree: window.appState.tree || []
-            aiCapable: backend.ai_available
-            aiEnabled: backend.ai_enabled
+            active: appState.hasWorkspace && !writingMode
+            sourceComponent: CreativeHub {
+                dt: designTokens
+                backendRef: backend
+                appState: window.appState
+                tree: window.appState.tree || []
+                aiCapable: backend.ai_available
+                aiEnabled: backend.ai_enabled
 
-            onOpenProject: function(projectId, projectTitle) {
-                window.writingProjectId = projectId;
-                window.writingProjectTitle = projectTitle;
-                window.writingMode = true;
-                window.debugLog("workspace", "enter_writing_mode", "projectId=" + projectId);
-            }
+                onOpenProject: function(projectId, projectTitle) {
+                    window.writingProjectId = projectId;
+                    window.writingProjectTitle = projectTitle;
+                    window.writingMode = true;
+                    window.debugLog("workspace", "enter_writing_mode", "projectId=" + projectId);
+                }
 
-            onCreateProject: {
-                window.debugLog("project", "create_project_dialog_open", "");
-                createProjectDialog.open();
-            }
+                onCreateProject: {
+                    window.debugLog("project", "create_project_dialog_open", "");
+                    createProjectDialog.open();
+                }
 
-            onOpenSettings: {
-                window.debugLog("settings", "settings_dialog_open", "");
-                settingsDialog.open();
-            }
+                onOpenSettings: {
+                    window.debugLog("settings", "settings_dialog_open", "");
+                    window.openSettingsDialog();
+                }
 
-            onOpenSync: {
-                window.debugLog("sync", "sync_dialog_open", "");
-                syncPageDialog.open();
-            }
+                onOpenSync: {
+                    window.debugLog("sync", "sync_dialog_open", "");
+                    window.openSyncDialog();
+                }
 
-            onSwitchWorkspace: {
-                window.debugLog("workspace", "switch_workspace_clicked", "");
-                backend.switch_workspace();
-                window.writingMode = false;
-                try {
-                    applyState(JSON.parse(backend.refresh_app_state_json()));
-                } catch (e) {
-                    window.debugError("workspace", "switch_workspace_parse_failed", "error: " + e);
+                onSwitchWorkspace: {
+                    window.debugLog("workspace", "switch_workspace_clicked", "");
+                    backend.switch_workspace();
+                    window.writingMode = false;
+                    try {
+                        applyState(JSON.parse(backend.refresh_app_state_json()));
+                    } catch (e) {
+                        window.debugError("workspace", "switch_workspace_parse_failed", "error: " + e);
+                    }
                 }
             }
         }
 
         // WritingWorkspace: shown when in writing mode
-        WritingWorkspace {
-            id: writingWorkspace
+        Loader {
+            id: writingWorkspaceLoader
             anchors.fill: parent
-            visible: appState.hasWorkspace && writingMode
-            dt: designTokens
-            backendRef: backend
-            appState: window.appState
-            tree: window.appState.tree || []
-            projectId: window.writingProjectId
-            projectTitle: window.writingProjectTitle
-            aiCapable: backend.ai_available
-            aiEnabled: backend.ai_enabled
+            active: appState.hasWorkspace && writingMode
+            sourceComponent: WritingWorkspace {
+                dt: designTokens
+                backendRef: backend
+                appState: window.appState
+                tree: window.appState.tree || []
+                projectId: window.writingProjectId
+                projectTitle: window.writingProjectTitle
+                aiCapable: backend.ai_available
+                aiEnabled: backend.ai_enabled
 
-            onBackToProjects: {
-                window.writingMode = false;
-                window.debugLog("workspace", "exit_writing_mode", "");
-                try {
-                    applyState(JSON.parse(backend.refresh_app_state_json()));
-                } catch (e) {}
-            }
+                onBackToProjects: {
+                    window.writingMode = false;
+                    window.debugLog("workspace", "exit_writing_mode", "");
+                    try {
+                        applyState(JSON.parse(backend.refresh_app_state_json()));
+                    } catch (e) {}
+                }
 
-            onOpenSettings: {
-                settingsDialog.open();
-            }
+                onOpenSettings: {
+                    window.openSettingsDialog();
+                }
 
-            onOpenSync: {
-                syncPageDialog.open();
-            }
+                onOpenSync: {
+                    window.openSyncDialog();
+                }
 
-            onCreateVolumeRequested: function(projectId) {
-                inputDialog.actionType = "volume";
-                inputDialog.projectId = projectId;
-                inputDialog.volumeId = "";
-                inputDialog.dialogTitle = "新建卷";
-                inputDialog.open();
-            }
+                onCreateVolumeRequested: function(projectId) {
+                    inputDialog.actionType = "volume";
+                    inputDialog.projectId = projectId;
+                    inputDialog.volumeId = "";
+                    inputDialog.dialogTitle = "新建卷";
+                    inputDialog.open();
+                }
 
-            onCreateChapterRequested: function(projectId, volumeId) {
-                inputDialog.actionType = "chapter";
-                inputDialog.projectId = projectId;
-                inputDialog.volumeId = volumeId;
-                inputDialog.dialogTitle = "新建章节";
-                inputDialog.open();
+                onCreateChapterRequested: function(projectId, volumeId) {
+                    inputDialog.actionType = "chapter";
+                    inputDialog.projectId = projectId;
+                    inputDialog.volumeId = volumeId;
+                    inputDialog.dialogTitle = "新建章节";
+                    inputDialog.open();
+                }
             }
         }
 
@@ -328,7 +350,9 @@ ApplicationWindow {
         title: "确认删除"
         modal: true
         width: 400
-        anchors.centerIn: Overlay.overlay
+        height: 220
+        x: (parent ? (parent.width - width) / 2 : 0)
+        y: (parent ? (parent.height - height) / 2 : 0)
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
 
         ColumnLayout {
@@ -403,7 +427,9 @@ ApplicationWindow {
         title: "提示"
         modal: true
         width: 340
-        anchors.centerIn: Overlay.overlay
+        height: 180
+        x: (parent ? (parent.width - width) / 2 : 0)
+        y: (parent ? (parent.height - height) / 2 : 0)
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
         ColumnLayout {
             anchors.fill: parent
@@ -423,48 +449,54 @@ ApplicationWindow {
         }
     }
 
-    SettingsDialog {
-        id: settingsDialog
-        theme: designTokens
-        backendRef: backend
-        onSettingsChanged: {
-            applyState(JSON.parse(backend.refresh_app_state_json()));
+    Loader {
+        id: settingsDialogLoader
+        active: false
+        sourceComponent: SettingsDialog {
+            theme: designTokens
+            backendRef: backend
+            onSettingsChanged: {
+                applyState(JSON.parse(backend.refresh_app_state_json()));
+            }
         }
     }
 
-    Dialog {
-        id: syncPageDialog
-        modal: true
-        title: "同步设置"
-        width: Math.max(360, Math.min(window.width - 80, 720))
-        height: Math.max(420, Math.min(window.height - 120, 560))
-        anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
+    Loader {
+        id: syncDialogLoader
+        active: false
+        sourceComponent: Dialog {
+            modal: true
+            title: "同步设置"
+            width: Math.max(360, Math.min(window.width - 80, 720))
+            height: Math.max(420, Math.min(window.height - 120, 560))
+            x: (parent ? (parent.width - width) / 2 : 0)
+            y: (parent ? (parent.height - height) / 2 : 0)
+            background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
 
-        header: null
+            header: null
 
-        contentItem: ScrollView {
-            id: syncDialogScroll
-            clip: true
-            topPadding: 16
-            bottomPadding: 16
-            leftPadding: 16
-            rightPadding: 16
+            contentItem: ScrollView {
+                id: syncDialogScroll
+                clip: true
+                topPadding: 16
+                bottomPadding: 16
+                leftPadding: 16
+                rightPadding: 16
 
-            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-            ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.policy: ScrollBar.AsNeeded
 
-            SyncPage {
-                id: syncPage
-                width: syncDialogScroll.availableWidth
-                height: Math.max(syncDialogScroll.availableHeight, implicitHeight)
-                theme: designTokens
-                backendRef: backend
-                beforeSyncHook: function() {
-                    backend.flush_writing_stats();
-                }
-                onSettingsChanged: {
-                    applyState(JSON.parse(backend.refresh_app_state_json()));
+                SyncPage {
+                    id: syncPage
+                    width: syncDialogScroll.availableWidth
+                    theme: designTokens
+                    backendRef: backend
+                    beforeSyncHook: function() {
+                        backend.flush_writing_stats();
+                    }
+                    onSettingsChanged: {
+                        applyState(JSON.parse(backend.refresh_app_state_json()));
+                    }
                 }
             }
         }
@@ -479,7 +511,9 @@ ApplicationWindow {
 
         modal: true
         width: 300
-        anchors.centerIn: Overlay.overlay
+        height: 200
+        x: (parent ? (parent.width - width) / 2 : 0)
+        y: (parent ? (parent.height - height) / 2 : 0)
         title: inputDialog.dialogTitle
 
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd }

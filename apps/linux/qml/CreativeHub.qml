@@ -209,44 +209,54 @@ Rectangle {
         }
 
         // Content
-        Item {
+        StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            currentIndex: root.currentTab
 
-            ProjectHomePage {
-                dt: root.dt
-                backendRef: root.backendRef
-                appState: root.appState
-                tree: root.tree
-                visible: root.currentTab === 0
-                anchors.fill: parent
-                onOpenProject: function(projectId) {
-                    var title = "";
-                    for (var i = 0; i < root.tree.length; i++) {
-                        if (root.tree[i].id === projectId) {
-                            title = root.tree[i].title;
-                            break;
+            Loader {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                active: root.currentTab === 0
+                sourceComponent: ProjectHomePage {
+                    dt: root.dt
+                    backendRef: root.backendRef
+                    appState: root.appState
+                    tree: root.tree
+                    onOpenProject: function(projectId) {
+                        var title = "";
+                        for (var i = 0; i < root.tree.length; i++) {
+                            if (root.tree[i].id === projectId) {
+                                title = root.tree[i].title;
+                                break;
+                            }
                         }
+                        root.openProject(projectId, title);
                     }
-                    root.openProject(projectId, title);
+                    onCreateProject: root.createProject()
                 }
-                onCreateProject: root.createProject()
             }
 
-            StarMapPage {
-                dt: root.dt
-                backendRef: root.backendRef
-                appState: root.appState
-                visible: root.currentTab === 1
-                anchors.fill: parent
+            Loader {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                active: root.currentTab === 1
+                sourceComponent: StarMapPage {
+                    dt: root.dt
+                    backendRef: root.backendRef
+                    appState: root.appState
+                }
             }
 
-            StatsPreviewPage {
-                dt: root.dt
-                backendRef: root.backendRef
-                appState: root.appState
-                visible: root.currentTab === 2
-                anchors.fill: parent
+            Loader {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                active: root.currentTab === 2
+                sourceComponent: StatsPreviewPage {
+                    dt: root.dt
+                    backendRef: root.backendRef
+                    appState: root.appState
+                }
             }
         }
     }

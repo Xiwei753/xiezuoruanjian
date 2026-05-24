@@ -6,13 +6,15 @@ Dialog {
     id: root
     title: "新建作品"
     modal: true
-    anchors.centerIn: Overlay.overlay
+    x: (parent ? (parent.width - width) / 2 : 0)
+    y: (parent ? (parent.height - height) / 2 : 0)
     standardButtons: Dialog.Ok | Dialog.Cancel
 
     property var theme: null
     signal submitProject(string title)
 
     width: 400
+    height: 220
 
     background: Rectangle {
         color: theme ? theme.bgDark : "#1E1E1E"
@@ -21,7 +23,8 @@ Dialog {
     }
 
     ColumnLayout {
-        width: parent.width
+        anchors.fill: parent
+        anchors.margins: 16
         spacing: 16
 
         Text {

@@ -7,16 +7,19 @@ Item {
     readonly property int pageMargin: width >= 980 ? (dt ? dt.pageMarginWide : 40) : (dt ? dt.pageMarginNarrow : 24)
     property int maxContentWidth: dt ? dt.maxContentWidth : 1240
     readonly property int contentWidth: Math.min(Math.max(1, width - pageMargin * 2), maxContentWidth)
+    readonly property int sideMargin: Math.max(pageMargin, Math.floor((width - contentWidth) / 2))
     default property alias contentData: contentColumn.data
     property alias headerData: headerContainer.data
 
     ColumnLayout {
-        width: root.contentWidth
-        anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
         anchors.topMargin: root.pageMargin
         anchors.bottomMargin: dt ? dt.sp24 : 24
+        anchors.leftMargin: root.sideMargin
+        anchors.rightMargin: root.sideMargin
         spacing: dt ? dt.sp16 : 16
 
         Item {

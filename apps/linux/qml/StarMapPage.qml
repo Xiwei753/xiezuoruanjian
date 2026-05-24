@@ -60,7 +60,7 @@ Rectangle {
 
         delegate: Item {
             width: GridView.view.gridRoot.cardWidth
-            height: 244
+            height: GridView.view.gridRoot.cardHeight
 
             Column {
                 anchors.fill: parent

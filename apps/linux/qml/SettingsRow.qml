@@ -8,7 +8,6 @@ Rectangle {
     property string description: ""
     property bool clickable: false
     signal clicked()
-    signal saveRequested()
     default property alias controlData: controlHost.data
 
     color: "transparent"
@@ -39,8 +38,10 @@ Rectangle {
         Item {
             id: controlHost
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-            Layout.preferredWidth: children.length > 0 ? (children[0].implicitWidth || children[0].width) : 0
+            Layout.preferredWidth: children.length > 0 ? Math.max(1, children[0].implicitWidth || children[0].width || 0) : 0
+            implicitWidth: Layout.preferredWidth
             Layout.preferredHeight: dt ? dt.settingsControlHeight : 36
+            implicitHeight: Layout.preferredHeight
         }
     }
 
@@ -58,7 +59,7 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         width: controlHost.children.length > 0
-            ? (textCol.implicitWidth + row.spacing)
+            ? Math.max(0, controlHost.mapToItem(root, 0, 0).x - row.spacing)
             : parent.width
         enabled: root.clickable
         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor

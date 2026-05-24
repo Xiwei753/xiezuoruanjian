@@ -12,33 +12,34 @@ Item {
     property string emptySubtitle: ""
     property string emptyIcon: ""
 
+    readonly property real viewportWidth: Math.max(1, gridView.width)
     readonly property int columns: {
-        var available = Math.max(1, width)
+        var available = viewportWidth
         return Math.max(1, Math.floor((available + gridGap) / (minCardWidth + gridGap)))
     }
     readonly property real cardWidth: {
         var allGap = (columns - 1) * gridGap
-        return Math.floor((Math.max(1, width) - allGap) / columns)
+        return Math.floor((viewportWidth - allGap) / columns)
     }
     readonly property real cellWidth: cardWidth + gridGap
     readonly property real cellHeight: cardHeight + gridGap
-    readonly property int itemCount: model && model.count !== undefined ? model.count : 0
-    readonly property int rowCount: itemCount > 0 ? Math.ceil(itemCount / columns) : 0
-    readonly property real computedHeight: rowCount * cellHeight
-
-    implicitHeight: computedHeight
+    readonly property real contentGridWidth: columns * cardWidth + Math.max(0, columns - 1) * gridGap
+    readonly property real horizontalPadding: Math.max(0, Math.floor((viewportWidth - contentGridWidth) / 2))
 
     GridView {
         id: gridView
+        property var gridRoot: root
         anchors.fill: parent
-        gridRoot: root
         clip: true
         model: root.model
         delegate: root.delegate
-        interactive: contentHeight > height
+        interactive: true
         cellWidth: root.cellWidth
         cellHeight: root.cellHeight
-        implicitHeight: root.computedHeight
+        leftMargin: root.horizontalPadding
+        rightMargin: root.horizontalPadding
+        topMargin: 0
+        bottomMargin: 0
         boundsBehavior: Flickable.StopAtBounds
     }
 

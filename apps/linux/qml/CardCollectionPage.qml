@@ -17,6 +17,8 @@ Item {
     signal actionClicked()
 
     readonly property real cardWidth: hubContent.cardWidth
+    readonly property int gridGap: hubContent.gridGap
+    readonly property real cardHeightResolved: hubContent.cardHeight
 
     HubPageFrame {
         anchors.fill: parent

@@ -52,7 +52,6 @@ Rectangle {
         DashboardGrid {
             id: dashboard
             Layout.fillWidth: true
-            Layout.fillHeight: true
             dt: root.dt
 
             GridLayout {
