@@ -5,6 +5,7 @@ import QtQuick.Layouts 1.15
 Rectangle {
     id: root
 
+    property var dt: null
     property string title: "Node"
     property string kind: "Note"
     property bool isSelected: false
@@ -14,8 +15,8 @@ Rectangle {
     signal clicked()
 
     radius: 8
-    color: DesignTokens.colorSurface
-    border.color: isSelected ? DesignTokens.colorPrimary : DesignTokens.colorBorder
+    color: dt ? dt.surface : "#1A1D23"
+    border.color: isSelected ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
     border.width: isSelected ? 2 : 1
 
     // Shadow effect approximation
@@ -53,7 +54,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             text: root.title
-            color: DesignTokens.colorText
+            color: dt ? dt.textPrimary : "#E2E4E9"
             font.pixelSize: 12
             wrapMode: Text.Wrap
             elide: Text.ElideRight
@@ -89,7 +90,7 @@ Rectangle {
             case "Location": return "#FF9800"
             case "Event": return "#F44336"
             case "Concept": return "#9C27B0"
-            default: return DesignTokens.colorTextLight
+            default: return dt ? dt.textMuted : "#606470"
         }
     }
 }

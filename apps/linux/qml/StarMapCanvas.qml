@@ -6,6 +6,9 @@ Item {
     clip: true
 
     property string starmapId: ""
+    property var dt: null
+    property var backendRef: null
+    property string errorMessage: ""
     property var graphData: null
     property var layoutData: null
 
@@ -29,6 +32,21 @@ Item {
     property var nodesModel: []
     property var edgesModel: []
 
+    function setError(msg) { errorMessage = msg || ""; console.warn("[StarMapCanvas]", errorMessage) }
+    function clearError() { errorMessage = "" }
+    function parseBackendJson(raw, fallbackMessage) {
+        try {
+            return JSON.parse(raw)
+        } catch(e) {
+            setError(fallbackMessage + ": " + e);
+            return { success: false, message: fallbackMessage }
+        }
+    }
+    function ensureBackend() {
+        if (!backendRef) { setError("星图后端未初始化"); return false; }
+        return true;
+    }
+
     // Background Grid
     Rectangle {
         anchors.fill: parent
@@ -40,7 +58,7 @@ Item {
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.clearRect(0, 0, width, height)
-                ctx.fillStyle = DesignTokens.colorTextLight
+                ctx.fillStyle = dt ? dt.textMuted : "#606470"
 
                 var gridSpacing = 50 * zoomLevel
                 var startX = (panX % gridSpacing)
@@ -100,18 +118,18 @@ Item {
                     // Simple straight line for V1
                     ctx.lineTo(x2, y2)
 
-                    ctx.strokeStyle = edge.isSelected ? DesignTokens.colorPrimary : DesignTokens.colorBorderFocus
+                    ctx.strokeStyle = edge.isSelected ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
                     ctx.stroke()
 
                     // Label
                     if (edge.label) {
-                        ctx.fillStyle = DesignTokens.colorSurface
+                        ctx.fillStyle = dt ? dt.surface : "#1A1D23"
                         var midX = (x1 + x2)/2
                         var midY = (y1 + y2)/2
                         var tw = ctx.measureText(edge.label).width
                         ctx.fillRect(midX - tw/2 - 4, midY - 10, tw + 8, 20)
 
-                        ctx.fillStyle = DesignTokens.colorText
+                        ctx.fillStyle = dt ? dt.textPrimary : "#E2E4E9"
                         ctx.font = "12px sans-serif"
                         ctx.textAlign = "center"
                         ctx.textBaseline = "middle"
@@ -126,7 +144,7 @@ Item {
                         ctx.beginPath()
                         ctx.moveTo(startNode.x + startNode.width/2, startNode.y + startNode.height/2)
                         ctx.lineTo(mouseWorldX, mouseWorldY)
-                        ctx.strokeStyle = DesignTokens.colorPrimary
+                        ctx.strokeStyle = dt ? dt.accent : "#7B8CDE"
                         ctx.setLineDash([5, 5])
                         ctx.stroke()
                         ctx.setLineDash([])
@@ -138,6 +156,7 @@ Item {
         Repeater {
             model: nodesModel.length
             delegate: StarMapNode {
+                dt: canvasArea.dt
                 property var nodeData: nodesModel[index]
 
                 x: nodeData.x
@@ -279,26 +298,49 @@ Item {
     Text {
         anchors.centerIn: parent
         text: "还没有节点，点击新增节点开始构建星图"
-        color: DesignTokens.colorTextLight
+        color: dt ? dt.textSecondary : "#9CA0AB"
         font.pixelSize: 16
         visible: nodesModel.length === 0
     }
 
+    Rectangle {
+        id: errorBanner
+        width: parent.width - 32
+        height: 40
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 16
+        anchors.horizontalCenter: parent.horizontalCenter
+        color: "#E53935" // explicit error color or use dt equivalent if defined
+        radius: 8
+        visible: errorMessage.length > 0
+        z: 100
+
+        Text {
+            anchors.centerIn: parent
+            text: errorMessage
+            color: "white"
+            font.pixelSize: 14
+        }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: clearError()
+        }
+    }
+
     function loadGraph() {
         if (starmapId === "") return;
-        var resStr = appBackend.get_starmap_graph_json(starmapId)
-        try {
-            var res = JSON.parse(resStr)
-            if (res.success) {
-                graphData = res.data.graph
-                layoutData = res.data.layout
+        if (!ensureBackend()) return;
 
-                buildModels()
-            } else {
-                console.warn("Failed to load graph:", res.message)
-            }
-        } catch(e) {
-            console.error("JSON parse error:", e)
+        var resStr = backendRef.get_starmap_graph_json(starmapId)
+        var res = parseBackendJson(resStr, "加载星图数据失败")
+        if (res.success) {
+            clearError()
+            graphData = res.data.graph
+            layoutData = res.data.layout
+
+            buildModels()
+        } else {
+            setError(res.userMessage || res.message || "加载星图数据失败")
         }
     }
 
@@ -384,12 +426,14 @@ Item {
     }
 
     function createNodeAtCenter() {
+        if (!ensureBackend()) return;
         var wx = (width/2 - panX) / zoomLevel
         var wy = (height/2 - panY) / zoomLevel
 
-        var resStr = appBackend.create_starmap_node_json(starmapId, "新节点", "Note", wx, wy)
-        var res = JSON.parse(resStr)
+        var resStr = backendRef.create_starmap_node_json(starmapId, "新节点", "Note", wx, wy)
+        var res = parseBackendJson(resStr, "创建节点失败")
         if (res.success) {
+            clearError()
             loadGraph()
             // Select new node
             for (var i = 0; i < nodesModel.length; i++) {
@@ -402,21 +446,24 @@ Item {
                 }
             }
         } else {
-            console.warn("Failed to create node:", res.message)
+            setError(res.userMessage || res.message || "创建节点失败")
         }
     }
 
     function createEdge(fromId, toId) {
-        var resStr = appBackend.create_starmap_edge_json(starmapId, fromId, toId, "RelatedTo", "")
-        var res = JSON.parse(resStr)
+        if (!ensureBackend()) return;
+        var resStr = backendRef.create_starmap_edge_json(starmapId, fromId, toId, "RelatedTo", "")
+        var res = parseBackendJson(resStr, "创建连线失败")
         if (res.success) {
+            clearError()
             loadGraph()
         } else {
-            console.warn("Failed to create edge:", res.message)
+            setError(res.userMessage || res.message || "创建连线失败")
         }
     }
 
     function saveLayout() {
+        if (!ensureBackend()) return;
         var lNodes = []
         for (var i = 0; i < nodesModel.length; i++) {
             var n = nodesModel[i]
@@ -435,13 +482,21 @@ Item {
             kind: "Freeform",
             nodes: lNodes
         }
-        appBackend.save_starmap_layout_json(starmapId, JSON.stringify(lj))
+        var resStr = backendRef.save_starmap_layout_json(starmapId, JSON.stringify(lj))
+        var res = parseBackendJson(resStr, "保存布局失败")
+        if (res.success) {
+            clearError()
+        } else {
+            setError(res.userMessage || res.message || "保存布局失败")
+        }
     }
 
     function updateNodeFromInspector(nodeId, patch) {
-        var resStr = appBackend.update_starmap_node_json(starmapId, nodeId, JSON.stringify(patch))
-        var res = JSON.parse(resStr)
+        if (!ensureBackend()) return;
+        var resStr = backendRef.update_starmap_node_json(starmapId, nodeId, JSON.stringify(patch))
+        var res = parseBackendJson(resStr, "更新节点失败")
         if (res.success) {
+            clearError()
             for (var i = 0; i < nodesModel.length; i++) {
                 if (nodesModel[i].id === nodeId) {
                     if (patch.title !== undefined) nodesModel[i].title = patch.title;
@@ -450,22 +505,30 @@ Item {
                     break
                 }
             }
+        } else {
+            setError(res.userMessage || res.message || "更新节点失败")
         }
     }
 
     function deleteNodeFromInspector(nodeId) {
-        var resStr = appBackend.delete_starmap_node_json(starmapId, nodeId)
-        var res = JSON.parse(resStr)
+        if (!ensureBackend()) return;
+        var resStr = backendRef.delete_starmap_node_json(starmapId, nodeId)
+        var res = parseBackendJson(resStr, "删除节点失败")
         if (res.success) {
+            clearError()
             loadGraph()
             clearSelection()
+        } else {
+            setError(res.userMessage || res.message || "删除节点失败")
         }
     }
 
     function updateEdgeFromInspector(edgeId, patch) {
-        var resStr = appBackend.update_starmap_edge_json(starmapId, edgeId, JSON.stringify(patch))
-        var res = JSON.parse(resStr)
+        if (!ensureBackend()) return;
+        var resStr = backendRef.update_starmap_edge_json(starmapId, edgeId, JSON.stringify(patch))
+        var res = parseBackendJson(resStr, "更新连线失败")
         if (res.success) {
+            clearError()
             for (var i = 0; i < edgesModel.length; i++) {
                 if (edgesModel[i].id === edgeId) {
                     if (patch.label !== undefined) edgesModel[i].label = patch.label;
@@ -474,15 +537,21 @@ Item {
                     break
                 }
             }
+        } else {
+            setError(res.userMessage || res.message || "更新连线失败")
         }
     }
 
     function deleteEdgeFromInspector(edgeId) {
-        var resStr = appBackend.delete_starmap_edge_json(starmapId, edgeId)
-        var res = JSON.parse(resStr)
+        if (!ensureBackend()) return;
+        var resStr = backendRef.delete_starmap_edge_json(starmapId, edgeId)
+        var res = parseBackendJson(resStr, "删除连线失败")
         if (res.success) {
+            clearError()
             loadGraph()
             clearSelection()
+        } else {
+            setError(res.userMessage || res.message || "删除连线失败")
         }
     }
 }
