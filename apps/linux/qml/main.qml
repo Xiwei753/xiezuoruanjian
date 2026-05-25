@@ -196,6 +196,8 @@ ApplicationWindow {
             anchors.fill: parent
             active: appState.hasWorkspace && starmapMode
             sourceComponent: StarMapWorkspace {
+                dt: designTokens
+                backendRef: backend
                 starmapId: window.currentStarmapId
                 starmapTitle: window.currentStarmapTitle
                 onBackClicked: {
@@ -216,6 +218,13 @@ ApplicationWindow {
                 tree: window.appState.tree || []
                 aiCapable: backend.ai_available
                 aiEnabled: backend.ai_enabled
+
+                onOpenStarmapWorkspace: function(smId, smTitle) {
+                    window.currentStarmapId = smId;
+                    window.currentStarmapTitle = smTitle;
+                    window.writingMode = false;
+                    window.starmapMode = true;
+                }
 
                 onOpenProject: function(projectId, projectTitle) {
                     window.writingProjectId = projectId;
@@ -273,15 +282,6 @@ ApplicationWindow {
                     try {
                         applyState(JSON.parse(backend.refresh_app_state_json()));
                     } catch (e) {}
-                }
-
-                Connections {
-                    target: creativeHubLoader.item
-                    function onOpenStarmapWorkspace(smId, smTitle) {
-                        window.currentStarmapId = smId;
-                        window.currentStarmapTitle = smTitle;
-                        window.starmapMode = true;
-                    }
                 }
 
                 onOpenSettings: {
