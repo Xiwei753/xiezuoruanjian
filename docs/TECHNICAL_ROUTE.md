@@ -57,40 +57,33 @@
   - Compose 迁移成本高，当前仓库没有 Compose 依赖，不适合为导图单点引入新 UI 栈。
   - OpenGL ES / GLSurfaceView 是 Android 大画布高性能图形路线之一。
 
-## JNI 与快照传输路线
-- 当前路线：
-  - V1 允许 Rust Core 通过 JNI 返回 MindMapSnapshot JSON。
-  - Android 用 Gson 解析成 Kotlin data class。
-  - 这个 JSON 只允许在进入导图、重新布局、数据变化时加载。
-  - 严禁在拖动、缩放、惯性滑动、每帧绘制时调用 JNI 或解析 JSON。
-- JSON 使用边界：
-  - 小图和中图可以先用 JSON。
-  - 50 到 300 节点以内，JSON 作为 V1 快照格式可以接受。
-  - 上千节点、频繁重新布局、或解析明显卡顿时，不应继续扩大 JSON 方案。
-- 必须做性能门槛：
-  - 记录 snapshot JSON 字节大小。
-  - 记录 Gson 解析耗时。
-  - 记录节点数、边数。
-  - 记录进入导图页首帧耗时。
-  - 记录内存分配峰值。
-- 升级触发条件：
-  - 单次 snapshot JSON 超过 1MB；
-  - Gson 解析超过 16ms；
-  - 进入导图页首帧超过 100ms；
-  - 节点数超过 1000 后明显卡顿；
-  - 重新布局/刷新时用户可感知卡顿。
-- 后续二进制路线：
-  - 首选 DirectByteBuffer 或 FlatBuffers。
-  - FlatBuffers 适合稳定结构的读多写少快照，可以减少反序列化开销。
-  - DirectByteBuffer 适合从 Rust/JNI 传递连续内存快照，但必须严格处理生命周期，不能悬垂指针。
-  - Protobuf 可作为兼容性更强的结构化传输方案，但不是零拷贝优先路线。
-  - 切换二进制快照前必须保留 MindMapSnapshot 抽象，不允许让 Android Renderer 直接依赖某一种序列化格式。
-- 禁止事项：
-  - 禁止每帧通过 JNI 获取节点。
-  - 禁止每帧解析 JSON。
-  - 禁止拖动中从 Rust 重新生成快照。
-  - 禁止 Renderer 直接拼接 JSON 字符串。
-  - 禁止为了性能直接绕开 Rust Core 的业务真相。
+## 跨语言暴露层与传输路线 (FFI / UniFFI)
+- **当前路线（全面升级中）：**
+  - 我们正在从“纯手工编写 JNI/C++ 胶水代码 + JSON 序列化”的 V1 模式，全面迁移至 **基于 UniFFI 的自动化暴露层**。
+  - Rust Core 作为核心业务真相，通过编写 `api.udl` 或使用宏，自动生成 Android (Kotlin) 和 Linux (C++) 的原生调用接口。
+  - **核心优势**：彻底消灭中间层的 JSON 序列化/反序列化性能损耗，避免跨平台胶水代码带来的割裂感，实现“内核加字段，双端自动拥有”的极速开发体验。
+- **历史 JSON 使用边界（逐步废弃）：**
+  - 针对导图快照等超大数据，V1 曾使用 Gson/JSON 解析。
+  - 在迁移到 UniFFI 结构体直接传递前，原有的 JSON 性能瓶颈规则依然适用（如 JSON 超过 1MB，或解析超过 16ms 必须重构）。
+- **禁止事项：**
+  - 禁止继续手动编写繁冗的 `Java_com_xiwei_...` JNI 函数。
+  - 禁止在 UI 层进行任何底层指针的裸操作，必须由 UniFFI 的安全封装接管。
+
+## 网络同步路线
+- **核心原则：** 拥抱基于 Token 的标准 API，对容易失败的底层代理探测进行“断舍离”。
+- **Android 与多端演进：**
+  - 由于移动端（Android）和部分受限网络环境（Linux）下，底层 C 语言库（`libgit2`）对系统 VPN 和代理透明转发的支持极差，导致频繁出现 `Certificate (-17)` 和 TCP 阻断问题。
+  - **当前确立**：彻底拥抱基于 Token 的 HTTP/REST API（如 GitHub API）。精简乃至删除内核中对底层 22 端口、443 端口的暴力 TCP 探测和 HTTP CONNECT 代理探针。
+- **未来扩展能力：**
+  - 同步服务保持 `BackendType` 的枚举抽象（Git, GithubApi, WebDav, S3 等）。
+  - 网络层只需保证 HTTP Client (如 `reqwest`) 能读取系统级别或用户设定的常规代理配置，网络连接的具体报错直接抛给上层，不在底层过度诊断拦截。
+
+## AI 智能体旁路路线 (AI Agent Bypass)
+- **核心原则：** AI 服务不能干扰主线业务数据的原子写入，必须作为“旁路辅助”。
+- **行动驱动 (Action-Driven UI)：**
+  - AI 不能只返回干瘪的文本回答。
+  - AI 模块必须返回结构化的 `AiActionResponse`，包含 `display_text`（给人看的）和 `actions: Vec<AiAction>`（给 UI 画按钮的）。
+  - 各端 UI（Android/Linux）收到数据后，在对话框底部渲染原生按钮。用户点击按钮，通过 UniFFI 接口直接调用 Core 的执行函数（如 `navigate_to_settings` 或 `apply_theme`），实现真正的“智能体”体验。
 
 ## Android 导图分层职责
 - Rust Core：
