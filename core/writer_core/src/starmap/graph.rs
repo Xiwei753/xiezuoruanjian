@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use crate::mind_map::graph::{MindMapEdgeKind, MindMapGraph, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind};
-use crate::mind_map::layout::{LayoutKind, MindMapLayout, MindMapLayoutNode};
+use crate::mind_map::layout::{LayoutKind, MindMapLayout};
 use crate::starmap::{load_starmap_meta, starmaps_dir, update_starmap_stats, now_epoch};
 use std::fs;
 use std::path::Path;
@@ -304,7 +304,7 @@ mod tests {
         let mut layout = get_starmap_layout(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(layout.nodes.len(), 0);
 
-        layout.nodes.push(MindMapLayoutNode {
+        layout.nodes.push(crate::mind_map::layout::MindMapLayoutNode {
             node_id: "n1".to_string(),
             x: 100.0,
             y: 200.0,

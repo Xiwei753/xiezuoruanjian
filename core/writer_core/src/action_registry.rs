@@ -48,6 +48,12 @@ pub struct ActionRegistry {
     actions: Vec<ActionDescriptor>,
 }
 
+impl Default for ActionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ActionRegistry {
     pub fn new() -> Self {
         let mut registry = Self {

@@ -1,7 +1,8 @@
 pub(crate) mod delete_guard;
 pub mod action_registry;
-#[cfg(feature = "ai")]
+// Always export these for UniFFI
 pub mod ai_service;
+pub use crate::ai_service::{AiActionResponse, AiAction, AiActionType};
 pub mod app_config;
 pub mod graph_service;
 pub mod proofreading_service;

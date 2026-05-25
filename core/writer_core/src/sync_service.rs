@@ -4,19 +4,16 @@ use base64::Engine;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BackendType {
     Git,
+    #[default]
     GithubApi,
     WebDav,
     S3,
     LocalFolder,
 }
 
-impl Default for BackendType {
-    fn default() -> Self {
-        BackendType::GithubApi
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -338,12 +335,6 @@ pub struct SyncDiagnosticsResult {
     pub android_has_internet_permission: bool,
     pub android_has_access_network_state_permission: bool,
     pub android_network_state: String,
-    pub tcp_probe_ok: bool,
-    pub tcp_probe_status: String,
-    pub http_connect_probe_ok: bool,
-    pub http_connect_probe_status: String,
-    pub libgit2_probe_ok: bool,
-    pub libgit2_probe_status: String,
     pub network_ok: bool,
     pub auth_ok: bool,
     pub repo_ok: bool,
@@ -352,10 +343,6 @@ pub struct SyncDiagnosticsResult {
     pub auth_status: String,
     pub repo_status: String,
     pub branch_status: String,
-    pub proxy_used: bool,
-    pub proxy_type: String,
-    pub proxy_host: String,
-    pub proxy_port: u16,
     /// Sanitized remote URL (no credentials)
     pub remote_url_sanitized: String,
     /// Transport type: https/ssh/unknown
@@ -370,6 +357,12 @@ pub struct SyncDiagnosticsResult {
     pub network_probe_summary: Vec<NetworkProbeResult>,
 }
 
+impl Default for SyncDiagnosticsResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SyncDiagnosticsResult {
     pub fn new() -> Self {
         Self {
@@ -378,12 +371,6 @@ impl SyncDiagnosticsResult {
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
             android_network_state: "unchecked".to_string(),
-            tcp_probe_ok: false,
-            tcp_probe_status: "unchecked".to_string(),
-            http_connect_probe_ok: false,
-            http_connect_probe_status: "unchecked".to_string(),
-            libgit2_probe_ok: false,
-            libgit2_probe_status: "unchecked".to_string(),
             network_ok: false,
             auth_ok: false,
             repo_ok: false,
@@ -392,10 +379,6 @@ impl SyncDiagnosticsResult {
             auth_status: "unchecked".to_string(),
             repo_status: "unchecked".to_string(),
             branch_status: "unchecked".to_string(),
-            proxy_used: false,
-            proxy_type: "none".to_string(),
-            proxy_host: "".to_string(),
-            proxy_port: 0,
             remote_url_sanitized: "".to_string(),
             transport: "unknown".to_string(),
             app_proxy_status: "未启用".to_string(),
@@ -600,7 +583,7 @@ impl Git2Backend {
             callbacks.credentials(move |_url, username_from_url, _allowed_types| match auth {
                 GitAuth::HttpsToken { username, token } => {
                     let user = username_override
-                        .or_else(|| username_from_url)
+                        .or(username_from_url)
                         .unwrap_or(username);
                     git2::Cred::userpass_plaintext(user, token)
                 }
@@ -616,8 +599,7 @@ impl Git2Backend {
 impl GitBackend for Git2Backend {
     fn init_repo(&self, local_repo_path: &Path) -> crate::Result<()> {
         git2::Repository::init(local_repo_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -626,22 +608,19 @@ impl GitBackend for Git2Backend {
 
     fn ensure_remote(&self, local_repo_path: &Path, remote_url: &str) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         if repo.find_remote("origin").is_err() {
             repo.remote("origin", remote_url).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
         } else {
             repo.remote_set_url("origin", remote_url).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -655,15 +634,13 @@ impl GitBackend for Git2Backend {
 
     fn is_worktree_empty_or_git_only(&self, local_repo_path: &Path) -> crate::Result<bool> {
         let entries = std::fs::read_dir(local_repo_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         for entry in entries {
             let entry = entry.map_err(|e| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -695,8 +672,7 @@ impl GitBackend for Git2Backend {
         builder
             .clone(remote_url, local_repo_path)
             .map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -705,8 +681,7 @@ impl GitBackend for Git2Backend {
 
     fn open_repo(&self, local_repo_path: &Path) -> crate::Result<()> {
         git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -721,8 +696,7 @@ impl GitBackend for Git2Backend {
         proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -756,8 +730,7 @@ impl GitBackend for Git2Backend {
         };
 
         let mut remote = repo.find_remote("origin").map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -769,8 +742,7 @@ impl GitBackend for Git2Backend {
 
         if let Err(e) = remote.fetch(&[branch], Some(&mut fetch_options), None) {
             rollback(&repo);
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             )));
         }
@@ -779,8 +751,7 @@ impl GitBackend for Git2Backend {
             .find_reference("FETCH_HEAD")
             .map_err(|e: git2::Error| {
                 rollback(&repo);
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -788,8 +759,7 @@ impl GitBackend for Git2Backend {
             repo.reference_to_annotated_commit(&fetch_head)
                 .map_err(|e: git2::Error| {
                     rollback(&repo);
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    crate::Error::Io(std::io::Error::other(
                         e.to_string(),
                     ))
                 })?;
@@ -800,20 +770,20 @@ impl GitBackend for Git2Backend {
                 Ok(c) => c,
                 Err(e) => {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             };
             if let Err(e) = repo.checkout_tree(commit_obj.as_object(), Some(git2::build::CheckoutBuilder::default().force())) {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
             if let Err(e) = repo.branch(branch, &commit_obj, true) {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
             if let Err(e) = repo.set_head(&format!("refs/heads/{}", branch)) {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
             return Ok(());
         }
@@ -822,8 +792,7 @@ impl GitBackend for Git2Backend {
             .merge_analysis(&[&fetch_commit])
             .map_err(|e: git2::Error| {
                 rollback(&repo);
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -856,18 +825,16 @@ impl GitBackend for Git2Backend {
                                 ],
                             };
                             let payload = serde_json::to_string(&summary).unwrap_or_default();
-                            return Err(crate::Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::Other,
+                            return Err(crate::Error::Io(std::io::Error::other(
                                 format!("checkout_conflict_payload:{}", payload),
                             )));
                         }
                     }
                     // Check for untracked files that would be overwritten
-                    if status.is_wt_new() {
-                        if SyncService::is_whitelisted_path(path) {
+                    if status.is_wt_new()
+                        && SyncService::is_whitelisted_path(path) {
                             blocking_files.push(path.to_string());
                         }
-                    }
                 }
             }
             if !blocking_files.is_empty() {
@@ -885,8 +852,7 @@ impl GitBackend for Git2Backend {
                     ],
                 };
                 let payload = serde_json::to_string(&summary).unwrap_or_default();
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     format!("checkout_conflict_payload:{}", payload),
                 )));
             }
@@ -917,7 +883,7 @@ impl GitBackend for Git2Backend {
                 Ok(t) => t,
                 Err(e) => {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             };
             if let Err(e) = repo.checkout_tree(
@@ -941,13 +907,11 @@ impl GitBackend for Git2Backend {
                         ],
                     };
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(crate::Error::Io(std::io::Error::other(
                         format!("checkout_conflict_payload:{}", payload),
                     )));
                 }
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     format!("checkout dry-run failed: {}", err_msg),
                 )));
             }
@@ -957,7 +921,7 @@ impl GitBackend for Git2Backend {
                 Ok(t) => t,
                 Err(e) => {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             };
             if let Err(e) = repo.checkout_tree(
@@ -965,8 +929,7 @@ impl GitBackend for Git2Backend {
                 Some(git2::build::CheckoutBuilder::default().safe()),
             ) {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 )));
             }
@@ -976,23 +939,20 @@ impl GitBackend for Git2Backend {
                 Ok(r) => r,
                 Err(e) => {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(crate::Error::Io(std::io::Error::other(
                         e.to_string(),
                     )));
                 }
             };
             if let Err(e) = reference.set_target(fetch_commit.id(), "Fast-Forward") {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 )));
             }
             if let Err(e) = repo.set_head(&refname) {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 )));
             }
@@ -1004,13 +964,11 @@ impl GitBackend for Git2Backend {
                 if e.code() == git2::ErrorCode::Conflict || e.class() == git2::ErrorClass::Checkout || err_msg.contains("conflict") || err_msg.contains("Conflict") {
                     let summary = build_conflict_summary(&repo, Some(fetch_commit.id()), "本地未提交的改动或冲突阻止了合并操作。");
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return Err(crate::Error::Io(std::io::Error::other(
                         format!("checkout_conflict_payload:{}", payload),
                     )));
                 }
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     err_msg,
                 )));
             }
@@ -1019,7 +977,7 @@ impl GitBackend for Git2Backend {
                 Ok(i) => i,
                 Err(e) => {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             };
 
@@ -1029,16 +987,14 @@ impl GitBackend for Git2Backend {
             if index.has_conflicts() {
                 if let Ok(mut conflicts) = index.conflicts() {
                     let mut settings_conflict = None;
-                    for conflict in conflicts.by_ref() {
-                        if let Ok(c) = conflict {
-                            let path_opt = c.our.as_ref().map(|o| String::from_utf8_lossy(&o.path).to_string())
-                                .or_else(|| c.their.as_ref().map(|t| String::from_utf8_lossy(&t.path).to_string()))
-                                .or_else(|| c.ancestor.as_ref().map(|a| String::from_utf8_lossy(&a.path).to_string()));
-                            if let Some(p) = path_opt {
-                                if p == "app-meta/settings/settings.sync.json" {
-                                    settings_conflict = Some(c);
-                                    break;
-                                }
+                    for c in conflicts.by_ref().flatten() {
+                        let path_opt = c.our.as_ref().map(|o| String::from_utf8_lossy(&o.path).to_string())
+                            .or_else(|| c.their.as_ref().map(|t| String::from_utf8_lossy(&t.path).to_string()))
+                            .or_else(|| c.ancestor.as_ref().map(|a| String::from_utf8_lossy(&a.path).to_string()));
+                        if let Some(p) = path_opt {
+                            if p == "app-meta/settings/settings.sync.json" {
+                                settings_conflict = Some(c);
+                                break;
                             }
                         }
                     }
@@ -1103,8 +1059,7 @@ impl GitBackend for Git2Backend {
             if let Some(details) = settings_conflict_details {
                 rollback(&repo);
                 let payload = serde_json::to_string(&details).unwrap_or_default();
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     format!("settings_conflict_payload:{}", payload),
                 )));
             }
@@ -1112,8 +1067,7 @@ impl GitBackend for Git2Backend {
             if index.has_conflicts() {
                 rollback(&repo);
                 // Return an error for conflicts with a special prefix that can be parsed
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     "SyncConflict_Detected".to_string(),
                 )));
             } else {
@@ -1121,42 +1075,42 @@ impl GitBackend for Git2Backend {
                     Ok(o) => o,
                     Err(e) => {
                         rollback(&repo);
-                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                        return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                     }
                 };
                 let signature = match git2::Signature::now("Sync User", "sync@writer.app") {
                     Ok(s) => s,
                     Err(e) => {
                         rollback(&repo);
-                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                        return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                     }
                 };
                 let tree = match repo.find_tree(oid) {
                     Ok(t) => t,
                     Err(e) => {
                         rollback(&repo);
-                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                        return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                     }
                 };
                 let head_ref = match repo.head() {
                     Ok(r) => r,
                     Err(e) => {
                         rollback(&repo);
-                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                        return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                     }
                 };
                 let head_commit = match head_ref.peel_to_commit() {
                     Ok(c) => c,
                     Err(e) => {
                         rollback(&repo);
-                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                        return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                     }
                 };
                 let fetch_commit_obj = match repo.find_commit(fetch_commit.id()) {
                     Ok(c) => c,
                     Err(e) => {
                         rollback(&repo);
-                        return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                        return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                     }
                 };
                 if let Err(e) = repo.commit(
@@ -1168,17 +1122,16 @@ impl GitBackend for Git2Backend {
                     &[&head_commit, &fetch_commit_obj],
                 ) {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
                 if let Err(e) = repo.cleanup_state() {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             }
         } else {
             rollback(&repo);
-            return Err(crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(crate::Error::Io(std::io::Error::other(
                 "Unable to pull: remote branch is unrelated or unable to merge",
             )));
         }
@@ -1188,14 +1141,12 @@ impl GitBackend for Git2Backend {
 
     fn stage_paths(&self, local_repo_path: &Path, paths: &[&str]) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         let mut index = repo.index().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -1204,15 +1155,13 @@ impl GitBackend for Git2Backend {
                 continue;
             }
             index.add_path(Path::new(p)).map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
         }
         index.write().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -1221,34 +1170,29 @@ impl GitBackend for Git2Backend {
 
     fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         let mut index = repo.index().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         let oid = index.write_tree().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         let signature =
             git2::Signature::now("Sync User", "sync@writer.app").map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
 
         let tree = repo.find_tree(oid).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -1256,14 +1200,12 @@ impl GitBackend for Git2Backend {
         let head_commit = match repo.head() {
             Ok(head) => {
                 let target = head.target().ok_or_else(|| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    crate::Error::Io(std::io::Error::other(
                         "HEAD target not found",
                     ))
                 })?;
                 Some(repo.find_commit(target).map_err(|e| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    crate::Error::Io(std::io::Error::other(
                         e.to_string(),
                     ))
                 })?)
@@ -1292,8 +1234,7 @@ impl GitBackend for Git2Backend {
                 &parent_refs,
             )
             .map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -1309,8 +1250,7 @@ impl GitBackend for Git2Backend {
         proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -1318,8 +1258,7 @@ impl GitBackend for Git2Backend {
         // 1. Check index conflicts
         if let Ok(index) = repo.index() {
             if index.has_conflicts() {
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     "fatal_error: Cannot push: index has unresolved conflicts.".to_string(),
                 )));
             }
@@ -1339,8 +1278,7 @@ impl GitBackend for Git2Backend {
             (false, Some(commit)) => {
                 // Branch ref doesn't exist but HEAD has a commit. Reconstruct it.
                 repo.branch(branch, &commit, false).map_err(|e| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    crate::Error::Io(std::io::Error::other(
                         format!("fatal_error: Failed to reconstruct branch ref: {}", e),
                     ))
                 })?;
@@ -1348,16 +1286,14 @@ impl GitBackend for Git2Backend {
             }
             (_, None) => {
                 // HEAD unborn / no commits.
-                return Err(crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(crate::Error::Io(std::io::Error::other(
                     "recoverable_error: HEAD is unborn and has no commit.".to_string(),
                 )));
             }
         }
 
         let mut remote = repo.find_remote("origin").map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -1371,8 +1307,7 @@ impl GitBackend for Git2Backend {
         remote
             .push(&[&refspec], Some(&mut push_options))
             .map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -1381,8 +1316,7 @@ impl GitBackend for Git2Backend {
 
     fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -1396,16 +1330,14 @@ impl GitBackend for Git2Backend {
 
     fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>> {
         let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true);
         let statuses = repo.statuses(Some(&mut opts)).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -2314,10 +2246,6 @@ impl SyncService {
             return Ok(result);
         }
 
-        result.proxy_used = config.proxy_enabled;
-        result.proxy_type = config.proxy_type.clone();
-        result.proxy_host = config.proxy_host.clone();
-        result.proxy_port = config.proxy_port;
 
         if config.proxy_enabled {
             result.app_proxy_status = "已启用 (注意：底层网络探测已精简，实际以最终请求结果为准)".to_string();
@@ -2377,14 +2305,12 @@ fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::R
         if let Ok(commit) = head_ref.peel_to_commit() {
             // Create branch pointing to this commit
             repo.branch(branch, &commit, false).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     format!("Failed to create branch '{}': {}", branch, e),
                 ))
             })?;
             repo.set_head(&branch_ref_name).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     format!("Failed to set HEAD to '{}': {}", branch, e),
                 ))
             })?;
@@ -2395,8 +2321,7 @@ fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::R
     // HEAD is unborn/empty (no commits yet). Set HEAD symbolically.
     // The first commit will automatically create this branch.
     repo.set_head(&branch_ref_name).map_err(|e| {
-        crate::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        crate::Error::Io(std::io::Error::other(
             format!("Failed to set symbolic HEAD to '{}': {}", branch, e),
         ))
     })?;
@@ -2687,7 +2612,7 @@ fn semantic_merge_json(
                     } else {
                         let modified_ms = std::fs::metadata(workspace_path.join(&path))
                             .and_then(|m| m.modified())
-                            .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                            .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(std::io::Error::other))
                             .map(|d| d.as_millis() as i64)
                             .unwrap_or(now_ms);
                         updated_at_ms = modified_ms;
@@ -2695,7 +2620,7 @@ fn semantic_merge_json(
                 } else {
                     let modified_ms = std::fs::metadata(workspace_path.join(&path))
                         .and_then(|m| m.modified())
-                        .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                        .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(std::io::Error::other))
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(now_ms);
                     updated_at_ms = modified_ms;
@@ -2713,7 +2638,7 @@ fn semantic_merge_json(
         }
 
         // 2. Local deletions (in known_files but missing from workspace)
-        for (path, _known_hash) in &state.known_files {
+        for path in state.known_files.keys() {
             if !local_records.contains_key(path) {
                 if !Self::is_whitelisted_path(path) || Self::is_blacklisted_path(path) {
                     continue;
@@ -2792,11 +2717,10 @@ fn semantic_merge_json(
                     let mut remote_wins = false;
                     if remote_rec.updated_at_ms > local_rec.updated_at_ms {
                         remote_wins = true;
-                    } else if remote_rec.updated_at_ms == local_rec.updated_at_ms {
-                        if remote_rec.device_id > local_rec.device_id {
+                    } else if remote_rec.updated_at_ms == local_rec.updated_at_ms
+                        && remote_rec.device_id > local_rec.device_id {
                             remote_wins = true;
                         }
-                    }
 
                     if remote_wins {
                         merged_manifest_files.insert(path.clone(), remote_rec.clone());
@@ -3061,7 +2985,7 @@ fn semantic_merge_json(
                 let t = matched_rec.map(|r| r.updated_at_ms).unwrap_or_else(|| {
                     std::fs::metadata(workspace_path.join(&entry.relative_path))
                         .and_then(|m| m.modified())
-                        .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+                        .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(std::io::Error::other))
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(now_ms)
                 });
@@ -3137,8 +3061,7 @@ fn semantic_merge_json(
                     || msg.contains("failed to resolve address")
                     || msg.contains("SOCKS5")
                 {
-                    return crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
+                    return crate::Error::Io(std::io::Error::other(
                         format!("代理不可用/端口不通: {}", msg),
                     ));
                 }
@@ -3369,7 +3292,7 @@ fn semantic_merge_json(
                     SyncStatus::Conflict,
                     result.first_sync_mode,
                     Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
-                    format!("Pull failed due to conflict."),
+                    "Pull failed due to conflict.".to_string(),
                 );
                 res.conflict_summary = summary;
                 return Ok(res);
@@ -3458,86 +3381,84 @@ fn semantic_merge_json(
                         }
                     };
 
-                    for conflict in conflicts {
-                        if let Ok(c) = conflict {
-                            let mut best_path = None;
-                            if let Some(our) = &c.our {
-                                best_path = Some(String::from_utf8_lossy(&our.path).to_string());
-                            } else if let Some(their) = &c.their {
-                                best_path = Some(String::from_utf8_lossy(&their.path).to_string());
-                            } else if let Some(ancestor) = &c.ancestor {
-                                best_path =
-                                    Some(String::from_utf8_lossy(&ancestor.path).to_string());
+                    for c in conflicts.flatten() {
+                        let mut best_path = None;
+                        if let Some(our) = &c.our {
+                            best_path = Some(String::from_utf8_lossy(&our.path).to_string());
+                        } else if let Some(their) = &c.their {
+                            best_path = Some(String::from_utf8_lossy(&their.path).to_string());
+                        } else if let Some(ancestor) = &c.ancestor {
+                            best_path =
+                                Some(String::from_utf8_lossy(&ancestor.path).to_string());
+                        }
+
+                        let real_path = match best_path {
+                            Some(p) => p,
+                            None => {
+                                result.status = SyncStatus::Conflict;
+                                result.error = Some("Sync Conflict: unknown path".to_string());
+                                result.user_message = Some(
+                                    "存在无法识别路径的冲突文件，需要手动处理。".to_string(),
+                                );
+                                continue;
                             }
+                        };
 
-                            let real_path = match best_path {
-                                Some(p) => p,
-                                None => {
-                                    result.status = SyncStatus::Conflict;
-                                    result.error = Some("Sync Conflict: unknown path".to_string());
-                                    result.user_message = Some(
-                                        "存在无法识别路径的冲突文件，需要手动处理。".to_string(),
-                                    );
-                                    continue;
+                        let local_path = real_path.clone();
+                        let remote_path = real_path.clone();
+
+                        let sync_conflict = SyncConflict {
+                            local_path,
+                            remote_path,
+                            local_hash: c
+                                .our
+                                .as_ref()
+                                .map(|o| o.id.to_string())
+                                .unwrap_or_default(),
+                            remote_hash: c
+                                .their
+                                .as_ref()
+                                .map(|o| o.id.to_string())
+                                .unwrap_or_default(),
+                            base_hash: c
+                                .ancestor
+                                .as_ref()
+                                .map(|o| o.id.to_string())
+                                .unwrap_or_default(),
+                            created_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs() as i64,
+                            description: "Git pull resulted in merge conflicts.".to_string(),
+                        };
+
+                        let mut local_content = None;
+                        if let Some(our) = c.our {
+                            if let Ok(blob) = repo.find_blob(our.id) {
+                                if let Ok(content_str) = std::str::from_utf8(blob.content()) {
+                                    local_content = Some(content_str.to_string());
                                 }
-                            };
+                            }
+                        }
 
-                            let local_path = real_path.clone();
-                            let remote_path = real_path.clone();
-
-                            let sync_conflict = SyncConflict {
-                                local_path,
-                                remote_path,
-                                local_hash: c
-                                    .our
-                                    .as_ref()
-                                    .map(|o| o.id.to_string())
-                                    .unwrap_or_default(),
-                                remote_hash: c
-                                    .their
-                                    .as_ref()
-                                    .map(|o| o.id.to_string())
-                                    .unwrap_or_default(),
-                                base_hash: c
-                                    .ancestor
-                                    .as_ref()
-                                    .map(|o| o.id.to_string())
-                                    .unwrap_or_default(),
-                                created_at: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs() as i64,
-                                description: "Git pull resulted in merge conflicts.".to_string(),
-                            };
-
-                            let mut local_content = None;
-                            if let Some(our) = c.our {
-                                if let Ok(blob) = repo.find_blob(our.id) {
-                                    if let Ok(content_str) = std::str::from_utf8(blob.content()) {
-                                        local_content = Some(content_str.to_string());
+                        if !Self::is_blacklisted_path(&sync_conflict.local_path)
+                            && Self::is_whitelisted_path(&sync_conflict.local_path)
+                        {
+                            if let Err(e) = Self::record_sync_conflict(
+                                workspace_path,
+                                sync_conflict.clone(),
+                                local_content.as_deref(),
+                            ) {
+                                let err_msg = format!("Failed to record sync conflict: {}", e);
+                                result.error = match result.error {
+                                    Some(ref mut err) => {
+                                        err.push_str(&format!(" | {}", err_msg));
+                                        Some(err.clone())
                                     }
-                                }
+                                    None => Some(err_msg),
+                                };
                             }
-
-                            if !Self::is_blacklisted_path(&sync_conflict.local_path)
-                                && Self::is_whitelisted_path(&sync_conflict.local_path)
-                            {
-                                if let Err(e) = Self::record_sync_conflict(
-                                    workspace_path,
-                                    sync_conflict.clone(),
-                                    local_content.as_deref(),
-                                ) {
-                                    let err_msg = format!("Failed to record sync conflict: {}", e);
-                                    result.error = match result.error {
-                                        Some(ref mut err) => {
-                                            err.push_str(&format!(" | {}", err_msg));
-                                            Some(err.clone())
-                                        }
-                                        None => Some(err_msg),
-                                    };
-                                }
-                                result.conflicts.push(sync_conflict);
-                            }
+                            result.conflicts.push(sync_conflict);
                         }
                     }
                 }
@@ -3980,8 +3901,7 @@ fn semantic_merge_json(
         }
 
         let content = serde_json::to_string_pretty(state).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -4024,8 +3944,7 @@ fn semantic_merge_json(
         conflicts.push(conflict);
 
         let content = serde_json::to_string_pretty(&conflicts).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -5198,7 +5117,7 @@ mod tests {
         // Now branch reference refs/heads/main does not exist, but HEAD points to a commit.
         // We verify that calling Git2Backend::push reconstructs the branch ref successfully!
         let backend = Git2Backend;
-        let res = backend.push(dir.path(), "main", None, None);
+        let _res = backend.push(dir.path(), "main", None, None);
         // Verify branch ref has been reconstructed!
         assert!(repo.find_reference("refs/heads/main").is_ok());
     }

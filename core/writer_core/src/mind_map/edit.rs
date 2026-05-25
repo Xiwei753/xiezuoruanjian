@@ -283,8 +283,7 @@ pub fn update_mind_map_node(
         updated_node = Some(node.clone());
         Ok(())
     })?;
-    updated_node.ok_or_else(|| crate::error::Error::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
+    updated_node.ok_or_else(|| crate::error::Error::Io(std::io::Error::other(
         "Failed to retrieve updated node",
     )))
 }
@@ -401,8 +400,7 @@ pub fn update_mind_map_edge(
         updated_edge = Some(edge.clone());
         Ok(())
     })?;
-    updated_edge.ok_or_else(|| crate::error::Error::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
+    updated_edge.ok_or_else(|| crate::error::Error::Io(std::io::Error::other(
         "Failed to retrieve updated edge",
     )))
 }

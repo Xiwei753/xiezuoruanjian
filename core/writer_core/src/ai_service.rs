@@ -8,10 +8,21 @@ pub struct AiActionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiActionType {
+    Navigate,
+    ApplySetting,
+    InsertText,
+    ReplaceText,
+    RunCommand,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiAction {
     pub label: String,
-    pub action_type: String,
-    pub payload: Value,
+    pub action_type: AiActionType,
+    pub payload: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
