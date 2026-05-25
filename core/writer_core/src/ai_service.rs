@@ -2,6 +2,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiActionResponse {
+    pub display_text: String,
+    pub actions: Vec<AiAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiAction {
+    pub label: String,
+    pub action_type: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiProviderConfig {
     pub provider_name: String,
     pub api_key: String,

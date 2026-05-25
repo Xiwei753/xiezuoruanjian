@@ -45,3 +45,9 @@ pub mod volume_tests;
 pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
+
+pub fn perform_dummy_action() -> String {
+    "hello from uniffi".to_string()
+}
+
+uniffi::include_scaffolding!("api");

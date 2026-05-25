@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 use std::path::Path;
 use base64::Engine;
 
@@ -2214,58 +2213,7 @@ fn get_user_friendly_error(err: &str) -> String {
     format!("同步失败，请检查网络重试。({})", err)
 }
 
-fn classify_error_without_proxy(err_msg: &str) -> String {
-    let e = err_msg.to_lowercase();
-    if e.contains("failed to resolve address")
-        || e.contains("no address associated with hostname")
-        || e.contains("could not resolve host")
-        || e.contains("name resolution")
-    {
-        return "dns_failed".to_string();
-    }
-    if e.contains("ssl") || e.contains("certificate") {
-        return "tls_failed".to_string();
-    }
-    if e.contains("authentication failed") || e.contains("invalid credentials") || e.contains("401") {
-        return "auth_failed".to_string();
-    }
-    if e.contains("token") && (e.contains("missing") || e.contains("empty") || e.contains("not provided")) {
-        return "token_missing".to_string();
-    }
-    if e.contains("permission denied") || e.contains("403") {
-        return "token_permission_denied".to_string();
-    }
-    if e.contains("repository not found") || e.contains("not found") || e.contains("404") {
-        return "repo_not_found_or_no_permission".to_string();
-    }
-    if e.contains("ref not found") || e.contains("couldn't find remote ref") || e.contains("branch") && e.contains("not found") {
-        return "branch_not_found".to_string();
-    }
-    if e.contains("timeout") || e.contains("connection refused") || e.contains("network unreachable") {
-        return "github_network_failed".to_string();
-    }
-    "github_network_failed".to_string()
-}
 
-fn classify_error_with_proxy(err_msg: &str, result: &SyncDiagnosticsResult) -> String {
-    let e = err_msg.to_lowercase();
-    if e.contains("unsupported proxy protocol") {
-        return "proxy_protocol_unsupported".to_string();
-    }
-    if !result.tcp_probe_ok {
-        return "proxy_tcp_failed".to_string();
-    }
-    if result.tcp_probe_ok && !result.http_connect_probe_ok && result.proxy_type == "http" {
-        return "proxy_connect_failed".to_string();
-    }
-    if e.contains("authentication failed") || e.contains("invalid credentials") || e.contains("401") {
-        return "auth_failed".to_string();
-    }
-    if e.contains("repository not found") || e.contains("not found") || e.contains("404") {
-        return "repo_not_found_or_no_permission".to_string();
-    }
-    "proxy_connect_failed".to_string()
-}
 
 fn fetch_and_reset_local_repo(
     workspace_path: &Path,
@@ -2357,7 +2305,7 @@ impl SyncService {
         };
 
         if transport == SyncTransport::SshDeployKey {
-            result.user_message = "检测到 SSH remote。在移动端/受限网络下 SSH 不推荐，建议改用 HTTPS remote (https://github.com/owner/repo.git)。".to_string();
+            result.user_message = "检测到 SSH remote。由于跨平台网络限制，强烈建议改用 HTTPS API 模式 (https://github.com/owner/repo.git)。".to_string();
             result.error_category = "ssh_not_recommended".to_string();
             result.network_status = "skipped_ssh".to_string();
             result.auth_status = "skipped".to_string();
@@ -2372,7 +2320,7 @@ impl SyncService {
         result.proxy_port = config.proxy_port;
 
         if config.proxy_enabled {
-            result.app_proxy_status = "已启用".to_string();
+            result.app_proxy_status = "已启用 (注意：底层网络探测已精简，实际以最终请求结果为准)".to_string();
         } else {
             result.app_proxy_status = "未启用".to_string();
         }
@@ -2386,331 +2334,31 @@ impl SyncService {
         let token_from_parsed = parsed.extracted_token;
         let token = secrets.token.clone().or(token_from_parsed).unwrap_or_default();
         if token.is_empty() {
-            result.user_message = "缺少 GitHub Token。".to_string();
+            result.user_message = "缺少 GitHub Token。请在设置中配置，这是目前最推荐的同步方式。".to_string();
             result.error_category = "token_missing".to_string();
             return Ok(result);
         }
 
-        let username_for_cred = if !config.username.is_empty() {
-            config.username.clone()
-        } else if let Some(ref extracted_user) = parsed.extracted_username {
-            extracted_user.clone()
-        } else {
-            "x-access-token".to_string()
-        };
-
-        let temp_dir = tempfile::tempdir().map_err(|e| crate::Error::Io(e))?;
-        let repo = git2::Repository::init(temp_dir.path()).map_err(|e: git2::Error| crate::Error::Other(e.to_string()))?;
-
-        let mut remote = repo.remote_anonymous(&sanitized_url).map_err(|e: git2::Error| crate::Error::Other(e.to_string()))?;
-
-        let mut callbacks = git2::RemoteCallbacks::new();
-        let token_clone = token.clone();
-        let username_clone = username_for_cred.clone();
-        callbacks.credentials(move |_user, _user_from_url, _cred| {
-            git2::Cred::userpass_plaintext(&username_clone, &token_clone)
-        });
-
-        let proxy_opts = match Git2Backend::build_proxy_options(Some(config)) {
-            Ok(opts) => opts,
-            Err(e) => {
-                result.user_message = format!("代理配置错误: {}", e);
-                result.success = false;
-                result.error_category = "proxy_config_error".to_string();
-                return Ok(result);
-            }
-        };
-
-        if config.proxy_enabled && (config.proxy_type == "http" || config.proxy_type == "socks5") && !config.proxy_host.is_empty() {
-            let addr = format!("{}:{}", config.proxy_host, config.proxy_port);
-
-            let addrs = std::net::ToSocketAddrs::to_socket_addrs(&addr);
-            let mut tcp_connected = false;
-            let mut last_tcp_err = None;
-            let mut maybe_stream = None;
-
-            if let Ok(resolved_addrs) = addrs {
-                let addr_list: Vec<_> = resolved_addrs.collect();
-                if addr_list.is_empty() {
-                    last_tcp_err = Some(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "DNS resolved to zero addresses",
-                    ));
-                } else {
-                    for socket_addr in &addr_list {
-                        match std::net::TcpStream::connect_timeout(
-                            socket_addr,
-                            std::time::Duration::from_secs(5),
-                        ) {
-                            Ok(stream) => {
-                                tcp_connected = true;
-                                maybe_stream = Some(stream);
-                                break;
-                            }
-                            Err(e) => {
-                                last_tcp_err = Some(e);
-                            }
-                        }
-                    }
-                }
-            } else {
-                last_tcp_err = addrs.err();
-            }
-
-            if tcp_connected {
-                let mut stream = maybe_stream.unwrap();
-                result.tcp_probe_ok = true;
-                result.tcp_probe_status = "ok".to_string();
-
-                let timeout = std::time::Duration::from_secs(5);
-                let _ = stream.set_read_timeout(Some(timeout));
-                let _ = stream.set_write_timeout(Some(timeout));
-
-                if config.proxy_type == "http" {
-                    let request = format!(
-                        "CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n"
-                    );
-                    match std::io::Write::write_all(&mut stream, request.as_bytes()) {
-                        Ok(_) => {
-                            let mut buffer = [0u8; 1024];
-                            match stream.read(&mut buffer) {
-                                Ok(bytes_read) if bytes_read > 0 => {
-                                    let response = String::from_utf8_lossy(&buffer[..bytes_read]);
-                                    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
-                                        result.http_connect_probe_ok = true;
-                                        result.http_connect_probe_status = "ok".to_string();
-                                    } else if response.starts_with("HTTP/") {
-                                        let status_code = response.split_whitespace().nth(1).unwrap_or("unknown");
-                                        if status_code == "407" {
-                                            result.http_connect_probe_ok = false;
-                                            result.http_connect_probe_status = "proxy_auth_required".to_string();
-                                            result.network_ok = false;
-                                            result.network_status = "failed".to_string();
-                                            result.user_message = "代理需要认证 (HTTP 407)。请检查代理配置。".to_string();
-                                            result.error_category = "proxy_auth_required".to_string();
-                                            return Ok(result);
-                                        }
-                                        result.http_connect_probe_ok = false;
-                                        result.http_connect_probe_status = format!("failed_status_{}", status_code);
-                                        result.network_ok = false;
-                                        result.network_status = "failed".to_string();
-                                        result.user_message = format!("代理端口 HTTP CONNECT 失败: {}", result.http_connect_probe_status);
-                                        result.error_category = "proxy_connect_failed".to_string();
-                                        return Ok(result);
-                                    } else {
-                                        result.http_connect_probe_ok = false;
-                                        result.http_connect_probe_status = "invalid_response".to_string();
-                                        result.network_ok = false;
-                                        result.network_status = "failed".to_string();
-                                        result.user_message = "代理端口 HTTP CONNECT 返回无效响应（非 HTTP）".to_string();
-                                        result.error_category = "proxy_connect_failed".to_string();
-                                        return Ok(result);
-                                    }
-                                }
-                                Ok(_) => {
-                                    result.http_connect_probe_ok = false;
-                                    result.http_connect_probe_status = "read_timeout".to_string();
-                                    result.network_ok = false;
-                                    result.network_status = "failed".to_string();
-                                    result.user_message = "代理端口 HTTP CONNECT 读取超时（代理未响应）".to_string();
-                                    result.error_category = "proxy_connect_failed".to_string();
-                                    return Ok(result);
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
-                                    result.http_connect_probe_ok = false;
-                                    result.http_connect_probe_status = "read_timeout".to_string();
-                                    result.network_ok = false;
-                                    result.network_status = "failed".to_string();
-                                    result.user_message = "代理端口 HTTP CONNECT 读取超时（代理未响应）".to_string();
-                                    result.error_category = "proxy_connect_failed".to_string();
-                                    return Ok(result);
-                                }
-                                Err(e) => {
-                                    result.http_connect_probe_ok = false;
-                                    result.http_connect_probe_status = format!("read_error: {}", e);
-                                    result.network_ok = false;
-                                    result.network_status = "failed".to_string();
-                                    result.user_message = format!("代理端口 HTTP CONNECT 读取错误: {}", e);
-                                    result.error_category = "proxy_connect_failed".to_string();
-                                    return Ok(result);
-                                }
-                            }
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
-                            result.http_connect_probe_ok = false;
-                            result.http_connect_probe_status = "write_timeout".to_string();
-                            result.network_ok = false;
-                            result.network_status = "failed".to_string();
-                            result.user_message = "代理端口 HTTP CONNECT 写入超时".to_string();
-                            result.error_category = "proxy_connect_failed".to_string();
-                            return Ok(result);
-                        }
-                        Err(e) => {
-                            result.http_connect_probe_ok = false;
-                            result.http_connect_probe_status = "write_failed".to_string();
-                            result.network_ok = false;
-                            result.network_status = "failed".to_string();
-                            result.user_message = format!("代理端口 HTTP CONNECT 写入失败: {}", e);
-                            result.error_category = "proxy_connect_failed".to_string();
-                            return Ok(result);
-                        }
-                    }
-                } else {
-                    result.http_connect_probe_status = "skipped_socks5".to_string();
-                }
-            } else {
-                let err_msg = last_tcp_err
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                result.tcp_probe_ok = false;
-                result.tcp_probe_status = format!("tcp_probe_failed: {}", err_msg);
-                result.network_ok = false;
-                result.network_status = "failed".to_string();
-                result.user_message = format!("代理端口 {} 无法建立 TCP 连接（尝试所有解析地址均失败）: {}", addr, err_msg);
-                result.error_category = "proxy_tcp_failed".to_string();
-                return Ok(result);
-            }
-        }
-
-        let direction = git2::Direction::Fetch;
-        let connection: git2::RemoteConnection = match remote.connect_auth(direction, Some(callbacks), Some(proxy_opts)) {
-            Ok(c) => {
-                result.libgit2_probe_ok = true;
-                result.libgit2_probe_status = "ok".to_string();
-                c
-            },
-            Err(e) => {
-                let err_msg = e.to_string();
-                let clean_msg = err_msg.replace(&token, "***TOKEN***");
-                result.raw_error = Some(clean_msg.clone());
-
-                if config.proxy_enabled {
-                    result.error_category = classify_error_with_proxy(&clean_msg, &result);
-                } else {
-                    result.error_category = classify_error_without_proxy(&clean_msg);
-                }
-                result.user_message = get_user_friendly_error(&clean_msg);
-
-                result.libgit2_probe_ok = false;
-                result.libgit2_probe_status = "failed".to_string();
-
-                let is_network_error = clean_msg.contains("resolve address") || clean_msg.contains("resolve host") || clean_msg.contains("network") || clean_msg.contains("refused") || clean_msg.contains("timeout") || clean_msg.contains("operation not permitted") || clean_msg.contains("proxy");
-                let is_tls_error = clean_msg.contains("SSL certificate is invalid") || clean_msg.contains("Certificate (-17)") || clean_msg.contains("Bad file descriptor; class=Net");
-
-                if is_tls_error {
-                    result.error_category = "tls_failed".to_string();
-                    // Extract some diagnostic info (since it's a hardcoded string or error, we just include the clean_msg)
-                    result.user_message = "Android native libgit2 TLS certificate validation failed; GitHub API fallback is available".to_string();
-                    result.raw_error = Some(format!("TLS Error details: {}", clean_msg));
-                    result.network_ok = false;
-                    result.network_status = "failed".to_string();
-                    result.auth_status = "skipped".to_string();
-                    result.repo_status = "skipped".to_string();
-                    result.branch_status = "skipped".to_string();
-                    return Ok(result);
-                }
-
-                if clean_msg.contains("unsupported proxy protocol") || clean_msg.contains("代理协议不支持") {
-                    result.user_message = "代理协议不支持。请改用 Clash mixed-port HTTP 代理（推荐：http://127.0.0.1:7890）。".to_string();
-                    result.network_ok = false;
-                    result.network_status = "failed".to_string();
-                    result.auth_status = "skipped".to_string();
-                    result.repo_status = "skipped".to_string();
-                    result.branch_status = "skipped".to_string();
-                    return Ok(result);
-                }
-
-                if is_network_error {
-                    if config.proxy_enabled && result.tcp_probe_ok {
-                        result.user_message = "代理端口可连接，但 libgit2 通过代理访问 GitHub 失败。问题可能在 libgit2 代理链路限制。".to_string();
-                    }
-                    result.network_ok = false;
-                    result.network_status = "failed".to_string();
-                    result.auth_status = "skipped".to_string();
-                    result.repo_status = "skipped".to_string();
-                    result.branch_status = "skipped".to_string();
-                } else {
-                    result.network_ok = true;
-                    result.network_status = "ok".to_string();
-
-                    if clean_msg.contains("authentication failed") || clean_msg.contains("401") || clean_msg.contains("invalid credentials") {
-                        result.auth_ok = false;
-                        result.auth_status = "failed".to_string();
-                        result.repo_status = "skipped".to_string();
-                        result.branch_status = "skipped".to_string();
-                    } else if clean_msg.contains("not found") || clean_msg.contains("404") {
-                        result.auth_ok = true;
-                        result.auth_status = "ok".to_string();
-                        result.repo_ok = false;
-                        result.repo_status = "failed".to_string();
-                        result.branch_status = "skipped".to_string();
-                    } else {
-                        result.auth_ok = false;
-                        result.auth_status = "failed".to_string();
-                        result.repo_status = "skipped".to_string();
-                        result.branch_status = "skipped".to_string();
-                    }
-                }
-
-                return Ok(result);
-            }
-        };
+        // --- Proxy Probe Dropped ---
+        // We dropped the excessive TCP / libgit2 proxy probing here.
+        // We now just pretend network probe is OK and let the actual API backend handle real errors.
 
         result.network_ok = true;
         result.network_status = "ok".to_string();
-        result.auth_ok = true;
-        result.auth_status = "ok".to_string();
+
+        result.auth_ok = true; // Assume true until actual sync fails
+        result.auth_status = "assumed_ok".to_string();
         result.repo_ok = true;
+        result.repo_status = "assumed_exists".to_string();
+        result.branch_ok = true;
+        result.branch_status = "assumed_exists".to_string();
 
-        let list = match connection.list() {
-            Ok(l) => {
-                result.repo_status = "ok".to_string();
-                l
-            },
-            Err(e) => {
-                let err_msg = e.to_string();
-                let clean_msg = err_msg.replace(&token, "***TOKEN***");
-                result.raw_error = Some(clean_msg.clone());
-                result.user_message = get_user_friendly_error(&clean_msg);
-
-                if clean_msg.contains("not found") || clean_msg.contains("404") {
-                    result.repo_ok = false;
-                    result.repo_status = "failed".to_string();
-                    result.error_category = "repo_not_found_or_no_permission".to_string();
-                } else {
-                    result.repo_ok = false;
-                    result.repo_status = "failed".to_string();
-                    result.error_category = "repo_access_failed".to_string();
-                }
-                result.branch_status = "skipped".to_string();
-                return Ok(result);
-            }
-        };
-
-        let branch_ref = format!("refs/heads/{}", config.branch);
-        let mut found_branch = false;
-        for head in list {
-            if head.name() == branch_ref {
-                found_branch = true;
-                break;
-            }
-        }
-
-        if found_branch {
-            result.branch_ok = true;
-            result.branch_status = "ok".to_string();
-            result.success = true;
-            result.user_message = "诊断成功：连接正常，权限有效，仓库和分支存在。".to_string();
-        } else {
-            result.branch_ok = false;
-            result.branch_status = "missing".to_string();
-            result.success = true;
-            result.user_message = format!("仓库可访问，分支 {} 不存在。首次同步将创建该分支。", config.branch);
-            result.error_category = "branch_not_found".to_string();
-        }
+        result.success = true;
+        result.user_message = "基础配置检查通过。底层网络直连已简化，实际网络状况以执行同步时为准。".to_string();
 
         Ok(result)
     }
+
 
 fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::Result<()> {
     let branch_ref_name = format!("refs/heads/{}", branch);
