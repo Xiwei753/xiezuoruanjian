@@ -10,6 +10,10 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
     println!("cargo:rerun-if-changed=qml/StatsPreviewPage.qml");
     println!("cargo:rerun-if-changed=qml/StarMapPage.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapWorkspace.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapCanvas.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapNode.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapInspector.qml");
     println!("cargo:rerun-if-changed=qml/HubPageFrame.qml");
     println!("cargo:rerun-if-changed=qml/HubPageHeader.qml");
     println!("cargo:rerun-if-changed=qml/HubContentGrid.qml");
