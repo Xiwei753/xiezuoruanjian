@@ -1235,6 +1235,7 @@ dependencies = [
  "qmetaobject",
  "qt-build-utils",
  "rfd",
+ "serde",
  "serde_json",
  "tempfile",
  "uuid",

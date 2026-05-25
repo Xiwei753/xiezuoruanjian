@@ -138,6 +138,10 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapPreviewPage.qml" as "StarMapPreviewPage.qml",
     "qml/StarMapCard.qml" as "StarMapCard.qml",
     "qml/StarMapPage.qml" as "StarMapPage.qml",
+    "qml/StarMapWorkspace.qml" as "StarMapWorkspace.qml",
+    "qml/StarMapCanvas.qml" as "StarMapCanvas.qml",
+    "qml/StarMapNode.qml" as "StarMapNode.qml",
+    "qml/StarMapInspector.qml" as "StarMapInspector.qml",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/StatCard.qml" as "StatCard.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
@@ -485,6 +489,14 @@ struct AppBackend {
     set_main_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
     get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
     unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
+    get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
+    create_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f32, y: f32) -> QString),
+    update_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString),
+    delete_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QString),
+    create_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString),
+    update_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString),
+    delete_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString) -> QString),
+    save_starmap_layout_json: qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QString),
 
     has_selected_chapter: qt_method!(fn(&self) -> bool),
     selected_chapter_exists: qt_method!(fn(&self) -> bool),
@@ -3491,6 +3503,228 @@ impl AppBackend {
             let core = core_ref.borrow();
             match core.delete_starmap(&sid) {
                 Ok(()) => serde_json::json!({"success": true}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_starmap_graph(&sid) {
+                Ok(g) => match core.get_starmap_layout(&sid) {
+                    Ok(l) => {
+                        serde_json::json!({
+                            "success": true,
+                            "data": {
+                                "graph": g,
+                                "layout": l
+                            }
+                        }).to_string().into()
+                    },
+                    Err(_) => {
+                        serde_json::json!({
+                            "success": true,
+                            "data": {
+                                "graph": g,
+                                "layout": null
+                            }
+                        }).to_string().into()
+                    }
+                },
+                Err(e) => serde_json::json!({
+                    "success": false,
+                    "userMessage": if e.to_string().contains("not bound to a project") { "请先绑定作品" } else { "加载失败" },
+                    "message": format!("{}", e)
+                }).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn create_starmap_node_json(&mut self, starmap_id: QString, title: QString, kind: QString, x: f32, y: f32) -> QString {
+        let sid = starmap_id.to_string();
+        let t = title.to_string();
+        let k = kind.to_string();
+
+        let node_kind = serde_json::from_value(serde_json::json!(k)).unwrap_or(writer_core::mind_map::graph::MindMapNodeKind::Note);
+        let id = format!("n_{}", uuid::Uuid::new_v4());
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+
+        let node = writer_core::mind_map::graph::MindMapGraphNode {
+            id: id.clone(),
+            title: t,
+            kind: node_kind,
+            payload: None,
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+        };
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.add_starmap_node(&sid, node.clone()) {
+                Ok(saved_node) => {
+                    // Update layout
+                    if let Ok(mut layout) = core.get_starmap_layout(&sid) {
+                        layout.nodes.push(writer_core::mind_map::layout::MindMapLayoutNode {
+                            node_id: saved_node.id.clone(),
+                            x,
+                            y,
+                            width: 150.0,
+                            height: 60.0,
+                            radius: 30.0,
+                            collapsed: false,
+                            z_index: 0,
+                        });
+                        let _ = core.save_starmap_layout(&sid, &layout);
+                    }
+                    serde_json::json!({"success": true, "data": saved_node}).to_string().into()
+                },
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn update_starmap_node_json(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let nid = node_id.to_string();
+        let p = patch_json.to_string();
+
+        #[derive(serde::Deserialize)]
+        struct Patch {
+            title: Option<String>,
+            kind: Option<String>,
+            tags: Option<Vec<String>>,
+        }
+
+        let patch: Patch = match serde_json::from_str(&p) {
+            Ok(pt) => pt,
+            Err(_) => return serde_json::json!({"success": false, "message": "Invalid patch JSON"}).to_string().into(),
+        };
+
+        let kind = patch.kind.and_then(|k| serde_json::from_value(serde_json::json!(k)).ok());
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.update_starmap_node(&sid, &nid, patch.title, kind, None, patch.tags) {
+                Ok(node) => serde_json::json!({"success": true, "data": node}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn delete_starmap_node_json(&mut self, starmap_id: QString, node_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let nid = node_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.delete_starmap_node(&sid, &nid) {
+                Ok(_) => serde_json::json!({"success": true}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn create_starmap_edge_json(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let from_id = from_node_id.to_string();
+        let to_id = to_node_id.to_string();
+        let k = kind.to_string();
+        let l = label.to_string();
+
+        let edge_kind = serde_json::from_value(serde_json::json!(k)).unwrap_or(writer_core::mind_map::graph::MindMapEdgeKind::RelatedTo);
+        let id = format!("e_{}", uuid::Uuid::new_v4());
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+
+        let edge = writer_core::mind_map::graph::MindMapGraphEdge {
+            id,
+            from: from_id,
+            to: to_id,
+            kind: edge_kind,
+            label: if l.is_empty() { None } else { Some(l) },
+            payload: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.add_starmap_edge(&sid, edge) {
+                Ok(saved_edge) => serde_json::json!({"success": true, "data": saved_edge}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn update_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let eid = edge_id.to_string();
+        let p = patch_json.to_string();
+
+        #[derive(serde::Deserialize)]
+        struct Patch {
+            kind: Option<String>,
+            label: Option<String>,
+        }
+
+        let patch: Patch = match serde_json::from_str(&p) {
+            Ok(pt) => pt,
+            Err(_) => return serde_json::json!({"success": false, "message": "Invalid patch JSON"}).to_string().into(),
+        };
+
+        let kind = patch.kind.and_then(|k| serde_json::from_value(serde_json::json!(k)).ok());
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.update_starmap_edge(&sid, &eid, kind, patch.label, None) {
+                Ok(edge) => serde_json::json!({"success": true, "data": edge}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn delete_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let eid = edge_id.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.delete_starmap_edge(&sid, &eid) {
+                Ok(_) => serde_json::json!({"success": true}).to_string().into(),
+                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
+            }
+        } else {
+            serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
+        }
+    }
+
+    fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString {
+        let sid = starmap_id.to_string();
+        let lj = layout_json.to_string();
+
+        let layout: writer_core::mind_map::layout::MindMapLayout = match serde_json::from_str(&lj) {
+            Ok(l) => l,
+            Err(_) => return serde_json::json!({"success": false, "message": "Invalid layout JSON"}).to_string().into(),
+        };
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.save_starmap_layout(&sid, &layout) {
+                Ok(_) => serde_json::json!({"success": true}).to_string().into(),
                 Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
             }
         } else {

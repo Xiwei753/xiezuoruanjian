@@ -9,7 +9,7 @@ Rectangle {
     property var starmaps: []
     property string filterProjectId: ""
 
-    signal openStarmap(string starmapId)
+    signal openStarmap(string starmapId, string title)
 
     color: dt ? dt.bg : "#111318"
 
@@ -71,7 +71,7 @@ Rectangle {
                     starmapData: starmapObj
                     width: parent.width
                     height: 184
-                    onClicked: function(starmapId) { root.openStarmap(starmapId) }
+                    onClicked: function(starmapId, title) { root.openStarmap(starmapId, title) }
                     onMenuRequested: function(starmapId, title) {
                         starmapContextMenu.starmapId = starmapId
                         starmapContextMenu.starmapTitle = title

@@ -11,6 +11,10 @@
     <file alias="StarMapPreviewPage.qml">qml/StarMapPreviewPage.qml</file>
     <file alias="StarMapPage.qml">qml/StarMapPage.qml</file>
     <file alias="StarMapCard.qml">qml/StarMapCard.qml</file>
+    <file alias="StarMapWorkspace.qml">qml/StarMapWorkspace.qml</file>
+    <file alias="StarMapCanvas.qml">qml/StarMapCanvas.qml</file>
+    <file alias="StarMapNode.qml">qml/StarMapNode.qml</file>
+    <file alias="StarMapInspector.qml">qml/StarMapInspector.qml</file>
     <file alias="StatsPreviewPage.qml">qml/StatsPreviewPage.qml</file>
     <file alias="StatCard.qml">qml/StatCard.qml</file>
     <file alias="CreativeHub.qml">qml/CreativeHub.qml</file>

@@ -71,6 +71,10 @@ ApplicationWindow {
     property string writingChapterId: ""
     property string writingChapterTitle: ""
 
+    property bool starmapMode: false
+    property string currentStarmapId: ""
+    property string currentStarmapTitle: ""
+
     // Design tokens
     DesignTokens {
         id: designTokens
@@ -186,11 +190,25 @@ ApplicationWindow {
     Item {
         anchors.fill: parent
 
+        // StarMapWorkspace: shown when in starmap editor mode
+        Loader {
+            id: starmapWorkspaceLoader
+            anchors.fill: parent
+            active: appState.hasWorkspace && starmapMode
+            sourceComponent: StarMapWorkspace {
+                starmapId: window.currentStarmapId
+                starmapTitle: window.currentStarmapTitle
+                onBackClicked: {
+                    window.starmapMode = false;
+                }
+            }
+        }
+
         // CreativeHub: shown when workspace open and not in writing mode
         Loader {
             id: creativeHubLoader
             anchors.fill: parent
-            active: appState.hasWorkspace && !writingMode
+            active: appState.hasWorkspace && !writingMode && !starmapMode
             sourceComponent: CreativeHub {
                 dt: designTokens
                 backendRef: backend
@@ -255,6 +273,15 @@ ApplicationWindow {
                     try {
                         applyState(JSON.parse(backend.refresh_app_state_json()));
                     } catch (e) {}
+                }
+
+                Connections {
+                    target: creativeHubLoader.item
+                    function onOpenStarmapWorkspace(smId, smTitle) {
+                        window.currentStarmapId = smId;
+                        window.currentStarmapTitle = smTitle;
+                        window.starmapMode = true;
+                    }
                 }
 
                 onOpenSettings: {

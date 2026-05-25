@@ -8,7 +8,7 @@ Rectangle {
     property var starmapData: ({})
     property bool isChild: false
 
-    signal clicked(string starmapId)
+    signal clicked(string starmapId, string title)
     signal menuRequested(string starmapId, string title)
 
     width: isChild ? 200 : 260
@@ -167,7 +167,7 @@ Rectangle {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onClicked: function(mouse) {
             if (mouse.button === Qt.LeftButton) {
-                root.clicked(root.starmapData.starmap_id || "");
+                root.clicked(root.starmapData.starmap_id || "", root.starmapData.title || "");
             } else if (mouse.button === Qt.RightButton) {
                 root.menuRequested(root.starmapData.starmap_id || "", root.starmapData.title || "");
             }
