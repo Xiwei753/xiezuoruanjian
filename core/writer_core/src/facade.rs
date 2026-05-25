@@ -955,6 +955,46 @@ impl WriterCore {
         crate::starmap::unbind_starmap_from_project(&self.workspace_path, starmap_id)
     }
 
+    pub fn get_starmap_graph(&self, starmap_id: &str) -> Result<crate::mind_map::graph::MindMapGraph> {
+        crate::starmap::graph::get_starmap_graph(&self.workspace_path, starmap_id)
+    }
+
+    pub fn save_starmap_graph(&self, starmap_id: &str, graph: &crate::mind_map::graph::MindMapGraph) -> Result<()> {
+        crate::starmap::graph::save_starmap_graph(&self.workspace_path, starmap_id, graph)
+    }
+
+    pub fn add_starmap_node(&self, starmap_id: &str, node: crate::mind_map::graph::MindMapGraphNode) -> Result<crate::mind_map::graph::MindMapGraphNode> {
+        crate::starmap::graph::add_starmap_node(&self.workspace_path, starmap_id, node)
+    }
+
+    pub fn update_starmap_node(&self, starmap_id: &str, node_id: &str, title: Option<String>, kind: Option<crate::mind_map::graph::MindMapNodeKind>, payload: Option<serde_json::Value>, tags: Option<Vec<String>>) -> Result<crate::mind_map::graph::MindMapGraphNode> {
+        crate::starmap::graph::update_starmap_node(&self.workspace_path, starmap_id, node_id, title, kind, payload, tags)
+    }
+
+    pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> Result<()> {
+        crate::starmap::graph::delete_starmap_node(&self.workspace_path, starmap_id, node_id)
+    }
+
+    pub fn add_starmap_edge(&self, starmap_id: &str, edge: crate::mind_map::graph::MindMapGraphEdge) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
+        crate::starmap::graph::add_starmap_edge(&self.workspace_path, starmap_id, edge)
+    }
+
+    pub fn update_starmap_edge(&self, starmap_id: &str, edge_id: &str, kind: Option<crate::mind_map::graph::MindMapEdgeKind>, label: Option<String>, payload: Option<serde_json::Value>) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
+        crate::starmap::graph::update_starmap_edge(&self.workspace_path, starmap_id, edge_id, kind, label, payload)
+    }
+
+    pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> Result<()> {
+        crate::starmap::graph::delete_starmap_edge(&self.workspace_path, starmap_id, edge_id)
+    }
+
+    pub fn get_starmap_layout(&self, starmap_id: &str) -> Result<crate::mind_map::layout::MindMapLayout> {
+        crate::starmap::graph::get_starmap_layout(&self.workspace_path, starmap_id)
+    }
+
+    pub fn save_starmap_layout(&self, starmap_id: &str, layout: &crate::mind_map::layout::MindMapLayout) -> Result<()> {
+        crate::starmap::graph::save_starmap_layout(&self.workspace_path, starmap_id, layout)
+    }
+
     // --- Writing Stats ---
 
     pub fn record_writing_event(

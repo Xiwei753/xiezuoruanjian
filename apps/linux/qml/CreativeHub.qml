@@ -17,6 +17,7 @@ Rectangle {
     signal openSettings()
     signal openSync()
     signal switchWorkspace()
+    signal openStarmapWorkspace(string smId, string smTitle)
 
     color: dt ? dt.bg : "#111318"
 
@@ -245,6 +246,10 @@ Rectangle {
                     dt: root.dt
                     backendRef: root.backendRef
                     appState: root.appState
+
+                    onOpenStarmap: function(starmapId, title) {
+                        root.openStarmapWorkspace(starmapId, title);
+                    }
                 }
             }
 
