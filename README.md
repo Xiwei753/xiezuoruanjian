@@ -23,7 +23,6 @@
 
 ### 工具
 
-- `tools/validate_workspace.py`: 根据规范验证工作区的结构。
 - `tools/build_core.sh`: 构建 Rust 核心库。
 
 ### Rust 核心

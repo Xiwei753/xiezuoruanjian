@@ -1,0 +1,23 @@
+namespace writer_core {
+    string perform_dummy_action();
+};
+
+dictionary AiActionResponse {
+    string display_text;
+    sequence<AiAction> actions;
+};
+
+dictionary AiAction {
+    string label;
+    AiActionType action_type;
+    string payload;
+};
+
+enum AiActionType {
+    "Navigate",
+    "ApplySetting",
+    "InsertText",
+    "ReplaceText",
+    "RunCommand",
+    "Custom",
+};

@@ -252,21 +252,8 @@ fn determine_diagnostics_status(result: &writer_core::sync_service::SyncDiagnost
 }
 
 fn format_proxy_diagnostics(msg: &mut String, result: &writer_core::sync_service::SyncDiagnosticsResult) {
-    if result.proxy_used && result.proxy_type != "none" {
-        if result.proxy_type == "auto" {
-            msg.push_str("\n代理配置: auto (注意：auto 代表 git config 自动代理，不是 Clash 自动代理，不是 TUN，不是 Android VPN，不是系统代理)");
-        } else {
-            let protocol = if result.proxy_type == "socks5" { "socks5h" } else { "http" };
-            msg.push_str(&format!("\n代理配置: {}://{}:{}", protocol, result.proxy_host, result.proxy_port));
-            if protocol == "http" || protocol == "socks5h" {
-                msg.push_str(&format!("\n  TCP 连通: {} ({})", if result.tcp_probe_ok { "成功" } else { "失败" }, result.tcp_probe_status));
-                if protocol == "http" {
-                    msg.push_str(&format!("\n  HTTP CONNECT: {} ({})", if result.http_connect_probe_ok { "成功" } else { "失败" }, result.http_connect_probe_status));
-                }
-            }
-        }
-        msg.push_str(&format!("\n  libgit2 访问: {} ({})\n", if result.libgit2_probe_ok { "成功" } else { "失败" }, result.libgit2_probe_status));
-    }
+    // We display proxy_status which encapsulates basic proxy settings information now.
+    msg.push_str(&format!("\n代理配置: {}", result.app_proxy_status));
 }
 
 fn format_diagnostics_message(result: &writer_core::sync_service::SyncDiagnosticsResult) -> String {

@@ -384,8 +384,8 @@ mod tests {
     #[test]
     fn test_create_and_list_starmaps() {
         let dir = setup_workspace();
-        let meta1 = create_starmap(dir.path(), "Star Map 1", "desc1", None).unwrap();
-        let meta2 = create_starmap(dir.path(), "Star Map 2", "desc2", Some("#FF0000")).unwrap();
+        let _meta1 = create_starmap(dir.path(), "Star Map 1", "desc1", None).unwrap();
+        let _meta2 = create_starmap(dir.path(), "Star Map 2", "desc2", Some("#FF0000")).unwrap();
 
         let all = list_starmaps(dir.path()).unwrap();
         assert_eq!(all.len(), 2);
