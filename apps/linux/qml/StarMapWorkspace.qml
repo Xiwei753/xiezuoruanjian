@@ -9,12 +9,14 @@ Item {
 
     property string starmapId: ""
     property string starmapTitle: "星图编辑器"
+    property var dt: null
+    property var backendRef: null
 
     signal backClicked()
 
     Rectangle {
         anchors.fill: parent
-        color: DesignTokens.colorBackground
+        color: dt ? dt.surface : "#1A1D23"
     }
 
     // 顶部工具栏
@@ -22,8 +24,8 @@ Item {
         id: toolbar
         width: parent.width
         height: 56
-        color: DesignTokens.colorSurface
-        border.color: DesignTokens.colorBorder
+        color: dt ? dt.card : "#1E2128"
+        border.color: dt ? dt.border : "#2A2E36"
         border.width: 1
         anchors.top: parent.top
         z: 10
@@ -42,7 +44,7 @@ Item {
                 text: root.starmapTitle
                 font.pixelSize: 18
                 font.bold: true
-                color: DesignTokens.colorText
+                color: dt ? dt.textPrimary : "#E2E4E9"
                 Layout.fillWidth: true
             }
 
@@ -72,6 +74,8 @@ Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
             starmapId: root.starmapId
+            dt: root.dt
+            backendRef: root.backendRef
 
             onNodeSelected: function(node) {
                 inspector.selectedNode = node
@@ -90,7 +94,7 @@ Item {
         Rectangle {
             width: 1
             Layout.fillHeight: true
-            color: DesignTokens.colorBorder
+            color: dt ? dt.border : "#2A2E36"
         }
 
         StarMapInspector {
@@ -98,6 +102,7 @@ Item {
             width: 300
             Layout.fillHeight: true
             starmapId: root.starmapId
+            dt: root.dt
 
             onNodeUpdated: function(nodeId, patch) {
                 canvas.updateNodeFromInspector(nodeId, patch)

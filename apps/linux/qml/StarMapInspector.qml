@@ -4,7 +4,8 @@ import QtQuick.Layouts 1.15
 
 Rectangle {
     id: root
-    color: DesignTokens.colorSurface
+    property var dt: null
+    color: dt ? dt.surface : "#1A1D23"
 
     property string starmapId: ""
     property var selectedNode: null
@@ -24,13 +25,13 @@ Rectangle {
             text: "属性"
             font.pixelSize: 16
             font.bold: true
-            color: DesignTokens.colorText
+            color: dt ? dt.textPrimary : "#E2E4E9"
             visible: selectedNode !== null || selectedEdge !== null
         }
 
         Text {
             text: "请在左侧选择节点或连线"
-            color: DesignTokens.colorTextLight
+            color: dt ? dt.textSecondary : "#9CA0AB"
             visible: selectedNode === null && selectedEdge === null
             Layout.alignment: Qt.AlignHCenter
         }
@@ -41,7 +42,7 @@ Rectangle {
             spacing: 12
             visible: selectedNode !== null
 
-            AppText { text: "标题"; color: DesignTokens.colorTextLight }
+            AppText { text: "标题"; color: dt ? dt.textSecondary : "#9CA0AB" }
             AppTextField {
                 id: titleInput
                 Layout.fillWidth: true
@@ -53,7 +54,7 @@ Rectangle {
                 }
             }
 
-            AppText { text: "类型"; color: DesignTokens.colorTextLight }
+            AppText { text: "类型"; color: dt ? dt.textSecondary : "#9CA0AB" }
             ModernComboBox {
                 id: kindInput
                 Layout.fillWidth: true
@@ -86,7 +87,7 @@ Rectangle {
             spacing: 12
             visible: selectedEdge !== null
 
-            AppText { text: "类型"; color: DesignTokens.colorTextLight }
+            AppText { text: "类型"; color: dt ? dt.textSecondary : "#9CA0AB" }
             ModernComboBox {
                 id: edgeKindInput
                 Layout.fillWidth: true
@@ -102,7 +103,7 @@ Rectangle {
                 }
             }
 
-            AppText { text: "标签"; color: DesignTokens.colorTextLight }
+            AppText { text: "标签"; color: dt ? dt.textSecondary : "#9CA0AB" }
             AppTextField {
                 id: labelInput
                 Layout.fillWidth: true
