@@ -1,7 +1,8 @@
 pub(crate) mod delete_guard;
 pub mod action_registry;
-#[cfg(feature = "ai")]
+// Always export these for UniFFI
 pub mod ai_service;
+pub use crate::ai_service::{AiActionResponse, AiAction, AiActionType};
 pub mod app_config;
 pub mod graph_service;
 pub mod proofreading_service;
@@ -45,3 +46,9 @@ pub mod volume_tests;
 pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
+
+pub fn perform_dummy_action() -> String {
+    "hello from uniffi".to_string()
+}
+
+uniffi::include_scaffolding!("api");

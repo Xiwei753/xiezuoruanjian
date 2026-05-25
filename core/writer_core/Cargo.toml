@@ -20,3 +20,10 @@ aho-corasick = "1.1.4"
 git2 = { version = "0.18", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 base64 = "0.22.1"
+
+[dependencies.uniffi]
+version = "0.28.0"
+features = ["cli"]
+
+[build-dependencies]
+uniffi = { version = "0.28.0", features = ["build"] }

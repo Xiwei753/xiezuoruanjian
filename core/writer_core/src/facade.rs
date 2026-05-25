@@ -142,7 +142,7 @@ impl WriterCore {
             }
             "settings.editor.font_size.set" => {
                 if let Some(font_size) = args.get("fontSize").and_then(|v| v.as_f64()) {
-                    if font_size < 10.0 || font_size > 72.0 {
+                    if !(10.0..=72.0).contains(&font_size) {
                         return Ok(ActionResult {
                             success: false,
                             message: Some("Font size must be between 10 and 72".to_string()),
@@ -203,7 +203,7 @@ impl WriterCore {
             }
             "settings.editor.auto_save_delay.set" => {
                 if let Some(delay) = args.get("delayMs").and_then(|v| v.as_u64()) {
-                    if delay < 500 || delay > 10000 {
+                    if !(500..=10000).contains(&delay) {
                         return Ok(ActionResult {
                             success: false,
                             message: Some("Delay must be between 500 and 10000".to_string()),
@@ -305,7 +305,7 @@ impl WriterCore {
             }
             "settings.editor.line_spacing.set" => {
                 if let Some(multiplier) = args.get("multiplier").and_then(|v| v.as_f64()) {
-                    if multiplier < 1.0 || multiplier > 3.0 {
+                    if !(1.0..=3.0).contains(&multiplier) {
                         return Ok(ActionResult {
                             success: false,
                             message: Some("Line spacing multiplier must be between 1.0 and 3.0".to_string()),
@@ -733,8 +733,7 @@ impl WriterCore {
         let content = std::fs::read_to_string(&secrets_path)?;
         let secrets: crate::sync_service::SyncSecrets =
             serde_json::from_str(&content).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -752,8 +751,7 @@ impl WriterCore {
             std::fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(secrets).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
@@ -785,15 +783,13 @@ impl WriterCore {
         }
         let content = std::fs::read_to_string(&config_path)?;
         let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
         let mut config: crate::sync_service::SyncConfig =
             serde_json::from_str(&content).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                crate::Error::Io(std::io::Error::other(
                     e.to_string(),
                 ))
             })?;
@@ -820,8 +816,7 @@ impl WriterCore {
             std::fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(config).map_err(|e| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            crate::Error::Io(std::io::Error::other(
                 e.to_string(),
             ))
         })?;
