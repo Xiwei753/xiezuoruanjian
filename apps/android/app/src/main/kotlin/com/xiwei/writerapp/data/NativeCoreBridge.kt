@@ -1180,15 +1180,36 @@ class NativeCoreBridge(context: Context) {
 
 
     // --- StarMap API ---
-    private external fun listStarmapsJson(workspaceDir: String): String
-    private external fun createStarmapJson(workspaceDir: String, title: String, desc: String): String
-    private external fun getStarmapGraphJson(workspaceDir: String, starmapId: String): String
-    private external fun addStarmapNodeJson(workspaceDir: String, starmapId: String, nodeJson: String): String
-    private external fun saveStarmapLayoutJson(workspaceDir: String, starmapId: String, layoutJson: String): String
+    private external fun listStarmapsJson(workspaceDir: String): String?
+    private external fun createStarmapJson(workspaceDir: String, title: String, desc: String): String?
+    private external fun getStarmapGraphJson(workspaceDir: String, starmapId: String): String?
+    private external fun addStarmapNodeJson(workspaceDir: String, starmapId: String, nodeJson: String): String?
+    private external fun saveStarmapLayoutJson(workspaceDir: String, starmapId: String, layoutJson: String): String?
+    private external fun renameStarmapNative(workspaceDir: String, starmapId: String, newTitle: String): String?
+    private external fun deleteStarmapNative(workspaceDir: String, starmapId: String): String?
+    private external fun bindStarmapToProjectJson(workspaceDir: String, starmapId: String, projectId: String): String?
+    private external fun unbindStarmapFromProjectJson(workspaceDir: String, starmapId: String): String?
+    private external fun setMainStarmapForProjectJson(workspaceDir: String, starmapId: String, projectId: String): String?
+    private external fun getMainStarmapForProjectJson(workspaceDir: String, projectId: String): String?
+    private external fun createChildStarmapJson(workspaceDir: String, parentId: String, title: String, desc: String): String?
+    private external fun updateStarmapNodeJson(workspaceDir: String, starmapId: String, nodeId: String, patchJson: String): String?
+    private external fun deleteStarmapNodeJson(workspaceDir: String, starmapId: String, nodeId: String): String?
+    private external fun addStarmapEdgeJson(workspaceDir: String, starmapId: String, edgeJson: String): String?
+    private external fun updateStarmapEdgeJson(workspaceDir: String, starmapId: String, edgeId: String, patchJson: String): String?
+    private external fun deleteStarmapEdgeJson(workspaceDir: String, starmapId: String, edgeId: String): String?
+    private external fun saveStarmapGraphJson(workspaceDir: String, starmapId: String, graphJson: String): String?
+
+    // --- Writing Stats: extended ---
+    private external fun getWritingStatsByProjectNative(workspaceDir: String, startDate: String, endDate: String): String?
+    private external fun getWritingStatsByChapterNative(workspaceDir: String, startDate: String, endDate: String): String?
+    private external fun getWritingStatsByDeviceNative(workspaceDir: String, startDate: String, endDate: String): String?
+    private external fun getWritingSpeedCurveNative(workspaceDir: String, startDate: String, endDate: String, bucketMinutes: Int): String?
 
     fun listStarmaps(): NativeResult<List<StarMapMeta>> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = listStarmapsJson(workspaceDir)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<List<StarMapMeta>>>() {}.type
             val response: RustResponse<List<StarMapMeta>> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
@@ -1196,12 +1217,17 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
     }
 
     fun createStarmap(title: String, desc: String): NativeResult<StarMapMeta> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = createStarmapJson(workspaceDir, title, desc)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<StarMapMeta>>() {}.type
             val response: RustResponse<StarMapMeta> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
@@ -1209,12 +1235,17 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
     }
 
     fun getStarmapGraph(starmapId: String): NativeResult<StarMapData> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = getStarmapGraphJson(workspaceDir, starmapId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<StarMapData>>() {}.type
             val response: RustResponse<StarMapData> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
@@ -1222,13 +1253,18 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
     }
 
     fun addStarmapNode(starmapId: String, node: MindMapGraphNode): NativeResult<MindMapGraphNode> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val nodeJson = gson.toJson(node)
             val json = addStarmapNodeJson(workspaceDir, starmapId, nodeJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<MindMapGraphNode>>() {}.type
             val response: RustResponse<MindMapGraphNode> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
@@ -1236,13 +1272,18 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
     }
 
     fun saveStarmapLayout(starmapId: String, layout: MindMapLayout): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val layoutJson = gson.toJson(layout)
             val json = saveStarmapLayoutJson(workspaceDir, starmapId, layoutJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<Any>>() {}.type
             val response: RustResponse<Any> = gson.fromJson(json, type)
             if (response.success) {
@@ -1250,6 +1291,273 @@ class NativeCoreBridge(context: Context) {
             } else {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
-        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun renameStarmap(starmapId: String, newTitle: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = renameStarmapNative(workspaceDir, starmapId, newTitle)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteStarmap(starmapId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = deleteStarmapNative(workspaceDir, starmapId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun bindStarmapToProject(starmapId: String, projectId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = bindStarmapToProjectJson(workspaceDir, starmapId, projectId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun unbindStarmapFromProject(starmapId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = unbindStarmapFromProjectJson(workspaceDir, starmapId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun setMainStarmapForProject(starmapId: String, projectId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = setMainStarmapForProjectJson(workspaceDir, starmapId, projectId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getMainStarmapForProject(projectId: String): NativeResult<StarMapMeta?> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = getMainStarmapForProjectJson(workspaceDir, projectId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<StarMapMeta>>() {}.type
+            val response: RustResponse<StarMapMeta> = gson.fromJson(json, type)
+            if (response.success) NativeResult.Success(response.data) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun createChildStarmap(parentId: String, title: String, desc: String): NativeResult<StarMapMeta> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = createChildStarmapJson(workspaceDir, parentId, title, desc)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<StarMapMeta>>() {}.type
+            val response: RustResponse<StarMapMeta> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun updateStarmapNode(starmapId: String, nodeId: String, patchJson: String): NativeResult<MindMapGraphNode> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = updateStarmapNodeJson(workspaceDir, starmapId, nodeId, patchJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<MindMapGraphNode>>() {}.type
+            val response: RustResponse<MindMapGraphNode> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteStarmapNode(starmapId: String, nodeId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = deleteStarmapNodeJson(workspaceDir, starmapId, nodeId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun addStarmapEdge(starmapId: String, edgeJson: String): NativeResult<MindMapGraphEdge> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = addStarmapEdgeJson(workspaceDir, starmapId, edgeJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<MindMapGraphEdge>>() {}.type
+            val response: RustResponse<MindMapGraphEdge> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun updateStarmapEdge(starmapId: String, edgeId: String, patchJson: String): NativeResult<MindMapGraphEdge> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = updateStarmapEdgeJson(workspaceDir, starmapId, edgeId, patchJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<MindMapGraphEdge>>() {}.type
+            val response: RustResponse<MindMapGraphEdge> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun deleteStarmapEdge(starmapId: String, edgeId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = deleteStarmapEdgeJson(workspaceDir, starmapId, edgeId)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun saveStarmapGraph(starmapId: String, graphJson: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = saveStarmapGraphJson(workspaceDir, starmapId, graphJson)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val response = gson.fromJson(json, RustResponse::class.java)
+            if (response.success) NativeResult.Success(true) else NativeResult.Error(response.error ?: "Unknown error")
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    // --- Writing Stats: extended ---
+
+    fun getWritingStatsByProject(startDate: String, endDate: String): NativeResult<Any> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = getWritingStatsByProjectNative(workspaceDir, startDate, endDate)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getWritingStatsByChapter(startDate: String, endDate: String): NativeResult<Any> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = getWritingStatsByChapterNative(workspaceDir, startDate, endDate)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getWritingStatsByDevice(startDate: String, endDate: String): NativeResult<Any> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = getWritingStatsByDeviceNative(workspaceDir, startDate, endDate)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun getWritingSpeedCurve(startDate: String, endDate: String, bucketMinutes: Int): NativeResult<Any> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        return try {
+            val json = getWritingSpeedCurveNative(workspaceDir, startDate, endDate, bucketMinutes)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
+        }
     }
 }

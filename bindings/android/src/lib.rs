@@ -1653,3 +1653,333 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveStarma
         Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))
     }
 }
+
+// --- StarMap: Rename / Delete / Bind ---
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameStarmapNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    new_title_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let new_title = match jstring_to_string(&mut env, &new_title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.rename_starmap(&starmap_id, &new_title).map(|_| ()))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteStarmapNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.delete_starmap(&starmap_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_bindStarmapToProjectJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    project_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.bind_starmap_to_project(&starmap_id, &project_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_unbindStarmapFromProjectJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.unbind_starmap_from_project(&starmap_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_setMainStarmapForProjectJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    project_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.set_main_starmap_for_project(&starmap_id, &project_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getMainStarmapForProjectJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.get_main_starmap_for_project(&project_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createChildStarmapJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    parent_id_j: JString,
+    title_j: JString,
+    desc_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let parent_id = match jstring_to_string(&mut env, &parent_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let title = match jstring_to_string(&mut env, &title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let desc = match jstring_to_string(&mut env, &desc_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.create_child_starmap(&parent_id, &title, &desc, None))
+}
+
+// --- StarMap: Node CRUD ---
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateStarmapNodeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    node_id_j: JString,
+    patch_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let node_id = match jstring_to_string(&mut env, &node_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let patch_json = match jstring_to_string(&mut env, &patch_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+
+    let patch: serde_json::Value = match serde_json::from_str(&patch_json) {
+        Ok(v) => v,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let title = patch.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let kind = patch.get("kind").and_then(|v| v.as_str()).map(|s| {
+        match s {
+            "project" => writer_core::mind_map::graph::MindMapNodeKind::Project,
+            "volume" => writer_core::mind_map::graph::MindMapNodeKind::Volume,
+            "chapter" => writer_core::mind_map::graph::MindMapNodeKind::Chapter,
+            "textAnchor" => writer_core::mind_map::graph::MindMapNodeKind::TextAnchor,
+            "character" => writer_core::mind_map::graph::MindMapNodeKind::Character,
+            "event" => writer_core::mind_map::graph::MindMapNodeKind::Event,
+            "location" => writer_core::mind_map::graph::MindMapNodeKind::Location,
+            "item" => writer_core::mind_map::graph::MindMapNodeKind::Item,
+            "concept" => writer_core::mind_map::graph::MindMapNodeKind::Concept,
+            "theme" => writer_core::mind_map::graph::MindMapNodeKind::Theme,
+            "note" => writer_core::mind_map::graph::MindMapNodeKind::Note,
+            "organization" => writer_core::mind_map::graph::MindMapNodeKind::Organization,
+            "timeline" => writer_core::mind_map::graph::MindMapNodeKind::Timeline,
+            "plot" => writer_core::mind_map::graph::MindMapNodeKind::Plot,
+            "foreshadowing" => writer_core::mind_map::graph::MindMapNodeKind::Foreshadowing,
+            _ => writer_core::mind_map::graph::MindMapNodeKind::Custom,
+        }
+    });
+    let payload = patch.get("payload").cloned();
+    let tags = patch.get("tags").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
+    });
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.update_starmap_node(&starmap_id, &node_id, title, kind, payload, tags))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteStarmapNodeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    node_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let node_id = match jstring_to_string(&mut env, &node_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.delete_starmap_node(&starmap_id, &node_id))
+}
+
+// --- StarMap: Edge CRUD ---
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_addStarmapEdgeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    edge_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let edge_json = match jstring_to_string(&mut env, &edge_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let edge = match serde_json::from_str(&edge_json) {
+        Ok(e) => e,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.add_starmap_edge(&starmap_id, edge))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateStarmapEdgeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    edge_id_j: JString,
+    patch_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let edge_id = match jstring_to_string(&mut env, &edge_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let patch_json = match jstring_to_string(&mut env, &patch_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+
+    let patch: serde_json::Value = match serde_json::from_str(&patch_json) {
+        Ok(v) => v,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+
+    let kind = patch.get("kind").and_then(|v| v.as_str()).map(|s| {
+        match s {
+            "contains" => writer_core::mind_map::graph::MindMapEdgeKind::Contains,
+            "references" => writer_core::mind_map::graph::MindMapEdgeKind::References,
+            "appearsIn" => writer_core::mind_map::graph::MindMapEdgeKind::AppearsIn,
+            "causes" => writer_core::mind_map::graph::MindMapEdgeKind::Causes,
+            "relatedTo" => writer_core::mind_map::graph::MindMapEdgeKind::RelatedTo,
+            "locatedAt" => writer_core::mind_map::graph::MindMapEdgeKind::LocatedAt,
+            "characterRelation" => writer_core::mind_map::graph::MindMapEdgeKind::CharacterRelation,
+            "timeline" => writer_core::mind_map::graph::MindMapEdgeKind::Timeline,
+            "foreshadows" => writer_core::mind_map::graph::MindMapEdgeKind::Foreshadows,
+            "resolves" => writer_core::mind_map::graph::MindMapEdgeKind::Resolves,
+            "dependsOn" => writer_core::mind_map::graph::MindMapEdgeKind::DependsOn,
+            "conflictsWith" => writer_core::mind_map::graph::MindMapEdgeKind::ConflictsWith,
+            _ => writer_core::mind_map::graph::MindMapEdgeKind::Custom,
+        }
+    });
+    let label = patch.get("label").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let payload = patch.get("payload").cloned();
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.update_starmap_edge(&starmap_id, &edge_id, kind, label, payload))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteStarmapEdgeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    edge_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let edge_id = match jstring_to_string(&mut env, &edge_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.delete_starmap_edge(&starmap_id, &edge_id))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveStarmapGraphJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    graph_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let graph_json = match jstring_to_string(&mut env, &graph_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let graph = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
+    };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.save_starmap_graph(&starmap_id, &graph))
+}
+
+// --- Writing Stats: By Project / Chapter / Device / Speed Curve ---
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWritingStatsByProjectNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    start_date_j: JString,
+    end_date_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.get_writing_stats_by_project(&start_date, &end_date))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWritingStatsByChapterNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    start_date_j: JString,
+    end_date_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.get_writing_stats_by_chapter(&start_date, &end_date))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWritingStatsByDeviceNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    start_date_j: JString,
+    end_date_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.get_writing_stats_by_device(&start_date, &end_date))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWritingSpeedCurveNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    start_date_j: JString,
+    end_date_j: JString,
+    bucket_minutes: jni::sys::jint,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.get_writing_speed_curve(&start_date, &end_date, bucket_minutes as u32))
+}
