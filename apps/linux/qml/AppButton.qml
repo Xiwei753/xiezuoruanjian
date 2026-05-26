@@ -6,6 +6,7 @@ Button {
     property var theme: null
     property string tooltip: ""
     property bool small: false
+    property bool primary: false
 
     implicitHeight: small ? 28 : 32
     implicitWidth: Math.max(tm.width + (small ? 16 : 24), small ? 48 : 64)
@@ -27,7 +28,8 @@ Button {
     background: Rectangle {
         color: {
             if (!control.enabled) return control.theme ? control.theme.surfaceAlt : "#f1f5f9"
-            return control.hovered ? (control.theme ? control.theme.primaryHover : "#60a5fa") : (control.theme ? control.theme.primary : "#3b82f6")
+            if (control.primary) return control.theme ? control.theme.primary : "#3b82f6"
+            return control.hovered ? (control.theme ? control.theme.primaryHover : "#60a5fa") : (control.theme ? control.theme.surfaceVariant : "#242933")
         }
         border.color: !control.enabled ? (control.theme ? control.theme.border : "#e2e8f0") : "transparent"
         border.width: !control.enabled ? 1 : 0
