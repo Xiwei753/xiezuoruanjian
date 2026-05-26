@@ -75,6 +75,8 @@ android {
             isDefault = true
         }
         create("ai") {
+            applicationIdSuffix = ".ai"
+            versionNameSuffix = "-ai"
             dimension = "ai"
         }
     }
