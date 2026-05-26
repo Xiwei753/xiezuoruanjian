@@ -13,6 +13,8 @@ Item {
     property alias validator: inputField.validator
     property bool fieldTabFocus: true
 
+    signal editingFinished()
+
     implicitHeight: inputField.height + 22
     implicitWidth: 200
 
@@ -37,6 +39,7 @@ Item {
             echoMode: control.echoMode
             validator: control.validator
             activeFocusOnTab: control.fieldTabFocus
+            onEditingFinished: control.editingFinished()
             background: Rectangle {
                 color: control.theme ? control.theme.surface : "#1a1a2e"
                 border.color: inputField.activeFocus ? (control.theme ? control.theme.borderFocus : "#0ea5e9") : (control.theme ? control.theme.border : "#334155")

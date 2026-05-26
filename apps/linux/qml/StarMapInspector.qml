@@ -58,7 +58,7 @@ Rectangle {
             ModernComboBox {
                 id: kindInput
                 Layout.fillWidth: true
-                model: ["Project", "Volume", "Chapter", "TextAnchor", "Character", "Event", "Location", "Item", "Concept", "Theme", "Note", "Organization", "Timeline", "Plot", "Foreshadowing", "Custom"]
+                model: ["project", "volume", "chapter", "textAnchor", "character", "event", "location", "item", "concept", "theme", "note", "organization", "timeline", "plot", "foreshadowing", "custom"]
                 currentIndex: selectedNode ? model.indexOf(selectedNode.kind) : -1
                 onActivated: {
                     if (selectedNode) {
@@ -91,7 +91,7 @@ Rectangle {
             ModernComboBox {
                 id: edgeKindInput
                 Layout.fillWidth: true
-                model: ["Contains", "References", "AppearsIn", "Causes", "RelatedTo", "LocatedAt", "CharacterRelation", "Timeline", "Foreshadows", "Resolves", "DependsOn", "ConflictsWith", "Custom"]
+                model: ["contains", "references", "appearsIn", "causes", "relatedTo", "locatedAt", "characterRelation", "timeline", "foreshadows", "resolves", "dependsOn", "conflictsWith", "custom"]
                 currentIndex: selectedEdge ? model.indexOf(selectedEdge.kind) : -1
                 onActivated: {
                     if (selectedEdge) {
