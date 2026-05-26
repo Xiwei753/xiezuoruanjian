@@ -31,6 +31,10 @@ pub struct LocalSettings {
     pub editor_typing_animation_enabled: bool,
     #[serde(default = "default_editor_smooth_cursor_enabled")]
     pub editor_smooth_cursor_enabled: bool,
+    #[serde(default = "default_editor_typing_animation_duration_ms")]
+    pub editor_typing_animation_duration_ms: u64,
+    #[serde(default = "default_editor_smooth_cursor_duration_ms")]
+    pub editor_smooth_cursor_duration_ms: u64,
     #[serde(default)]
     pub ai_enabled: bool,
     #[serde(default)]
@@ -62,6 +66,12 @@ fn default_editor_typing_animation_enabled() -> bool {
 fn default_editor_smooth_cursor_enabled() -> bool {
     true
 }
+fn default_editor_typing_animation_duration_ms() -> u64 {
+    100
+}
+fn default_editor_smooth_cursor_duration_ms() -> u64 {
+    80
+}
 
 impl Default for LocalSettings {
     fn default() -> Self {
@@ -78,6 +88,8 @@ impl Default for LocalSettings {
             window_height: 600.0,
             editor_typing_animation_enabled: default_editor_typing_animation_enabled(),
             editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
+            editor_typing_animation_duration_ms: default_editor_typing_animation_duration_ms(),
+            editor_smooth_cursor_duration_ms: default_editor_smooth_cursor_duration_ms(),
             ai_enabled: false,
             stats_device_id: None,
         }

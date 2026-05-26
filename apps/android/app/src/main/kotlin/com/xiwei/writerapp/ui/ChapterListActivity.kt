@@ -94,13 +94,7 @@ class ChapterListActivity : AppCompatActivity() {
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_mind_map -> {
-                openMindMap()
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
-        }
+        return super.onOptionsItemSelected(item)
     }
 
     override fun onResume() {
@@ -161,17 +155,6 @@ class ChapterListActivity : AppCompatActivity() {
             emptyStateLayout.visibility = View.GONE
             adapter.notifyDataSetChanged()
         }
-    }
-
-    private fun openMindMap() {
-        val pid = projectId ?: return
-        val tb: com.google.android.material.appbar.MaterialToolbar = findViewById(R.id.toolbar)
-        val title = tb.title?.toString() ?: "导图"
-        val intent = android.content.Intent(this, com.xiwei.writerapp.ui.mindmap.MindMapActivity::class.java).apply {
-            putExtra("EXTRA_PROJECT_ID", pid)
-            putExtra("EXTRA_PROJECT_TITLE", title)
-        }
-        startActivity(intent)
     }
 
     private fun showNewVolumeDialog() {

@@ -374,64 +374,70 @@ impl WriterCore {
                 Ok(ActionResult {
                     success: true,
                     message: None,
-                    data: Some(serde_json::json!({ "enabled": settings.editor_typing_animation_enabled })),
+                    data: Some(serde_json::json!({
+                        "enabled": settings.editor_typing_animation_enabled,
+                        "durationMs": settings.editor_typing_animation_duration_ms
+                    })),
                     proposed_ui: None,
                     requires_confirmation: None,
                 })
             }
             "settings.editor.typing_animation.set" => {
+                let mut settings = self.load_local_settings()?;
+                let mut modified = false;
                 if let Some(enabled) = args.get("enabled").and_then(|v| v.as_bool()) {
-                    let mut settings = self.load_local_settings()?;
                     settings.editor_typing_animation_enabled = enabled;
-                    self.save_local_settings(&settings)?;
-                    Ok(ActionResult {
-                        success: true,
-                        message: Some("Typing animation updated".to_string()),
-                        data: None,
-                        proposed_ui: None,
-                        requires_confirmation: None,
-                    })
-                } else {
-                    Ok(ActionResult {
-                        success: false,
-                        message: Some("Missing or invalid enabled parameter".to_string()),
-                        data: None,
-                        proposed_ui: None,
-                        requires_confirmation: None,
-                    })
+                    modified = true;
                 }
+                if let Some(duration) = args.get("durationMs").and_then(|v| v.as_u64()) {
+                    settings.editor_typing_animation_duration_ms = duration;
+                    modified = true;
+                }
+                if modified {
+                    self.save_local_settings(&settings)?;
+                }
+                Ok(ActionResult {
+                    success: true,
+                    message: Some("Typing animation updated".to_string()),
+                    data: None,
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
             }
             "settings.editor.smooth_cursor.get" => {
                 let settings = self.load_local_settings()?;
                 Ok(ActionResult {
                     success: true,
                     message: None,
-                    data: Some(serde_json::json!({ "enabled": settings.editor_smooth_cursor_enabled })),
+                    data: Some(serde_json::json!({
+                        "enabled": settings.editor_smooth_cursor_enabled,
+                        "durationMs": settings.editor_smooth_cursor_duration_ms
+                    })),
                     proposed_ui: None,
                     requires_confirmation: None,
                 })
             }
             "settings.editor.smooth_cursor.set" => {
+                let mut settings = self.load_local_settings()?;
+                let mut modified = false;
                 if let Some(enabled) = args.get("enabled").and_then(|v| v.as_bool()) {
-                    let mut settings = self.load_local_settings()?;
                     settings.editor_smooth_cursor_enabled = enabled;
-                    self.save_local_settings(&settings)?;
-                    Ok(ActionResult {
-                        success: true,
-                        message: Some("Smooth cursor updated".to_string()),
-                        data: None,
-                        proposed_ui: None,
-                        requires_confirmation: None,
-                    })
-                } else {
-                    Ok(ActionResult {
-                        success: false,
-                        message: Some("Missing or invalid enabled parameter".to_string()),
-                        data: None,
-                        proposed_ui: None,
-                        requires_confirmation: None,
-                    })
+                    modified = true;
                 }
+                if let Some(duration) = args.get("durationMs").and_then(|v| v.as_u64()) {
+                    settings.editor_smooth_cursor_duration_ms = duration;
+                    modified = true;
+                }
+                if modified {
+                    self.save_local_settings(&settings)?;
+                }
+                Ok(ActionResult {
+                    success: true,
+                    message: Some("Smooth cursor updated".to_string()),
+                    data: None,
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
             }
             _ => {
                 Ok(ActionResult {
