@@ -10,6 +10,8 @@ Rectangle {
 
     signal openProject(string projectId)
     signal createProject()
+    signal renameProjectRequested(string projectId, string title)
+    signal deleteProjectRequested(string projectId, string title)
 
     color: dt ? dt.bg : "#111318"
 
@@ -50,7 +52,7 @@ Rectangle {
         subtitle: projectModel.count > 0 ? (projectModel.count + " 部作品") : "开始你的创作之旅"
         actionText: "+ 新建作品"
         model: projectModel
-        cardHeight: 214
+        cardHeight: 184
         minCardWidth: 280
         emptyIcon: "📖"
         emptyTitle: "暂无作品"
@@ -69,6 +71,58 @@ Rectangle {
             syncStatus: model.projectSyncStatus
             accentColor: model.projectAccent
             onClicked: root.openProject(model.projectId)
+            onRightClicked: {
+                projectContextMenu.projectId = model.projectId
+                projectContextMenu.projectTitle = model.projectTitle
+                projectContextMenu.popup()
+            }
+        }
+    }
+
+    Menu {
+        id: projectContextMenu
+        property string projectId: ""
+        property string projectTitle: ""
+        MenuItem { text: "打开"; onTriggered: root.openProject(projectContextMenu.projectId) }
+        MenuSeparator {}
+        MenuItem { text: "重命名"; onTriggered: { renameProjectDialog.projectId = projectContextMenu.projectId; renameProjectDialog.currentTitle = projectContextMenu.projectTitle; renameProjectDialog.open() } }
+        MenuItem { text: "删除"; onTriggered: root.deleteProjectRequested(projectContextMenu.projectId, projectContextMenu.projectTitle) }
+    }
+
+    Dialog {
+        id: renameProjectDialog
+        property string projectId: ""
+        property string currentTitle: ""
+        title: "重命名作品"
+        modal: true
+        width: 320
+        anchors.centerIn: Overlay.overlay
+        background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; radius: dt ? dt.radiusMd : 12; border.width: 1 }
+        Column {
+            anchors.fill: parent
+            anchors.margins: dt ? dt.sp16 : 16
+            spacing: dt ? dt.sp8 : 8
+            TextField {
+                id: renameField
+                width: parent.width
+                text: renameProjectDialog.currentTitle
+                color: dt ? dt.textPrimary : "#E2E4E9"
+                background: Rectangle { color: dt ? dt.paper : "#1E2128"; border.color: dt ? dt.border : "#2A2E36"; radius: dt ? dt.radiusSm : 8 }
+            }
+            Button {
+                text: "确定"
+                anchors.right: parent.right
+                onClicked: {
+                    var t = renameField.text.trim();
+                    if (t === "") return;
+                    root.renameProjectRequested(renameProjectDialog.projectId, t);
+                    renameProjectDialog.close();
+                }
+            }
+        }
+        onOpened: {
+            renameField.text = renameProjectDialog.currentTitle;
+            renameField.forceActiveFocus();
         }
     }
 

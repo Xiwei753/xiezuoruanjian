@@ -26,101 +26,40 @@ Rectangle {
     signal createVolumeRequested(string projectId)
     signal createChapterRequested(string projectId, string volumeId)
 
+    WritingTreeController {
+        id: writingTree
+        tree: root.tree
+        projectId: root.projectId
+        onItemsChanged: root.populateTreeModel()
+    }
+
     function populateTreeModel() {
         treeModel.clear();
-        if (!tree) return;
-        for (var i = 0; i < tree.length; i++) {
-            var item = tree[i];
-            if (item.type === "project" && item.id === root.projectId) {
-                treeModel.append({
-                    "itemId": item.id || "",
-                    "itemType": item.type || "",
-                    "itemTitle": item.title || "",
-                    "itemProjectId": item.id || "",
-                    "itemVolumeId": ""
-                });
-                // Add volumes for this project
-                for (var j = 0; j < tree.length; j++) {
-                    var vol = tree[j];
-                    if (vol.type === "volume" && vol.projectId === item.id) {
-                        treeModel.append({
-                            "itemId": vol.id || "",
-                            "itemType": "volume",
-                            "itemTitle": vol.title || "",
-                            "itemProjectId": vol.projectId || "",
-                            "itemVolumeId": vol.id || ""
-                        });
-                        // Add chapters for this volume
-                        for (var k = 0; k < tree.length; k++) {
-                            var chap = tree[k];
-                            if (chap.type === "chapter" && chap.volumeId === vol.id && chap.projectId === vol.projectId) {
-                                treeModel.append({
-                                    "itemId": chap.id || "",
-                                    "itemType": "chapter",
-                                    "itemTitle": chap.title || "",
-                                    "itemProjectId": chap.projectId || "",
-                                    "itemVolumeId": chap.volumeId || ""
-                                });
-                            }
-                        }
-                    }
-                }
-                break;
-            }
+        var items = writingTree.items || [];
+        for (var i = 0; i < items.length; i++) {
+            treeModel.append({
+                "itemId": items[i].id || "",
+                "itemType": items[i].type || "",
+                "itemTitle": items[i].title || "",
+                "itemProjectId": items[i].projectId || "",
+                "itemVolumeId": items[i].volumeId || ""
+            });
         }
+    }
+
+    EditorController {
+        id: editorController
+        targetTextArea: editorArea
+        backendRef: root.backendRef
+        projectId: root.projectId
+        volumeId: root.volumeId
+        chapterId: root.chapterId
     }
 
     onTreeChanged: populateTreeModel()
     Component.onCompleted: populateTreeModel()
 
     color: dt ? dt.bg : "#111318"
-
-    function loadChapterContent() {
-        if (!chapterId || !backendRef) return;
-        isLoadingChapter = true;
-        var content = backendRef.get_chapter_content(projectId, volumeId, chapterId);
-        if (typeof window !== "undefined" && typeof window.debugLog === "function") {
-            window.debugLog("editor", "workspace_load_chapter", "projectId=" + projectId + ", volumeId=" + volumeId + ", chapterId=" + chapterId + ", len=" + content.length);
-        }
-        editorPage.loadContent(content);
-        previousEditorText = content;
-        isLoadingChapter = false;
-    }
-
-    function computeWordCount(text) {
-        if (!text) return 0;
-        var count = 0;
-        var chars = text.replace(/\s/g, '');
-        count = chars.length;
-        return count;
-    }
-
-    function reportStatsIfChanged() {
-        if (isLoadingChapter || !chapterId) return;
-        var newText = editorPage.text;
-        if (previousEditorText === newText) return;
-
-        var oldLen = previousEditorText.length;
-        var newLen = newText.length;
-        var diff = newLen - oldLen;
-
-        if (diff > 0) {
-            var source = "human_typed";
-            var inserted = diff;
-            var deleted = 0;
-            var pasted = 0;
-            if (diff > 20) {
-                source = "pasted";
-                pasted = diff;
-                inserted = 0;
-            }
-            backendRef.report_writing_event(projectId, volumeId, chapterId, source, inserted, deleted, pasted);
-        } else if (diff < 0) {
-            backendRef.report_writing_event(projectId, volumeId, chapterId, "deleted", 0, Math.abs(diff), 0);
-        }
-
-        previousEditorText = newText;
-    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -133,8 +72,8 @@ Rectangle {
             backendRef: root.backendRef
             currentFontSize: root.backendRef ? root.backendRef.setting_font_size : 16
             currentLineSpacing: root.backendRef ? root.backendRef.setting_line_spacing : 1.5
-            firstLineIndent: false
-            saveStatus: root.backendRef ? root.backendRef.save_status : ""
+            firstLineIndent: root.backendRef ? root.backendRef.setting_auto_indent_enabled : false
+            saveStatus: editorController.saveStatus
             onFontSizeChanged: function(size) {
                 if (root.backendRef) {
                     root.backendRef.setting_font_size = size;
@@ -145,8 +84,12 @@ Rectangle {
                     root.backendRef.setting_line_spacing = spacing;
                 }
             }
-            onFirstLineIndentToggled: firstLineIndent = !firstLineIndent
-            onFormatOneClick: { /* placeholder */ }
+            onFirstLineIndentToggled: {
+                if (root.backendRef) {
+                    root.backendRef.setting_auto_indent_enabled = !root.backendRef.setting_auto_indent_enabled;
+                }
+            }
+            onFormatOneClick: editorController.formatText()
             onLinkToStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
             onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
         }
@@ -301,7 +244,7 @@ Rectangle {
                                                     root.chapterId = model.itemId;
                                                     root.volumeId = model.itemVolumeId;
                                                     root.chapterTitle = model.itemTitle;
-                                                    root.loadChapterContent();
+                                                    editorController.loadChapterContent();
                                                 }
                                             } else if (mouse.button === Qt.RightButton) {
                                                 treeContextMenu.itemType = model.itemType;
@@ -423,7 +366,18 @@ Rectangle {
                         topPadding: dt ? dt.sp16 : 16
                         bottomPadding: dt ? dt.sp16 : 16
 
+                        cursorVisible: false
+
                         text: ""
+
+
+
+
+
+                        SmoothCursor {
+                            targetTextArea: editorArea
+                            dt: root.dt
+                        }
                     }
                 }
 
@@ -501,42 +455,7 @@ Rectangle {
         target: root.backendRef
         function onChapter_path_changed() {
             if (root.chapterId) {
-                root.loadChapterContent();
-            }
-        }
-    }
-
-    Timer {
-        id: autoSaveTimer
-        interval: root.backendRef ? root.backendRef.setting_auto_save_delay_ms : 1500
-        repeat: false
-        onTriggered: {
-            if (!root.backendRef || !root.chapterId) return;
-            if (!root.backendRef.setting_auto_save_enabled) return;
-            root.backendRef.save_current_chapter(editorArea.text);
-        }
-    }
-
-    Timer {
-        id: autoSyncTimer
-        interval: 20000
-        repeat: false
-        onTriggered: {
-            if (!root.backendRef || !root.backendRef.has_workspace) return;
-            if (!root.backendRef.sync_auto_sync || !root.backendRef.sync_enabled) return;
-            root.backendRef.request_auto_sync("auto_sync_after_save");
-        }
-    }
-
-    Connections {
-        target: editorArea
-        function onTextChanged() {
-            root.reportStatsIfChanged();
-            if (root.chapterId && root.backendRef) {
-                root.backendRef.calculate_word_count(editorArea.text);
-                if (root.backendRef.setting_auto_save_enabled) {
-                    autoSaveTimer.restart();
-                }
+                editorController.loadChapterContent();
             }
         }
     }

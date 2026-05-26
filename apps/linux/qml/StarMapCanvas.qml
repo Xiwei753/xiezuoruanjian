@@ -9,9 +9,7 @@ Item {
     property string starmapId: ""
     property var dt: null
     property var backendRef: null
-    property string errorMessage: ""
-    property var graphData: null
-    property var layoutData: null
+    property string errorMessage: graphController.errorMessage
 
     // View transform properties
     property real panX: 0
@@ -43,20 +41,22 @@ Item {
     property real contextMenuWorldX: 0
     property real contextMenuWorldY: 0
 
-    function setError(msg) { errorMessage = msg || ""; console.warn("[StarMapCanvas]", errorMessage) }
-    function clearError() { errorMessage = "" }
-    function parseBackendJson(raw, fallbackMessage) {
-        try {
-            return JSON.parse(raw)
-        } catch(e) {
-            setError(fallbackMessage + ": " + e);
-            return { success: false, message: fallbackMessage }
+    StarMapGraphController {
+        id: graphController
+        starmapId: canvasArea.starmapId
+        backendRef: canvasArea.backendRef
+        onGraphChanged: {
+            canvasArea.nodesModel = graphController.nodesModel
+            canvasArea.edgesModel = graphController.edgesModel
+            edgeCanvas.requestPaint()
         }
+        onSelectionCleared: canvasArea.selectionCleared()
+        onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
+        onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
+        onErrorMessageChanged: canvasArea.errorMessage = graphController.errorMessage
     }
-    function ensureBackend() {
-        if (!backendRef) { setError("星图后端未初始化"); return false; }
-        return true;
-    }
+
+    function clearError() { graphController.clearError() }
 
     // Background Grid
     Rectangle {
@@ -171,10 +171,7 @@ Item {
                         selectedEdgeForMenu = clickedEdge
                         edgeContextMenu.popup(mouse.x, mouse.y)
                     } else if (mouse.button === Qt.LeftButton) {
-                        clearSelection()
-                        clickedEdge.isSelected = true
-                        edgeSelected(clickedEdge)
-                        edgeCanvas.requestPaint()
+                        graphController.selectEdge(clickedEdge.id)
                     }
                 } else {
                     // Clicked on empty background
@@ -208,6 +205,13 @@ Item {
     Canvas {
         id: edgeCanvas
         anchors.fill: parent
+
+        Connections {
+            target: canvasArea
+            function onPanXChanged() { edgeCanvas.requestPaint() }
+            function onPanYChanged() { edgeCanvas.requestPaint() }
+            function onZoomLevelChanged() { edgeCanvas.requestPaint() }
+        }
 
         onPaint: {
             var ctx = getContext("2d")
@@ -336,9 +340,17 @@ Item {
                 kind: nodeData.kind
                 isSelected: nodeData.isSelected
 
-                onPositionChanged: function(newX, newY) {
-                    nodesModel[index].x = newX
-                    nodesModel[index].y = newY
+                onXChanged: {
+                    if (nodeData) {
+                        nodeData.x = x
+                    }
+                    edgeCanvas.requestPaint()
+                }
+
+                onYChanged: {
+                    if (nodeData) {
+                        nodeData.y = y
+                    }
                     edgeCanvas.requestPaint()
                 }
 
@@ -347,17 +359,11 @@ Item {
                 }
 
                 onClicked: {
-                    clearSelection()
-                    nodesModel[index].isSelected = true
-                    nodeSelected(nodesModel[index])
-                    nodesModelChanged()
+                    graphController.selectNode(nodesModel[index].id)
                 }
 
                 onRightPressed: function(mouseX, mouseY) {
-                    clearSelection()
-                    nodesModel[index].isSelected = true
-                    nodeSelected(nodesModel[index])
-                    nodesModelChanged()
+                    graphController.selectNode(nodesModel[index].id)
 
                     rightPressStartX = mouseX
                     rightPressStartY = mouseY
@@ -433,266 +439,78 @@ Item {
     }
 
     function loadGraph() {
-        if (starmapId === "") return;
-        if (!ensureBackend()) return;
-
-        var resStr = backendRef.get_starmap_graph_json(starmapId)
-        var res = parseBackendJson(resStr, "加载星图数据失败")
-        if (res.success) {
-            clearError()
-            graphData = res.data.graph
-            layoutData = res.data.layout
-
-            buildModels()
-        } else {
-            setError(res.userMessage || res.message || "加载星图数据失败")
-        }
+        graphController.loadGraph()
     }
 
     function buildModels() {
-        var newNodes = []
-        for (var i = 0; i < graphData.nodes.length; i++) {
-            var gn = graphData.nodes[i]
-            var ln = getLayoutNode(gn.id)
-            newNodes.push({
-                id: gn.id,
-                title: gn.title,
-                kind: gn.kind,
-                x: ln ? ln.x : 0,
-                y: ln ? ln.y : 0,
-                width: ln ? ln.width : 150,
-                height: ln ? ln.height : 60,
-                isSelected: false,
-                payload: gn.payload,
-                tags: gn.tags
-            })
-        }
-        nodesModel = newNodes
-        nodesModelChanged()
-
-        var newEdges = []
-        for (var j = 0; j < graphData.edges.length; j++) {
-            var ge = graphData.edges[j]
-            newEdges.push({
-                id: ge.id,
-                from: ge.from,
-                to: ge.to,
-                kind: ge.kind,
-                label: ge.label,
-                isSelected: false
-            })
-        }
-        edgesModel = newEdges
-
-        // Auto layout if needed
-        if (nodesModel.length > 0 && (!layoutData || !layoutData.nodes || layoutData.nodes.length === 0)) {
-            autoLayout()
-        }
-
-        edgeCanvas.requestPaint()
+        graphController.buildModels()
     }
 
     function autoLayout() {
-        var curX = 100
-        var curY = 100
-        for (var i = 0; i < nodesModel.length; i++) {
-            nodesModel[i].x = curX
-            nodesModel[i].y = curY
-            curX += 200
-            if (curX > 800) {
-                curX = 100
-                curY += 100
-            }
-        }
-        nodesModelChanged()
-        saveLayout()
+        graphController.autoLayout()
     }
 
     function getLayoutNode(id) {
-        if (!layoutData || !layoutData.nodes) return null;
-        for (var i = 0; i < layoutData.nodes.length; i++) {
-            if (layoutData.nodes[i].nodeId === id) return layoutData.nodes[i];
-        }
-        return null;
+        return graphController.getLayoutNode(id)
     }
 
     function getNode(id) {
-        for (var i = 0; i < nodesModel.length; i++) {
-            if (nodesModel[i].id === id) return nodesModel[i];
+        if (container) {
+            for (var i = 0; i < container.children.length; i++) {
+                var child = container.children[i];
+                if (child && child.nodeData && child.nodeData.id === id) {
+                    return child;
+                }
+            }
+        }
+        for (var j = 0; j < nodesModel.length; j++) {
+            if (nodesModel[j].id === id) return nodesModel[j];
         }
         return null;
     }
 
     function clearSelection() {
-        for (var i = 0; i < nodesModel.length; i++) nodesModel[i].isSelected = false;
-        for (var j = 0; j < edgesModel.length; j++) edgesModel[j].isSelected = false;
-        nodesModelChanged()
-        edgeCanvas.requestPaint()
-        selectionCleared()
+        graphController.clearSelection()
     }
 
     function createNodeAtCenter() {
-        if (!ensureBackend()) return;
         var wx = (width/2 - panX) / zoomLevel
         var wy = (height/2 - panY) / zoomLevel
-
-        var resStr = backendRef.create_starmap_node_json(starmapId, "新节点", "Note", wx, wy)
-        var res = parseBackendJson(resStr, "创建节点失败")
-        if (res.success) {
-            clearError()
-            loadGraph()
-            // Select new node
-            for (var i = 0; i < nodesModel.length; i++) {
-                if (nodesModel[i].id === res.data.id) {
-                    clearSelection()
-                    nodesModel[i].isSelected = true
-                    nodeSelected(nodesModel[i])
-                    nodesModelChanged()
-                    break
-                }
-            }
-        } else {
-            setError(res.userMessage || res.message || "创建节点失败")
-        }
+        graphController.createNode(wx, wy)
     }
 
     function createEdge(fromId, toId) {
-        if (!ensureBackend()) return;
-        var resStr = backendRef.create_starmap_edge_json(starmapId, fromId, toId, "RelatedTo", "")
-        var res = parseBackendJson(resStr, "创建连线失败")
-        if (res.success) {
-            clearError()
-            loadGraph()
-        } else {
-            setError(res.userMessage || res.message || "创建连线失败")
-        }
+        graphController.createEdge(fromId, toId)
     }
 
     function saveLayout() {
-        if (!ensureBackend()) return;
-        var lNodes = []
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = nodesModel[i]
-            lNodes.push({
-                nodeId: n.id,
-                x: n.x,
-                y: n.y,
-                width: n.width,
-                height: n.height,
-                radius: 30,
-                collapsed: false,
-                zIndex: 0
-            })
-        }
-        var lj = {
-            kind: "Freeform",
-            nodes: lNodes
-        }
-        var resStr = backendRef.save_starmap_layout_json(starmapId, JSON.stringify(lj))
-        var res = parseBackendJson(resStr, "保存布局失败")
-        if (res.success) {
-            clearError()
-        } else {
-            setError(res.userMessage || res.message || "保存布局失败")
-        }
+        graphController.saveLayout()
     }
 
     function updateNodeFromInspector(nodeId, patch) {
-        if (!ensureBackend()) return;
-        var resStr = backendRef.update_starmap_node_json(starmapId, nodeId, JSON.stringify(patch))
-        var res = parseBackendJson(resStr, "更新节点失败")
-        if (res.success) {
-            clearError()
-            for (var i = 0; i < nodesModel.length; i++) {
-                if (nodesModel[i].id === nodeId) {
-                    if (patch.title !== undefined) nodesModel[i].title = patch.title;
-                    if (patch.kind !== undefined) nodesModel[i].kind = patch.kind;
-                    nodesModelChanged()
-                    break
-                }
-            }
-        } else {
-            setError(res.userMessage || res.message || "更新节点失败")
-        }
+        graphController.updateNode(nodeId, patch)
     }
 
     function deleteNodeFromInspector(nodeId) {
-        if (!ensureBackend()) return;
-        var resStr = backendRef.delete_starmap_node_json(starmapId, nodeId)
-        var res = parseBackendJson(resStr, "删除节点失败")
-        if (res.success) {
-            clearError()
-            loadGraph()
-            clearSelection()
-        } else {
-            setError(res.userMessage || res.message || "删除节点失败")
-        }
+        graphController.deleteNode(nodeId)
     }
 
     function updateEdgeFromInspector(edgeId, patch) {
-        if (!ensureBackend()) return;
-        var resStr = backendRef.update_starmap_edge_json(starmapId, edgeId, JSON.stringify(patch))
-        var res = parseBackendJson(resStr, "更新连线失败")
-        if (res.success) {
-            clearError()
-            for (var i = 0; i < edgesModel.length; i++) {
-                if (edgesModel[i].id === edgeId) {
-                    if (patch.label !== undefined) edgesModel[i].label = patch.label;
-                    if (patch.kind !== undefined) edgesModel[i].kind = patch.kind;
-                    edgeCanvas.requestPaint()
-                    break
-                }
-            }
-        } else {
-            setError(res.userMessage || res.message || "更新连线失败")
-        }
+        graphController.updateEdge(edgeId, patch)
     }
 
     function deleteEdgeFromInspector(edgeId) {
-        if (!ensureBackend()) return;
-        var resStr = backendRef.delete_starmap_edge_json(starmapId, edgeId)
-        var res = parseBackendJson(resStr, "删除连线失败")
-        if (res.success) {
-            clearError()
-            loadGraph()
-            clearSelection()
-        } else {
-            setError(res.userMessage || res.message || "删除连线失败")
-        }
+        graphController.deleteEdge(edgeId)
     }
 
     // Helper function to find a node at world coordinates
     function findNodeAt(wx, wy) {
-        for (var i = 0; i < nodesModel.length; i++) {
-            var n = nodesModel[i]
-            if (wx >= n.x && wx <= n.x + n.width && wy >= n.y && wy <= n.y + n.height) {
-                return n;
-            }
-        }
-        return null;
+        return graphController.findNodeAt(wx, wy)
     }
 
     // Helper to create node at world coordinates
     function createNodeAtWorld(wx, wy) {
-        if (!ensureBackend()) return;
-        var resStr = backendRef.create_starmap_node_json(starmapId, "新节点", "Note", wx, wy)
-        var res = parseBackendJson(resStr, "创建节点失败")
-        if (res.success) {
-            clearError()
-            loadGraph()
-            // Select new node
-            for (var i = 0; i < nodesModel.length; i++) {
-                if (nodesModel[i].id === res.data.id) {
-                    clearSelection()
-                    nodesModel[i].isSelected = true
-                    nodeSelected(nodesModel[i])
-                    nodesModelChanged()
-                    break
-                }
-            }
-        } else {
-            setError(res.userMessage || res.message || "创建节点失败")
-        }
+        graphController.createNode(wx, wy)
     }
 
     // Context Menus

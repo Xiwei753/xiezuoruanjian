@@ -92,7 +92,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                    text: "排版"
+                    text: "排版设置"
                     color: dt ? dt.textPrimary : "#E2E4E9"
                     font.pixelSize: dt ? dt.fontSm : 12
                     anchors.verticalCenter: parent.verticalCenter
@@ -136,7 +136,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                    text: "排版"
+                    text: "一键排版"
                     color: dt ? dt.textSecondary : "#5C6070"
                     font.pixelSize: dt ? dt.fontSm : 12
                     anchors.verticalCenter: parent.verticalCenter

@@ -12,10 +12,6 @@ ApplicationWindow {
     title: "Writer"
     color: designTokens.bg
 
-    function generateActionId() {
-        return Math.random().toString(36).substring(2, 8);
-    }
-
     function debugLog(module, event, message) {
         if (backend.debug_qml_enabled) {
             backend.log_qml("info", module, event, message);
@@ -52,28 +48,9 @@ ApplicationWindow {
         }
     }
 
-    property var appState: ({
-        hasWorkspace: false,
-        workspacePath: "",
-        saveStatus: "",
-        selected: { projectId: "", volumeId: "", chapterId: "" },
-        tree: [],
-        settings: { fontSize: 16, themeMode: "dark" },
-        sync: { status: "not_configured" }
-    })
+    property alias appState: appController.appState
 
-    property bool isLoadingChapter: false
     property string previousEditorText: ""
-    property bool writingMode: false
-    property string writingProjectId: ""
-    property string writingProjectTitle: ""
-    property string writingVolumeId: ""
-    property string writingChapterId: ""
-    property string writingChapterTitle: ""
-
-    property bool starmapMode: false
-    property string currentStarmapId: ""
-    property string currentStarmapTitle: ""
 
     // Design tokens
     DesignTokens {
@@ -89,17 +66,18 @@ ApplicationWindow {
         id: backend
     }
 
+    AppController {
+        id: appController
+        backendRef: backend
+        onErrorRaised: function(message) {
+            errorDialog.message = message;
+            errorDialog.open();
+        }
+    }
+
     Component.onCompleted: {
         window.debugLog("app", "qml_completed", "QML components fully loaded");
-        backend.query_system_color_scheme();
-        backend.try_restore_last_workspace();
-        var stateStr = backend.refresh_app_state_json();
-        try {
-            var stateObj = JSON.parse(stateStr);
-            applyState(stateObj);
-        } catch (e) {
-            window.debugError("app", "app_state_parse_failed", "error: " + e + ", raw: " + stateStr);
-        }
+        appController.restoreWorkspace();
     }
 
     onActiveChanged: {
@@ -109,7 +87,7 @@ ApplicationWindow {
     }
 
     onClosing: {
-        if (writingMode && writingChapterId) {
+        if (appController.inWriting) {
             backend.flush_writing_stats();
         }
     }
@@ -137,42 +115,22 @@ ApplicationWindow {
     }
 
     function applyState(state) {
-        if (!state) return;
-        appState = state;
-
-        if (appState.tree && creativeHubLoader.item) {
-            creativeHubLoader.item.tree = appState.tree;
-        }
-        if (appState.tree && writingWorkspaceLoader.item) {
-            writingWorkspaceLoader.item.tree = appState.tree;
-        }
+        appController.applyState(state);
     }
 
     Connections {
         target: backend
         function onProjects_reloaded() {
-            try {
-                applyState(JSON.parse(backend.refresh_app_state_json()));
-            } catch (e) {
-                window.debugError("tree", "projects_reloaded_parse_failed", "error: " + e);
-            }
+            appController.refreshState("刷新作品列表失败");
         }
         function onWorkspace_state_changed() {
-            try {
-                applyState(JSON.parse(backend.refresh_app_state_json()));
-            } catch (e) {
-                window.debugError("workspace", "workspace_state_changed_parse_failed", "error: " + e);
-            }
+            appController.refreshState("刷新工作区状态失败");
         }
         function onWorkspace_opened() {
             workspaceOpenAutoSyncTimer.restart();
         }
         function onWorkspace_content_changed() {
-            try {
-                applyState(JSON.parse(backend.refresh_app_state_json()));
-            } catch (e) {
-                window.debugError("workspace", "workspace_content_changed_parse_failed", "error: " + e);
-            }
+            appController.refreshState("刷新工作区内容失败");
         }
         function onClear_editor() {
             if (writingWorkspaceLoader.item) {
@@ -180,9 +138,7 @@ ApplicationWindow {
             }
         }
         function onSettings_changed() {
-            try {
-                applyState(JSON.parse(backend.refresh_app_state_json()));
-            } catch (e) {}
+            appController.refreshState("刷新设置失败");
         }
     }
 
@@ -194,14 +150,14 @@ ApplicationWindow {
         Loader {
             id: starmapWorkspaceLoader
             anchors.fill: parent
-            active: appState.hasWorkspace && starmapMode
+            active: appState.hasWorkspace && appController.inStarmap
             sourceComponent: StarMapWorkspace {
                 dt: designTokens
                 backendRef: backend
-                starmapId: window.currentStarmapId
-                starmapTitle: window.currentStarmapTitle
+                starmapId: appController.starmapId
+                starmapTitle: appController.starmapTitle
                 onBackClicked: {
-                    window.starmapMode = false;
+                    appController.openHub();
                 }
             }
         }
@@ -210,7 +166,7 @@ ApplicationWindow {
         Loader {
             id: creativeHubLoader
             anchors.fill: parent
-            active: appState.hasWorkspace && !writingMode && !starmapMode
+            active: appState.hasWorkspace && appController.route === "hub"
             sourceComponent: CreativeHub {
                 dt: designTokens
                 backendRef: backend
@@ -220,22 +176,27 @@ ApplicationWindow {
                 aiEnabled: backend.ai_enabled
 
                 onOpenStarmapWorkspace: function(smId, smTitle) {
-                    window.currentStarmapId = smId;
-                    window.currentStarmapTitle = smTitle;
-                    window.writingMode = false;
-                    window.starmapMode = true;
+                    appController.openStarmap(smId, smTitle);
                 }
 
                 onOpenProject: function(projectId, projectTitle) {
-                    window.writingProjectId = projectId;
-                    window.writingProjectTitle = projectTitle;
-                    window.writingMode = true;
+                    appController.openWriting(projectId, projectTitle);
                     window.debugLog("workspace", "enter_writing_mode", "projectId=" + projectId);
                 }
 
                 onCreateProject: {
                     window.debugLog("project", "create_project_dialog_open", "");
                     createProjectDialog.open();
+                }
+
+                onRenameProjectRequested: function(projectId, title) {
+                    appController.renameProject(projectId, title);
+                }
+
+                onDeleteProjectRequested: function(projectId, title) {
+                    confirmDialog.actionType = "delete_project";
+                    confirmDialog.contextData = { projectId: projectId, title: title };
+                    confirmDialog.open();
                 }
 
                 onOpenSettings: {
@@ -250,13 +211,7 @@ ApplicationWindow {
 
                 onSwitchWorkspace: {
                     window.debugLog("workspace", "switch_workspace_clicked", "");
-                    backend.switch_workspace();
-                    window.writingMode = false;
-                    try {
-                        applyState(JSON.parse(backend.refresh_app_state_json()));
-                    } catch (e) {
-                        window.debugError("workspace", "switch_workspace_parse_failed", "error: " + e);
-                    }
+                    appController.switchWorkspace();
                 }
             }
         }
@@ -265,23 +220,20 @@ ApplicationWindow {
         Loader {
             id: writingWorkspaceLoader
             anchors.fill: parent
-            active: appState.hasWorkspace && writingMode
+            active: appState.hasWorkspace && appController.inWriting
             sourceComponent: WritingWorkspace {
                 dt: designTokens
                 backendRef: backend
                 appState: window.appState
                 tree: window.appState.tree || []
-                projectId: window.writingProjectId
-                projectTitle: window.writingProjectTitle
+                projectId: appController.writingProjectId
+                projectTitle: appController.writingProjectTitle
                 aiCapable: backend.ai_available
                 aiEnabled: backend.ai_enabled
 
                 onBackToProjects: {
-                    window.writingMode = false;
+                    appController.openHub();
                     window.debugLog("workspace", "exit_writing_mode", "");
-                    try {
-                        applyState(JSON.parse(backend.refresh_app_state_json()));
-                    } catch (e) {}
                 }
 
                 onOpenSettings: {
@@ -317,12 +269,10 @@ ApplicationWindow {
             backendRef: backend
             appTheme: designTokens
             onCreateWorkspace: {
-                backend.create_new_workspace();
-                applyState(JSON.parse(backend.refresh_app_state_json()));
+                appController.createWorkspace(false);
             }
             onOpenWorkspace: {
-                backend.open_existing_workspace();
-                applyState(JSON.parse(backend.refresh_app_state_json()));
+                appController.createWorkspace(true);
             }
         }
     }
@@ -332,39 +282,11 @@ ApplicationWindow {
         id: createProjectDialog
         theme: designTokens
         onSubmitProject: function(title) {
-            var actionId = window.generateActionId();
             var trimmedTitle = title ? title.trim() : "";
             var isEmpty = (trimmedTitle === "");
-            window.debugLog("project", "create_project_submit", "[actionId=" + actionId + "] titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
-
-            var stateStr = "";
-            try {
-                stateStr = backend.create_project_json(title, actionId);
-            } catch (e) {
-                window.debugError("project", "create_project_failed", "[actionId=" + actionId + "] backend call failed: " + e);
-                errorDialog.message = "后端调用失败: " + e;
-                errorDialog.open();
-                return;
-            }
-
-            var res;
-            try {
-                res = JSON.parse(stateStr);
-            } catch (e) {
-                window.debugError("project", "create_project_parse_failed", "[actionId=" + actionId + "] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
-                errorDialog.message = "解析后端返回数据失败";
-                errorDialog.open();
-                return;
-            }
-
-            window.debugLog("project", "create_project_received", "[actionId=" + actionId + "] success=" + res.success + ", userMessage=" + (res.userMessage || res.message || ""));
-
-            if (res.success) {
-                applyState(res.state);
+            window.debugLog("project", "create_project_submit", "titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
+            if (appController.createProject(title)) {
                 createProjectDialog.close();
-            } else {
-                errorDialog.message = res.userMessage || res.message || "创建失败";
-                errorDialog.open();
             }
         }
     }
@@ -411,36 +333,7 @@ ApplicationWindow {
                 Button {
                     text: "删除"
                     onClicked: {
-                        var actionId = window.generateActionId();
-                        var resStr = "";
-                        if (confirmDialog.actionType === "delete_project") {
-                            window.debugLog("project", "delete_project_submit", "[actionId=" + actionId + "] projectId=" + confirmDialog.contextData.projectId);
-                            resStr = backend.delete_project_json(confirmDialog.contextData.projectId, actionId);
-                        } else if (confirmDialog.actionType === "delete_volume") {
-                            window.debugLog("volume", "delete_volume_submit", "[actionId=" + actionId + "] projectId=" + confirmDialog.contextData.projectId + ", volumeId=" + confirmDialog.contextData.volumeId);
-                            resStr = backend.delete_volume_json(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId, actionId);
-                        } else if (confirmDialog.actionType === "delete_chapter") {
-                            window.debugLog("chapter", "delete_chapter_submit", "[actionId=" + actionId + "] projectId=" + confirmDialog.contextData.projectId + ", volumeId=" + confirmDialog.contextData.volumeId + ", chapterId=" + confirmDialog.contextData.chapterId);
-                            resStr = backend.delete_chapter_json(confirmDialog.contextData.projectId, confirmDialog.contextData.volumeId, confirmDialog.contextData.chapterId, actionId);
-                        }
-
-                        if (resStr) {
-                            try {
-                                var res = JSON.parse(resStr);
-                                if (res.success) {
-                                    window.debugLog(confirmDialog.actionType.replace("delete_", ""), "delete_success", "[actionId=" + actionId + "]");
-                                    applyState(res.state);
-                                } else {
-                                    window.debugError(confirmDialog.actionType.replace("delete_", ""), "delete_failed", "[actionId=" + actionId + "] error=" + (res.message || ""));
-                                    errorDialog.message = res.message || "删除失败";
-                                    errorDialog.open();
-                                }
-                            } catch (e) {
-                                window.debugError(confirmDialog.actionType.replace("delete_", ""), "delete_parse_failed", "[actionId=" + actionId + "] error=" + e + ", raw=" + resStr);
-                                errorDialog.message = "解析后端返回数据失败";
-                                errorDialog.open();
-                            }
-                        }
+                        appController.deleteItem(confirmDialog.actionType, confirmDialog.contextData);
                         confirmDialog.close();
                     }
                 }
@@ -483,7 +376,7 @@ ApplicationWindow {
             theme: designTokens
             backendRef: backend
             onSettingsChanged: {
-                applyState(JSON.parse(backend.refresh_app_state_json()));
+                appController.refreshState("刷新设置失败");
             }
         }
     }
@@ -522,7 +415,7 @@ ApplicationWindow {
                         backend.flush_writing_stats();
                     }
                     onSettingsChanged: {
-                        applyState(JSON.parse(backend.refresh_app_state_json()));
+                        appController.refreshState("刷新同步设置失败");
                     }
                 }
             }
@@ -567,69 +460,10 @@ ApplicationWindow {
                 onClicked: {
                     var title = inputField.text.trim();
                     if (title !== "") {
-                        var actionId = window.generateActionId();
                         if (inputDialog.actionType === "volume") {
-                            window.debugLog("volume", "create_volume_submit", "[actionId=" + actionId + "] projectId=" + inputDialog.projectId + ", title=" + title);
-                            var stateStr = "";
-                            try {
-                                stateStr = backend.create_volume_json(inputDialog.projectId, title, actionId);
-                            } catch (e) {
-                                window.debugError("volume", "create_volume_failed", "[actionId=" + actionId + "] backend call failed: " + e);
-                                errorDialog.message = "后端调用失败: " + e;
-                                errorDialog.open();
-                                inputDialog.close();
-                                return;
-                            }
-
-                            var res;
-                            try {
-                                res = JSON.parse(stateStr);
-                            } catch (e) {
-                                window.debugError("volume", "create_volume_parse_failed", "[actionId=" + actionId + "] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
-                                errorDialog.message = "解析后端返回数据失败";
-                                errorDialog.open();
-                                inputDialog.close();
-                                return;
-                            }
-
-                            window.debugLog("volume", "create_volume_received", "[actionId=" + actionId + "] success=" + res.success + ", message=" + (res.message || ""));
-                            if (res.success) {
-                                applyState(res.state);
-                            } else {
-                                errorDialog.message = res.message || "创建卷失败";
-                                errorDialog.open();
-                            }
+                            appController.createVolume(inputDialog.projectId, title);
                         } else if (inputDialog.actionType === "chapter") {
-                            window.debugLog("chapter", "create_chapter_submit", "[actionId=" + actionId + "] projectId=" + inputDialog.projectId + ", volumeId=" + inputDialog.volumeId + ", title=" + title);
-                            var stateStr = "";
-                            try {
-                                stateStr = backend.create_chapter_json(inputDialog.projectId, inputDialog.volumeId, title, actionId);
-                            } catch (e) {
-                                window.debugError("chapter", "create_chapter_failed", "[actionId=" + actionId + "] backend call failed: " + e);
-                                errorDialog.message = "后端调用失败: " + e;
-                                errorDialog.open();
-                                inputDialog.close();
-                                return;
-                            }
-
-                            var res;
-                            try {
-                                res = JSON.parse(stateStr);
-                            } catch (e) {
-                                window.debugError("chapter", "create_chapter_parse_failed", "[actionId=" + actionId + "] JSON.parse failed. Raw response: " + stateStr + ", error: " + e);
-                                errorDialog.message = "解析后端返回数据失败";
-                                errorDialog.open();
-                                inputDialog.close();
-                                return;
-                            }
-
-                            window.debugLog("chapter", "create_chapter_received", "[actionId=" + actionId + "] success=" + res.success + ", message=" + (res.message || ""));
-                            if (res.success) {
-                                applyState(res.state);
-                            } else {
-                                errorDialog.message = res.message || "创建章节失败";
-                                errorDialog.open();
-                            }
+                            appController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
                         }
                     }
                     inputDialog.close();

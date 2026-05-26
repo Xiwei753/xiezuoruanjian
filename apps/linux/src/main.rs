@@ -140,12 +140,17 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapPage.qml" as "StarMapPage.qml",
     "qml/StarMapWorkspace.qml" as "StarMapWorkspace.qml",
     "qml/StarMapCanvas.qml" as "StarMapCanvas.qml",
+    "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",
     "qml/StarMapNode.qml" as "StarMapNode.qml",
     "qml/StarMapInspector.qml" as "StarMapInspector.qml",
     "qml/StatsPreviewPage.qml" as "StatsPreviewPage.qml",
     "qml/StatCard.qml" as "StatCard.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
+    "qml/AppController.qml" as "AppController.qml",
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
+    "qml/WritingTreeController.qml" as "WritingTreeController.qml",
+    "qml/EditorController.qml" as "EditorController.qml",
+    "qml/SmoothCursor.qml" as "SmoothCursor.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
@@ -1140,22 +1145,22 @@ impl AppBackend {
 
 
     fn setting_font_size(&self) -> f32 { self.current_setting_font_size }
-    fn set_setting_font_size(&mut self, val: f32) { self.current_setting_font_size = val; self.settings_changed(); }
+    fn set_setting_font_size(&mut self, val: f32) { self.current_setting_font_size = val; self.settings_changed(); self.save_local_settings(); }
 
     fn setting_line_spacing(&self) -> f32 { self.current_setting_line_spacing }
-    fn set_setting_line_spacing(&mut self, val: f32) { self.current_setting_line_spacing = val; self.settings_changed(); }
+    fn set_setting_line_spacing(&mut self, val: f32) { self.current_setting_line_spacing = val; self.settings_changed(); self.save_local_settings(); }
 
     fn setting_auto_save_enabled(&self) -> bool { self.current_setting_auto_save_enabled }
-    fn set_setting_auto_save_enabled(&mut self, val: bool) { self.current_setting_auto_save_enabled = val; self.settings_changed(); }
+    fn set_setting_auto_save_enabled(&mut self, val: bool) { self.current_setting_auto_save_enabled = val; self.settings_changed(); self.save_local_settings(); }
 
     fn setting_auto_save_delay_ms(&self) -> u32 { self.current_setting_auto_save_delay_ms }
-    fn set_setting_auto_save_delay_ms(&mut self, val: u32) { self.current_setting_auto_save_delay_ms = val; self.settings_changed(); }
+    fn set_setting_auto_save_delay_ms(&mut self, val: u32) { self.current_setting_auto_save_delay_ms = val; self.settings_changed(); self.save_local_settings(); }
 
     fn setting_auto_indent_enabled(&self) -> bool { self.current_setting_auto_indent_enabled }
-    fn set_setting_auto_indent_enabled(&mut self, val: bool) { self.current_setting_auto_indent_enabled = val; self.settings_changed(); }
+    fn set_setting_auto_indent_enabled(&mut self, val: bool) { self.current_setting_auto_indent_enabled = val; self.settings_changed(); self.save_local_settings(); }
 
     fn setting_auto_indent_width(&self) -> f32 { self.current_setting_auto_indent_width }
-    fn set_setting_auto_indent_width(&mut self, val: f32) { self.current_setting_auto_indent_width = val; self.settings_changed(); }
+    fn set_setting_auto_indent_width(&mut self, val: f32) { self.current_setting_auto_indent_width = val; self.settings_changed(); self.save_local_settings(); }
 
     fn setting_theme_mode(&self) -> QString {
         if self.current_setting_theme_mode.is_empty() {
@@ -1696,6 +1701,7 @@ impl AppBackend {
             let core = core_ref.borrow();
 
             let mut local = core.load_local_settings().unwrap_or_default();
+            local.editor_font_size = self.current_setting_font_size;
             local.editor_line_spacing_multiplier = self.current_setting_line_spacing;
             local.auto_save_enabled = self.current_setting_auto_save_enabled;
             local.auto_save_delay_ms = self.current_setting_auto_save_delay_ms as u64;

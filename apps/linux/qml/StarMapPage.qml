@@ -61,6 +61,8 @@ Rectangle {
         onActionClicked: createStarmapDialog.open()
 
         delegate: Item {
+            id: delegateItem
+            property var currentStarmap: model.starmapObj
             width: GridView.view.gridRoot.cardWidth
             height: GridView.view.gridRoot.cardHeight
 
@@ -89,10 +91,13 @@ Rectangle {
                     Repeater {
                         model: {
                             var children = []
-                            for (var i = 0; i < root.starmaps.length; i++) {
-                                var pId = root.starmaps[i].parentStarmapId;
-                                var sId = starmapObj.starmapId;
-                                if (pId === sId) children.push(root.starmaps[i])
+                            var currentObj = delegateItem.currentStarmap
+                            if (currentObj) {
+                                for (var i = 0; i < root.starmaps.length; i++) {
+                                    var pId = root.starmaps[i].parentStarmapId;
+                                    var sId = currentObj.starmapId;
+                                    if (pId === sId) children.push(root.starmaps[i])
+                                }
                             }
                             return children
                         }

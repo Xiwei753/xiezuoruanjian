@@ -18,6 +18,8 @@ Rectangle {
     signal openSync()
     signal switchWorkspace()
     signal openStarmapWorkspace(string smId, string smTitle)
+    signal renameProjectRequested(string projectId, string title)
+    signal deleteProjectRequested(string projectId, string title)
 
     color: dt ? dt.bg : "#111318"
 
@@ -235,6 +237,8 @@ Rectangle {
                         root.openProject(projectId, title);
                     }
                     onCreateProject: root.createProject()
+                    onRenameProjectRequested: function(projectId, title) { root.renameProjectRequested(projectId, title) }
+                    onDeleteProjectRequested: function(projectId, title) { root.deleteProjectRequested(projectId, title) }
                 }
             }
 

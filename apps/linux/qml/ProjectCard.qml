@@ -31,6 +31,7 @@ Rectangle {
     MouseArea {
         anchors.fill: parent
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         onContainsMouseChanged: root.hovered = containsMouse
         onClicked: function(mouse) {
             if (mouse.button === Qt.LeftButton) root.clicked();
