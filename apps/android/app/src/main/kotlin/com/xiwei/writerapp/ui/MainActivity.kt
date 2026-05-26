@@ -5,6 +5,11 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.xiwei.writerapp.data.NativeResult
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
@@ -81,6 +86,30 @@ class MainActivity : AppCompatActivity() {
 
         fabNewProject.setOnClickListener {
             showNewProjectDialog()
+        }
+
+
+        findViewById<View>(R.id.fabStarMap).setOnClickListener {
+            val workspaceDir = if (::workspaceRepository.isInitialized) workspaceRepository.getWorkspaceDir() else ""
+            CoroutineScope(Dispatchers.IO).launch {
+                val bridge = com.xiwei.writerapp.data.NativeCoreBridge(this@MainActivity)
+                var starmaps = bridge.listStarmaps()
+                if (starmaps is NativeResult.Success && starmaps.data.isEmpty()) {
+                    bridge.createStarmap("作品宇宙", "自动生成的默认星图")
+                    starmaps = bridge.listStarmaps()
+                }
+
+                withContext(Dispatchers.Main) {
+                    val intent = Intent(this@MainActivity, StarMapActivity::class.java).apply {
+                        putExtra("WORKSPACE_DIR", workspaceDir)
+                        if (starmaps is NativeResult.Success && starmaps.data.isNotEmpty()) {
+                            putExtra("STARMAP_ID", starmaps.data[0].starmapId)
+                            putExtra("TITLE", starmaps.data[0].title)
+                        }
+                    }
+                    startActivity(intent)
+                }
+            }
         }
 
         btnSettings.setOnClickListener {

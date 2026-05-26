@@ -102,4 +102,14 @@
         android:text="@string/action_new_project"
         app:icon="@drawable/ic_add" />
 
+
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+        android:id="@+id/fabStarMap"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="16dp"
+        android:text="星图"
+        app:icon="@drawable/ic_empty_box" />
+
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

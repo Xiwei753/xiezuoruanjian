@@ -1177,4 +1177,79 @@ class NativeCoreBridge(context: Context) {
             return NativeResult.Error(e.message ?: "Exception occurred")
         }
     }
+
+
+    // --- StarMap API ---
+    private external fun listStarmapsJson(workspaceDir: String): String
+    private external fun createStarmapJson(workspaceDir: String, title: String, desc: String): String
+    private external fun getStarmapGraphJson(workspaceDir: String, starmapId: String): String
+    private external fun addStarmapNodeJson(workspaceDir: String, starmapId: String, nodeJson: String): String
+    private external fun saveStarmapLayoutJson(workspaceDir: String, starmapId: String, layoutJson: String): String
+
+    fun listStarmaps(): NativeResult<List<StarMapMeta>> {
+        return try {
+            val json = listStarmapsJson(workspaceDir)
+            val type = object : TypeToken<RustResponse<List<StarMapMeta>>>() {}.type
+            val response: RustResponse<List<StarMapMeta>> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+    }
+
+    fun createStarmap(title: String, desc: String): NativeResult<StarMapMeta> {
+        return try {
+            val json = createStarmapJson(workspaceDir, title, desc)
+            val type = object : TypeToken<RustResponse<StarMapMeta>>() {}.type
+            val response: RustResponse<StarMapMeta> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+    }
+
+    fun getStarmapGraph(starmapId: String): NativeResult<StarMapData> {
+        return try {
+            val json = getStarmapGraphJson(workspaceDir, starmapId)
+            val type = object : TypeToken<RustResponse<StarMapData>>() {}.type
+            val response: RustResponse<StarMapData> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+    }
+
+    fun addStarmapNode(starmapId: String, node: MindMapGraphNode): NativeResult<MindMapGraphNode> {
+        return try {
+            val nodeJson = gson.toJson(node)
+            val json = addStarmapNodeJson(workspaceDir, starmapId, nodeJson)
+            val type = object : TypeToken<RustResponse<MindMapGraphNode>>() {}.type
+            val response: RustResponse<MindMapGraphNode> = gson.fromJson(json, type)
+            if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+    }
+
+    fun saveStarmapLayout(starmapId: String, layout: MindMapLayout): NativeResult<Boolean> {
+        return try {
+            val layoutJson = gson.toJson(layout)
+            val json = saveStarmapLayoutJson(workspaceDir, starmapId, layoutJson)
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(json, type)
+            if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Exception) { NativeResult.Error(e.message ?: "Unknown") }
+    }
 }
