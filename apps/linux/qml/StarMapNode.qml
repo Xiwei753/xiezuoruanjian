@@ -63,21 +63,45 @@ Rectangle {
         }
     }
 
-    MouseArea {
-        anchors.fill: parent
-        drag.target: root
-        drag.axis: Drag.XAndYAxis
+    signal rightPressed(real mouseX, real mouseY)
+    signal rightDragged(real worldX, real worldY)
+    signal rightReleased(real worldX, real worldY)
 
-        onClicked: root.clicked()
+    MouseArea {
+        id: hoverArea
+        anchors.fill: parent
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        
+        property point clickPos: "0,0"
+
+        onPressed: function(mouse) {
+            if (mouse.button === Qt.RightButton) {
+                root.rightPressed(mouse.x, mouse.y)
+            } else if (mouse.button === Qt.LeftButton) {
+                clickPos = Qt.point(mouse.x, mouse.y)
+                root.clicked()
+            }
+        }
 
         onPositionChanged: function(mouse) {
-            if (drag.active) {
+            if (pressedButtons & Qt.RightButton) {
+                var mapped = mapToItem(root.parent, mouse.x, mouse.y)
+                root.rightDragged(mapped.x, mapped.y)
+            } else if (pressedButtons & Qt.LeftButton) {
+                var dx = mouse.x - clickPos.x
+                var dy = mouse.y - clickPos.y
+                var zoom = (root.parent && root.parent.scale) ? root.parent.scale : 1.0
+                root.x += dx / zoom
+                root.y += dy / zoom
                 root.positionChanged(root.x, root.y)
             }
         }
 
         onReleased: function(mouse) {
-            if (drag.active) {
+            if (mouse.button === Qt.RightButton) {
+                var mapped = mapToItem(root.parent, mouse.x, mouse.y)
+                root.rightReleased(mapped.x, mapped.y)
+            } else if (mouse.button === Qt.LeftButton) {
                 root.positionChangeFinished()
             }
         }
@@ -91,6 +115,21 @@ Rectangle {
             case "Event": return "#F44336"
             case "Concept": return "#9C27B0"
             default: return dt ? dt.textMuted : "#606470"
+        }
+    }
+
+    function getKindLabel(k) {
+        switch(k) {
+            case "Note": return "笔记"
+            case "Chapter": return "章节"
+            case "Character": return "角色"
+            case "Location": return "地点"
+            case "Event": return "事件"
+            case "Concept": return "概念"
+            case "Project": return "作品"
+            case "Volume": return "卷"
+            case "Custom": return "自定义"
+            default: return k
         }
     }
 }

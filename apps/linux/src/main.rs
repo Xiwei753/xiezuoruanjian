@@ -491,7 +491,7 @@ struct AppBackend {
     get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
     unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
     get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
-    create_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f32, y: f32) -> QString),
+    create_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QString),
     update_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString),
     delete_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QString),
     create_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString),
@@ -3796,7 +3796,7 @@ impl AppBackend {
         }
     }
 
-    fn create_starmap_node_json(&mut self, starmap_id: QString, title: QString, kind: QString, x: f32, y: f32) -> QString {
+    fn create_starmap_node_json(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QString {
         let sid = starmap_id.to_string();
         let t = title.to_string();
         let k = kind.to_string();
@@ -3823,8 +3823,8 @@ impl AppBackend {
                     if let Ok(mut layout) = core.get_starmap_layout(&sid) {
                         layout.nodes.push(writer_core::mind_map::layout::MindMapLayoutNode {
                             node_id: saved_node.id.clone(),
-                            x,
-                            y,
+                            x: x as f32,
+                            y: y as f32,
                             width: 150.0,
                             height: 60.0,
                             radius: 30.0,

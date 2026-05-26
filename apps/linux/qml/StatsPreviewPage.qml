@@ -47,7 +47,7 @@ Rectangle {
     HubPageFrame {
         anchors.fill: parent
         dt: root.dt
-        headerData: [ HubPageHeader { dt: root.dt; title: "统计"; subtitle: "追踪你的写作节奏与习惯" } ]
+        headerData: [ HubPageHeader { anchors.fill: parent; dt: root.dt; title: "统计"; subtitle: "追踪你的写作节奏与习惯" } ]
 
         DashboardGrid {
             id: dashboard

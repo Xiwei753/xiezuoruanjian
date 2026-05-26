@@ -6,9 +6,11 @@ Item {
     id: root
     property var dt: null
     property var model: []
+    property var displayModel: null
     property int currentIndex: 0
     readonly property string currentText: {
         if (!model || model.length === 0 || currentIndex < 0 || currentIndex >= model.length) return ""
+        if (displayModel && displayModel.length > currentIndex) return String(displayModel[currentIndex])
         return String(model[currentIndex])
     }
     signal activated(int index)
@@ -83,7 +85,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left
                         anchors.leftMargin: dt ? dt.sp10 : 10
-                        text: String(modelData)
+                        text: (root.displayModel && root.displayModel.length > index) ? String(root.displayModel[index]) : String(modelData)
                         color: index === root.currentIndex ? (dt ? dt.accentText : "#3D4D9E") : (dt ? dt.textPrimary : "#E2E4E9")
                         font.pixelSize: dt ? dt.fontSm : 12
                     }

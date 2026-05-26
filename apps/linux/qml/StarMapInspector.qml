@@ -54,22 +54,6 @@ Rectangle {
                 }
             }
 
-            AppText { text: "类型"; color: dt ? dt.textSecondary : "#9CA0AB" }
-            ModernComboBox {
-                id: kindInput
-                Layout.fillWidth: true
-                model: ["project", "volume", "chapter", "textAnchor", "character", "event", "location", "item", "concept", "theme", "note", "organization", "timeline", "plot", "foreshadowing", "custom"]
-                currentIndex: selectedNode ? model.indexOf(selectedNode.kind) : -1
-                onActivated: {
-                    if (selectedNode) {
-                        var k = model[index]
-                        if (k !== selectedNode.kind) {
-                            nodeUpdated(selectedNode.id, { kind: k })
-                        }
-                    }
-                }
-            }
-
             Item { Layout.fillHeight: true }
 
             AppButton {
@@ -86,22 +70,6 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 12
             visible: selectedEdge !== null
-
-            AppText { text: "类型"; color: dt ? dt.textSecondary : "#9CA0AB" }
-            ModernComboBox {
-                id: edgeKindInput
-                Layout.fillWidth: true
-                model: ["contains", "references", "appearsIn", "causes", "relatedTo", "locatedAt", "characterRelation", "timeline", "foreshadows", "resolves", "dependsOn", "conflictsWith", "custom"]
-                currentIndex: selectedEdge ? model.indexOf(selectedEdge.kind) : -1
-                onActivated: {
-                    if (selectedEdge) {
-                        var k = model[index]
-                        if (k !== selectedEdge.kind) {
-                            edgeUpdated(selectedEdge.id, { kind: k })
-                        }
-                    }
-                }
-            }
 
             AppText { text: "标签"; color: dt ? dt.textSecondary : "#9CA0AB" }
             AppTextField {

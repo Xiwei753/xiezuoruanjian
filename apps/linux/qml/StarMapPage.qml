@@ -27,14 +27,16 @@ Rectangle {
         var roots = getRootStarmaps()
         gridModel.clear()
         for (var i = 0; i < roots.length; i++) {
-            gridModel.append({ starmapObj: roots[i], childCount: roots[i].child_starmap_count || 0 })
+            gridModel.append({ starmapObj: roots[i], childCount: roots[i].childStarmapCount || 0 })
         }
     }
 
     function getRootStarmaps() {
         var roots = []
         for (var i = 0; i < starmaps.length; i++) {
-            if (!starmaps[i].parent_starmap_id && (filterProjectId === "" || starmaps[i].project_id === filterProjectId)) roots.push(starmaps[i])
+            var parentId = starmaps[i].parentStarmapId;
+            var projId = starmaps[i].projectId;
+            if (!parentId && (filterProjectId === "" || projId === filterProjectId)) roots.push(starmaps[i])
         }
         return roots
     }
@@ -48,7 +50,7 @@ Rectangle {
         anchors.fill: parent
         dt: root.dt
         title: "星图"
-        subtitle: "构建你的创作宇宙，可视化人物关系与故事脉络"
+        subtitle: gridModel.count > 0 ? (gridModel.count + " 个星图") : "构建你的创作宇宙"
         actionText: "+ 新建星图"
         model: gridModel
         cardHeight: 260
@@ -88,7 +90,9 @@ Rectangle {
                         model: {
                             var children = []
                             for (var i = 0; i < root.starmaps.length; i++) {
-                                if (root.starmaps[i].parent_starmap_id === starmapObj.starmap_id) children.push(root.starmaps[i])
+                                var pId = root.starmaps[i].parentStarmapId;
+                                var sId = starmapObj.starmapId;
+                                if (pId === sId) children.push(root.starmaps[i])
                             }
                             return children
                         }
@@ -112,7 +116,7 @@ Rectangle {
                             MouseArea {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.openStarmap(modelData.starmap_id || "")
+                                onClicked: root.openStarmap(modelData.starmapId || "", modelData.title || "")
                             }
                         }
                     }

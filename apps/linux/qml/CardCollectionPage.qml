@@ -26,6 +26,7 @@ Item {
 
         headerData: [
             HubPageHeader {
+                anchors.fill: parent
                 dt: root.dt
                 title: root.title
                 subtitle: root.subtitle

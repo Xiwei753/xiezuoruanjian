@@ -230,6 +230,7 @@ Rectangle {
                                 height: model.itemType === "volume" ? 36 : 32
 
                                 Rectangle {
+                                    id: delegateBg
                                     anchors.fill: parent
                                     anchors.leftMargin: dt ? dt.sp8 : 8
                                     anchors.rightMargin: dt ? dt.sp8 : 8
@@ -254,11 +255,11 @@ Rectangle {
 
                                         Text {
                                             text: model.itemTitle || ""
-                                            color: isSelected ?
+                                            color: delegateBg.isSelected ?
                                                    (dt ? dt.accentText : "#3D4D9E") :
                                                    (dt ? dt.textPrimary : "#E2E4E9")
                                             font.pixelSize: dt ? dt.fontSm : 12
-                                            font.weight: isSelected ? Font.DemiBold : Font.Normal
+                                            font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
                                             Layout.fillWidth: true
                                             elide: Text.ElideRight
                                         }

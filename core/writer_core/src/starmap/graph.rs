@@ -7,19 +7,13 @@ use std::path::Path;
 
 pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<MindMapGraph> {
     let meta = load_starmap_meta(workspace, starmap_id)?;
-    if meta.project_id.is_none() {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "StarMap is not bound to a project",
-        )));
-    }
 
     let graph_path = starmaps_dir(workspace).join(starmap_id).join("graph.json");
     if !graph_path.exists() {
         return Ok(MindMapGraph {
             schema_version: 2,
             id: starmap_id.to_string(),
-            project_id: meta.project_id.unwrap(),
+            project_id: meta.project_id.clone().unwrap_or_default(),
             title: meta.title.clone(),
             nodes: vec![],
             edges: vec![],

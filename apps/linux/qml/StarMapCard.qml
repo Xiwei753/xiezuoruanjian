@@ -35,8 +35,8 @@ Rectangle {
                 height: isChild ? 32 : 40
                 radius: dt ? dt.radiusSm : 8
                 color: {
-                    var c = starmapData.accent_color || (dt ? dt.accent : "#7B8CDE");
-                    return Qt.rgba(Qt.color(c).r, Qt.color(c).g, Qt.color(c).b, 0.15);
+                    var c = starmapData.accentColor || (dt ? dt.accent : "#7B8CDE");
+                    return c + "26"; // 15% opacity
                 }
                 Layout.alignment: Qt.AlignTop
 
@@ -63,11 +63,11 @@ Rectangle {
 
                 Text {
                     text: {
-                        if (starmapData.is_main_for_project) return "主星图";
-                        if (starmapData.project_id) return "已绑定";
+                        if (starmapData.isMainForProject) return "主星图";
+                        if (starmapData.projectId) return "已绑定";
                         return "独立星图";
                     }
-                    color: starmapData.is_main_for_project ?
+                    color: starmapData.isMainForProject ?
                            (dt ? dt.accent : "#7B8CDE") :
                            (dt ? dt.textMuted : "#606470")
                     font.pixelSize: dt ? dt.fontXs : 11
@@ -82,9 +82,9 @@ Rectangle {
 
             Repeater {
                 model: [
-                    { label: "节点", value: starmapData.node_count || 0 },
-                    { label: "关系", value: starmapData.edge_count || 0 },
-                    { label: "链接", value: starmapData.linked_chapter_count || 0 }
+                    { label: "节点", value: starmapData.nodeCount || 0 },
+                    { label: "关系", value: starmapData.edgeCount || 0 },
+                    { label: "链接", value: starmapData.linkedChapterCount || 0 }
                 ]
 
                 Column {
@@ -114,7 +114,7 @@ Rectangle {
             spacing: dt ? dt.sp8 : 8
 
             Rectangle {
-                visible: (starmapData.child_starmap_count || 0) > 0
+                visible: (starmapData.childStarmapCount || 0) > 0
                 width: childCountRow.implicitWidth + (dt ? dt.sp8 : 8)
                 height: 20
                 radius: dt ? dt.radiusSm : 8
@@ -131,7 +131,7 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                     }
                     Text {
-                        text: (starmapData.child_starmap_count || 0) + " 子星图"
+                        text: (starmapData.childStarmapCount || 0) + " 子星图"
                         color: dt ? dt.accentText : "#3D4D9E"
                         font.pixelSize: dt ? dt.fontXs : 11
                         anchors.verticalCenter: parent.verticalCenter
@@ -143,8 +143,8 @@ Rectangle {
 
             Text {
                 text: {
-                    if (!starmapData.updated_at) return "";
-                    var d = new Date(starmapData.updated_at);
+                    if (!starmapData.updatedAt) return "";
+                    var d = new Date(starmapData.updatedAt);
                     var now = new Date();
                     var diff = now - d;
                     if (diff < 60000) return "刚刚";
@@ -166,10 +166,11 @@ Rectangle {
         cursorShape: Qt.PointingHandCursor
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onClicked: function(mouse) {
+            var smId = root.starmapData.starmapId || "";
             if (mouse.button === Qt.LeftButton) {
-                root.clicked(root.starmapData.starmap_id || "", root.starmapData.title || "");
+                root.clicked(smId, root.starmapData.title || "");
             } else if (mouse.button === Qt.RightButton) {
-                root.menuRequested(root.starmapData.starmap_id || "", root.starmapData.title || "");
+                root.menuRequested(smId, root.starmapData.title || "");
             }
         }
     }
