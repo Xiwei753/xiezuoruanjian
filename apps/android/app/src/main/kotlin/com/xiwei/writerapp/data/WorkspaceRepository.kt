@@ -3,7 +3,7 @@ package com.xiwei.writerapp.data
 import android.content.Context
 import com.xiwei.writerapp.model.*
 
-class WorkspaceRepository(context: Context) {
+class WorkspaceRepository(val context: Context) {
     private val bridge = NativeCoreBridge(context)
 
     init {
@@ -204,4 +204,5 @@ class WorkspaceRepository(context: Context) {
         }
     }
 
+    fun getWorkspaceDir(): String = com.xiwei.writerapp.data.WorkspaceManager.getWorkspaceDir(context).absolutePath
 }

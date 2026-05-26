@@ -1567,3 +1567,89 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
         core.get_writing_stats_summary(&start_date, &end_date),
     )
 }
+
+
+// StarMap Endpoints
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listStarmapsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.list_starmaps())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createStarmapJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    title_j: JString,
+    desc_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let title = match jstring_to_string(&mut env, &title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let desc = match jstring_to_string(&mut env, &desc_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(&mut env, core.create_starmap(&title, &desc, None))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getStarmapGraphJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    let graph_res = core.get_starmap_graph(&starmap_id);
+    let layout_res = core.get_starmap_layout(&starmap_id);
+    match (graph_res, layout_res) {
+        (Ok(graph), Ok(layout)) => {
+            let data = serde_json::json!({ "graph": graph, "layout": layout });
+            result_to_jstring(&mut env, Ok(data))
+        },
+        (Err(e), _) => result_to_jstring::<()>(&mut env, Err(e)),
+        (_, Err(e)) => result_to_jstring::<()>(&mut env, Err(e)),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_addStarmapNodeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    node_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let node_json = match jstring_to_string(&mut env, &node_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    match serde_json::from_str(&node_json) {
+        Ok(node) => result_to_jstring(&mut env, core.add_starmap_node(&starmap_id, node)),
+        Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveStarmapLayoutJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    starmap_id_j: JString,
+    layout_json_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let layout_json = match jstring_to_string(&mut env, &layout_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let core = WriterCore::new(&workspace_path);
+    match serde_json::from_str(&layout_json) {
+        Ok(layout) => result_to_jstring(&mut env, core.save_starmap_layout(&starmap_id, &layout)),
+        Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))
+    }
+}

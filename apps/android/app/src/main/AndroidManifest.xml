@@ -23,6 +23,7 @@
         <activity android:name=".ui.EditorActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" />
         <activity android:name=".ui.ActionRegistryActivity" android:exported="false" />
+        <activity android:name=".ui.StarMapActivity" android:exported="false" />
     </application>
 
 </manifest>
