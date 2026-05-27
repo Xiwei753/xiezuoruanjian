@@ -226,10 +226,17 @@ impl EditorFormatter {
 
             QTextCursor cursor(doc);
             cursor.select(QTextCursor::Document);
+            
             QTextBlockFormat blockFormat;
             blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
             blockFormat.setTextIndent(indent);
             cursor.mergeBlockFormat(blockFormat);
+            
+            if (font_size > 0) {
+                QTextCharFormat charFormat;
+                charFormat.setFontPointSize(font_size);
+                cursor.mergeCharFormat(charFormat);
+            }
         });
     }
 }
