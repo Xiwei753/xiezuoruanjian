@@ -56,10 +56,60 @@ QtObject {
 
     function getEditorPlainText() {
         if (!targetTextArea) return "";
+        var txt = "";
         if (targetTextArea.textFormat === TextEdit.RichText) {
-            return targetTextArea.getText(0, targetTextArea.length);
+            txt = targetTextArea.getText(0, targetTextArea.length);
+        } else {
+            txt = targetTextArea.text;
         }
-        return targetTextArea.text;
+        return txt.replace(/\u2029/g, "\n");
+    }
+
+    function getContentHtml(content) {
+        if (!backendRef) return content;
+        
+        var fontSize = backendRef.setting_font_size || 16;
+        var lineSpacing = backendRef.setting_line_spacing || 1.5;
+        var autoIndent = backendRef.setting_auto_indent_enabled || false;
+        
+        var textColor = "#E2E4E9";
+        if (targetTextArea && targetTextArea.color) {
+            textColor = targetTextArea.color.toString();
+        }
+        
+        var fontFamily = (targetTextArea && targetTextArea.font && targetTextArea.font.family) ? targetTextArea.font.family : "serif";
+        
+        var html = "<html><head><style>";
+        html += "body { font-size: " + fontSize + "px; line-height: " + lineSpacing + "; font-family: " + fontFamily + "; color: " + textColor + "; }";
+        if (autoIndent) {
+            html += "p { text-indent: 2em; margin-top: 0px; margin-bottom: 8px; }";
+        } else {
+            html += "p { text-indent: 0px; margin-top: 0px; margin-bottom: 8px; }";
+        }
+        html += "</style></head><body>";
+        
+        var paragraphs = content.split(/\r?\n|\u2029/);
+        for (var i = 0; i < paragraphs.length; i++) {
+            var p = paragraphs[i];
+            p = p.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            html += "<p>" + p + "</p>";
+        }
+        html += "</body></html>";
+        return html;
+    }
+
+    function applyCurrentSettings() {
+        if (!targetTextArea || !chapterId) return;
+        var plainText = getEditorPlainText();
+        var cursor = targetTextArea.cursorPosition;
+        
+        var html = getContentHtml(plainText);
+        isLoadingChapter = true;
+        targetTextArea.textFormat = TextEdit.RichText;
+        targetTextArea.text = html;
+        isLoadingChapter = false;
+        
+        targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
     }
 
     function loadChapterContent() {
@@ -67,20 +117,8 @@ QtObject {
         isLoadingChapter = true;
         var content = backendRef.get_chapter_content(projectId, volumeId, chapterId);
         
-        if (backendRef.setting_auto_indent_enabled) {
-            var paragraphs = content.split("\n");
-            var html = "";
-            for (var i = 0; i < paragraphs.length; i++) {
-                var p = paragraphs[i];
-                p = p.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                html += "<p style='text-indent: 2em; margin-top: 0; margin-bottom: 8px;'>" + p + "</p>";
-            }
-            targetTextArea.textFormat = TextEdit.RichText;
-            targetTextArea.text = html;
-        } else {
-            targetTextArea.textFormat = TextEdit.PlainText;
-            targetTextArea.text = content;
-        }
+        targetTextArea.textFormat = TextEdit.RichText;
+        targetTextArea.text = getContentHtml(content);
         
         previousEditorText = content;
         isLoadingChapter = false;
@@ -122,7 +160,7 @@ QtObject {
         if (!targetTextArea) return;
         var raw = getEditorPlainText();
         if (!raw) return;
-        var paragraphs = raw.split(/\n/);
+        var paragraphs = raw.split(/\r?\n|\u2029/);
         var formatted = [];
         for (var i = 0; i < paragraphs.length; i++) {
             var p = paragraphs[i].trim();
@@ -148,19 +186,10 @@ QtObject {
         }
         
         var plain = finalParagraphs.join("\n");
-        if (backendRef && backendRef.setting_auto_indent_enabled) {
-            var html = "";
-            for (var k = 0; k < finalParagraphs.length; k++) {
-                var line = finalParagraphs[k];
-                line = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                html += "<p style='text-indent: 2em; margin-top: 0; margin-bottom: 8px;'>" + line + "</p>";
-            }
-            targetTextArea.textFormat = TextEdit.RichText;
-            targetTextArea.text = html;
-        } else {
-            targetTextArea.textFormat = TextEdit.PlainText;
-            targetTextArea.text = plain;
-        }
+        isLoadingChapter = true;
+        targetTextArea.textFormat = TextEdit.RichText;
+        targetTextArea.text = getContentHtml(plain);
+        isLoadingChapter = false;
         
         if (backendRef && chapterId) {
             backendRef.save_current_chapter(plain);

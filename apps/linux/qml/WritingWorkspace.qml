@@ -458,5 +458,15 @@ Rectangle {
                 editorController.loadChapterContent();
             }
         }
+        function onSettings_changed() {
+            editorController.applyCurrentSettings();
+        }
+    }
+
+    Connections {
+        target: root.dt
+        function onIsDarkChanged() {
+            editorController.applyCurrentSettings();
+        }
     }
 }
