@@ -22,6 +22,8 @@ class NativeCoreBridge(context: Context) {
     private val gson = GsonBuilder()
         .registerTypeAdapter(SyncStatus::class.java, SyncStatusDeserializer())
         .registerTypeAdapter(com.xiwei.writerapp.model.MindMapNodeKind::class.java, com.xiwei.writerapp.model.MindMapNodeKindDeserializer())
+        .registerTypeAdapter(com.xiwei.writerapp.model.StarMapNodeKind::class.java, com.xiwei.writerapp.model.StarMapNodeKindDeserializer())
+        .registerTypeAdapter(com.xiwei.writerapp.model.StarMapEdgeKind::class.java, com.xiwei.writerapp.model.StarMapEdgeKindDeserializer())
         .create()
 
     var isLoaded = false
@@ -1259,14 +1261,14 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun addStarmapNode(starmapId: String, node: MindMapGraphNode): NativeResult<MindMapGraphNode> {
+    fun addStarmapNode(starmapId: String, node: StarMapGraphNode): NativeResult<StarMapGraphNode> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val nodeJson = gson.toJson(node)
             val json = addStarmapNodeJson(workspaceDir, starmapId, nodeJson)
             if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<MindMapGraphNode>>() {}.type
-            val response: RustResponse<MindMapGraphNode> = gson.fromJson(json, type)
+            val type = object : TypeToken<RustResponse<StarMapGraphNode>>() {}.type
+            val response: RustResponse<StarMapGraphNode> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {
@@ -1278,7 +1280,7 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun saveStarmapLayout(starmapId: String, layout: MindMapLayout): NativeResult<Boolean> {
+    fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): NativeResult<Boolean> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val layoutJson = gson.toJson(layout)
@@ -1394,13 +1396,13 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun updateStarmapNode(starmapId: String, nodeId: String, patchJson: String): NativeResult<MindMapGraphNode> {
+    fun updateStarmapNode(starmapId: String, nodeId: String, patchJson: String): NativeResult<StarMapGraphNode> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = updateStarmapNodeJson(workspaceDir, starmapId, nodeId, patchJson)
             if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<MindMapGraphNode>>() {}.type
-            val response: RustResponse<MindMapGraphNode> = gson.fromJson(json, type)
+            val type = object : TypeToken<RustResponse<StarMapGraphNode>>() {}.type
+            val response: RustResponse<StarMapGraphNode> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {
@@ -1425,13 +1427,13 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun addStarmapEdge(starmapId: String, edgeJson: String): NativeResult<MindMapGraphEdge> {
+    fun addStarmapEdge(starmapId: String, edgeJson: String): NativeResult<StarMapGraphEdge> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = addStarmapEdgeJson(workspaceDir, starmapId, edgeJson)
             if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<MindMapGraphEdge>>() {}.type
-            val response: RustResponse<MindMapGraphEdge> = gson.fromJson(json, type)
+            val type = object : TypeToken<RustResponse<StarMapGraphEdge>>() {}.type
+            val response: RustResponse<StarMapGraphEdge> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {
@@ -1443,13 +1445,13 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun updateStarmapEdge(starmapId: String, edgeId: String, patchJson: String): NativeResult<MindMapGraphEdge> {
+    fun updateStarmapEdge(starmapId: String, edgeId: String, patchJson: String): NativeResult<StarMapGraphEdge> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = updateStarmapEdgeJson(workspaceDir, starmapId, edgeId, patchJson)
             if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<MindMapGraphEdge>>() {}.type
-            val response: RustResponse<MindMapGraphEdge> = gson.fromJson(json, type)
+            val type = object : TypeToken<RustResponse<StarMapGraphEdge>>() {}.type
+            val response: RustResponse<StarMapGraphEdge> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {

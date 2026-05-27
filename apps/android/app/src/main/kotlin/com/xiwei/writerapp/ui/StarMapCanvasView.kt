@@ -41,7 +41,7 @@ class StarMapCanvasView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawColor(Color.parseColor("#111318")) // Background
+        canvas.drawColor(Color.parseColor("#111318"))
 
         val currentData = data ?: return
 
