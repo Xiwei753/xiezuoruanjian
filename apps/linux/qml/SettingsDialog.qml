@@ -31,7 +31,13 @@ Dialog {
         typingAnim.checked = backendRef.setting_typing_animation_enabled
         smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
         aiSwitch.checked = backendRef.ai_enabled
-        autoSaveDelay.currentIndex = Math.max(0, [1, 2, 3, 5, 10].indexOf(Number(backendRef.setting_auto_save_delay_seconds || 3)))
+        autoSaveDelay.value = backendRef.setting_auto_save_delay_ms / 1000.0
+        fontSizeSlider.value = backendRef.setting_font_size || 16.0
+        lineSpacingSlider.value = backendRef.setting_line_spacing || 1.5
+        autoIndent.checked = backendRef.setting_auto_indent_enabled
+        autoIndentWidth.value = backendRef.setting_auto_indent_width || 2.0
+        typingAnimDuration.value = backendRef.setting_typing_animation_duration_ms || 100
+        smoothCursorDuration.value = backendRef.setting_smooth_cursor_duration_ms || 80
         var mode = backendRef.setting_theme_mode
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
         updatingValues = false
@@ -76,6 +82,30 @@ Dialog {
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
+                    title: "字体大小"
+                    description: Math.round(fontSizeSlider.value) + " px"
+                    Slider {
+                        id: fontSizeSlider
+                        from: 12.0
+                        to: 32.0
+                        stepSize: 1.0
+                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.saveAndNotify() }
+                    }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: "行距倍数"
+                    description: Number(lineSpacingSlider.value).toFixed(1) + "x"
+                    Slider {
+                        id: lineSpacingSlider
+                        from: 1.0
+                        to: 3.0
+                        stepSize: 0.1
+                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.saveAndNotify() }
+                    }
+                }
+                SettingsRow {
+                    dt: root.dt
                     title: "主题模式"
                     description: "切换系统、浅色或深色"
                     ModernComboBox {
@@ -105,11 +135,55 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
+                    title: "打字动画持续时间"
+                    description: Math.round(typingAnimDuration.value) + " ms"
+                    Slider {
+                        id: typingAnimDuration
+                        from: 0
+                        to: 240
+                        stepSize: 10
+                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.saveAndNotify() }
+                    }
+                }
+                SettingsRow {
+                    dt: root.dt
                     title: "平滑光标"
                     description: "光标移动更顺滑"
                     clickable: true
                     onClicked: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", !smoothCursor.checked)
                     ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", v) } }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: "平滑光标持续时间"
+                    description: Math.round(smoothCursorDuration.value) + " ms"
+                    Slider {
+                        id: smoothCursorDuration
+                        from: 0
+                        to: 240
+                        stepSize: 10
+                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }
+                    }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: "自动首行缩进"
+                    description: "回车时自动添加缩进"
+                    clickable: true
+                    onClicked: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", !autoIndent.checked)
+                    ModernSwitch { id: autoIndent; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", v) } }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: "首行缩进宽度"
+                    description: Number(autoIndentWidth.value).toFixed(1) + " 字符"
+                    Slider {
+                        id: autoIndentWidth
+                        from: 0.0
+                        to: 8.0
+                        stepSize: 0.5
+                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.saveAndNotify() }
+                    }
                 }
             }
 
@@ -128,12 +202,13 @@ Dialog {
                 SettingsRow {
                     dt: root.dt
                     title: "自动保存延迟"
-                    description: "停止输入后多久触发保存"
-                    ModernComboBox {
+                    description: Math.round(autoSaveDelay.value) + " 秒"
+                    Slider {
                         id: autoSaveDelay
-                        dt: root.dt
-                        model: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒"]
-                        onActivated: function(index) { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_seconds = [1,2,3,5,10][index]; root.saveAndNotify() }
+                        from: 1
+                        to: 10
+                        stepSize: 1
+                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000; root.saveAndNotify() }
                     }
                 }
             }
