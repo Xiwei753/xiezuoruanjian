@@ -105,14 +105,6 @@
                     android:textSize="16sp" />
             </LinearLayout>
 
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-                android:id="@+id/fabNewProject"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|end"
-                android:layout_margin="16dp"
-                android:text="@string/action_new_project"
-                app:icon="@drawable/ic_add" />
         </FrameLayout>
 
         <!-- Star Map Tab -->
@@ -133,13 +125,6 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:visibility="gone">
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="统计页面开发中..."
-                android:textSize="18sp"
-                android:textColor="?attr/colorOnSurface" />
         </FrameLayout>
 
     </FrameLayout>
@@ -150,5 +135,15 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         app:menu="@menu/menu_main_bottom_nav" />
+
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+        android:id="@+id/fabNewProject"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:text="@string/action_new_project"
+        app:icon="@drawable/ic_add"
+        app:layout_anchor="@id/bottomNav"
+        app:layout_anchorGravity="top|end" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
