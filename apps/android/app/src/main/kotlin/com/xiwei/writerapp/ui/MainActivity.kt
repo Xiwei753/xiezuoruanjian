@@ -103,6 +103,7 @@ class MainActivity : AppCompatActivity() {
                 tabStarMap.visibility = View.GONE
                 tabStats.visibility = View.GONE
                 toolbar.title = "作品"
+                fabNewProject.show()
             }
             R.id.nav_starmap -> {
                 tabWorks.visibility = View.GONE
@@ -110,12 +111,15 @@ class MainActivity : AppCompatActivity() {
                 tabStats.visibility = View.GONE
                 toolbar.title = "星图"
                 starMapController.initialize(starmapId)
+                fabNewProject.hide()
             }
             R.id.nav_stats -> {
                 tabWorks.visibility = View.GONE
                 tabStarMap.visibility = View.GONE
                 tabStats.visibility = View.VISIBLE
                 toolbar.title = "统计"
+                statsController.initialize()
+                fabNewProject.hide()
             }
         }
 
@@ -126,6 +130,7 @@ class MainActivity : AppCompatActivity() {
                     tabStarMap.visibility = View.GONE
                     tabStats.visibility = View.GONE
                     toolbar.title = "作品"
+                    fabNewProject.show()
                     true
                 }
                 R.id.nav_starmap -> {
@@ -134,6 +139,7 @@ class MainActivity : AppCompatActivity() {
                     tabStats.visibility = View.GONE
                     toolbar.title = "星图"
                     starMapController.initialize(starmapId)
+                    fabNewProject.hide()
                     true
                 }
                 R.id.nav_stats -> {
@@ -142,6 +148,7 @@ class MainActivity : AppCompatActivity() {
                     tabStats.visibility = View.VISIBLE
                     toolbar.title = "统计"
                     statsController.initialize()
+                    fabNewProject.hide()
                     true
                 }
                 else -> false
