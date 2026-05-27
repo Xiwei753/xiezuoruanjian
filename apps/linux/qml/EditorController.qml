@@ -78,21 +78,14 @@ QtObject {
         }
         
         var fontFamily = (targetTextArea && targetTextArea.font && targetTextArea.font.family) ? targetTextArea.font.family : "serif";
+        var indentPx = autoIndent ? Math.round(fontSize * 2) : 0;
         
-        var html = "<html><head><style>";
-        html += "body { font-size: " + fontSize + "px; line-height: " + lineSpacing + "; font-family: " + fontFamily + "; color: " + textColor + "; }";
-        if (autoIndent) {
-            html += "p { text-indent: 2em; margin-top: 0px; margin-bottom: 8px; }";
-        } else {
-            html += "p { text-indent: 0px; margin-top: 0px; margin-bottom: 8px; }";
-        }
-        html += "</style></head><body>";
-        
+        var html = "<html><body style='margin:0;padding:0;'>";
         var paragraphs = content.split(/\r?\n|\u2029/);
         for (var i = 0; i < paragraphs.length; i++) {
             var p = paragraphs[i];
             p = p.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-            html += "<p>" + p + "</p>";
+            html += "<p style='font-size:" + fontSize + "px;line-height:" + lineSpacing + ";font-family:" + fontFamily + ";color:" + textColor + ";text-indent:" + indentPx + "px;margin-top:0;margin-bottom:8px;'>" + p + "</p>";
         }
         html += "</body></html>";
         return html;
@@ -121,6 +114,7 @@ QtObject {
         targetTextArea.text = getContentHtml(content);
         
         previousEditorText = content;
+        previousTextLength = targetTextArea.length;
         isLoadingChapter = false;
     }
 
@@ -195,4 +189,5 @@ QtObject {
             backendRef.save_current_chapter(plain);
         }
     }
+}
 }
