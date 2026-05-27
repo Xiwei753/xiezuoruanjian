@@ -28,7 +28,7 @@ QtObject {
         }
     }
 
-    EditorFormatter {
+    property EditorFormatter cFormat: EditorFormatter {
         id: cFormat
     }
 
