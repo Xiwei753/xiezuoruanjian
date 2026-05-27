@@ -9,6 +9,8 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import com.xiwei.writerapp.model.StarMapData
+import com.xiwei.writerapp.model.StarMapNodeKind
+import android.graphics.Typeface
 
 class StarMapCanvasView @JvmOverloads constructor(
     context: Context,
@@ -18,15 +20,30 @@ class StarMapCanvasView @JvmOverloads constructor(
 
     private var data: StarMapData? = null
 
-    private val paintNode = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#2A2E36") }
-    private val paintText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+    private val paintNodeBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A1D23") }
+    private val paintNodeBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#2A2E36")
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+    }
+    private val paintHeader = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private val paintTitleText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#E2E4E9")
         textSize = 36f
         textAlign = Paint.Align.CENTER
     }
+
+    private val paintKindText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textSize = 28f
+        typeface = Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+
     private val paintEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.GRAY
-        strokeWidth = 3f
+        color = Color.parseColor("#4C566A")
+        strokeWidth = 4f
         style = Paint.Style.STROKE
     }
 
@@ -43,6 +60,35 @@ class StarMapCanvasView @JvmOverloads constructor(
     fun setData(newData: StarMapData) {
         this.data = newData
         invalidate()
+    }
+
+    private fun getKindColor(kind: StarMapNodeKind): Int {
+        return when (kind) {
+            StarMapNodeKind.Chapter -> Color.parseColor("#4CAF50")
+            StarMapNodeKind.Character -> Color.parseColor("#2196F3")
+            StarMapNodeKind.Location -> Color.parseColor("#FF9800")
+            StarMapNodeKind.Event -> Color.parseColor("#F44336")
+            StarMapNodeKind.Concept -> Color.parseColor("#9C27B0")
+            else -> Color.parseColor("#606470")
+        }
+    }
+
+    private fun getKindString(kind: StarMapNodeKind): String {
+        return when (kind) {
+            StarMapNodeKind.Note -> "Note"
+            StarMapNodeKind.Chapter -> "Chapter"
+            StarMapNodeKind.Character -> "Character"
+            StarMapNodeKind.Location -> "Location"
+            StarMapNodeKind.Event -> "Event"
+            StarMapNodeKind.Concept -> "Concept"
+            StarMapNodeKind.Theme -> "Theme"
+            StarMapNodeKind.Item -> "Item"
+            StarMapNodeKind.Organization -> "Organization"
+            StarMapNodeKind.Timeline -> "Timeline"
+            StarMapNodeKind.Plot -> "Plot"
+            StarMapNodeKind.Foreshadowing -> "Foreshadowing"
+            StarMapNodeKind.Custom -> "Custom"
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -73,13 +119,32 @@ class StarMapCanvasView @JvmOverloads constructor(
             val layout = currentData.layout.nodes.find { it.nodeId == node.id }
             if (layout != null) {
                 val rect = RectF(layout.x, layout.y, layout.x + layout.width, layout.y + layout.height)
-                canvas.drawRoundRect(rect, 16f, 16f, paintNode)
 
+                // Draw node background
+                canvas.drawRoundRect(rect, 16f, 16f, paintNodeBg)
+
+                // Draw border
+                canvas.drawRoundRect(rect, 16f, 16f, paintNodeBorder)
+
+                // Draw header strip
+                paintHeader.color = getKindColor(node.kind)
+                val headerRect = RectF(layout.x + 16f, layout.y + 16f, layout.x + layout.width - 16f, layout.y + 16f + 48f)
+                canvas.drawRoundRect(headerRect, 8f, 8f, paintHeader)
+
+                // Draw kind text
+                canvas.drawText(
+                    getKindString(node.kind),
+                    layout.x + layout.width / 2,
+                    layout.y + 16f + 34f,
+                    paintKindText
+                )
+
+                // Draw title text
                 canvas.drawText(
                     node.title,
                     layout.x + layout.width / 2,
-                    layout.y + layout.height / 2 + 12f,
-                    paintText
+                    layout.y + layout.height / 2 + 32f,
+                    paintTitleText
                 )
             }
         }

@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     var starmapId: String = ""
     private val bridge by lazy { NativeCoreBridge(this) }
     private lateinit var starMapController: StarMapController
+    private lateinit var statsController: StatsController
 
     private lateinit var workspaceRepository: WorkspaceRepository
     private lateinit var settingsRepository: SettingsRepository
@@ -93,6 +94,7 @@ class MainActivity : AppCompatActivity() {
         toolbar = findViewById(R.id.toolbar)
 
         starMapController = StarMapController(this, bridge, tabStarMap, canvasView)
+        statsController = StatsController(this, bridge, tabStats)
 
         // Sync initial state
         when (bottomNav.selectedItemId) {
@@ -139,6 +141,7 @@ class MainActivity : AppCompatActivity() {
                     tabStarMap.visibility = View.GONE
                     tabStats.visibility = View.VISIBLE
                     toolbar.title = "统计"
+                    statsController.initialize()
                     true
                 }
                 else -> false
