@@ -14,6 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::facade::WriterCore;
 
+mod starmap_bridge;
+
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
 enum DebugLevel {
     Error = 1,
@@ -3685,10 +3687,7 @@ impl AppBackend {
     fn list_starmaps_json(&self) -> QString {
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.list_starmaps() {
-                Ok(list) => serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()).into(),
-                Err(_) => "[]".into(),
-            }
+            starmap_bridge::list_starmaps(&core).into()
         } else {
             "[]".into()
         }
@@ -3698,10 +3697,7 @@ impl AppBackend {
         let pid = project_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.list_starmaps_for_project(&pid) {
-                Ok(list) => serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()).into(),
-                Err(_) => "[]".into(),
-            }
+            starmap_bridge::list_starmaps_for_project(&core, &pid).into()
         } else {
             "[]".into()
         }
@@ -3711,10 +3707,7 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.get_starmap(&sid) {
-                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
-                Err(_) => "{}".into(),
-            }
+            starmap_bridge::get_starmap(&core, &sid).into()
         } else {
             "{}".into()
         }
@@ -3727,10 +3720,7 @@ impl AppBackend {
         let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.create_starmap(&t, &d, color_ref) {
-                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::create_starmap(&core, &t, &d, color_ref).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3744,10 +3734,7 @@ impl AppBackend {
         let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.create_child_starmap(&pid, &t, &d, color_ref) {
-                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::create_child_starmap(&core, &pid, &t, &d, color_ref).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3758,10 +3745,7 @@ impl AppBackend {
         let t = new_title.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.rename_starmap(&sid, &t) {
-                Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::rename_starmap(&core, &sid, &t).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3771,10 +3755,7 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.delete_starmap(&sid) {
-                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::delete_starmap(&core, &sid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3784,33 +3765,7 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.get_starmap_graph(&sid) {
-                Ok(g) => match core.get_starmap_layout(&sid) {
-                    Ok(l) => {
-                        serde_json::json!({
-                            "success": true,
-                            "data": {
-                                "graph": g,
-                                "layout": l
-                            }
-                        }).to_string().into()
-                    },
-                    Err(_) => {
-                        serde_json::json!({
-                            "success": true,
-                            "data": {
-                                "graph": g,
-                                "layout": null
-                            }
-                        }).to_string().into()
-                    }
-                },
-                Err(e) => serde_json::json!({
-                    "success": false,
-                    "userMessage": if e.to_string().contains("not bound to a project") { "请先绑定作品" } else { "加载失败" },
-                    "message": format!("{}", e)
-                }).to_string().into(),
-            }
+            starmap_bridge::get_starmap_graph_and_layout(&core, &sid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3820,43 +3775,9 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let t = title.to_string();
         let k = kind.to_string();
-
-        let node_kind = serde_json::from_value(serde_json::json!(k)).unwrap_or(writer_core::mind_map::graph::MindMapNodeKind::Note);
-        let id = format!("n_{}", uuid::Uuid::new_v4());
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-
-        let node = writer_core::mind_map::graph::MindMapGraphNode {
-            id: id.clone(),
-            title: t,
-            kind: node_kind,
-            payload: None,
-            tags: vec![],
-            created_at: now,
-            updated_at: now,
-        };
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.add_starmap_node(&sid, node.clone()) {
-                Ok(saved_node) => {
-                    // Update layout
-                    if let Ok(mut layout) = core.get_starmap_layout(&sid) {
-                        layout.nodes.push(writer_core::mind_map::layout::MindMapLayoutNode {
-                            node_id: saved_node.id.clone(),
-                            x: x as f32,
-                            y: y as f32,
-                            width: 150.0,
-                            height: 60.0,
-                            radius: 30.0,
-                            collapsed: false,
-                            z_index: 0,
-                        });
-                        let _ = core.save_starmap_layout(&sid, &layout);
-                    }
-                    serde_json::json!({"success": true, "data": saved_node}).to_string().into()
-                },
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::create_starmap_node(&core, &sid, &t, &k, x, y).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3866,27 +3787,9 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
         let p = patch_json.to_string();
-
-        #[derive(serde::Deserialize)]
-        struct Patch {
-            title: Option<String>,
-            kind: Option<String>,
-            tags: Option<Vec<String>>,
-        }
-
-        let patch: Patch = match serde_json::from_str(&p) {
-            Ok(pt) => pt,
-            Err(_) => return serde_json::json!({"success": false, "message": "Invalid patch JSON"}).to_string().into(),
-        };
-
-        let kind = patch.kind.and_then(|k| serde_json::from_value(serde_json::json!(k)).ok());
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.update_starmap_node(&sid, &nid, patch.title, kind, None, patch.tags) {
-                Ok(node) => serde_json::json!({"success": true, "data": node}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::update_starmap_node(&core, &sid, &nid, &p).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3897,10 +3800,7 @@ impl AppBackend {
         let nid = node_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.delete_starmap_node(&sid, &nid) {
-                Ok(_) => serde_json::json!({"success": true}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::delete_starmap_node(&core, &sid, &nid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3912,28 +3812,9 @@ impl AppBackend {
         let to_id = to_node_id.to_string();
         let k = kind.to_string();
         let l = label.to_string();
-
-        let edge_kind = serde_json::from_value(serde_json::json!(k)).unwrap_or(writer_core::mind_map::graph::MindMapEdgeKind::RelatedTo);
-        let id = format!("e_{}", uuid::Uuid::new_v4());
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-
-        let edge = writer_core::mind_map::graph::MindMapGraphEdge {
-            id,
-            from: from_id,
-            to: to_id,
-            kind: edge_kind,
-            label: if l.is_empty() { None } else { Some(l) },
-            payload: None,
-            created_at: now,
-            updated_at: now,
-        };
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.add_starmap_edge(&sid, edge) {
-                Ok(saved_edge) => serde_json::json!({"success": true, "data": saved_edge}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::create_starmap_edge(&core, &sid, &from_id, &to_id, &k, &l).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3943,26 +3824,9 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
         let p = patch_json.to_string();
-
-        #[derive(serde::Deserialize)]
-        struct Patch {
-            kind: Option<String>,
-            label: Option<String>,
-        }
-
-        let patch: Patch = match serde_json::from_str(&p) {
-            Ok(pt) => pt,
-            Err(_) => return serde_json::json!({"success": false, "message": "Invalid patch JSON"}).to_string().into(),
-        };
-
-        let kind = patch.kind.and_then(|k| serde_json::from_value(serde_json::json!(k)).ok());
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.update_starmap_edge(&sid, &eid, kind, patch.label, None) {
-                Ok(edge) => serde_json::json!({"success": true, "data": edge}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::update_starmap_edge(&core, &sid, &eid, &p).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3973,10 +3837,7 @@ impl AppBackend {
         let eid = edge_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.delete_starmap_edge(&sid, &eid) {
-                Ok(_) => serde_json::json!({"success": true}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::delete_starmap_edge(&core, &sid, &eid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -3985,18 +3846,9 @@ impl AppBackend {
     fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString {
         let sid = starmap_id.to_string();
         let lj = layout_json.to_string();
-
-        let layout: writer_core::mind_map::layout::MindMapLayout = match serde_json::from_str(&lj) {
-            Ok(l) => l,
-            Err(_) => return serde_json::json!({"success": false, "message": "Invalid layout JSON"}).to_string().into(),
-        };
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.save_starmap_layout(&sid, &layout) {
-                Ok(_) => serde_json::json!({"success": true}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::save_starmap_layout(&core, &sid, &lj).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -4007,10 +3859,7 @@ impl AppBackend {
         let pid = project_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.bind_starmap_to_project(&sid, &pid) {
-                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::bind_starmap_to_project(&core, &sid, &pid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -4021,10 +3870,7 @@ impl AppBackend {
         let pid = project_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.set_main_starmap_for_project(&sid, &pid) {
-                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::set_main_starmap(&core, &sid, &pid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
@@ -4034,11 +3880,7 @@ impl AppBackend {
         let pid = project_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.get_main_starmap_for_project(&pid) {
-                Ok(Some(meta)) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()).into(),
-                Ok(None) => "{}".into(),
-                Err(_) => "{}".into(),
-            }
+            starmap_bridge::get_main_starmap(&core, &pid).into()
         } else {
             "{}".into()
         }
@@ -4048,10 +3890,7 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            match core.unbind_starmap_from_project(&sid) {
-                Ok(()) => serde_json::json!({"success": true}).to_string().into(),
-                Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string().into(),
-            }
+            starmap_bridge::unbind_starmap(&core, &sid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }

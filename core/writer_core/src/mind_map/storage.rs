@@ -140,7 +140,7 @@ pub fn save_mind_map_graph(
 
     let graph_path = graphs_dir.join(format!("{}.json", graph.id));
     let json_str = serde_json::to_string_pretty(graph)?;
-    fs::write(graph_path, json_str)?;
+    crate::storage::atomic_write_string(&graph_path, &json_str)?;
 
     // Ensure index.json exists/is updated
     let index_path = mind_map_dir.join("index.json");
@@ -172,7 +172,7 @@ pub fn save_mind_map_graph(
     };
 
     let index_str = serde_json::to_string_pretty(&index)?;
-    fs::write(index_path, index_str)?;
+    crate::storage::atomic_write_string(&index_path, &index_str)?;
 
     Ok(())
 }
@@ -206,7 +206,7 @@ pub fn save_mind_map_layout(
     fs::create_dir_all(&layouts_dir)?;
     let layout_path = layouts_dir.join(format!("{}.json", graph_id));
     let json_str = serde_json::to_string_pretty(layout)?;
-    fs::write(layout_path, json_str)?;
+    crate::storage::atomic_write_string(&layout_path, &json_str)?;
     Ok(())
 }
 

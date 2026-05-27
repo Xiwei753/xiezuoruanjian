@@ -1,4 +1,5 @@
 pub mod graph;
+pub mod types;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;

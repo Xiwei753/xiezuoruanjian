@@ -1773,39 +1773,13 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateStar
     let node_id = match jstring_to_string(&mut env, &node_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let patch_json = match jstring_to_string(&mut env, &patch_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
 
-    let patch: serde_json::Value = match serde_json::from_str(&patch_json) {
-        Ok(v) => v,
+    let patch: writer_core::starmap::types::StarMapNodePatch = match serde_json::from_str(&patch_json) {
+        Ok(p) => p,
         Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
     };
 
-    let title = patch.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let kind = patch.get("kind").and_then(|v| v.as_str()).map(|s| {
-        match s {
-            "project" => writer_core::mind_map::graph::MindMapNodeKind::Project,
-            "volume" => writer_core::mind_map::graph::MindMapNodeKind::Volume,
-            "chapter" => writer_core::mind_map::graph::MindMapNodeKind::Chapter,
-            "textAnchor" => writer_core::mind_map::graph::MindMapNodeKind::TextAnchor,
-            "character" => writer_core::mind_map::graph::MindMapNodeKind::Character,
-            "event" => writer_core::mind_map::graph::MindMapNodeKind::Event,
-            "location" => writer_core::mind_map::graph::MindMapNodeKind::Location,
-            "item" => writer_core::mind_map::graph::MindMapNodeKind::Item,
-            "concept" => writer_core::mind_map::graph::MindMapNodeKind::Concept,
-            "theme" => writer_core::mind_map::graph::MindMapNodeKind::Theme,
-            "note" => writer_core::mind_map::graph::MindMapNodeKind::Note,
-            "organization" => writer_core::mind_map::graph::MindMapNodeKind::Organization,
-            "timeline" => writer_core::mind_map::graph::MindMapNodeKind::Timeline,
-            "plot" => writer_core::mind_map::graph::MindMapNodeKind::Plot,
-            "foreshadowing" => writer_core::mind_map::graph::MindMapNodeKind::Foreshadowing,
-            _ => writer_core::mind_map::graph::MindMapNodeKind::Custom,
-        }
-    });
-    let payload = patch.get("payload").cloned();
-    let tags = patch.get("tags").and_then(|v| v.as_array()).map(|arr| {
-        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
-    });
-
     let core = WriterCore::new(&workspace_path);
-    result_to_jstring(&mut env, core.update_starmap_node(&starmap_id, &node_id, title, kind, payload, tags))
+    result_to_jstring(&mut env, core.update_starmap_node(&starmap_id, &node_id, patch))
 }
 
 #[no_mangle]
@@ -1858,33 +1832,13 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateStar
     let edge_id = match jstring_to_string(&mut env, &edge_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let patch_json = match jstring_to_string(&mut env, &patch_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
 
-    let patch: serde_json::Value = match serde_json::from_str(&patch_json) {
-        Ok(v) => v,
+    let patch: writer_core::starmap::types::StarMapEdgePatch = match serde_json::from_str(&patch_json) {
+        Ok(p) => p,
         Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::Error::Json(e))),
     };
 
-    let kind = patch.get("kind").and_then(|v| v.as_str()).map(|s| {
-        match s {
-            "contains" => writer_core::mind_map::graph::MindMapEdgeKind::Contains,
-            "references" => writer_core::mind_map::graph::MindMapEdgeKind::References,
-            "appearsIn" => writer_core::mind_map::graph::MindMapEdgeKind::AppearsIn,
-            "causes" => writer_core::mind_map::graph::MindMapEdgeKind::Causes,
-            "relatedTo" => writer_core::mind_map::graph::MindMapEdgeKind::RelatedTo,
-            "locatedAt" => writer_core::mind_map::graph::MindMapEdgeKind::LocatedAt,
-            "characterRelation" => writer_core::mind_map::graph::MindMapEdgeKind::CharacterRelation,
-            "timeline" => writer_core::mind_map::graph::MindMapEdgeKind::Timeline,
-            "foreshadows" => writer_core::mind_map::graph::MindMapEdgeKind::Foreshadows,
-            "resolves" => writer_core::mind_map::graph::MindMapEdgeKind::Resolves,
-            "dependsOn" => writer_core::mind_map::graph::MindMapEdgeKind::DependsOn,
-            "conflictsWith" => writer_core::mind_map::graph::MindMapEdgeKind::ConflictsWith,
-            _ => writer_core::mind_map::graph::MindMapEdgeKind::Custom,
-        }
-    });
-    let label = patch.get("label").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let payload = patch.get("payload").cloned();
-
     let core = WriterCore::new(&workspace_path);
-    result_to_jstring(&mut env, core.update_starmap_edge(&starmap_id, &edge_id, kind, label, payload))
+    result_to_jstring(&mut env, core.update_starmap_edge(&starmap_id, &edge_id, patch))
 }
 
 #[no_mangle]

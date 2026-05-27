@@ -1,84 +1,82 @@
 use crate::error::{Error, Result};
-use crate::mind_map::graph::{MindMapEdgeKind, MindMapGraph, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind};
-use crate::mind_map::layout::{LayoutKind, MindMapLayout};
+use crate::starmap::types::*;
 use crate::starmap::{load_starmap_meta, starmaps_dir, update_starmap_stats, now_epoch};
+use crate::storage::atomic_write_string;
 use std::fs;
 use std::path::Path;
 
-pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<MindMapGraph> {
+fn graph_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
+    starmaps_dir(workspace).join(starmap_id).join("graph.json")
+}
+
+fn layout_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
+    starmaps_dir(workspace).join(starmap_id).join("layout.json")
+}
+
+pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGraph> {
     let meta = load_starmap_meta(workspace, starmap_id)?;
 
-    let graph_path = starmaps_dir(workspace).join(starmap_id).join("graph.json");
-    if !graph_path.exists() {
-        return Ok(MindMapGraph {
-            schema_version: 2,
+    let path = graph_path(workspace, starmap_id);
+    if !path.exists() {
+        return Ok(StarMapGraph {
+            schema_version: 1,
             id: starmap_id.to_string(),
-            project_id: meta.project_id.clone().unwrap_or_default(),
+            starmap_id: starmap_id.to_string(),
             title: meta.title.clone(),
             nodes: vec![],
             edges: vec![],
-            anchors: vec![],
-            links: vec![],
             created_at: now_epoch(),
             updated_at: now_epoch(),
         });
     }
 
-    let json_str = fs::read_to_string(&graph_path)?;
-    let graph: MindMapGraph = serde_json::from_str(&json_str)?;
+    let json_str = fs::read_to_string(&path)?;
+    let graph: StarMapGraph = serde_json::from_str(&json_str)?;
     Ok(graph)
 }
 
-pub fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &MindMapGraph) -> Result<()> {
+pub fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &StarMapGraph) -> Result<()> {
     let starmap_dir = starmaps_dir(workspace).join(starmap_id);
     fs::create_dir_all(&starmap_dir)?;
 
-    let graph_path = starmap_dir.join("graph.json");
     let json_str = serde_json::to_string_pretty(graph)?;
-    fs::write(graph_path, json_str)?;
+    atomic_write_string(&graph_path(workspace, starmap_id), &json_str)?;
 
     let node_count = graph.nodes.len() as u32;
     let edge_count = graph.edges.len() as u32;
 
-    // linked_chapter_count calculation
-    let mut linked_chapters = 0;
+    let mut linked_chapters = 0u32;
     for node in &graph.nodes {
-        if node.kind == MindMapNodeKind::Chapter {
+        if node.kind == StarMapNodeKind::Chapter {
             linked_chapters += 1;
         }
     }
 
     update_starmap_stats(workspace, starmap_id, node_count, edge_count, linked_chapters)?;
-
     Ok(())
 }
 
-pub fn get_starmap_layout(workspace: &Path, starmap_id: &str) -> Result<MindMapLayout> {
-    let layout_path = starmaps_dir(workspace).join(starmap_id).join("layout.json");
-    if !layout_path.exists() {
-        return Ok(MindMapLayout {
-            kind: LayoutKind::Freeform,
-            nodes: vec![],
-        });
+pub fn get_starmap_layout(workspace: &Path, starmap_id: &str) -> Result<StarMapLayout> {
+    let path = layout_path(workspace, starmap_id);
+    if !path.exists() {
+        return Ok(StarMapLayout::default());
     }
 
-    let json_str = fs::read_to_string(&layout_path)?;
-    let layout: MindMapLayout = serde_json::from_str(&json_str)?;
+    let json_str = fs::read_to_string(&path)?;
+    let layout: StarMapLayout = serde_json::from_str(&json_str)?;
     Ok(layout)
 }
 
-pub fn save_starmap_layout(workspace: &Path, starmap_id: &str, layout: &MindMapLayout) -> Result<()> {
+pub fn save_starmap_layout(workspace: &Path, starmap_id: &str, layout: &StarMapLayout) -> Result<()> {
     let starmap_dir = starmaps_dir(workspace).join(starmap_id);
     fs::create_dir_all(&starmap_dir)?;
 
-    let layout_path = starmap_dir.join("layout.json");
     let json_str = serde_json::to_string_pretty(layout)?;
-    fs::write(layout_path, json_str)?;
-
+    atomic_write_string(&layout_path(workspace, starmap_id), &json_str)?;
     Ok(())
 }
 
-pub fn add_starmap_node(workspace: &Path, starmap_id: &str, node: MindMapGraphNode) -> Result<MindMapGraphNode> {
+pub fn add_starmap_node(workspace: &Path, starmap_id: &str, node: StarMapNode) -> Result<StarMapNode> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
     let new_node = node.clone();
     graph.nodes.push(new_node.clone());
@@ -91,39 +89,48 @@ pub fn update_starmap_node(
     workspace: &Path,
     starmap_id: &str,
     node_id: &str,
-    title: Option<String>,
-    kind: Option<MindMapNodeKind>,
-    payload: Option<serde_json::Value>,
-    tags: Option<Vec<String>>
-) -> Result<MindMapGraphNode> {
+    patch: StarMapNodePatch,
+) -> Result<StarMapNode> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
     if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == node_id) {
-        if let Some(t) = title { node.title = t; }
-        if let Some(k) = kind { node.kind = k; }
-        if let Some(p) = payload { node.payload = Some(p); }
-        if let Some(t) = tags { node.tags = t; }
+        if let Some(t) = patch.title {
+            node.title = t;
+        }
+        if let Some(k) = patch.kind {
+            node.kind = k;
+        }
+        if let Some(p) = patch.payload {
+            node.payload = p;
+        }
+        if let Some(t) = patch.tags {
+            node.tags = t;
+        }
         node.updated_at = now_epoch();
         let updated_node = node.clone();
         graph.updated_at = now_epoch();
         save_starmap_graph(workspace, starmap_id, &graph)?;
         Ok(updated_node)
     } else {
-        Err(Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "Node not found")))
+        Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Node not found",
+        )))
     }
 }
 
 pub fn delete_starmap_node(workspace: &Path, starmap_id: &str, node_id: &str) -> Result<()> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
-    let initial_node_count = graph.nodes.len();
+    let initial_count = graph.nodes.len();
     graph.nodes.retain(|n| n.id != node_id);
-    if graph.nodes.len() == initial_node_count {
-        return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "Node not found")));
+    if graph.nodes.len() == initial_count {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Node not found",
+        )));
     }
 
-    // Cascade delete edges
     graph.edges.retain(|e| e.from != node_id && e.to != node_id);
 
-    // Also remove from layout
     if let Ok(mut layout) = get_starmap_layout(workspace, starmap_id) {
         layout.nodes.retain(|n| n.node_id != node_id);
         let _ = save_starmap_layout(workspace, starmap_id, &layout);
@@ -134,12 +141,16 @@ pub fn delete_starmap_node(workspace: &Path, starmap_id: &str, node_id: &str) ->
     Ok(())
 }
 
-pub fn add_starmap_edge(workspace: &Path, starmap_id: &str, edge: MindMapGraphEdge) -> Result<MindMapGraphEdge> {
+pub fn add_starmap_edge(workspace: &Path, starmap_id: &str, edge: StarMapEdge) -> Result<StarMapEdge> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
 
-    // Validate from and to nodes exist
-    if !graph.nodes.iter().any(|n| n.id == edge.from) || !graph.nodes.iter().any(|n| n.id == edge.to) {
-        return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Edge nodes do not exist")));
+    if !graph.nodes.iter().any(|n| n.id == edge.from)
+        || !graph.nodes.iter().any(|n| n.id == edge.to)
+    {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Edge nodes do not exist",
+        )));
     }
 
     let new_edge = edge.clone();
@@ -153,39 +164,41 @@ pub fn update_starmap_edge(
     workspace: &Path,
     starmap_id: &str,
     edge_id: &str,
-    kind: Option<MindMapEdgeKind>,
-    label: Option<String>,
-    payload: Option<serde_json::Value>
-) -> Result<MindMapGraphEdge> {
+    patch: StarMapEdgePatch,
+) -> Result<StarMapEdge> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
     if let Some(edge) = graph.edges.iter_mut().find(|e| e.id == edge_id) {
-        if let Some(k) = kind { edge.kind = k; }
-        // For label, we might want to allow clearing it, so we can't just use `Option<String>` easily,
-        // but for now, we'll assume if Some, update it. If we need to clear, we can pass Some("".to_string()).
-        if let Some(l) = label {
-            if l.is_empty() {
-                edge.label = None;
-            } else {
-                edge.label = Some(l);
-            }
+        if let Some(k) = patch.kind {
+            edge.kind = k;
         }
-        if let Some(p) = payload { edge.payload = Some(p); }
+        if let Some(l) = patch.label {
+            edge.label = l;
+        }
+        if let Some(p) = patch.payload {
+            edge.payload = p;
+        }
         edge.updated_at = now_epoch();
         let updated_edge = edge.clone();
         graph.updated_at = now_epoch();
         save_starmap_graph(workspace, starmap_id, &graph)?;
         Ok(updated_edge)
     } else {
-        Err(Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "Edge not found")))
+        Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Edge not found",
+        )))
     }
 }
 
 pub fn delete_starmap_edge(workspace: &Path, starmap_id: &str, edge_id: &str) -> Result<()> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
-    let initial_edge_count = graph.edges.len();
+    let initial_count = graph.edges.len();
     graph.edges.retain(|e| e.id != edge_id);
-    if graph.edges.len() == initial_edge_count {
-        return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "Edge not found")));
+    if graph.edges.len() == initial_count {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Edge not found",
+        )));
     }
     graph.updated_at = now_epoch();
     save_starmap_graph(workspace, starmap_id, &graph)?;
@@ -211,16 +224,14 @@ mod tests {
         let meta = create_starmap(dir.path(), "Test Map", "desc", None).unwrap();
         crate::starmap::bind_starmap_to_project(dir.path(), &meta.starmap_id, "test_proj").unwrap();
 
-        // 1. Get empty graph
         let mut graph = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(graph.nodes.len(), 0);
         assert_eq!(graph.edges.len(), 0);
 
-        // 2. Add node
-        let node1 = MindMapGraphNode {
+        let node1 = StarMapNode {
             id: "n1".to_string(),
             title: "Node 1".to_string(),
-            kind: MindMapNodeKind::Note,
+            kind: StarMapNodeKind::Note,
             payload: None,
             tags: vec![],
             created_at: now_epoch(),
@@ -228,10 +239,10 @@ mod tests {
         };
         add_starmap_node(dir.path(), &meta.starmap_id, node1.clone()).unwrap();
 
-        let node2 = MindMapGraphNode {
+        let node2 = StarMapNode {
             id: "n2".to_string(),
             title: "Node 2".to_string(),
-            kind: MindMapNodeKind::Concept,
+            kind: StarMapNodeKind::Concept,
             payload: None,
             tags: vec![],
             created_at: now_epoch(),
@@ -242,25 +253,35 @@ mod tests {
         graph = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(graph.nodes.len(), 2);
 
-        // Verify meta stats updated
         let refreshed_meta = load_starmap_meta(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(refreshed_meta.node_count, 2);
 
-        // 3. Update node
-        update_starmap_node(dir.path(), &meta.starmap_id, "n1", Some("Updated N1".to_string()), Some(MindMapNodeKind::Chapter), None, None).unwrap();
+        update_starmap_node(
+            dir.path(),
+            &meta.starmap_id,
+            "n1",
+            StarMapNodePatch {
+                title: Some("Updated N1".to_string()),
+                kind: Some(StarMapNodeKind::Chapter),
+                payload: None,
+                tags: None,
+            },
+        )
+        .unwrap();
         graph = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
-        assert_eq!(graph.nodes.iter().find(|n| n.id == "n1").unwrap().title, "Updated N1");
+        assert_eq!(
+            graph.nodes.iter().find(|n| n.id == "n1").unwrap().title,
+            "Updated N1"
+        );
 
-        // Verify meta stats linked chapter count
         let refreshed_meta2 = load_starmap_meta(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(refreshed_meta2.linked_chapter_count, 1);
 
-        // 4. Add edge
-        let edge = MindMapGraphEdge {
+        let edge = StarMapEdge {
             id: "e1".to_string(),
             from: "n1".to_string(),
             to: "n2".to_string(),
-            kind: MindMapEdgeKind::RelatedTo,
+            kind: StarMapEdgeKind::RelatedTo,
             label: Some("relates".to_string()),
             payload: None,
             created_at: now_epoch(),
@@ -271,22 +292,29 @@ mod tests {
         graph = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(graph.edges.len(), 1);
 
-        // 5. Update edge
-        update_starmap_edge(dir.path(), &meta.starmap_id, "e1", Some(MindMapEdgeKind::Causes), Some("causes".to_string()), None).unwrap();
+        update_starmap_edge(
+            dir.path(),
+            &meta.starmap_id,
+            "e1",
+            StarMapEdgePatch {
+                kind: Some(StarMapEdgeKind::Causes),
+                label: Some(Some("causes".to_string())),
+                payload: None,
+            },
+        )
+        .unwrap();
         graph = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(graph.edges[0].label.as_deref(), Some("causes"));
 
-        // 6. Delete node (cascades edge)
         delete_starmap_node(dir.path(), &meta.starmap_id, "n1").unwrap();
         graph = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
-        assert_eq!(graph.nodes.len(), 1); // n2 remains
-        assert_eq!(graph.edges.len(), 0); // e1 deleted
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.edges.len(), 0);
 
-        // Verify stats again
         let refreshed_meta3 = load_starmap_meta(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(refreshed_meta3.node_count, 1);
         assert_eq!(refreshed_meta3.edge_count, 0);
-        assert_eq!(refreshed_meta3.linked_chapter_count, 0); // n1 was the chapter
+        assert_eq!(refreshed_meta3.linked_chapter_count, 0);
     }
 
     #[test]
@@ -298,7 +326,7 @@ mod tests {
         let mut layout = get_starmap_layout(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(layout.nodes.len(), 0);
 
-        layout.nodes.push(crate::mind_map::layout::MindMapLayoutNode {
+        layout.nodes.push(StarMapLayoutNode {
             node_id: "n1".to_string(),
             x: 100.0,
             y: 200.0,
