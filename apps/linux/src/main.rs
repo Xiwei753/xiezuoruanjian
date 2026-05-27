@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
 use cpp::cpp;
@@ -209,14 +210,72 @@ fn try_kreadconfig(cmd: &str) -> Option<String> {
 }
 
 #[derive(QObject, Default)]
-pub struct EditorFormatter {
+pub struct DocumentHandler {
     base: qt_base_class!(trait QObject),
-    format_document: qt_method!(fn(&self, doc_variant: QVariant, font_size: f32, line_spacing: f32, indent: f32)),
+    
+    document: qt_property!(QVariant; READ document WRITE set_document NOTIFY document_changed),
+    line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY line_spacing_changed),
+    text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY text_indent_changed),
+    font_size: qt_property!(f32; READ font_size WRITE set_font_size NOTIFY font_size_changed),
+    
+    document_changed: qt_signal!(),
+    line_spacing_changed: qt_signal!(),
+    text_indent_changed: qt_signal!(),
+    font_size_changed: qt_signal!(),
+    
+    apply_format: qt_method!(fn(&self)),
+    set_plain_text: qt_method!(fn(&self, text: QString)),
+    clear_undo_stack: qt_method!(fn(&self)),
+
+    // internal fields
+    current_doc: QVariant,
+    current_line_spacing: f32,
+    current_text_indent: f32,
+    current_font_size: f32,
 }
 
-impl EditorFormatter {
-    fn format_document(&self, doc_variant: QVariant, font_size: f32, line_spacing: f32, indent: f32) {
-        cpp!(unsafe [doc_variant as "QVariant", font_size as "float", line_spacing as "float", indent as "float"] {
+impl DocumentHandler {
+    fn document(&self) -> QVariant { self.current_doc.clone() }
+    fn set_document(&mut self, val: QVariant) { 
+        self.current_doc = val; 
+        self.document_changed();
+        self.apply_format();
+    }
+    
+    fn line_spacing(&self) -> f32 { self.current_line_spacing }
+    fn set_line_spacing(&mut self, val: f32) { 
+        if (self.current_line_spacing - val).abs() > 0.001 {
+            self.current_line_spacing = val; 
+            self.line_spacing_changed();
+            self.apply_format();
+        }
+    }
+    
+    fn text_indent(&self) -> f32 { self.current_text_indent }
+    fn set_text_indent(&mut self, val: f32) { 
+        if (self.current_text_indent - val).abs() > 0.001 {
+            self.current_text_indent = val; 
+            self.text_indent_changed();
+            self.apply_format();
+        }
+    }
+
+    fn font_size(&self) -> f32 { self.current_font_size }
+    fn set_font_size(&mut self, val: f32) {
+        if (self.current_font_size - val).abs() > 0.001 {
+            self.current_font_size = val;
+            self.font_size_changed();
+            self.apply_format();
+        }
+    }
+
+    fn apply_format(&self) {
+        let doc_variant = self.current_doc.clone();
+        let line_spacing = self.current_line_spacing;
+        let indent = self.current_text_indent;
+        let font_size = self.current_font_size;
+        
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", font_size as "float"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -225,6 +284,7 @@ impl EditorFormatter {
             if (!doc) return;
 
             QTextCursor cursor(doc);
+            cursor.beginEditBlock();
             cursor.select(QTextCursor::Document);
             
             QTextBlockFormat blockFormat;
@@ -237,6 +297,65 @@ impl EditorFormatter {
                 charFormat.setFontPointSize(font_size);
                 cursor.mergeCharFormat(charFormat);
             }
+            cursor.endEditBlock();
+        });
+    }
+
+    fn set_plain_text(&self, text: QString) {
+        let doc_variant = self.current_doc.clone();
+        let line_spacing = self.current_line_spacing;
+        let indent = self.current_text_indent;
+        let font_size = self.current_font_size;
+        
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", font_size as "float", text as "QString"] {
+            QObject* obj = doc_variant.value<QObject*>();
+            if (!obj) return;
+            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
+            if (!qquick_doc) return;
+            QTextDocument* doc = qquick_doc->textDocument();
+            if (!doc) return;
+
+            QTextCursor cursor(doc);
+            cursor.beginEditBlock();
+            
+            cursor.select(QTextCursor::Document);
+            cursor.removeSelectedText();
+
+            QTextBlockFormat blockFormat;
+            blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
+            blockFormat.setTextIndent(indent);
+
+            QTextCharFormat charFormat;
+            if (font_size > 0) {
+                charFormat.setFontPointSize(font_size);
+            }
+
+            QStringList lines = text.split("\n");
+            for (int i = 0; i < lines.size(); ++i) {
+                cursor.setBlockFormat(blockFormat);
+                if (font_size > 0) {
+                    cursor.setCharFormat(charFormat);
+                }
+                cursor.insertText(lines[i]);
+                if (i < lines.size() - 1) {
+                    cursor.insertBlock();
+                }
+            }
+            
+            cursor.endEditBlock();
+        });
+    }
+
+    fn clear_undo_stack(&self) {
+        let doc_variant = self.current_doc.clone();
+        cpp!(unsafe [doc_variant as "QVariant"] {
+            QObject* obj = doc_variant.value<QObject*>();
+            if (!obj) return;
+            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
+            if (!qquick_doc) return;
+            QTextDocument* doc = qquick_doc->textDocument();
+            if (!doc) return;
+            doc->clearUndoRedoStacks();
         });
     }
 }
@@ -3968,11 +4087,11 @@ fn main() {
         0,
         CStr::from_bytes_with_nul(b"AppBackend\0").unwrap(),
     );
-    qmetaobject::qml_register_type::<EditorFormatter>(
+    qmetaobject::qml_register_type::<DocumentHandler>(
         CStr::from_bytes_with_nul(b"Writer\0").unwrap(),
         1,
         0,
-        CStr::from_bytes_with_nul(b"EditorFormatter\0").unwrap(),
+        CStr::from_bytes_with_nul(b"DocumentHandler\0").unwrap(),
     );
 
     let qml_path = "qrc:/main.qml";

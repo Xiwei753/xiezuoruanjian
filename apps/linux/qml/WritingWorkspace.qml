@@ -86,58 +86,23 @@ Rectangle {
 
     color: dt ? dt.bg : "#111318"
 
-    ColumnLayout {
+    RowLayout {
         anchors.fill: parent
         spacing: 0
 
-        // Top toolbar
-        TopWritingToolbar {
-            Layout.fillWidth: true
-            dt: root.dt
-            backendRef: root.backendRef
-            currentFontSize: root.backendRef ? root.backendRef.setting_font_size : 16
-            currentLineSpacing: root.backendRef ? root.backendRef.setting_line_spacing : 1.5
-            firstLineIndent: root.backendRef ? root.backendRef.setting_auto_indent_enabled : false
-            saveStatus: editorController.saveStatus
-            onFontSizeChanged: function(size) {
-                if (root.backendRef) {
-                    root.backendRef.setting_font_size = size;
-                }
-            }
-            onLineSpacingChanged: function(spacing) {
-                if (root.backendRef) {
-                    root.backendRef.setting_line_spacing = spacing;
-                }
-            }
-            onFirstLineIndentToggled: {
-                if (root.backendRef) {
-                    root.backendRef.setting_auto_indent_enabled = !root.backendRef.setting_auto_indent_enabled;
-                }
-            }
-            onFormatOneClick: editorController.formatText()
-            onLinkToStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
-            onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
-        }
-
-        // Main content area
-        RowLayout {
-            Layout.fillWidth: true
+        // Left sidebar: volume/chapter tree
+        Rectangle {
+            Layout.preferredWidth: 240
             Layout.fillHeight: true
-            spacing: 0
+            color: dt ? dt.sidebar : "#14161B"
+            border.color: dt ? dt.border : "#2A2E36"
+            border.width: 1
 
-            // Left sidebar: volume/chapter tree
-            Rectangle {
-                Layout.preferredWidth: 240
-                Layout.fillHeight: true
-                color: dt ? dt.sidebar : "#14161B"
-                border.color: dt ? dt.border : "#2A2E36"
-                border.width: 1
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 0
-
-                    // Back button + project title
+                // Back button + project title
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 48
@@ -340,7 +305,42 @@ Rectangle {
                 }
             }
 
-            // Center: Editor paper area
+        // Right side: Toolbar + Editor
+        ColumnLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 0
+
+            // Top toolbar
+            TopWritingToolbar {
+                Layout.fillWidth: true
+                dt: root.dt
+                backendRef: root.backendRef
+                currentFontSize: root.backendRef ? root.backendRef.setting_font_size : 16
+                currentLineSpacing: root.backendRef ? root.backendRef.setting_line_spacing : 1.5
+                firstLineIndent: root.backendRef ? root.backendRef.setting_auto_indent_enabled : false
+                saveStatus: editorController.saveStatus
+                onFontSizeChanged: function(size) {
+                    if (root.backendRef) {
+                        root.backendRef.setting_font_size = size;
+                    }
+                }
+                onLineSpacingChanged: function(spacing) {
+                    if (root.backendRef) {
+                        root.backendRef.setting_line_spacing = spacing;
+                    }
+                }
+                onFirstLineIndentToggled: {
+                    if (root.backendRef) {
+                        root.backendRef.setting_auto_indent_enabled = !root.backendRef.setting_auto_indent_enabled;
+                    }
+                }
+                onFormatOneClick: editorController.formatText()
+                onLinkToStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
+                onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
+            }
+
+            // Editor Area
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true

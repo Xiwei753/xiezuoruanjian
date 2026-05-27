@@ -28,8 +28,12 @@ QtObject {
         }
     }
 
-    property EditorFormatter cFormat: EditorFormatter {
-        id: cFormat
+    property DocumentHandler docHandler: DocumentHandler {
+        id: docHandler
+        document: targetTextArea ? targetTextArea.textDocument : null
+        line_spacing: backendRef ? backendRef.setting_line_spacing : 1.5
+        text_indent: (backendRef && backendRef.setting_auto_indent_enabled) ? Math.round((backendRef.setting_font_size || 16) * 2) : 0
+        font_size: backendRef ? backendRef.setting_font_size : 16
     }
 
     // Autosync timer
@@ -65,15 +69,7 @@ QtObject {
         return txt.replace(/\u2029/g, "\n");
     }
 
-    function applyCurrentSettings() {
-        if (!targetTextArea || !backendRef) return;
-        var fontSize = backendRef.setting_font_size || 16;
-        var lineSpacing = backendRef.setting_line_spacing || 1.5;
-        var autoIndent = backendRef.setting_auto_indent_enabled || false;
-        var indentPx = autoIndent ? Math.round(fontSize * 2) : 0;
-        
-        cFormat.format_document(targetTextArea.textDocument, fontSize, lineSpacing, indentPx);
-    }
+    // Settings applied automatically via property bindings on docHandler
 
     function loadChapterContentWithIds(pId, vId, cId) {
         if (!cId || !pId || !vId || !backendRef || !targetTextArea) return false;
@@ -93,12 +89,10 @@ QtObject {
         var content = result.content;
         
         targetTextArea.textFormat = TextEdit.RichText;
-        targetTextArea.text = content;
+        docHandler.set_plain_text(content);
+        docHandler.clear_undo_stack();
         
         previousEditorText = content;
-        
-        // Apply visual formatting after loading text
-        applyCurrentSettings();
         
         isLoadingChapter = false;
         return true;
@@ -169,9 +163,7 @@ QtObject {
         isLoadingChapter = true;
         var cursor = targetTextArea.cursorPosition;
         targetTextArea.textFormat = TextEdit.RichText;
-        targetTextArea.text = plain;
-        
-        applyCurrentSettings();
+        docHandler.set_plain_text(plain);
         
         targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
         isLoadingChapter = false;
