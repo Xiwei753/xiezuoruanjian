@@ -66,7 +66,7 @@ QtObject {
     }
 
     function applyCurrentSettings() {
-        if (!targetTextArea || !chapterId || !backendRef) return;
+        if (!targetTextArea || !backendRef) return;
         var fontSize = backendRef.setting_font_size || 16;
         var lineSpacing = backendRef.setting_line_spacing || 1.5;
         var autoIndent = backendRef.setting_auto_indent_enabled || false;
@@ -75,17 +75,19 @@ QtObject {
         cFormat.format_document(targetTextArea.textDocument, fontSize, lineSpacing, indentPx);
     }
 
-    function loadChapterContent() {
-        if (!chapterId || !projectId || !volumeId || !backendRef || !targetTextArea) return;
+    function loadChapterContentWithIds(pId, vId, cId) {
+        if (!cId || !pId || !vId || !backendRef || !targetTextArea) return false;
+        if (isLoadingChapter) return false;
+        
         isLoadingChapter = true;
         
-        var resultJson = backendRef.open_chapter_json(projectId, volumeId, chapterId);
+        var resultJson = backendRef.open_chapter_json(pId, vId, cId);
         var result = JSON.parse(resultJson);
         
         if (!result.success) {
             console.error("Failed to open chapter:", result.error);
             isLoadingChapter = false;
-            return;
+            return false;
         }
         
         var content = result.content;
@@ -99,6 +101,7 @@ QtObject {
         applyCurrentSettings();
         
         isLoadingChapter = false;
+        return true;
     }
 
     function computeWordCount(text) {

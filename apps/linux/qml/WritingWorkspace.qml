@@ -57,7 +57,32 @@ Rectangle {
     }
 
     onTreeChanged: populateTreeModel()
-    Component.onCompleted: populateTreeModel()
+    Component.onCompleted: {
+        populateTreeModel();
+        if (root.backendRef && root.backendRef.selected_chapter_id) {
+            root.openChapter(
+                root.backendRef.selected_project_id,
+                root.backendRef.selected_volume_id,
+                root.backendRef.selected_chapter_id,
+                ""
+            );
+        }
+    }
+
+    function openChapter(pId, vId, cId, cTitle) {
+        if (!pId || !vId || !cId) return;
+        if (root.projectId === pId && root.volumeId === vId && root.chapterId === cId && !editorController.isLoadingChapter) {
+            return;
+        }
+        
+        var success = editorController.loadChapterContentWithIds(pId, vId, cId);
+        if (success) {
+            root.projectId = pId;
+            root.volumeId = vId;
+            root.chapterId = cId;
+            root.chapterTitle = cTitle || "";
+        }
+    }
 
     color: dt ? dt.bg : "#111318"
 
@@ -241,10 +266,7 @@ Rectangle {
                                         onClicked: function(mouse) {
                                             if (mouse.button === Qt.LeftButton) {
                                                 if (model.itemType === "chapter") {
-                                                    root.chapterId = model.itemId;
-                                                    root.volumeId = model.itemVolumeId;
-                                                    root.chapterTitle = model.itemTitle;
-                                                    editorController.loadChapterContent();
+                                                    root.openChapter(model.itemProjectId || root.projectId, model.itemVolumeId, model.itemId, model.itemTitle);
                                                 }
                                             } else if (mouse.button === Qt.RightButton) {
                                                 treeContextMenu.itemType = model.itemType;
@@ -454,9 +476,8 @@ Rectangle {
     Connections {
         target: root.backendRef
         function onChapter_path_changed() {
-            if (root.chapterId) {
-                editorController.loadChapterContent();
-            }
+            // Path changed visually, do NOT load chapter content to avoid infinite loop.
+            // Just update title if needed
         }
         function onSettings_changed() {
             editorController.applyCurrentSettings();
