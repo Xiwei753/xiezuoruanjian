@@ -371,6 +371,8 @@ struct AppBackend {
 
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
+    setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
+    setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms WRITE set_setting_smooth_cursor_duration_ms NOTIFY settings_changed),
 
     settings_changed: qt_signal!(),
 
@@ -561,6 +563,8 @@ struct AppBackend {
     current_setting_theme_mode: String,
     current_setting_typing_animation_enabled: bool,
     current_setting_smooth_cursor_enabled: bool,
+    current_setting_typing_animation_duration_ms: u32,
+    current_setting_smooth_cursor_duration_ms: u32,
 }
 
 impl AppBackend {
@@ -1172,10 +1176,16 @@ impl AppBackend {
     fn set_setting_theme_mode(&mut self, val: QString) { self.current_setting_theme_mode = val.to_string(); self.settings_changed(); }
 
     fn setting_typing_animation_enabled(&self) -> bool { self.current_setting_typing_animation_enabled }
-    fn set_setting_typing_animation_enabled(&mut self, val: bool) { self.current_setting_typing_animation_enabled = val; self.settings_changed(); }
+    fn set_setting_typing_animation_enabled(&mut self, val: bool) { self.current_setting_typing_animation_enabled = val; self.settings_changed(); self.save_local_settings(); }
 
     fn setting_smooth_cursor_enabled(&self) -> bool { self.current_setting_smooth_cursor_enabled }
-    fn set_setting_smooth_cursor_enabled(&mut self, val: bool) { self.current_setting_smooth_cursor_enabled = val; self.settings_changed(); }
+    fn set_setting_smooth_cursor_enabled(&mut self, val: bool) { self.current_setting_smooth_cursor_enabled = val; self.settings_changed(); self.save_local_settings(); }
+
+    fn setting_typing_animation_duration_ms(&self) -> u32 { self.current_setting_typing_animation_duration_ms }
+    fn set_setting_typing_animation_duration_ms(&mut self, val: u32) { self.current_setting_typing_animation_duration_ms = val; self.settings_changed(); self.save_local_settings(); }
+
+    fn setting_smooth_cursor_duration_ms(&self) -> u32 { self.current_setting_smooth_cursor_duration_ms }
+    fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) { self.current_setting_smooth_cursor_duration_ms = val; self.settings_changed(); self.save_local_settings(); }
 
     fn try_restore_last_workspace(&mut self) {
         self.debug_log("workspace", "try_restore_last_workspace_start", "");
@@ -1656,6 +1666,8 @@ impl AppBackend {
                 self.current_setting_auto_indent_width = settings.auto_indent_width;
                 self.current_setting_typing_animation_enabled = settings.editor_typing_animation_enabled;
                 self.current_setting_smooth_cursor_enabled = settings.editor_smooth_cursor_enabled;
+                self.current_setting_typing_animation_duration_ms = settings.editor_typing_animation_duration_ms as u32;
+                self.current_setting_smooth_cursor_duration_ms = settings.editor_smooth_cursor_duration_ms as u32;
                 self.current_ai_enabled = settings.ai_enabled;
                 if let Some(ref device_id) = settings.stats_device_id {
                     if !device_id.is_empty() {
@@ -1709,6 +1721,8 @@ impl AppBackend {
             local.auto_indent_width = self.current_setting_auto_indent_width;
             local.editor_typing_animation_enabled = self.current_setting_typing_animation_enabled;
             local.editor_smooth_cursor_enabled = self.current_setting_smooth_cursor_enabled;
+            local.editor_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms as u64;
+            local.editor_smooth_cursor_duration_ms = self.current_setting_smooth_cursor_duration_ms as u64;
             local.ai_enabled = self.current_ai_enabled;
 
             let local_save = core.save_local_settings(&local);
