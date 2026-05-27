@@ -1,6 +1,13 @@
 package com.xiwei.writerapp.ui
 
 import android.content.Intent
+
+import android.widget.Toast
+import android.widget.FrameLayout
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.xiwei.writerapp.data.NativeCoreBridge
+import com.xiwei.writerapp.model.StarMapData
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -33,6 +40,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyStateLayout: View
     private lateinit var recentEditsLayout: View
     private lateinit var btnSettings: ImageView
+    private lateinit var tabWorks: FrameLayout
+    private lateinit var tabStarMap: FrameLayout
+    private lateinit var tabStats: FrameLayout
+    private lateinit var bottomNav: BottomNavigationView
+    private lateinit var canvasView: StarMapCanvasView
+    private lateinit var toolbar: MaterialToolbar
+
+    private var starmapId: String = ""
+    private var currentData: StarMapData? = null
+    private val bridge by lazy { NativeCoreBridge(this) }
 
     private lateinit var workspaceRepository: WorkspaceRepository
     private lateinit var settingsRepository: SettingsRepository
@@ -68,6 +85,86 @@ class MainActivity : AppCompatActivity() {
         emptyStateLayout = findViewById(R.id.emptyStateLayout)
         recentEditsLayout = findViewById(R.id.recentEditsLayout)
         btnSettings = findViewById(R.id.btnSettings)
+        tabWorks = findViewById(R.id.tabWorks)
+        tabStarMap = findViewById(R.id.tabStarMap)
+        tabStats = findViewById(R.id.tabStats)
+        bottomNav = findViewById(R.id.bottomNav)
+        canvasView = findViewById(R.id.canvasView)
+        toolbar = findViewById(R.id.toolbar)
+
+        canvasView.onLayoutChangedListener = {
+            saveLayout()
+        }
+
+
+        // Sync initial state
+        when (bottomNav.selectedItemId) {
+            R.id.nav_works -> {
+                tabWorks.visibility = View.VISIBLE
+                tabStarMap.visibility = View.GONE
+                tabStats.visibility = View.GONE
+                toolbar.title = "作品"
+            }
+            R.id.nav_starmap -> {
+                tabWorks.visibility = View.GONE
+                tabStarMap.visibility = View.VISIBLE
+                tabStats.visibility = View.GONE
+                toolbar.title = "星图"
+                if (!starmapId.isEmpty()) {
+                    loadGraph()
+                }
+            }
+            R.id.nav_stats -> {
+                tabWorks.visibility = View.GONE
+                tabStarMap.visibility = View.GONE
+                tabStats.visibility = View.VISIBLE
+                toolbar.title = "统计"
+            }
+        }
+
+        bottomNav.setOnItemSelectedListener { item ->
+            when (item.itemId) {
+                R.id.nav_works -> {
+                    tabWorks.visibility = View.VISIBLE
+                    tabStarMap.visibility = View.GONE
+                    tabStats.visibility = View.GONE
+                    toolbar.title = "作品"
+                    true
+                }
+                R.id.nav_starmap -> {
+                    tabWorks.visibility = View.GONE
+                    tabStarMap.visibility = View.VISIBLE
+                    tabStats.visibility = View.GONE
+                    toolbar.title = "星图"
+
+                    if (starmapId.isEmpty()) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            var starmaps = bridge.listStarmaps()
+                            if (starmaps is NativeResult.Success && starmaps.data.isEmpty()) {
+                                bridge.createStarmap("作品宇宙", "自动生成的默认星图")
+                                starmaps = bridge.listStarmaps()
+                            }
+                            if (starmaps is NativeResult.Success && starmaps.data.isNotEmpty()) {
+                                starmapId = starmaps.data[0].starmapId
+                                loadGraph()
+                            }
+                        }
+                    } else {
+                        loadGraph()
+                    }
+
+                    true
+                }
+                R.id.nav_stats -> {
+                    tabWorks.visibility = View.GONE
+                    tabStarMap.visibility = View.GONE
+                    tabStats.visibility = View.VISIBLE
+                    toolbar.title = "统计"
+                    true
+                }
+                else -> false
+            }
+        }
 
         ErrorUtil.safeRun(this) {
             workspaceRepository = WorkspaceRepository(this)
@@ -89,31 +186,36 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-        findViewById<View>(R.id.fabStarMap).setOnClickListener {
-            val workspaceDir = if (::workspaceRepository.isInitialized) workspaceRepository.getWorkspaceDir() else ""
-            CoroutineScope(Dispatchers.IO).launch {
-                val bridge = com.xiwei.writerapp.data.NativeCoreBridge(this@MainActivity)
-                var starmaps = bridge.listStarmaps()
-                if (starmaps is NativeResult.Success && starmaps.data.isEmpty()) {
-                    bridge.createStarmap("作品宇宙", "自动生成的默认星图")
-                    starmaps = bridge.listStarmaps()
-                }
-
-                withContext(Dispatchers.Main) {
-                    val intent = Intent(this@MainActivity, StarMapActivity::class.java).apply {
-                        putExtra("WORKSPACE_DIR", workspaceDir)
-                        if (starmaps is NativeResult.Success && starmaps.data.isNotEmpty()) {
-                            putExtra("STARMAP_ID", starmaps.data[0].starmapId)
-                            putExtra("TITLE", starmaps.data[0].title)
-                        }
-                    }
-                    startActivity(intent)
-                }
-            }
-        }
 
         btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
+        }
+    }
+
+
+    private fun loadGraph() {
+        if (starmapId.isEmpty()) return
+        CoroutineScope(Dispatchers.IO).launch {
+            val result = bridge.getStarmapGraph(starmapId)
+            withContext(Dispatchers.Main) {
+                when (result) {
+                    is NativeResult.Success -> {
+                        currentData = result.data
+                        canvasView.setData(result.data)
+                    }
+                    is NativeResult.Error -> {
+                        Toast.makeText(this@MainActivity, "Failed to load: ${result.message}", Toast.LENGTH_LONG).show()
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    private fun saveLayout() {
+        val data = canvasView.getData() ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            bridge.saveStarmapLayout(starmapId, data.layout)
         }
     }
 
