@@ -30,7 +30,8 @@ class StarMapCanvasView(context: Context) : View(context) {
     var lastTouchX = 0f
     var lastTouchY = 0f
     var draggingNodeId: String? = null
-    var onLayoutChangedListener: (() -> Unit)? = null
+    var onNodeDragListener: ((String, Float, Float) -> Unit)? = null
+    var onLayoutSavedListener: (() -> Unit)? = null
 
     fun getData(): StarMapData? = data
 
@@ -106,15 +107,7 @@ class StarMapCanvasView(context: Context) : View(context) {
                 val dy = y - lastTouchY
 
                 if (draggingNodeId != null) {
-                    data?.layout?.nodes?.find { it.nodeId == draggingNodeId }?.let { layout ->
-                        val newLayout = layout.copy(x = layout.x + dx, y = layout.y + dy)
-                        val mutableNodes = data!!.layout.nodes.toMutableList()
-                        val idx = mutableNodes.indexOf(layout)
-                        if (idx != -1) {
-                            mutableNodes[idx] = newLayout
-                            data = data!!.copy(layout = data!!.layout.copy(nodes = mutableNodes))
-                        }
-                    }
+                    onNodeDragListener?.invoke(draggingNodeId!!, dx, dy)
                 } else {
                     panX += dx
                     panY += dy
@@ -126,7 +119,7 @@ class StarMapCanvasView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP -> {
                 if (draggingNodeId != null) {
-                    onLayoutChangedListener?.invoke()
+                    onLayoutSavedListener?.invoke()
                 }
                 draggingNodeId = null
             }

@@ -47,9 +47,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var canvasView: StarMapCanvasView
     private lateinit var toolbar: MaterialToolbar
 
-    private var starmapId: String = ""
-    private var currentData: StarMapData? = null
+    var starmapId: String = ""
     private val bridge by lazy { NativeCoreBridge(this) }
+    private lateinit var starMapController: StarMapController
 
     private lateinit var workspaceRepository: WorkspaceRepository
     private lateinit var settingsRepository: SettingsRepository
@@ -92,10 +92,7 @@ class MainActivity : AppCompatActivity() {
         canvasView = findViewById(R.id.canvasView)
         toolbar = findViewById(R.id.toolbar)
 
-        canvasView.onLayoutChangedListener = {
-            saveLayout()
-        }
-
+        starMapController = StarMapController(this, bridge, tabStarMap, canvasView)
 
         // Sync initial state
         when (bottomNav.selectedItemId) {
@@ -110,9 +107,7 @@ class MainActivity : AppCompatActivity() {
                 tabStarMap.visibility = View.VISIBLE
                 tabStats.visibility = View.GONE
                 toolbar.title = "星图"
-                if (!starmapId.isEmpty()) {
-                    loadGraph()
-                }
+                starMapController.initialize(starmapId)
             }
             R.id.nav_stats -> {
                 tabWorks.visibility = View.GONE
@@ -136,23 +131,7 @@ class MainActivity : AppCompatActivity() {
                     tabStarMap.visibility = View.VISIBLE
                     tabStats.visibility = View.GONE
                     toolbar.title = "星图"
-
-                    if (starmapId.isEmpty()) {
-                        CoroutineScope(Dispatchers.IO).launch {
-                            var starmaps = bridge.listStarmaps()
-                            if (starmaps is NativeResult.Success && starmaps.data.isEmpty()) {
-                                bridge.createStarmap("作品宇宙", "自动生成的默认星图")
-                                starmaps = bridge.listStarmaps()
-                            }
-                            if (starmaps is NativeResult.Success && starmaps.data.isNotEmpty()) {
-                                starmapId = starmaps.data[0].starmapId
-                                loadGraph()
-                            }
-                        }
-                    } else {
-                        loadGraph()
-                    }
-
+                    starMapController.initialize(starmapId)
                     true
                 }
                 R.id.nav_stats -> {
@@ -193,30 +172,8 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    private fun loadGraph() {
-        if (starmapId.isEmpty()) return
-        CoroutineScope(Dispatchers.IO).launch {
-            val result = bridge.getStarmapGraph(starmapId)
-            withContext(Dispatchers.Main) {
-                when (result) {
-                    is NativeResult.Success -> {
-                        currentData = result.data
-                        canvasView.setData(result.data)
-                    }
-                    is NativeResult.Error -> {
-                        Toast.makeText(this@MainActivity, "Failed to load: ${result.message}", Toast.LENGTH_LONG).show()
-                    }
-                    else -> {}
-                }
-            }
-        }
-    }
-
-    private fun saveLayout() {
-        val data = canvasView.getData() ?: return
-        CoroutineScope(Dispatchers.IO).launch {
-            bridge.saveStarmapLayout(starmapId, data.layout)
-        }
+    fun onStarmapIdInitialized(id: String) {
+        this.starmapId = id
     }
 
     override fun onResume() {
