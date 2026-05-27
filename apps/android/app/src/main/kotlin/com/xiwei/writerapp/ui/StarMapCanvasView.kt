@@ -5,11 +5,16 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import com.xiwei.writerapp.model.StarMapData
 
-class StarMapCanvasView(context: Context) : View(context) {
+class StarMapCanvasView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : View(context, attrs, defStyleAttr) {
 
     private var data: StarMapData? = null
 
