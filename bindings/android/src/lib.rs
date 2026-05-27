@@ -1630,8 +1630,10 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_addStarmap
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let node_json = match jstring_to_string(&mut env, &node_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let core = WriterCore::new(&workspace_path);
+    // Currently Android Canvas drops node anywhere, default it to 0,0 since canvas isn't tracking click coordinates here yet.
+    // The core will default it and save to the layout.
     match serde_json::from_str(&node_json) {
-        Ok(node) => result_to_jstring(&mut env, core.add_starmap_node(&starmap_id, node)),
+        Ok(node) => result_to_jstring(&mut env, core.add_starmap_node(&starmap_id, node, 0.0, 0.0)),
         Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))))
     }
 }

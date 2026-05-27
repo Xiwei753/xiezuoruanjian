@@ -964,8 +964,8 @@ impl WriterCore {
         crate::starmap::graph::save_starmap_graph(&self.workspace_path, starmap_id, graph)
     }
 
-    pub fn add_starmap_node(&self, starmap_id: &str, node: crate::starmap::types::StarMapNode) -> Result<crate::starmap::types::StarMapNode> {
-        crate::starmap::graph::add_starmap_node(&self.workspace_path, starmap_id, node)
+    pub fn add_starmap_node(&self, starmap_id: &str, node: crate::starmap::types::StarMapNode, default_x: f32, default_y: f32) -> Result<crate::starmap::types::StarMapNode> {
+        crate::starmap::graph::add_starmap_node(&self.workspace_path, starmap_id, node, default_x, default_y)
     }
 
     pub fn update_starmap_node(&self, starmap_id: &str, node_id: &str, patch: crate::starmap::types::StarMapNodePatch) -> Result<crate::starmap::types::StarMapNode> {

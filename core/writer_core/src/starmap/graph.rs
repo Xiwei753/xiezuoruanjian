@@ -76,12 +76,27 @@ pub fn save_starmap_layout(workspace: &Path, starmap_id: &str, layout: &StarMapL
     Ok(())
 }
 
-pub fn add_starmap_node(workspace: &Path, starmap_id: &str, node: StarMapNode) -> Result<StarMapNode> {
+pub fn add_starmap_node(workspace: &Path, starmap_id: &str, node: StarMapNode, default_x: f32, default_y: f32) -> Result<StarMapNode> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
     let new_node = node.clone();
     graph.nodes.push(new_node.clone());
     graph.updated_at = now_epoch();
     save_starmap_graph(workspace, starmap_id, &graph)?;
+
+    if let Ok(mut layout) = get_starmap_layout(workspace, starmap_id) {
+        layout.nodes.push(crate::starmap::types::StarMapLayoutNode {
+            node_id: new_node.id.clone(),
+            x: default_x,
+            y: default_y,
+            width: 150.0,
+            height: 60.0,
+            radius: 30.0,
+            collapsed: false,
+            z_index: 0,
+        });
+        let _ = save_starmap_layout(workspace, starmap_id, &layout);
+    }
+
     Ok(new_node)
 }
 
@@ -237,7 +252,7 @@ mod tests {
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
-        add_starmap_node(dir.path(), &meta.starmap_id, node1.clone()).unwrap();
+        add_starmap_node(dir.path(), &meta.starmap_id, node1.clone(), 0.0, 0.0).unwrap();
 
         let node2 = StarMapNode {
             id: "n2".to_string(),
@@ -248,7 +263,7 @@ mod tests {
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
-        add_starmap_node(dir.path(), &meta.starmap_id, node2.clone()).unwrap();
+        add_starmap_node(dir.path(), &meta.starmap_id, node2.clone(), 0.0, 0.0).unwrap();
 
         graph = get_starmap_graph(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(graph.nodes.len(), 2);

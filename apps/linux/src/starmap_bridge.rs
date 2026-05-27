@@ -3,42 +3,42 @@ use writer_core::starmap::types::{StarMapEdge, StarMapEdgeKind, StarMapLayout, S
 
 pub fn list_starmaps(core: &WriterCore) -> String {
     match core.list_starmaps() {
-        Ok(list) => serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()),
-        Err(_) => "[]".to_string(),
+        Ok(list) => serde_json::json!({"success": true, "data": list}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
 
 pub fn list_starmaps_for_project(core: &WriterCore, project_id: &str) -> String {
     match core.list_starmaps_for_project(project_id) {
-        Ok(list) => serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()),
-        Err(_) => "[]".to_string(),
+        Ok(list) => serde_json::json!({"success": true, "data": list}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
 
 pub fn get_starmap(core: &WriterCore, starmap_id: &str) -> String {
     match core.get_starmap(starmap_id) {
-        Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()),
-        Err(_) => "{}".to_string(),
+        Ok(meta) => serde_json::json!({"success": true, "data": meta}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
 
 pub fn create_starmap(core: &WriterCore, title: &str, description: &str, accent_color: Option<&str>) -> String {
     match core.create_starmap(title, description, accent_color) {
-        Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()),
+        Ok(meta) => serde_json::json!({"success": true, "data": meta}).to_string(),
         Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
 
 pub fn create_child_starmap(core: &WriterCore, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> String {
     match core.create_child_starmap(parent_id, title, description, accent_color) {
-        Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()),
+        Ok(meta) => serde_json::json!({"success": true, "data": meta}).to_string(),
         Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
 
 pub fn rename_starmap(core: &WriterCore, starmap_id: &str, new_title: &str) -> String {
     match core.rename_starmap(starmap_id, new_title) {
-        Ok(meta) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()),
+        Ok(meta) => serde_json::json!({"success": true, "data": meta}).to_string(),
         Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
@@ -85,23 +85,8 @@ pub fn create_starmap_node(core: &WriterCore, starmap_id: &str, title: &str, kin
         updated_at: now,
     };
 
-    match core.add_starmap_node(starmap_id, node) {
-        Ok(saved_node) => {
-            if let Ok(mut layout) = core.get_starmap_layout(starmap_id) {
-                layout.nodes.push(writer_core::starmap::types::StarMapLayoutNode {
-                    node_id: saved_node.id.clone(),
-                    x: x as f32,
-                    y: y as f32,
-                    width: 150.0,
-                    height: 60.0,
-                    radius: 30.0,
-                    collapsed: false,
-                    z_index: 0,
-                });
-                let _ = core.save_starmap_layout(starmap_id, &layout);
-            }
-            serde_json::json!({"success": true, "data": saved_node}).to_string()
-        },
+    match core.add_starmap_node(starmap_id, node, x as f32, y as f32) {
+        Ok(saved_node) => serde_json::json!({"success": true, "data": saved_node}).to_string(),
         Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
@@ -194,9 +179,9 @@ pub fn set_main_starmap(core: &WriterCore, starmap_id: &str, project_id: &str) -
 
 pub fn get_main_starmap(core: &WriterCore, project_id: &str) -> String {
     match core.get_main_starmap_for_project(project_id) {
-        Ok(Some(meta)) => serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string()),
-        Ok(None) => "{}".to_string(),
-        Err(_) => "{}".to_string(),
+        Ok(Some(meta)) => serde_json::json!({"success": true, "data": meta}).to_string(),
+        Ok(None) => serde_json::json!({"success": true, "data": null}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
 
