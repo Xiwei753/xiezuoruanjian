@@ -373,6 +373,7 @@ Rectangle {
                     TextArea {
                         id: editorArea
                         width: editorScroll.availableWidth
+                        height: Math.max(implicitHeight, editorScroll.availableHeight)
                         color: dt ? dt.editorText : "#2C2E36"
                         font.pixelSize: root.backendRef ? root.backendRef.setting_font_size : 16
                         font.family: "serif"

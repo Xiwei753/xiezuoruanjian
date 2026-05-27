@@ -61,7 +61,7 @@ QtObject {
 
     function getEditorPlainText() {
         if (!targetTextArea) return "";
-        var txt = targetTextArea.text;
+        var txt = targetTextArea.getText(0, targetTextArea.length);
         return txt.replace(/\u2029/g, "\n");
     }
 
@@ -92,7 +92,7 @@ QtObject {
         
         var content = result.content;
         
-        targetTextArea.textFormat = TextEdit.PlainText;
+        targetTextArea.textFormat = TextEdit.RichText;
         targetTextArea.text = content;
         
         previousEditorText = content;
@@ -168,7 +168,7 @@ QtObject {
         var plain = finalParagraphs.join("\n");
         isLoadingChapter = true;
         var cursor = targetTextArea.cursorPosition;
-        targetTextArea.textFormat = TextEdit.PlainText;
+        targetTextArea.textFormat = TextEdit.RichText;
         targetTextArea.text = plain;
         
         applyCurrentSettings();
