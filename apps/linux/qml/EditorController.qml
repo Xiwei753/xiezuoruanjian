@@ -33,7 +33,6 @@ QtObject {
         document: targetTextArea ? targetTextArea.textDocument : null
         line_spacing: backendRef ? backendRef.setting_line_spacing : 1.5
         text_indent: (backendRef && backendRef.setting_auto_indent_enabled) ? Math.round((backendRef.setting_font_size || 16) * 2) : 0
-        font_size: backendRef ? backendRef.setting_font_size : 16
     }
 
     // Autosync timer

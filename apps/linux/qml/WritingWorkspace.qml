@@ -378,6 +378,7 @@ Rectangle {
                         font.pixelSize: root.backendRef ? root.backendRef.setting_font_size : 16
                         font.family: "serif"
                         wrapMode: TextArea.Wrap
+                        verticalAlignment: TextInput.AlignTop
                         background: Rectangle { color: "transparent" }
                         enabled: root.chapterId !== ""
                         focus: true

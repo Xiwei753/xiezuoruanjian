@@ -216,12 +216,10 @@ pub struct DocumentHandler {
     document: qt_property!(QVariant; READ document WRITE set_document NOTIFY document_changed),
     line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY line_spacing_changed),
     text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY text_indent_changed),
-    font_size: qt_property!(f32; READ font_size WRITE set_font_size NOTIFY font_size_changed),
     
     document_changed: qt_signal!(),
     line_spacing_changed: qt_signal!(),
     text_indent_changed: qt_signal!(),
-    font_size_changed: qt_signal!(),
     
     apply_format: qt_method!(fn(&self)),
     set_plain_text: qt_method!(fn(&self, text: QString)),
@@ -231,7 +229,6 @@ pub struct DocumentHandler {
     current_doc: QVariant,
     current_line_spacing: f32,
     current_text_indent: f32,
-    current_font_size: f32,
 }
 
 impl DocumentHandler {
@@ -260,22 +257,12 @@ impl DocumentHandler {
         }
     }
 
-    fn font_size(&self) -> f32 { self.current_font_size }
-    fn set_font_size(&mut self, val: f32) {
-        if (self.current_font_size - val).abs() > 0.001 {
-            self.current_font_size = val;
-            self.font_size_changed();
-            self.apply_format();
-        }
-    }
-
     fn apply_format(&self) {
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
-        let font_size = self.current_font_size;
         
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", font_size as "float"] {
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -292,11 +279,6 @@ impl DocumentHandler {
             blockFormat.setTextIndent(indent);
             cursor.mergeBlockFormat(blockFormat);
             
-            if (font_size > 0) {
-                QTextCharFormat charFormat;
-                charFormat.setFontPointSize(font_size);
-                cursor.mergeCharFormat(charFormat);
-            }
             cursor.endEditBlock();
         });
     }
@@ -305,9 +287,8 @@ impl DocumentHandler {
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
-        let font_size = self.current_font_size;
         
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", font_size as "float", text as "QString"] {
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text as "QString"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -325,17 +306,9 @@ impl DocumentHandler {
             blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
             blockFormat.setTextIndent(indent);
 
-            QTextCharFormat charFormat;
-            if (font_size > 0) {
-                charFormat.setFontPointSize(font_size);
-            }
-
             QStringList lines = text.split("\n");
             for (int i = 0; i < lines.size(); ++i) {
                 cursor.setBlockFormat(blockFormat);
-                if (font_size > 0) {
-                    cursor.setCharFormat(charFormat);
-                }
                 cursor.insertText(lines[i]);
                 if (i < lines.size() - 1) {
                     cursor.insertBlock();
