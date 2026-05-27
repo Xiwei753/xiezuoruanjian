@@ -361,8 +361,8 @@ Rectangle {
                         activeFocusOnTab: true
                         selectByMouse: true
                         persistentSelection: true
-                        leftPadding: dt ? dt.sp8 : 8
-                        rightPadding: dt ? dt.sp8 : 8
+                        leftPadding: Math.max(dt ? dt.sp8 : 8, (editorScroll.availableWidth - 860) / 2)
+                        rightPadding: Math.max(dt ? dt.sp8 : 8, (editorScroll.availableWidth - 860) / 2)
                         topPadding: dt ? dt.sp16 : 16
                         bottomPadding: dt ? dt.sp16 : 16
 

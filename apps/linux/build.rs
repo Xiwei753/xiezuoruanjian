@@ -37,6 +37,10 @@ fn main() {
     println!("cargo:rerun-if-changed=src/qml.qrc");
 
     let mut config = cpp_build::Config::new();
-    config.include(env::var("DEP_QT_INCLUDE").unwrap_or_else(|_| "".into()));
+    if let Ok(qt5_quick) = pkg_config::probe_library("Qt5Quick") {
+        for p in qt5_quick.include_paths {
+            config.include(p);
+        }
+    }
     config.build("src/main.rs");
 }

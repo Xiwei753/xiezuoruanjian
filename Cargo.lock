@@ -1450,7 +1450,9 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "chrono",
+ "cpp",
  "cpp_build",
+ "pkg-config",
  "qmetaobject",
  "qt-build-utils",
  "rfd",

@@ -16,9 +16,11 @@ serde_json = "1.0.149"
 serde = { version = "1.0", features = ["derive"] }
 uuid = "1.8"
 chrono = "0.4"
+cpp = "0.5.11"
 
 [build-dependencies]
 cpp_build = "0.5.11"
+pkg-config = "0.3.33"
 qmetaobject = "0.2.10"
 qt-build-utils = "0.8.1"
 

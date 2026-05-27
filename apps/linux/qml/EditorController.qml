@@ -1,5 +1,6 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
+import Writer 1.0
 
 QtObject {
     id: controller
@@ -21,10 +22,14 @@ QtObject {
         interval: backendRef ? backendRef.setting_auto_save_delay_ms : 1500
         repeat: false
         onTriggered: {
-            if (!backendRef || !chapterId) return;
+            if (!backendRef || !chapterId || !projectId || !volumeId) return;
             if (!backendRef.setting_auto_save_enabled) return;
-            backendRef.save_current_chapter(controller.getEditorPlainText());
+            backendRef.save_chapter(projectId, volumeId, chapterId, controller.getEditorPlainText());
         }
+    }
+
+    EditorFormatter {
+        id: cFormat
     }
 
     // Autosync timer
@@ -56,65 +61,43 @@ QtObject {
 
     function getEditorPlainText() {
         if (!targetTextArea) return "";
-        var txt = "";
-        if (targetTextArea.textFormat === TextEdit.RichText) {
-            txt = targetTextArea.getText(0, targetTextArea.length);
-        } else {
-            txt = targetTextArea.text;
-        }
+        var txt = targetTextArea.text;
         return txt.replace(/\u2029/g, "\n");
     }
 
-    function getContentHtml(content) {
-        if (!backendRef) return content;
-        
+    function applyCurrentSettings() {
+        if (!targetTextArea || !chapterId || !backendRef) return;
         var fontSize = backendRef.setting_font_size || 16;
         var lineSpacing = backendRef.setting_line_spacing || 1.5;
         var autoIndent = backendRef.setting_auto_indent_enabled || false;
-        
-        var textColor = "#E2E4E9";
-        if (targetTextArea && targetTextArea.color) {
-            textColor = targetTextArea.color.toString();
-        }
-        
-        var fontFamily = (targetTextArea && targetTextArea.font && targetTextArea.font.family) ? targetTextArea.font.family : "serif";
         var indentPx = autoIndent ? Math.round(fontSize * 2) : 0;
         
-        var html = "<html><body style='margin:0;padding:0;'>";
-        var paragraphs = content.split(/\r?\n|\u2029/);
-        for (var i = 0; i < paragraphs.length; i++) {
-            var p = paragraphs[i];
-            p = p.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-            html += "<p style='font-size:" + fontSize + "px;line-height:" + lineSpacing + ";font-family:" + fontFamily + ";color:" + textColor + ";text-indent:" + indentPx + "px;margin-top:0;margin-bottom:8px;'>" + p + "</p>";
-        }
-        html += "</body></html>";
-        return html;
-    }
-
-    function applyCurrentSettings() {
-        if (!targetTextArea || !chapterId) return;
-        var plainText = getEditorPlainText();
-        var cursor = targetTextArea.cursorPosition;
-        
-        var html = getContentHtml(plainText);
-        isLoadingChapter = true;
-        targetTextArea.textFormat = TextEdit.RichText;
-        targetTextArea.text = html;
-        isLoadingChapter = false;
-        
-        targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
+        cFormat.format_document(targetTextArea.textDocument, fontSize, lineSpacing, indentPx);
     }
 
     function loadChapterContent() {
-        if (!chapterId || !backendRef || !targetTextArea) return;
+        if (!chapterId || !projectId || !volumeId || !backendRef || !targetTextArea) return;
         isLoadingChapter = true;
-        var content = backendRef.get_chapter_content(projectId, volumeId, chapterId);
         
-        targetTextArea.textFormat = TextEdit.RichText;
-        targetTextArea.text = getContentHtml(content);
+        var resultJson = backendRef.open_chapter_json(projectId, volumeId, chapterId);
+        var result = JSON.parse(resultJson);
+        
+        if (!result.success) {
+            console.error("Failed to open chapter:", result.error);
+            isLoadingChapter = false;
+            return;
+        }
+        
+        var content = result.content;
+        
+        targetTextArea.textFormat = TextEdit.PlainText;
+        targetTextArea.text = content;
         
         previousEditorText = content;
-        previousTextLength = targetTextArea.length;
+        
+        // Apply visual formatting after loading text
+        applyCurrentSettings();
+        
         isLoadingChapter = false;
     }
 
@@ -181,12 +164,17 @@ QtObject {
         
         var plain = finalParagraphs.join("\n");
         isLoadingChapter = true;
-        targetTextArea.textFormat = TextEdit.RichText;
-        targetTextArea.text = getContentHtml(plain);
+        var cursor = targetTextArea.cursorPosition;
+        targetTextArea.textFormat = TextEdit.PlainText;
+        targetTextArea.text = plain;
+        
+        applyCurrentSettings();
+        
+        targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
         isLoadingChapter = false;
         
-        if (backendRef && chapterId) {
-            backendRef.save_current_chapter(plain);
+        if (backendRef && chapterId && projectId && volumeId) {
+            backendRef.save_chapter(projectId, volumeId, chapterId, plain);
         }
     }
 }

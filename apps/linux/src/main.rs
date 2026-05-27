@@ -1,5 +1,16 @@
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
+use cpp::cpp;
+
+cpp!{{
+    #include <QtCore/QVariant>
+    #include <QtQuick/QQuickTextDocument>
+    #include <QtGui/QTextDocument>
+    #include <QtGui/QTextCursor>
+    #include <QtGui/QTextBlockFormat>
+    #include <QtCore/QDebug>
+}}
+
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
 use std::cell::RefCell;
@@ -197,6 +208,32 @@ fn try_kreadconfig(cmd: &str) -> Option<String> {
     None
 }
 
+#[derive(QObject, Default)]
+pub struct EditorFormatter {
+    base: qt_base_class!(trait QObject),
+    format_document: qt_method!(fn(&self, doc_variant: QVariant, font_size: f32, line_spacing: f32, indent: f32)),
+}
+
+impl EditorFormatter {
+    fn format_document(&self, doc_variant: QVariant, font_size: f32, line_spacing: f32, indent: f32) {
+        cpp!(unsafe [doc_variant as "QVariant", font_size as "float", line_spacing as "float", indent as "float"] {
+            QObject* obj = doc_variant.value<QObject*>();
+            if (!obj) return;
+            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
+            if (!qquick_doc) return;
+            QTextDocument* doc = qquick_doc->textDocument();
+            if (!doc) return;
+
+            QTextCursor cursor(doc);
+            cursor.select(QTextCursor::Document);
+            QTextBlockFormat blockFormat;
+            blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
+            blockFormat.setTextIndent(indent);
+            cursor.mergeBlockFormat(blockFormat);
+        });
+    }
+}
+
 #[allow(dead_code)]
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -358,8 +395,14 @@ struct AppBackend {
     select_chapter:
         qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
 
+    open_chapter_json: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
+    ),
     get_chapter_content: qt_method!(
         fn(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
+    ),
+    save_chapter: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> bool
     ),
     save_current_chapter: qt_method!(fn(&mut self, content: QString)),
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
@@ -3383,6 +3426,92 @@ impl AppBackend {
         "".into()
     }
 
+    fn open_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        self.debug_log("chapter", "open_chapter_json_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
+        
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let chapters = core.list_chapters(&p, &v).unwrap_or_default();
+            if let Some(chapter) = chapters.iter().find(|ch| ch.id == c) {
+                match core.read_chapter(&p, &v, &c) {
+                    Ok(content) => {
+                        self.selected_project_id = Some(p.clone());
+                        self.selected_volume_id = Some(v.clone());
+                        self.selected_chapter_id = Some(c.clone());
+                        self.selected_item_changed();
+                        self.chapter_path_changed();
+                        
+                        self.debug_log("chapter", "open_chapter_json_success", &format!("len={}", content.content.len()));
+                        
+                        let res = serde_json::json!({
+                            "success": true,
+                            "content": content.content,
+                            "title": chapter.title,
+                            "projectId": p,
+                            "volumeId": v,
+                            "chapterId": c,
+                        });
+                        return res.to_string().into();
+                    }
+                    Err(e) => {
+                        self.debug_error("chapter", "open_chapter_json_failed", &format!("error={}", e));
+                        let res = serde_json::json!({ "success": false, "error": format!("读取章节失败: {}", e) });
+                        return res.to_string().into();
+                    }
+                }
+            } else {
+                self.debug_error("chapter", "open_chapter_json_failed", "chapter_not_exists");
+                let res = serde_json::json!({ "success": false, "error": "章节不存在" });
+                return res.to_string().into();
+            }
+        }
+        
+        let res = serde_json::json!({ "success": false, "error": "后端未初始化" });
+        res.to_string().into()
+    }
+
+    fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> bool {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        let text_str = content.to_string();
+        let len = text_str.len();
+        self.debug_log("chapter", "save_chapter_start", &format!("len={}", len));
+        
+        let mut success = false;
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let chapters = core.list_chapters(&p, &v).unwrap_or_default();
+            if chapters.iter().any(|ch| ch.id == c) {
+                match core.write_chapter_verified(&p, &v, &c, &text_str) {
+                    Ok(_) => {
+                        self.debug_log("chapter", "save_chapter_success", "");
+                        self.current_save_status = "已保存".to_string();
+                        success = true;
+                    }
+                    Err(e) => {
+                        self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
+                        self.current_save_status = "保存失败".to_string();
+                    }
+                }
+            } else {
+                self.debug_error("chapter", "save_chapter_failed", "chapter_not_exists");
+                self.current_save_status = "保存失败: 章节不存在".to_string();
+            }
+        } else {
+            self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
+        }
+        
+        self.save_status_changed();
+        if success {
+            self.workspace_content_changed();
+        }
+        success
+    }
+
     fn save_current_chapter(&mut self, content: QString) {
         let text_str = content.to_string();
         let len = text_str.len();
@@ -3831,6 +3960,12 @@ fn main() {
         1,
         0,
         CStr::from_bytes_with_nul(b"AppBackend\0").unwrap(),
+    );
+    qmetaobject::qml_register_type::<EditorFormatter>(
+        CStr::from_bytes_with_nul(b"Writer\0").unwrap(),
+        1,
+        0,
+        CStr::from_bytes_with_nul(b"EditorFormatter\0").unwrap(),
     );
 
     let qml_path = "qrc:/main.qml";
