@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectRecyclerView: RecyclerView
     private lateinit var recentEditsRecyclerView: RecyclerView
     private lateinit var fabNewProject: ExtendedFloatingActionButton
+    private lateinit var fabNewStarMapNode: ExtendedFloatingActionButton
     private lateinit var emptyStateLayout: View
     private lateinit var recentEditsLayout: View
     private lateinit var btnSettings: ImageView
@@ -84,6 +85,7 @@ class MainActivity : AppCompatActivity() {
         projectRecyclerView = findViewById(R.id.projectRecyclerView)
         recentEditsRecyclerView = findViewById(R.id.recentEditsRecyclerView)
         fabNewProject = findViewById(R.id.fabNewProject)
+        fabNewStarMapNode = findViewById(R.id.fabNewStarMapNode)
         emptyStateLayout = findViewById(R.id.emptyStateLayout)
         recentEditsLayout = findViewById(R.id.recentEditsLayout)
         btnSettings = findViewById(R.id.btnSettings)
@@ -105,6 +107,7 @@ class MainActivity : AppCompatActivity() {
                 tabStats.visibility = View.GONE
                 toolbar.title = "作品"
                 fabNewProject.show()
+                fabNewStarMapNode.hide()
             }
             R.id.nav_starmap -> {
                 tabWorks.visibility = View.GONE
@@ -113,6 +116,7 @@ class MainActivity : AppCompatActivity() {
                 toolbar.title = "星图"
                 starMapController.initialize(starmapId)
                 fabNewProject.hide()
+                fabNewStarMapNode.show()
             }
             R.id.nav_stats -> {
                 tabWorks.visibility = View.GONE
@@ -121,6 +125,7 @@ class MainActivity : AppCompatActivity() {
                 toolbar.title = "统计"
                 statsController.initialize()
                 fabNewProject.hide()
+                fabNewStarMapNode.hide()
             }
         }
 
@@ -132,6 +137,7 @@ class MainActivity : AppCompatActivity() {
                     tabStats.visibility = View.GONE
                     toolbar.title = "作品"
                     fabNewProject.show()
+                    fabNewStarMapNode.hide()
                     true
                 }
                 R.id.nav_starmap -> {
@@ -141,6 +147,7 @@ class MainActivity : AppCompatActivity() {
                     toolbar.title = "星图"
                     starMapController.initialize(starmapId)
                     fabNewProject.hide()
+                    fabNewStarMapNode.show()
                     true
                 }
                 R.id.nav_stats -> {
@@ -150,6 +157,7 @@ class MainActivity : AppCompatActivity() {
                     toolbar.title = "统计"
                     statsController.initialize()
                     fabNewProject.hide()
+                    fabNewStarMapNode.hide()
                     true
                 }
                 else -> false
@@ -173,6 +181,10 @@ class MainActivity : AppCompatActivity() {
 
         fabNewProject.setOnClickListener {
             showNewProjectDialog()
+        }
+
+        fabNewStarMapNode.setOnClickListener {
+            starMapController.showNewNodeDialog()
         }
 
 

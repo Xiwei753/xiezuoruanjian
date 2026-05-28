@@ -1,56 +1,70 @@
 import re
 
-with open("apps/linux/src/main.rs", "r") as f:
+with open("apps/android/app/src/main/kotlin/com/xiwei/writerapp/ui/MainActivity.kt", "r") as f:
     content = f.read()
 
-new_methods = """
-    fn delete_project_json(&mut self, project_id: QString) -> QString {
-        self.error_message = "".into();
-        self.delete_project(project_id);
-        let success = self.error_message.to_string().is_empty();
-        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
-        let final_res = serde_json::json!({
-            "success": success,
-            "message": msg,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
-    }
+# 1. Add `private lateinit var fabNewStarMapNode: ExtendedFloatingActionButton`
+content = re.sub(
+    r'    private lateinit var fabNewProject: ExtendedFloatingActionButton\n',
+    '    private lateinit var fabNewProject: ExtendedFloatingActionButton\n    private lateinit var fabNewStarMapNode: ExtendedFloatingActionButton\n',
+    content, count=1
+)
 
-    fn delete_volume_json(&mut self, project_id: QString, volume_id: QString) -> QString {
-        self.error_message = "".into();
-        self.delete_volume(project_id, volume_id);
-        let success = self.error_message.to_string().is_empty();
-        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
-        let final_res = serde_json::json!({
-            "success": success,
-            "message": msg,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
-    }
+# 2. Add `fabNewStarMapNode = findViewById(R.id.fabNewStarMapNode)`
+content = re.sub(
+    r'        fabNewProject = findViewById\(R\.id\.fabNewProject\)\n',
+    '        fabNewProject = findViewById(R.id.fabNewProject)\n        fabNewStarMapNode = findViewById(R.id.fabNewStarMapNode)\n',
+    content, count=1
+)
 
-    fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString {
-        self.error_message = "".into();
-        self.delete_chapter(project_id, volume_id, chapter_id);
-        let success = self.error_message.to_string().is_empty();
-        let msg = if success { "删除成功".to_string() } else { self.error_message.to_string() };
-        let final_res = serde_json::json!({
-            "success": success,
-            "message": msg,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
-    }
-"""
+# 3. Add `fabNewStarMapNode.setOnClickListener { starMapController.showNewNodeDialog() }`
+content = re.sub(
+    r'        fabNewProject\.setOnClickListener \{\n            showNewProjectDialog\(\)\n        \}\n',
+    '        fabNewProject.setOnClickListener {\n            showNewProjectDialog()\n        }\n\n        fabNewStarMapNode.setOnClickListener {\n            starMapController.showNewNodeDialog()\n        }\n',
+    content, count=1
+)
 
-# insert after select_tree_item_json
-target = "        final_res.to_string().into()\n    }"
-parts = content.split("fn select_tree_item_json", 1)
-subparts = parts[1].split(target, 1)
+# 4. Hide/Show logic in `onCreate` initially
+content = re.sub(
+    r'                fabNewProject\.show\(\)\n',
+    '                fabNewProject.show()\n                fabNewStarMapNode.hide()\n',
+    content, count=1
+)
 
-new_content = parts[0] + "fn select_tree_item_json" + subparts[0] + target + new_methods + subparts[1]
+# Replace the first `fabNewProject.hide()` inside `nav_starmap` (in onCreate)
+content = re.sub(
+    r'                toolbar\.title = "星图"\n                starMapController\.initialize\(starmapId\)\n                fabNewProject\.hide\(\)\n',
+    '                toolbar.title = "星图"\n                starMapController.initialize(starmapId)\n                fabNewProject.hide()\n                fabNewStarMapNode.show()\n',
+    content, count=1
+)
 
-with open("apps/linux/src/main.rs", "w") as f:
-    f.write(new_content)
+# Replace the second `fabNewProject.hide()` inside `nav_stats` (in onCreate)
+content = re.sub(
+    r'                toolbar\.title = "统计"\n                statsController\.initialize\(\)\n                fabNewProject\.hide\(\)\n',
+    '                toolbar.title = "统计"\n                statsController.initialize()\n                fabNewProject.hide()\n                fabNewStarMapNode.hide()\n',
+    content, count=1
+)
+
+# 5. Hide/Show logic in `bottomNav.setOnItemSelectedListener`
+# Same pattern, just replace them all
+content = re.sub(
+    r'                    toolbar\.title = "作品"\n                    fabNewProject\.show\(\)\n',
+    '                    toolbar.title = "作品"\n                    fabNewProject.show()\n                    fabNewStarMapNode.hide()\n',
+    content, count=1
+)
+
+content = re.sub(
+    r'                    toolbar\.title = "星图"\n                    starMapController\.initialize\(starmapId\)\n                    fabNewProject\.hide\(\)\n',
+    '                    toolbar.title = "星图"\n                    starMapController.initialize(starmapId)\n                    fabNewProject.hide()\n                    fabNewStarMapNode.show()\n',
+    content, count=1
+)
+
+content = re.sub(
+    r'                    toolbar\.title = "统计"\n                    statsController\.initialize\(\)\n                    fabNewProject\.hide\(\)\n',
+    '                    toolbar.title = "统计"\n                    statsController.initialize()\n                    fabNewProject.hide()\n                    fabNewStarMapNode.hide()\n',
+    content, count=1
+)
+
+with open("apps/android/app/src/main/kotlin/com/xiwei/writerapp/ui/MainActivity.kt", "w") as f:
+    f.write(content)
 

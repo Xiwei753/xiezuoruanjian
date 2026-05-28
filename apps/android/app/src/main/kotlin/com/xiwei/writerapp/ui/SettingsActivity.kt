@@ -50,10 +50,6 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var switchAutoSync: MaterialSwitch
     private lateinit var sbSyncInterval: Slider
 
-    private lateinit var spinnerProxyType: Spinner
-    private lateinit var etProxyHost: TextInputEditText
-    private lateinit var etProxyPort: TextInputEditText
-
     private lateinit var tvFontSizeValue: TextView
     private lateinit var tvLineSpacingValue: TextView
     private lateinit var tvAutoSaveDelayValue: TextView
@@ -155,9 +151,7 @@ class SettingsActivity : AppCompatActivity() {
             }
             override fun afterTextChanged(s: android.text.Editable?) {}
         })
-        spinnerProxyType = findViewById(R.id.spinnerProxyType)
-        etProxyHost = findViewById(R.id.etProxyHost)
-        etProxyPort = findViewById(R.id.etProxyPort)
+
         btnDryRun = findViewById(R.id.btnDryRun)
         btnTestConnection = findViewById(R.id.btnTestConnection)
         btnPerformSync = findViewById(R.id.btnPerformSync)
@@ -289,27 +283,7 @@ class SettingsActivity : AppCompatActivity() {
             else -> spinnerTheme.setSelection(0, false)
         }
 
-        spinnerProxyType.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                val enabled = position == 2 || position == 3
-                etProxyHost.isEnabled = enabled
-                etProxyPort.isEnabled = enabled
 
-                val currentPortStr = etProxyPort.text?.toString() ?: ""
-                val currentPort = currentPortStr.toIntOrNull()
-
-                if (position == 3) { // SOCKS5
-                    if (currentPortStr.isEmpty() || currentPort == 7890) {
-                        etProxyPort.setText("7891")
-                    }
-                } else if (position == 2) { // HTTP
-                    if (currentPortStr.isEmpty() || currentPort == 7891) {
-                        etProxyPort.setText("7890")
-                    }
-                }
-            }
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-        }
 
         tvWorkspacePath.text = WorkspaceManager.getWorkspaceDir(this).absolutePath
 
@@ -352,17 +326,7 @@ class SettingsActivity : AppCompatActivity() {
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
         tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds ?: 300}秒"
 
-        val proxyType = currentSyncConfig.proxyType ?: "auto"
-        spinnerProxyType.setSelection(when (proxyType) {
-            "auto" -> 0
-            "none" -> 1
-            "http" -> 2
-            "socks5" -> 3
-            else -> 0
-        })
-        etProxyHost.setText(currentSyncConfig.proxyHost ?: "127.0.0.1")
-        val defaultPort = if (proxyType == "socks5") 7891 else 7890
-        etProxyPort.setText((currentSyncConfig.proxyPort ?: defaultPort).toString())
+
 
         updateTokenStatusUI()
 
@@ -371,26 +335,14 @@ class SettingsActivity : AppCompatActivity() {
 
 
     private fun getUIConfig(): SyncConfig {
-        val sel = spinnerProxyType.selectedItemPosition
-        val pType = when (sel) {
-            0 -> "auto"
-            1 -> "none"
-            2 -> "http"
-            3 -> "socks5"
-            else -> "auto"
-        }
         return currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             backendType = com.xiwei.writerapp.model.BackendType.GithubApi,
             remoteUrl = etGithubRepo.text?.toString() ?: "",
-            transport = currentSyncConfig.transport ?: SyncTransport.HttpsToken,
+            transport = currentSyncConfig.transport ?: com.xiwei.writerapp.model.SyncTransport.HttpsToken,
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
-            syncIntervalSeconds = sbSyncInterval.value.toInt(),
-            proxyEnabled = sel != 1,
-            proxyType = pType,
-            proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (sel == 3) 7891 else 7890
+            syncIntervalSeconds = sbSyncInterval.value.toInt()
         )
     }
 
@@ -535,26 +487,6 @@ class SettingsActivity : AppCompatActivity() {
                                     msgBuilder.append("$mark ${probe.mode}: ${probe.message}\n")
                                 }
                                 msgBuilder.append("\n")
-                            } else {
-                                val proxyType = diag.proxyType
-                                if (diag.proxyUsed && proxyType != "none") {
-                                    val protocol = if (proxyType == "socks5") "socks5h" else if (proxyType == "auto") "auto" else "http"
-                                    if (protocol == "auto") {
-                                        msgBuilder.append("代理配置: auto\n")
-                                    } else {
-                                        msgBuilder.append("代理配置: ${protocol}://${diag.proxyHost}:${diag.proxyPort}\n")
-                                        if (protocol == "http" || protocol == "socks5h") {
-                                            msgBuilder.append("  TCP 连通: ${if (diag.tcpProbeOk) "成功" else "失败"} (${diag.tcpProbeStatus})\n")
-                                            if (protocol == "http") {
-                                                msgBuilder.append("  HTTP CONNECT: ${if (diag.httpConnectProbeOk) "成功" else "失败"} (${diag.httpConnectProbeStatus})\n")
-                                            }
-                                        }
-                                    }
-                                    msgBuilder.append("  libgit2 访问: ${if (diag.libgit2ProbeOk) "成功" else "失败"} (${diag.libgit2ProbeStatus})\n\n")
-                                } else {
-                                    msgBuilder.append("代理配置: 未使用显式代理\n\n")
-                                    msgBuilder.append("提示：当前同步底层没有使用显式代理。系统代理/TUN 是否接管取决于系统路由和 Clash，本应用不能保证 libgit2 自动读取。如果同步失败，建议启用 HTTP 代理 127.0.0.1:7890。\n\n")
-                                }
                             }
 
                             msgBuilder.append(diag.userMessage)
@@ -856,14 +788,6 @@ class SettingsActivity : AppCompatActivity() {
 
 
         // Save Sync Config
-        val sel = spinnerProxyType.selectedItemPosition
-        val pType = when (sel) {
-            0 -> "auto"
-            1 -> "none"
-            2 -> "http"
-            3 -> "socks5"
-            else -> "auto"
-        }
         val newSyncConfig = currentSyncConfig.copy(
             enabled = switchEnableSync.isChecked,
             backendType = com.xiwei.writerapp.model.BackendType.GithubApi,
@@ -871,11 +795,7 @@ class SettingsActivity : AppCompatActivity() {
             transport = currentSyncConfig.transport ?: SyncTransport.HttpsToken,
             branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
             autoSync = switchAutoSync.isChecked,
-            syncIntervalSeconds = sbSyncInterval.value.toInt(),
-            proxyEnabled = sel != 1,
-            proxyType = pType,
-            proxyHost = etProxyHost.text?.toString()?.ifEmpty { "127.0.0.1" } ?: "127.0.0.1",
-            proxyPort = etProxyPort.text?.toString()?.toIntOrNull() ?: if (sel == 3) 7891 else 7890
+            syncIntervalSeconds = sbSyncInterval.value.toInt()
         )
 
         val tokenInput = etHttpsToken.text?.toString() ?: ""

@@ -94,10 +94,6 @@ data class SyncConfig(
     val branch: String? = "main",
     @SerializedName("auto_sync") val autoSync: Boolean? = false,
     @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300,
-    @SerializedName("proxy_enabled") val proxyEnabled: Boolean? = true,
-    @SerializedName("proxy_type") val proxyType: String? = "auto",
-    @SerializedName("proxy_host") val proxyHost: String? = "127.0.0.1",
-    @SerializedName("proxy_port") val proxyPort: Int? = 7890,
     val username: String? = "",
     @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean? = null,
     @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean? = null
@@ -111,12 +107,6 @@ data class SyncConfig(
             branch = if (branch.isNullOrEmpty()) "main" else branch,
             autoSync = autoSync ?: false,
             syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
-            proxyEnabled = proxyEnabled ?: true,
-            proxyType = if (proxyType.isNullOrEmpty()) "auto" else proxyType,
-            proxyHost = if (proxyHost.isNullOrEmpty()) "127.0.0.1" else proxyHost,
-            proxyPort = if (proxyPort == null || proxyPort <= 0) {
-                if (proxyType == "socks5") 7891 else 7890
-            } else proxyPort,
             username = username ?: "",
             androidHasInternetPermission = androidHasInternetPermission ?: true,
             androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission ?: true
@@ -287,13 +277,8 @@ data class SyncDiagnosticsResult(
     @SerializedName("auth_status") val authStatus: String,
     @SerializedName("repo_status") val repoStatus: String,
     @SerializedName("branch_status") val branchStatus: String,
-    @SerializedName("proxy_used") val proxyUsed: Boolean,
-    @SerializedName("proxy_type") val proxyType: String,
-    @SerializedName("proxy_host") val proxyHost: String,
-    @SerializedName("proxy_port") val proxyPort: Int,
     @SerializedName("remote_url_sanitized") val remoteUrlSanitized: String,
     val transport: String,
-    @SerializedName("app_proxy_status") val appProxyStatus: String,
     @SerializedName("error_category") val errorCategory: String,
     @SerializedName("user_message") val userMessage: String,
     @SerializedName("raw_error") val rawError: String?,
