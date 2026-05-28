@@ -308,19 +308,47 @@ class EditorViewModel(
 
             _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
 
-            return try {
-                workspaceRepository.saveChapterContent(pid, vid, cid, content)
-                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
-                pendingSaveContent = null
-                true
+            try {
+                val result = workspaceRepository.saveChapterContent(pid, vid, cid, content)
+                return when (result) {
+                    is com.xiwei.writerapp.data.BridgeResult.Success -> {
+                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
+                        pendingSaveContent = null
+                        true
+                    }
+                    is com.xiwei.writerapp.data.BridgeResult.Error -> {
+                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                        if (result.code == com.xiwei.writerapp.model.BridgeErrorCode.EmptyOverwriteBlocked) {
+                            if (!isAutoSave) {
+                                _events.send(EditorEvent.ShowSaveFailedDialog("已阻止空内容覆盖，请检查内容是否丢失。"))
+                            } else {
+                                emitErrorEvent("已阻止空内容覆盖保存")
+                            }
+                        } else {
+                            if (!isAutoSave) {
+                                _events.send(EditorEvent.ShowSaveFailedDialog("保存失败: ${result.message}"))
+                            } else {
+                                emitErrorEvent("自动保存失败: ${result.message}")
+                            }
+                        }
+                        false
+                    }
+                    com.xiwei.writerapp.data.BridgeResult.NotLoaded -> {
+                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                        if (!isAutoSave) {
+                            _events.send(EditorEvent.ShowSaveFailedDialog("保存失败: Native库未加载"))
+                        }
+                        false
+                    }
+                }
             } catch (e: Throwable) {
                 _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                 if (!isAutoSave) {
-                    _events.send(EditorEvent.ShowSaveFailedDialog("保存失败: ${e.message}"))
+                    _events.send(EditorEvent.ShowSaveFailedDialog("保存异常: ${e.message}"))
                 } else {
-                    emitErrorEvent("自动保存失败: ${e.message}")
+                    emitErrorEvent("自动保存异常: ${e.message}")
                 }
-                false
+                return false
             }
         }
     }

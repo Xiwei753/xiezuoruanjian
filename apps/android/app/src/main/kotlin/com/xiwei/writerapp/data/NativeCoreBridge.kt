@@ -18,6 +18,7 @@ package com.xiwei.writerapp.data
 //!
 //! ## 注意事项
 //!
+//! - @Deprecated("Legacy internal JNI bridge. UI/Repository 应该使用 Domain Bridges (如 WritingBridge) 而非直接调用此类。")
 //! - `isLoaded` 标记 native 库是否加载成功，所有方法在调用前检查此标记
 //! - 旧兼容包装为 `{ "success": true/false, "data": ..., "code": ..., "error": ... }`
 

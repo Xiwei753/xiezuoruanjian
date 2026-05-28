@@ -244,16 +244,21 @@ QtObject {
         var plainText = read.text;
         if (plainText === lastSavedEditorText) return true;
 
-        var saved = backendRef.save_chapter(projectId, volumeId, chapterId, plainText);
-        if (saved) {
+        var result = backendRef.save_chapter(projectId, volumeId, chapterId, plainText);
+        if (result && result.success) {
             lastSavedEditorText = plainText;
             previousEditorText = plainText;
             if (plainText.length === 0) {
                 explicitEmptySavePending = false;
                 lastPotentialExplicitClearAtMs = 0;
             }
+            return true;
+        } else {
+            if (result && result.code === "EMPTY_OVERWRITE_BLOCKED") {
+                logWriterWarning("empty_save_blocked", "blocked by core: " + (result.message || ""));
+            }
+            return false;
         }
-        return saved;
     }
 
     // Load chapter: content comes from Rust core as plain text.

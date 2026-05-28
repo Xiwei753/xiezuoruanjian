@@ -482,10 +482,10 @@ struct AppBackend {
         fn(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
     ),
     save_chapter: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> bool
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> QJsonObject
     ),
     clear_chapter_content: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> bool
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
     ),
     save_current_chapter: qt_method!(fn(&mut self, content: QString)),
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
@@ -3617,7 +3617,7 @@ impl AppBackend {
         bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
     }
 
-    fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> bool {
+    fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> QJsonObject {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
@@ -3625,48 +3625,53 @@ impl AppBackend {
         let len = text_str.len();
         self.debug_log("chapter", "save_chapter_start", &format!("len={}", len));
         
-        let mut success = false;
-        let mut error_to_emit = None;
-        if let Some(core_ref) = &self.core {
+        let save_res = if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
             let chapters = core.list_chapters(&p, &v).unwrap_or_default();
             if chapters.iter().any(|ch| ch.id == c) {
-                match core.write_chapter_verified(&p, &v, &c, &text_str) {
-                    Ok(_) => {
-                        self.debug_log("chapter", "save_chapter_success", "");
-                        self.current_save_status = "已保存".to_string();
-                        success = true;
-                    }
-                    Err(e) => {
-                        self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
-                        if is_empty_overwrite_blocked(&e) {
-                            let msg = blocked_empty_overwrite_user_message();
-                            self.current_save_status = msg.to_string();
-                            error_to_emit = Some(msg.to_string());
-                        } else {
-                            self.current_save_status = "保存失败".to_string();
-                        }
-                    }
-                }
+                Some(core.write_chapter_verified(&p, &v, &c, &text_str))
             } else {
-                self.debug_error("chapter", "save_chapter_failed", "chapter_not_exists");
-                self.current_save_status = "保存失败: 章节不存在".to_string();
+                None
             }
         } else {
             self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
-        }
+            return bridge_error_object("后端未初始化", "INVALID_WORKSPACE");
+        };
+
+        let result_obj = match save_res {
+            Some(Ok(receipt)) => {
+                self.debug_log("chapter", "save_chapter_success", "");
+                self.current_save_status = "已保存".to_string();
+                self.workspace_content_changed();
+                let obj = serde_json::json!({
+                    "success": true,
+                    "data": receipt
+                });
+                serde_to_qjson_object(obj)
+            }
+            Some(Err(e)) => {
+                self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
+                if is_empty_overwrite_blocked(&e) {
+                    let msg = blocked_empty_overwrite_user_message();
+                    self.current_save_status = msg.to_string();
+                    self.set_error(msg);
+                } else {
+                    self.current_save_status = "保存失败".to_string();
+                }
+                bridge_error_object(&format!("保存失败: {}", e), e.code())
+            }
+            None => {
+                self.debug_error("chapter", "save_chapter_failed", "chapter_not_exists");
+                self.current_save_status = "保存失败: 章节不存在".to_string();
+                bridge_error_object("章节不存在", "CHAPTER_NOT_FOUND")
+            }
+        };
         
         self.save_status_changed();
-        if let Some(msg) = error_to_emit {
-            self.set_error(&msg);
-        }
-        if success {
-            self.workspace_content_changed();
-        }
-        success
+        result_obj
     }
 
-    fn clear_chapter_content(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> bool {
+    fn clear_chapter_content(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
@@ -3674,22 +3679,26 @@ impl AppBackend {
 
         let clear_result = if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            core.clear_chapter_content_verified(&p, &v, &c).map(|_| ())
+            core.clear_chapter_content_verified(&p, &v, &c)
         } else {
             self.debug_error("chapter", "clear_chapter_content_failed", "core_not_initialized");
             self.current_save_status = "清空失败".to_string();
             self.save_status_changed();
             self.set_error("清空章节失败: 后端未初始化");
-            return false;
+            return bridge_error_object("清空章节失败: 后端未初始化", "INVALID_WORKSPACE");
         };
 
         match clear_result {
-            Ok(_) => {
+            Ok(receipt) => {
                 self.debug_log("chapter", "clear_chapter_content_success", &format!("chapter_id={}", c));
                 self.current_save_status = "已清空".to_string();
                 self.save_status_changed();
                 self.workspace_content_changed();
-                true
+                let obj = serde_json::json!({
+                    "success": true,
+                    "data": receipt
+                });
+                serde_to_qjson_object(obj)
             }
             Err(e) => {
                 let err_msg = format!("清空章节失败: {}", e);
@@ -3697,7 +3706,7 @@ impl AppBackend {
                 self.current_save_status = "清空失败".to_string();
                 self.save_status_changed();
                 self.set_error(&err_msg);
-                false
+                bridge_error_object(&err_msg, e.code())
             }
         }
     }

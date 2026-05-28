@@ -1,26 +1,5 @@
 package com.xiwei.writerapp.data
 
-//! # 仓库层封装（Android UI 层 - Data 层）
-//!
-//! 对领域 Bridge 的高层封装，将 BridgeResult 转换为异常。
-//!
-//! ## 架构定位
-//!
-//! ```text
-//! ViewModel → WorkspaceRepository → 领域 Bridge → JNI → Rust Core
-//! ```
-//!
-//! ## 职责边界
-//!
-//! - **做**：统一错误处理（BridgeResult → RepositoryException）、简化 API 调用
-//! - **不做**：业务逻辑（只做类型转换和错误传播）
-//!
-//! ## 设计原则
-//!
-//! - 所有方法在失败时抛出 RepositoryException，由 ViewModel 捕获
-//! - 不吞掉错误，不伪造成功状态
-//! - 不添加任何业务逻辑，只做 BridgeResult ↔ Exception 转换
-
 import android.content.Context
 import com.xiwei.writerapp.model.*
 
@@ -94,20 +73,12 @@ class WorkspaceRepository(val context: Context) {
         }
     }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): Boolean {
-        return when (val result = writingBridge.saveChapterContent(projectId, volumeId, chapterId, content)) {
-            is BridgeResult.Success -> true
-            is BridgeResult.Error -> throw RepositoryException("保存章节内容失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
-        }
+    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> {
+        return writingBridge.saveChapterContent(projectId, volumeId, chapterId, content)
     }
 
-    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): Boolean {
-        return when (val result = writingBridge.clearChapterContent(projectId, volumeId, chapterId)) {
-            is BridgeResult.Success -> true
-            is BridgeResult.Error -> throw RepositoryException("清空章节内容失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
-        }
+    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterSaveReceipt> {
+        return writingBridge.clearChapterContent(projectId, volumeId, chapterId)
     }
 
     fun recordWritingEvent(
@@ -165,74 +136,74 @@ class WorkspaceRepository(val context: Context) {
     }
 
     fun renameProject(projectId: String, newTitle: String) {
-        when (val result = nativeBridge.renameProject(projectId, newTitle)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("重命名作品失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.renameProject(projectId, newTitle)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("重命名作品失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun deleteProject(projectId: String) {
-        when (val result = nativeBridge.deleteProject(projectId)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("删除作品失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.deleteProject(projectId)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("删除作品失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun reorderProjects(orderedProjectIds: List<String>) {
-        when (val result = nativeBridge.reorderProjects(orderedProjectIds)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("重排作品失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.reorderProjects(orderedProjectIds)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("重排作品失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun renameVolume(projectId: String, volumeId: String, newTitle: String) {
-        when (val result = nativeBridge.renameVolume(projectId, volumeId, newTitle)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("重命名分卷失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.renameVolume(projectId, volumeId, newTitle)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("重命名分卷失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun deleteVolume(projectId: String, volumeId: String) {
-        when (val result = nativeBridge.deleteVolume(projectId, volumeId)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("删除分卷失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.deleteVolume(projectId, volumeId)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("删除分卷失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun reorderVolumes(projectId: String, orderedVolumeIds: List<String>) {
-        when (val result = nativeBridge.reorderVolumes(projectId, orderedVolumeIds)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("重排分卷失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.reorderVolumes(projectId, orderedVolumeIds)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("重排分卷失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String) {
-        when (val result = nativeBridge.renameChapter(projectId, volumeId, chapterId, newTitle)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("重命名章节失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.renameChapter(projectId, volumeId, chapterId, newTitle)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("重命名章节失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun deleteChapter(projectId: String, volumeId: String, chapterId: String) {
-        when (val result = nativeBridge.deleteChapter(projectId, volumeId, chapterId)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("删除章节失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.deleteChapter(projectId, volumeId, chapterId)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("删除章节失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
     fun reorderChapters(projectId: String, volumeId: String, orderedChapterIds: List<String>) {
-        when (val result = nativeBridge.reorderChapters(projectId, volumeId, orderedChapterIds)) {
-            is NativeResult.Success<*> -> {}
-            is NativeResult.Error -> throw RepositoryException("重排章节失败: ${result.message}")
-            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        when (val result = workspaceBridge.reorderChapters(projectId, volumeId, orderedChapterIds)) {
+            is BridgeResult.Success -> {}
+            is BridgeResult.Error -> throw RepositoryException("重排章节失败: ${result.message}")
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
