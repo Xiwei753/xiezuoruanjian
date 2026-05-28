@@ -62,6 +62,7 @@
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">浅色模式</string>
     <string name="theme_dark">深色模式</string>
+    <string name="pref_enable_monet">启用 Monet 取色</string>
 
     <string name="pref_category_about">关于</string>
     <string name="pref_workspace_path">工作区路径</string>

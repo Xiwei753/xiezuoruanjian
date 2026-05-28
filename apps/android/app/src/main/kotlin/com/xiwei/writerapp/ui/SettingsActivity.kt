@@ -38,6 +38,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var switchAutoSave: MaterialSwitch
     private lateinit var sbAutoSaveDelay: Slider
     private lateinit var spinnerTheme: Spinner
+    private lateinit var switchEnableMonet: MaterialSwitch
     private lateinit var tvWorkspacePath: TextView
     private lateinit var tvVersionInfo: TextView
 
@@ -118,6 +119,7 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoSave = findViewById(R.id.switchAutoSave)
         sbAutoSaveDelay = findViewById(R.id.sbAutoSaveDelay)
         spinnerTheme = findViewById(R.id.spinnerTheme)
+        switchEnableMonet = findViewById(R.id.switchEnableMonet)
 
         tvFontSizeValue = findViewById(R.id.tvFontSizeValue)
         tvLineSpacingValue = findViewById(R.id.tvLineSpacingValue)
@@ -256,7 +258,7 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoIndent.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
         switchTypingAnimation.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
         switchSmoothCursor.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
-
+        switchEnableMonet.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
 
         spinnerTheme.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
@@ -783,6 +785,7 @@ class SettingsActivity : AppCompatActivity() {
         switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
         sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
         sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
+        switchEnableMonet.isChecked = currentSettings.enableMonetColor
 
         tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
@@ -834,7 +837,8 @@ class SettingsActivity : AppCompatActivity() {
             editorSmoothCursorEnabled = switchSmoothCursor.isChecked,
             editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
             editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),
-            aiEnabled = switchAiEnabled.isChecked
+            aiEnabled = switchAiEnabled.isChecked,
+            enableMonetColor = switchEnableMonet.isChecked
         )
 
         ErrorUtil.safeRun(this) {

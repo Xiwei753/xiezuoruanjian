@@ -320,6 +320,14 @@
                 android:textStyle="bold"
                 android:layout_marginBottom="8dp"/>
 
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/switchEnableMonet"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/pref_enable_monet"
+                android:textSize="16sp"
+                android:layout_marginBottom="8dp"/>
+
             <Spinner
                 android:id="@+id/spinnerTheme"
                 android:layout_width="match_parent"

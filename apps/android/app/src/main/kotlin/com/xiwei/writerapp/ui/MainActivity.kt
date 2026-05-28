@@ -24,7 +24,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.WorkspaceRepository
@@ -37,10 +37,10 @@ import android.os.Build
 class MainActivity : AppCompatActivity() {
     private lateinit var projectRecyclerView: RecyclerView
     private lateinit var recentEditsRecyclerView: RecyclerView
-    private lateinit var fabNewProject: ExtendedFloatingActionButton
+    private lateinit var fabNewProject: FloatingActionButton
     private lateinit var emptyStateLayout: View
     private lateinit var recentEditsLayout: View
-    private lateinit var btnSettings: ImageView
+    private lateinit var btnSettings: FloatingActionButton
     private lateinit var tabWorks: FrameLayout
     private lateinit var tabStarMap: FrameLayout
     private lateinit var tabStats: FrameLayout
@@ -197,10 +197,11 @@ class MainActivity : AppCompatActivity() {
     private fun syncMonetColor() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
-                val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
-                val hexColor = String.format("#%06X", 0xFFFFFF and colorInt)
-
                 if (::settingsRepository.isInitialized) {
+                    val localSettings = settingsRepository.getLocalSettings()
+                    if (!localSettings.enableMonetColor) return
+                    val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
+                    val hexColor = String.format("#%06X", 0xFFFFFF and colorInt)
                     val syncable = settingsRepository.getSyncableSettings()
                     if (syncable.monetColor != hexColor) {
                         settingsRepository.saveSyncableSettings(syncable.copy(monetColor = hexColor))
