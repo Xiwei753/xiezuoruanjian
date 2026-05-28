@@ -227,7 +227,7 @@ ApplicationWindow {
                 backendRef: backend
                 appState: window.appState
                 tree: window.appState.tree || []
-                projectId: appController.writingProjectId
+                workspaceProjectId: appController.writingProjectId
                 projectTitle: appController.writingProjectTitle
                 aiCapable: backend.ai_available
                 aiEnabled: backend.ai_enabled

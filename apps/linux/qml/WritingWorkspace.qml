@@ -14,11 +14,8 @@ Rectangle {
     property bool aiCapable: false
     property bool aiEnabled: false
 
-    // Chapter state — delegated to EditorController, read-only here for UI binding
-    readonly property string projectId: editorController.projectId
-    readonly property string volumeId: editorController.volumeId
-    readonly property string chapterId: editorController.chapterId
-    readonly property string chapterTitle: editorController.chapterTitle
+    // Project-level ID — set by main.qml, used for tree and create volume/chapter
+    property string workspaceProjectId: ""
 
     signal backToProjects()
     signal openSettings()
@@ -29,7 +26,7 @@ Rectangle {
     WritingTreeController {
         id: writingTree
         tree: root.tree
-        projectId: root.projectId
+        projectId: root.workspaceProjectId
         onItemsChanged: root.populateTreeModel()
     }
 
@@ -176,7 +173,7 @@ Rectangle {
                                            delegateHover.containsMouse ?
                                            (dt ? dt.card : "#1E2128") : "transparent"
 
-                                    property bool isSelected: model.itemId === root.chapterId
+                                    property bool isSelected: model.itemId === editorController.chapterId
 
                                     RowLayout {
                                         anchors.fill: parent
@@ -234,7 +231,7 @@ Rectangle {
                                         onClicked: function(mouse) {
                                             if (mouse.button === Qt.LeftButton) {
                                                 if (model.itemType === "chapter") {
-                                                    root.openChapter(model.itemProjectId || root.projectId, model.itemVolumeId, model.itemId, model.itemTitle);
+                                                     root.openChapter(model.itemProjectId || root.workspaceProjectId, model.itemVolumeId, model.itemId, model.itemTitle);
                                                 }
                                             } else if (mouse.button === Qt.RightButton) {
                                                 treeContextMenu.itemType = model.itemType;
@@ -281,7 +278,7 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.createVolumeRequested(root.projectId)
+                            onClicked: root.createVolumeRequested(root.workspaceProjectId)
                         }
                     }
 
@@ -297,7 +294,7 @@ Rectangle {
                         MenuItem {
                             text: "新建卷"
                             visible: treeContextMenu.itemType === "project"
-                            onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.projectId)
+                            onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
                         }
                         MenuItem {
                             text: "新建章节"
@@ -397,7 +394,7 @@ Rectangle {
                                 wrapMode: TextArea.Wrap
                                 verticalAlignment: TextInput.AlignTop
                                 background: Rectangle { color: "transparent" }
-                                enabled: root.chapterId !== ""
+                                enabled: editorController.chapterId !== ""
                                 focus: true
                                 activeFocusOnTab: true
                                 selectByMouse: true
@@ -423,7 +420,7 @@ Rectangle {
                     ColumnLayout {
                         anchors.centerIn: parent
                         spacing: dt ? dt.sp12 : 12
-                        visible: !root.chapterId
+                        visible: !editorController.chapterId
 
                         Text {
                             text: "\uD83D\uDCDD"
