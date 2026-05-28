@@ -67,6 +67,7 @@ class NativeCoreBridge(context: Context) {
 
     private external fun readChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
     private external fun writeChapter(workspacePath: String, projectId: String, volumeId: String, chapterId: String, content: String): String?
+    private external fun clearChapterContentNative(workspacePath: String, projectId: String, volumeId: String, chapterId: String): String?
     private external fun updateChapterNote(workspacePath: String, projectId: String, volumeId: String, chapterId: String, note: String): String?
 
     private external fun loadLocalSettings(workspacePath: String): String?
@@ -385,6 +386,27 @@ class NativeCoreBridge(context: Context) {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = writeChapter(workspaceDir, projectId, volumeId, chapterId, content)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<Any>>() {}.type
+            val response: RustResponse<Any> = gson.fromJson(resultJson, type)
+            return if (response.success) {
+                NativeResult.Success(true)
+            } else {
+                NativeResult.Error(response.error ?: "Unknown error")
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): NativeResult<Boolean> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = clearChapterContentNative(workspaceDir, projectId, volumeId, chapterId)
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
             val type = object : TypeToken<RustResponse<Any>>() {}.type
             val response: RustResponse<Any> = gson.fromJson(resultJson, type)

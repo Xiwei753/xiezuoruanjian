@@ -534,6 +534,16 @@ impl WriterCore {
         )
     }
 
+    /// Explicitly clear chapter content. Ordinary writes refuse empty-overwriting non-empty text.
+    pub fn clear_chapter_content(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Result<()> {
+        chapter::clear_chapter_content(&self.workspace_path, project_id, volume_id, chapter_id)
+    }
+
     pub fn write_chapter_verified(
         &self,
         project_id: &str,

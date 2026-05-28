@@ -5,6 +5,8 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+const CHAPTER_BACKUP_KEEP: usize = 20;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Chapter {
     pub id: String,
@@ -173,6 +175,49 @@ pub fn save_chapter_verified(
     chapter_id: &str,
     content: &str,
 ) -> Result<ChapterSaveReceipt> {
+    save_chapter_verified_with_options(
+        workspace_path,
+        project_id,
+        volume_id,
+        chapter_id,
+        content,
+        false,
+    )
+}
+
+pub fn clear_chapter_content(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<()> {
+    clear_chapter_content_verified(workspace_path, project_id, volume_id, chapter_id).map(|_| ())
+}
+
+pub fn clear_chapter_content_verified(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<ChapterSaveReceipt> {
+    save_chapter_verified_with_options(
+        workspace_path,
+        project_id,
+        volume_id,
+        chapter_id,
+        "",
+        true,
+    )
+}
+
+fn save_chapter_verified_with_options(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+) -> Result<ChapterSaveReceipt> {
     let chapter_dir = workspace_path
         .join("projects")
         .join(project_id)
@@ -185,6 +230,33 @@ pub fn save_chapter_verified(
 
     if !meta_path.exists() {
         return Err(crate::error::Error::ChapterNotFound);
+    }
+
+    let old_content = if md_path.exists() {
+        fs::read_to_string(&md_path)?
+    } else {
+        String::new()
+    };
+
+    if !allow_empty_overwrite && !old_content.trim().is_empty() && content.trim().is_empty() {
+        let reason = "new_content_empty_or_whitespace_without_allow_empty_overwrite".to_string();
+        eprintln!(
+            "blocked_empty_overwrite chapter_id={} old_len={} new_len={} reason={}",
+            chapter_id,
+            old_content.len(),
+            content.len(),
+            reason
+        );
+        return Err(crate::error::Error::EmptyOverwriteBlocked {
+            chapter_id: chapter_id.to_string(),
+            old_len: old_content.len(),
+            new_len: content.len(),
+            reason,
+        });
+    }
+
+    if !old_content.is_empty() && old_content != content {
+        backup_chapter_content(workspace_path, project_id, volume_id, chapter_id, &old_content)?;
     }
 
     let meta_str = fs::read_to_string(&meta_path)?;
@@ -237,6 +309,79 @@ pub fn save_chapter_verified(
         updated_at: meta.updated_at,
         word_count: meta.word_count,
     })
+}
+
+fn backup_chapter_content(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+) -> Result<()> {
+    let backup_dir = workspace_path.join("backups").join("chapters");
+    fs::create_dir_all(&backup_dir)?;
+
+    let prefix = chapter_backup_prefix(project_id, volume_id, chapter_id);
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    let backup_path = backup_dir.join(format!("{}{}__{}.md", prefix, timestamp, Uuid::new_v4()));
+
+    crate::storage::atomic_write_string(&backup_path, content)?;
+    prune_chapter_backups(&backup_dir, &prefix, CHAPTER_BACKUP_KEEP)
+}
+
+fn prune_chapter_backups(backup_dir: &Path, prefix: &str, keep: usize) -> Result<()> {
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(backup_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with(prefix) && file_name.ends_with(".md") {
+            backups.push((file_name, entry.path()));
+        }
+    }
+
+    if backups.len() <= keep {
+        return Ok(());
+    }
+
+    backups.sort_by(|a, b| a.0.cmp(&b.0));
+    let remove_count = backups.len() - keep;
+    for (_, path) in backups.into_iter().take(remove_count) {
+        fs::remove_file(path)?;
+    }
+
+    Ok(())
+}
+
+fn chapter_backup_prefix(project_id: &str, volume_id: &str, chapter_id: &str) -> String {
+    format!(
+        "{}__{}__{}__",
+        backup_file_part(project_id),
+        backup_file_part(volume_id),
+        backup_file_part(chapter_id)
+    )
+}
+
+fn backup_file_part(value: &str) -> String {
+    let safe: String = value
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    if safe.is_empty() {
+        "empty".to_string()
+    } else {
+        safe
+    }
 }
 
 pub fn update_chapter_note(

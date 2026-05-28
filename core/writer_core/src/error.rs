@@ -14,6 +14,13 @@ pub enum Error {
     VolumeNotFound,
     #[error("Chapter not found")]
     ChapterNotFound,
+    #[error("blocked_empty_overwrite: chapter_id={chapter_id}, old_len={old_len}, new_len={new_len}, reason={reason}")]
+    EmptyOverwriteBlocked {
+        chapter_id: String,
+        old_len: usize,
+        new_len: usize,
+        reason: String,
+    },
     #[error("Not implemented")]
     NotImplemented,
     #[error("Refuse to delete workspace root")]

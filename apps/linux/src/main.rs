@@ -85,6 +85,14 @@ fn get_debug_config() -> &'static DebugConfig {
     })
 }
 
+fn is_empty_overwrite_blocked(error: &writer_core::Error) -> bool {
+    matches!(error, writer_core::Error::EmptyOverwriteBlocked { .. })
+}
+
+fn blocked_empty_overwrite_user_message() -> &'static str {
+    "已阻止空内容覆盖，原章节内容已保留"
+}
+
 #[allow(dead_code)]
 fn debug_enabled() -> bool {
     get_debug_config().enabled
@@ -370,6 +378,9 @@ struct AppBackend {
     ),
     save_chapter: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> bool
+    ),
+    clear_chapter_content: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> bool
     ),
     save_current_chapter: qt_method!(fn(&mut self, content: QString)),
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
@@ -3457,6 +3468,7 @@ impl AppBackend {
         self.debug_log("chapter", "save_chapter_start", &format!("len={}", len));
         
         let mut success = false;
+        let mut error_to_emit = None;
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
             let chapters = core.list_chapters(&p, &v).unwrap_or_default();
@@ -3469,7 +3481,13 @@ impl AppBackend {
                     }
                     Err(e) => {
                         self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
-                        self.current_save_status = "保存失败".to_string();
+                        if is_empty_overwrite_blocked(&e) {
+                            let msg = blocked_empty_overwrite_user_message();
+                            self.current_save_status = msg.to_string();
+                            error_to_emit = Some(msg.to_string());
+                        } else {
+                            self.current_save_status = "保存失败".to_string();
+                        }
                     }
                 }
             } else {
@@ -3481,10 +3499,49 @@ impl AppBackend {
         }
         
         self.save_status_changed();
+        if let Some(msg) = error_to_emit {
+            self.set_error(&msg);
+        }
         if success {
             self.workspace_content_changed();
         }
         success
+    }
+
+    fn clear_chapter_content(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> bool {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        self.debug_log("chapter", "clear_chapter_content_start", &format!("chapter_id={}", c));
+
+        let clear_result = if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            core.clear_chapter_content(&p, &v, &c)
+        } else {
+            self.debug_error("chapter", "clear_chapter_content_failed", "core_not_initialized");
+            self.current_save_status = "清空失败".to_string();
+            self.save_status_changed();
+            self.set_error("清空章节失败: 后端未初始化");
+            return false;
+        };
+
+        match clear_result {
+            Ok(_) => {
+                self.debug_log("chapter", "clear_chapter_content_success", &format!("chapter_id={}", c));
+                self.current_save_status = "已清空".to_string();
+                self.save_status_changed();
+                self.workspace_content_changed();
+                true
+            }
+            Err(e) => {
+                let err_msg = format!("清空章节失败: {}", e);
+                self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
+                self.current_save_status = "清空失败".to_string();
+                self.save_status_changed();
+                self.set_error(&err_msg);
+                false
+            }
+        }
     }
 
     fn save_current_chapter(&mut self, content: QString) {
@@ -3536,7 +3593,15 @@ impl AppBackend {
                 );
             }
             Err(e) => {
-                let err_msg = format!("保存失败: {}", e);
+                let err_msg = if is_empty_overwrite_blocked(&e) {
+                    blocked_empty_overwrite_user_message().to_string()
+                } else {
+                    format!("保存失败: {}", e)
+                };
+                if is_empty_overwrite_blocked(&e) {
+                    self.current_save_status = err_msg.clone();
+                    self.save_status_changed();
+                }
                 self.set_error(&err_msg);
                 self.debug_error("chapter", "save_current_chapter_failed", &err_msg);
             }

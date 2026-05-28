@@ -370,6 +370,40 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_writeChapt
     )
 }
 
+// Explicitly Clear Chapter Content
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_clearChapterContentNative(
+    mut env: JNIEnv,
+    _class: JClass,
+    workspace_path_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+    chapter_id_j: JString,
+) -> jstring {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let chapter_id = match jstring_to_string(&mut env, &chapter_id_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+
+    let core = WriterCore::new(&workspace_path);
+    result_to_jstring(
+        &mut env,
+        core.clear_chapter_content(&project_id, &volume_id, &chapter_id),
+    )
+}
+
 // Update Chapter Note
 #[no_mangle]
 pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateChapterNote(

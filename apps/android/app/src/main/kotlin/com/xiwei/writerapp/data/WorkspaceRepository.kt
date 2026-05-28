@@ -78,6 +78,14 @@ class WorkspaceRepository(val context: Context) {
         }
     }
 
+    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): Boolean {
+        return when (val result = bridge.clearChapterContent(projectId, volumeId, chapterId)) {
+            is NativeResult.Success -> result.data
+            is NativeResult.Error -> throw RepositoryException("清空章节内容失败: ${result.message}")
+            NativeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+        }
+    }
+
     fun recordWritingEvent(
         deviceId: String,
         projectId: String,
