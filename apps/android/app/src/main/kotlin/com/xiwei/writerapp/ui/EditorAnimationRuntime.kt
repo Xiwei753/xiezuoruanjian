@@ -3,6 +3,23 @@ package com.xiwei.writerapp.ui
 import android.view.Choreographer
 import android.os.Build
 
+/**
+ * EditorAnimationRuntime — 编辑器动画运行时
+ *
+ * 使用 Choreographer 管理编辑器的帧动画，统一调度平滑光标和打字动画。
+ *
+ * ## 架构定位
+ * - WriterEditText → EditorAnimationRuntime → Choreographer
+ * - 管理多个 Animatable 实现的动画生命周期
+ *
+ * ## 职责边界
+ * - **做**：帧回调管理、动画启停、帧率监控
+ * - **不做**：具体动画逻辑（由 SmoothCursorRenderer 和 TypingOverlayRenderer 负责）
+ *
+ * ## 使用场景
+ * - 平滑光标动画
+ * - 打字动画效果
+ */
 class EditorAnimationRuntime(private val editText: WriterEditText) {
 
     interface Animatable {

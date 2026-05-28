@@ -10,6 +10,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * StarMapController — 星图控制器
+ *
+ * 管理星图的加载、渲染和节点操作。
+ *
+ * ## 架构定位
+ * - MainActivity → StarMapController → NativeCoreBridge → JNI → Rust Core
+ *
+ * ## 职责边界
+ * - **做**：加载星图数据、处理节点拖拽、保存布局、新建节点
+ * - **不做**：星图渲染（由 StarMapCanvasView 负责）
+ *
+ * ## 使用场景
+ * - MainActivity 星图标签页的数据管理
+ * - 节点拖拽后的布局保存
+ * - 新建星图节点
+ */
 class StarMapController(
     private val activity: MainActivity,
     private val bridge: NativeCoreBridge,

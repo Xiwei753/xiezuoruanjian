@@ -1,3 +1,49 @@
+//! # 思维导图存储管理模块
+//!
+//! 本模块负责思维导图数据的持久化存储，包括图形数据和布局信息的读写操作，
+//! 以及V1到V2格式的自动迁移功能。
+//!
+//! ## 主要功能
+//! - **图形数据存储**：将思维导图图形数据序列化为JSON格式存储
+//! - **布局信息存储**：存储和读取节点的布局位置信息
+//! - **索引管理**：维护思维导图的索引文件，支持默认图形选择
+//! - **V1格式迁移**：自动检测并迁移旧版本格式到V2
+//! - **数据验证**：在保存前验证图形数据的完整性
+//!
+//! ## 存储结构
+//!
+//! - `projects/{project_id}/mind_map/index.json` - 索引文件，记录默认图形ID和所有图形ID列表
+//! - `projects/{project_id}/mind_map/graphs/{graph_id}.json` - 图形数据文件
+//! - `projects/{project_id}/mind_map/layouts/{graph_id}.json` - 布局信息文件
+//! - `projects/{project_id}/mind_map.json` - V1格式文件（迁移后重命名为备份）
+//!
+//! ## 核心函数
+//! - `load_mind_map_graph`：加载思维导图图形数据
+//! - `save_mind_map_graph`：保存思维导图图形数据
+//! - `load_mind_map_layout`：加载布局信息
+//! - `save_mind_map_layout`：保存布局信息
+//!
+//! ## V1迁移
+//! - 自动检测V1格式的`mind_map.json`文件
+//! - 迁移时保留原有数据，转换为V2格式
+//! - 迁移成功后将原文件重命名为`mind_map.v1.backup.json`
+//! - 迁移失败时保留原文件不变
+//!
+//! ## 依赖关系
+//! - `crate::mind_map::graph`：思维导图数据类型
+//! - `crate::mind_map::layout`：布局类型
+//! - `crate::mind_map::migration`：数据迁移功能
+//! - `crate::mind_map::validation`：数据验证
+//! - `crate::facade::WriterCore`：核心门面
+//! - `crate::storage`：原子写入功能
+//! - `serde`：JSON序列化/反序列化
+//!
+//! ## 使用场景
+//! - 思维导图数据的持久化存储
+//! - 支持多版本格式兼容
+//! - 自动数据迁移
+//! - 索引管理和默认图形选择
+
 use crate::mind_map::graph::MindMapGraph;
 use serde::{Deserialize, Serialize};
 use std::fs;

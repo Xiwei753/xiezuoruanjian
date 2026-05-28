@@ -1,53 +1,48 @@
-# Linux Native Client
+# Linux 应用
 
-This directory contains the Linux native client, built using Rust, `qmetaobject`, and Qt/QML.
+本目录包含 Linux 原生客户端，使用 Rust 和 Qt/QML 构建，提供桌面端写作体验。
 
-## Architecture Note
-This client **MUST** use the `core/writer_core` Rust library via bindings (FFI). It is strictly forbidden to implement workspace formats, save logic, or syncing directly in C++ or QML.
-The UI is built with Qt 5 / QML, relying on the Rust core for all business logic.
+## 主要文件
 
-## Dependencies
+| 文件 | 用途 |
+|------|------|
+| `Cargo.toml` | Rust 项目配置 |
+| `build.rs` | 构建脚本 |
+| `src/` | Rust 源代码，包含 QObject 绑定 |
+| `qml/` | QML 界面文件 |
+| `TECHNICAL_ROUTE.md` | 技术路线文档 |
+| `.gitignore` | Git 忽略规则 |
 
-To build and run the Linux application, you need to install the Qt 5 development packages and qmake.
+## 架构说明
 
-### Fedora / openSUSE
+客户端**必须**通过 FFI 使用 `core/writer_core` Rust 核心库，严格禁止在 C++ 或 QML 中直接实现工作区格式、保存逻辑或同步功能。UI 使用 Qt 5 / QML 构建，所有业务逻辑依赖 Rust 核心。
+
+## 依赖关系
+
+- 依赖 `core/writer_core` Rust 核心库
+- 需要 Qt 5 开发环境
+
+## 使用说明
+
+### 安装依赖
+
+**Fedora / openSUSE：**
 ```bash
 sudo dnf install qt5-qtbase-devel qt5-qtdeclarative-devel qt5-qtquickcontrols2-devel qt5-qtwayland
 ```
-*(Note: on Fedora/openSUSE, `qmake` might be available as `qmake-qt5`)*
 
-### Ubuntu / Debian
+**Ubuntu / Debian：**
 ```bash
 sudo apt install qtbase5-dev qtdeclarative5-dev qtquickcontrols2-5-dev qtwayland5
 ```
 
-## Building & Running
-
-Run the following command from the root workspace or within this directory:
+### 构建运行
 
 ```bash
 cargo run -p linux
 ```
 
-If your system's `qmake` is named `qmake-qt5` (e.g. on Fedora), explicitly provide the path:
+如果系统的 `qmake` 命名为 `qmake-qt5`：
 ```bash
 QMAKE=/usr/bin/qmake-qt5 cargo run -p linux
 ```
-
-If you encounter wayland/xcb display errors, you can test specific Qt platform plugins manually by setting `QT_QPA_PLATFORM`:
-
-For X11 / Xwayland:
-```bash
-QT_QPA_PLATFORM=xcb QMAKE=/usr/bin/qmake-qt5 cargo run -p linux
-```
-
-For Wayland:
-```bash
-QT_QPA_PLATFORM=wayland QMAKE=/usr/bin/qmake-qt5 cargo run -p linux
-```
-
-## Features
-
-- Native file operations and directory management
-- Editor with basic operations (save, edit)
-- **GitHub Sync Configuration:** Added a UI dialogue for configuring your Git remote, automatic sync, personal access tokens (saved securely to `sync_secrets.local.json`), and proxy settings. You can trigger sync plans and execution directly from the Linux client.

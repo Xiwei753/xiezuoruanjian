@@ -28,6 +28,25 @@ import android.util.Log
 import android.widget.Toast
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SyncChangeBus
+
+/**
+ * EditorActivity — 章节编辑器页面
+ *
+ * 提供纯文本编辑环境，集成平滑光标、打字动画、自动缩进等写作增强功能。
+ *
+ * ## 架构定位
+ * - EditorActivity → EditorViewModel → WorkspaceRepository → NativeCoreBridge → Rust Core
+ * - EditorActivity → WriterEditText → EditorAnimationRuntime
+ *
+ * ## 职责边界
+ * - **做**：文本编辑、自动保存、工具栏交互、星图链接
+ * - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 WriterEditText 负责）
+ *
+ * ## 使用场景
+ * - 用户点击章节后进入编辑器
+ * - 进行纯文本写作和编辑
+ */
+class EditorActivity : AppCompatActivity() {
 import com.xiwei.writerapp.data.WorkspaceRepository
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch

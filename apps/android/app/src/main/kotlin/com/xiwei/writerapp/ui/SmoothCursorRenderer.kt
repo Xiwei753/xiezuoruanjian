@@ -3,6 +3,22 @@ package com.xiwei.writerapp.ui
 import android.graphics.Canvas
 import android.graphics.Paint
 
+/**
+ * SmoothCursorRenderer — 平滑光标渲染器
+ *
+ * 使用插值动画实现光标的平滑移动效果，替代系统默认的跳跃式光标。
+ *
+ * ## 架构定位
+ * - EditorRenderLayer → SmoothCursorRenderer → Canvas 绘制
+ * - 实现 EditorAnimationRuntime.Animatable 接口
+ *
+ * ## 职责边界
+ * - **做**：光标位置插值动画、光标绘制
+ * - **不做**：光标位置计算（由系统 EditText 负责）
+ *
+ * ## 使用场景
+ * - 编辑器中光标移动时的平滑过渡动画
+ */
 class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimationRuntime.Animatable {
 
     var cursorRuntimeReady = false

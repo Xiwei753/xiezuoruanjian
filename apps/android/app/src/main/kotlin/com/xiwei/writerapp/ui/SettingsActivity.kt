@@ -27,6 +27,26 @@ import com.xiwei.writerapp.data.NativeCoreBridge
 import com.xiwei.writerapp.model.FirstSyncMode
 import com.xiwei.writerapp.data.SyncSession
 
+/**
+ * SettingsActivity — 设置页面
+ *
+ * 提供编辑器设置、同步设置和应用信息的配置界面。
+ *
+ * ## 架构定位
+ * - 通过 SettingsRepository 读写设置
+ * - 通过 NativeCoreBridge 执行同步操作
+ *
+ * ## 职责边界
+ * - **做**：设置展示、保存、同步配置、同步诊断、同步执行
+ * - **不做**：业务逻辑（由 Rust Core 负责）
+ *
+ * ## 使用场景
+ * - 用户点击设置按钮进入
+ * - 配置编辑器参数（字号、行距、自动保存等）
+ * - 配置同步参数（GitHub 仓库、Token 等）
+ * - 执行同步诊断和手动同步
+ */
+
 
 class SettingsActivity : AppCompatActivity() {
 

@@ -6,6 +6,22 @@ import android.text.style.LeadingMarginSpan
 import android.view.inputmethod.BaseInputConnection
 import android.widget.EditText
 
+/**
+ * AutoIndentController — 自动首行缩进控制器
+ *
+ * 使用 LeadingMarginSpan 实现段落的首行缩进效果。
+ *
+ * ## 架构定位
+ * - WriterEditText → AutoIndentController → LeadingMarginSpan
+ *
+ * ## 职责边界
+ * - **做**：首行缩进的 Span 管理、新段落自动缩进
+ * - **不做**：文本内容管理（由 EditText 负责）
+ *
+ * ## 使用场景
+ * - 用户输入时自动为新段落添加首行缩进
+ * - 支持动态调整缩进宽度
+ */
 class AutoIndentController(private val editText: EditText) {
 
     var autoIndentEnabled: Boolean = false

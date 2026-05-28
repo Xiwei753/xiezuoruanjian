@@ -6,6 +6,22 @@ import android.animation.ValueAnimator
 import android.text.Editable
 import android.view.inputmethod.BaseInputConnection
 
+/**
+ * TypingAnimationController — 打字动画控制器
+ *
+ * 监听 EditText 的文本变化，触发动画效果并管理动画生命周期。
+ *
+ * ## 架构定位
+ * - WriterEditText → TypingAnimationController → TypingOverlayRenderer
+ *
+ * ## 职责边界
+ * - **做**：文本变化监听、动画触发、动画参数管理
+ * - **不做**：动画渲染（由 TypingOverlayRenderer 负责）
+ *
+ * ## 使用场景
+ * - 用户输入字符时触发动画
+ * - 粘贴/删除时抑制动画
+ */
 class TypingAnimationController(
     private val editText: WriterEditText,
     private val renderLayer: EditorRenderLayer

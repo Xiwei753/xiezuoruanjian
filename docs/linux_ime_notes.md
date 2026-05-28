@@ -1,30 +1,30 @@
-# Linux IME Notes
+# Linux 输入法笔记
 
-If you are running Writer App on Linux, particularly on Fedora KDE Wayland with fcitx5, you might experience issues with the Flutter `TextField` where the pre-editing candidate box (composing region) flickers or twitches during input. This is a known interaction issue between Flutter's text input handling and certain Linux IME/Wayland setups.
+如果你在 Linux 上运行写作应用，特别是在 Fedora KDE Wayland 配合 fcitx5 的环境下，可能会遇到 Flutter `TextField` 的预编辑候选框（组合区域）在输入时闪烁或抖动的问题。这是 Flutter 文本输入处理与某些 Linux 输入法/Wayland 配置之间的已知交互问题。
 
-## Workarounds
+## 解决方法
 
-1.  **Release Mode**: The issue is often exacerbated in Debug mode due to performance overhead and frequent rebuilds. Try running or building the app in release mode:
+1.  **Release 模式**：由于性能开销和频繁重建，该问题在 Debug 模式下通常会加剧。尝试以 release 模式运行或构建应用：
     ```bash
     flutter run --release
     ```
-    or
+    或
     ```bash
     flutter build linux
     ```
 
-2.  **Use X11 Backend**: Forcing the app to use the X11 backend under Wayland can bypass some Wayland-specific IME rendering bugs. You can set the `GDK_BACKEND` environment variable before launching:
+2.  **使用 X11 后端**：在 Wayland 下强制应用使用 X11 后端可以绕过一些 Wayland 特定的输入法渲染 bug。你可以在启动前设置 `GDK_BACKEND` 环境变量：
     ```bash
     GDK_BACKEND=x11 flutter run
     ```
 
-3.  **KDE X11 Session**: If you are still experiencing severe issues and the above steps do not help, consider logging out of Wayland and running a KDE X11 session as a temporary workaround.
+3.  **KDE X11 会话**：如果仍然遇到严重问题且上述步骤无效，可以考虑注销 Wayland 并使用 KDE X11 会话作为临时解决方案。
 
-4.  **IME Safe Mode (In-App)**: Writer App includes an experimental "IME Safe Mode" built specifically to mitigate this issue. This mode:
-    *   Prioritizes reducing the number of global state saves and UI rebuilds during active text input.
-    *   Completely pauses saving editor state (like cursor position or scroll offset) while the IME composing region is active.
-    *   Uses silent saves to update disk state without triggering `ChangeNotifier` listeners that might cause the application's root `MaterialApp` to unnecessarily rebuild and interrupt the input context.
-    *   Can be enabled within the App Settings (if exposed to the UI) or by manually modifying the `imeSafeModeEnabled` flag in your configuration.
+4.  **输入法安全模式（应用内）**：写作应用包含一个专门为此问题设计的实验性"输入法安全模式"。此模式：
+    *   优先减少活动文本输入期间的全局状态保存和 UI 重建次数。
+    *   在输入法组合区域活动时，完全暂停保存编辑器状态（如光标位置或滚动偏移）。
+    *   使用静默保存更新磁盘状态，而不触发 `ChangeNotifier` 监听器（这些监听器可能导致应用的根 `MaterialApp` 不必要地重建并中断输入上下文）。
+    *   可在应用设置中启用（如果暴露给 UI）或通过手动修改配置中的 `imeSafeModeEnabled` 标志启用。
 
 ---
 

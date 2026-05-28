@@ -6,6 +6,23 @@ import android.os.Looper
 import com.xiwei.writerapp.model.SyncConfig
 import com.xiwei.writerapp.model.SyncSecrets
 
+/**
+ * AutoSyncScheduler — 自动同步调度器
+ *
+ * 根据用户设置的同步间隔，自动触发后台同步任务。
+ *
+ * ## 架构定位
+ * - WriterApp → AutoSyncScheduler → SettingsRepository → NativeCoreBridge → Rust Core
+ *
+ * ## 职责边界
+ * - **做**：定时检查同步配置、触发自动同步、网络状态检测
+ * - **不做**：实际同步操作（由 Rust Core 负责）
+ *
+ * ## 使用场景
+ * - 应用进入前台时启动调度
+ * - 应用进入后台时停止调度
+ * - 根据 sync_interval_seconds 定时触发同步
+ */
 class AutoSyncScheduler(context: Context) {
     private val settingsRepository = SettingsRepository(context)
     private val handler = Handler(Looper.getMainLooper())

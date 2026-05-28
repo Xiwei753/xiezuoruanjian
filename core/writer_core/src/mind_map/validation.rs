@@ -1,3 +1,70 @@
+//! # 思维导图数据验证模块
+//!
+//! 本模块负责验证思维导图数据的完整性和一致性，确保图形数据符合业务规则。
+//! 验证操作在图形数据的读取和保存前执行，防止无效数据进入系统。
+//!
+//! ## 验证规则
+//!
+//! ### 基本验证
+//! - 图形ID不能为空
+//! - 项目ID不能为空
+//! - schema版本必须为2
+//! - 项目必须存在
+//!
+//! ### 节点验证
+//! - 节点ID不能为空
+//! - 节点ID不能重复
+//!
+//! ### 边验证
+//! - 边ID不能为空
+//! - 边ID不能重复
+//! - 边的起始节点必须存在
+//! - 边的结束节点必须存在
+//!
+//! ### 锚点验证
+//! - 锚点ID不能为空
+//! - 锚点ID不能重复
+//! - 锚点关联的章节必须属于该项目
+//!
+//! ### 链接验证
+//! - 链接ID不能为空
+//! - 链接ID不能重复
+//! - 链接关联的节点必须存在
+//! - 链接关联的锚点必须存在
+//!
+//! ## 错误类型
+//! `ValidationError`枚举定义了所有可能的验证错误：
+//! - `EmptyGraphId`：图形ID为空
+//! - `EmptyProjectId`：项目ID为空
+//! - `UnsupportedSchemaVersion`：不支持的schema版本
+//! - `EmptyNodeId`：节点ID为空
+//! - `DuplicateNodeId`：节点ID重复
+//! - `EmptyEdgeId`：边ID为空
+//! - `DuplicateEdgeId`：边ID重复
+//! - `EdgeReferencesMissingNode`：边引用了不存在的节点
+//! - `LinkReferencesMissingNode`：链接引用了不存在的节点
+//! - `LinkReferencesMissingAnchor`：链接引用了不存在的锚点
+//! - `AnchorChapterNotInProject`：锚点章节不属于项目
+//! - `ProjectNotFound`：项目不存在
+//! - `EmptyAnchorId`：锚点ID为空
+//! - `DuplicateAnchorId`：锚点ID重复
+//! - `EmptyLinkId`：链接ID为空
+//! - `DuplicateLinkId`：链接ID重复
+//!
+//! ## 核心函数
+//! - `validate_graph`：验证思维导图图形数据
+//!
+//! ## 依赖关系
+//! - `crate::mind_map::graph`：思维导图数据类型
+//! - `crate::facade::WriterCore`：核心门面，用于查询项目和章节信息
+//! - `std::collections::HashSet`：用于检测重复ID
+//!
+//! ## 使用场景
+//! - 数据保存前的验证
+//! - 数据加载后的验证
+//! - 防止无效数据进入系统
+//! - 确保数据引用的完整性
+
 use crate::mind_map::graph::MindMapGraph;
 use std::collections::HashSet;
 

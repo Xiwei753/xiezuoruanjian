@@ -12,6 +12,22 @@ import com.xiwei.writerapp.model.StarMapData
 import com.xiwei.writerapp.model.StarMapNodeKind
 import android.graphics.Typeface
 
+/**
+ * StarMapCanvasView — 星图画布自定义 View
+ *
+ * 使用 Canvas 绘制星图节点和连线，支持平移和缩放交互。
+ *
+ * ## 架构定位
+ * - StarMapController → StarMapCanvasView → Canvas 绘制
+ *
+ * ## 职责边界
+ * - **做**：星图可视化渲染、节点拖拽、平移/缩放交互
+ * - **不做**：数据管理（由 StarMapController 负责）
+ *
+ * ## 使用场景
+ * - MainActivity 星图标签页的可视化展示
+ * - 用户拖拽节点调整布局
+ */
 class StarMapCanvasView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,

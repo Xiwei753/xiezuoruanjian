@@ -34,6 +34,28 @@ import com.xiwei.writerapp.model.LocalSettings
 import androidx.appcompat.app.AppCompatDelegate
 import android.os.Build
 
+/**
+ * MainActivity — 应用主界面
+ *
+ * 包含作品列表、最近编辑、星图和统计四个标签页，是应用的导航中心。
+ *
+ * ## 架构定位
+ * - 应用入口 Activity，管理底部导航和标签页切换
+ * - 通过 NativeCoreBridge 与 Rust Core 交互
+ *
+ * ## 职责边界
+ * - **做**：作品列表展示、新建作品、标签页切换、主题管理
+ * - **不做**：具体业务逻辑（由各 Controller 负责）
+ *
+ * ## 依赖关系
+ * - NativeCoreBridge：Rust Core JNI 桥接
+ * - StarMapController：星图标签页控制器
+ * - StatsController：统计标签页控制器
+ *
+ * ## 使用场景
+ * - 应用启动后的主界面
+ * - 作品的创建、浏览和管理
+ */
 class MainActivity : AppCompatActivity() {
     private lateinit var projectRecyclerView: RecyclerView
     private lateinit var recentEditsRecyclerView: RecyclerView

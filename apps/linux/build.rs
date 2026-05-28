@@ -1,3 +1,13 @@
+//! # 构建脚本（Linux UI 层 - Build）
+//!
+//! Cargo 构建脚本，负责：
+//! 1. 声明 QML 文件依赖（rerun-if-changed）
+//! 2. 配置 Qt5 头文件包含路径
+//!
+//! ## 使用场景
+//! - `cargo build` 时自动执行
+//! - QML 文件修改后触发重新编译
+
 use std::env;
 
 fn main() {

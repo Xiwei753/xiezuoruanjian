@@ -16,7 +16,7 @@
 //! - **不做**：业务逻辑（全部委托给 WriterCore）
 //! - **不做**：文件 I/O（由 WriterCore 负责）
 //!
-## JSON 协议
+//! ## JSON 协议
 //!
 //! 所有函数返回 JSON 字符串：
 //! - 成功：`{ "success": true, "data": ... }`

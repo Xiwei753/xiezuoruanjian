@@ -6,6 +6,22 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonDeserializationContext
 import java.lang.reflect.Type
 
+/**
+ * StarMapModels — 星图数据模型
+ *
+ * 定义星图相关的数据类和枚举，与 Rust Core 的星图数据结构一一对应。
+ *
+ * ## 架构定位
+ * - 这些模型是 Rust Core JSON 响应的 Kotlin 映射
+ * - 所有字段名使用 @SerializedName 映射 Rust 的 snake_case
+ *
+ * ## 包含模型
+ * - StarMapMeta：星图元数据
+ * - StarMapNodeKind：节点类型枚举（角色、地点、事件等）
+ * - StarMapEdgeKind：连线类型枚举
+ * - StarMapData：星图完整数据（节点 + 连线 + 布局）
+ */
+
 data class StarMapMeta(
     val starmapId: String,
     val title: String,

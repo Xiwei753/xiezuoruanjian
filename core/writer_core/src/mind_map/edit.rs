@@ -1,3 +1,50 @@
+//! # 思维导图编辑操作模块
+//!
+//! 本模块提供了思维导图的高级编辑操作，包括图形的创建、节点和边的增删改查、
+//! 锚点管理以及布局保存等功能。所有编辑操作都包含数据验证，确保数据一致性。
+//!
+//! ## 主要功能
+//! - **图形管理**：创建新的思维导图图形，列出项目中的所有图形
+//! - **节点操作**：创建、更新、删除思维导图节点
+//! - **边操作**：创建、更新、删除思维导图边
+//! - **锚点操作**：创建锚点，将节点绑定到锚点
+//! - **布局保存**：保存思维导图的布局信息
+//! - **默认图形管理**：设置和获取项目的默认思维导图
+//!
+//! ## 核心函数
+//! - `create_mind_map_graph`：创建新的思维导图图形
+//! - `list_mind_map_graphs`：列出项目中的所有思维导图
+//! - `create_mind_map_node`：创建思维导图节点
+//! - `update_mind_map_node`：更新思维导图节点
+//! - `delete_mind_map_node`：删除思维导图节点（支持级联删除）
+//! - `create_mind_map_edge`：创建思维导图边
+//! - `update_mind_map_edge`：更新思维导图边
+//! - `delete_mind_map_edge`：删除思维导图边
+//! - `create_mind_map_anchor`：创建文本锚点
+//! - `bind_mind_map_node_to_anchor`：将节点绑定到锚点
+//! - `save_mind_map_layout`：保存布局信息
+//!
+//! ## 数据验证
+//! - 所有编辑操作都会在修改前后验证数据完整性
+//! - 节点删除时检查是否被边或链接引用
+//! - 边创建时验证起始和结束节点是否存在
+//! - 锚点绑定时验证节点和锚点是否存在
+//!
+//! ## 依赖关系
+//! - `crate::mind_map::graph`：思维导图数据类型
+//! - `crate::mind_map::anchor`：锚点和链接类型
+//! - `crate::mind_map::layout`：布局类型
+//! - `crate::mind_map::storage`：存储操作
+//! - `crate::mind_map::validation`：数据验证
+//! - `crate::facade::WriterCore`：核心门面
+//! - `serde`：JSON序列化/反序列化
+//! - `uuid`：生成唯一标识符
+//!
+//! ## 使用场景
+//! - 思维导图编辑器的后端逻辑
+//! - 图形数据的CRUD操作
+//! - 数据完整性保护
+
 use crate::mind_map::anchor::{MindMapAnchor, MindMapLink};
 use crate::mind_map::graph::{
     MindMapEdgeKind, MindMapGraph, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind,

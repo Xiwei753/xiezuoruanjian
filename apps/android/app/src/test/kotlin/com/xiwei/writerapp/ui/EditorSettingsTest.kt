@@ -8,6 +8,12 @@ import com.xiwei.writerapp.model.MindMapGraphNode
 import com.xiwei.writerapp.model.MindMapNodeKind
 import com.xiwei.writerapp.model.MindMapNodeKindDeserializer
 import org.junit.Assert.*
+
+/**
+ * EditorSettingsTest — 编辑器设置和模型序列化测试
+ *
+ * 测试 LocalSettings、MindMapGraphNode 等模型的 JSON 序列化/反序列化逻辑。
+ */
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner

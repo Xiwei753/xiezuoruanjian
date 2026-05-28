@@ -7,6 +7,12 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
+/**
+ * WriterEditTextTest — WriterEditText 仪器化测试
+ *
+ * 测试 WriterEditText 的打字动画、平滑光标等功能在真机/模拟器上的行为。
+ */
+
 @RunWith(AndroidJUnit4::class)
 class WriterEditTextTest {
 

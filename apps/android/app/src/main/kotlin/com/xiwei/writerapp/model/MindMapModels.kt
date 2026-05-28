@@ -6,6 +6,21 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonDeserializationContext
 import java.lang.reflect.Type
 
+/**
+ * MindMapModels — 思维导图数据模型
+ *
+ * 定义思维导图相关的数据类和枚举，与 Rust Core 的思维导图数据结构一一对应。
+ *
+ * ## 架构定位
+ * - 这些模型是 Rust Core JSON 响应的 Kotlin 映射
+ * - 所有字段名使用 @SerializedName 映射 Rust 的 snake_case
+ *
+ * ## 包含模型
+ * - MindMapNodeKind：节点类型枚举（项目、卷、章节、角色等）
+ * - MindMapSnapshot：思维导图快照数据
+ * - MindMapGraph/MindMapGraphNode/MindMapGraphEdge：图数据结构
+ */
+
 enum class MindMapNodeKind {
     @SerializedName("project") Project,
     @SerializedName("volume") Volume,

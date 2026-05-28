@@ -5,6 +5,23 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
+/**
+ * WorkspaceManager — 工作区目录管理
+ *
+ * 负责工作区目录的获取和初始化（从 assets 复制示例工作区）。
+ *
+ * ## 架构定位
+ * - 全局单例，管理工作区目录路径
+ * - 首次启动时从 assets 复制示例工作区
+ *
+ * ## 职责边界
+ * - **做**：获取工作区目录、初始化示例工作区
+ * - **不做**：业务逻辑（由 Rust Core 负责）
+ *
+ * ## 使用场景
+ * - NativeCoreBridge 获取工作区路径
+ * - 首次启动应用时初始化工作区
+ */
 object WorkspaceManager {
     fun getWorkspaceDir(context: Context): File {
         return File(context.filesDir, "workspace")

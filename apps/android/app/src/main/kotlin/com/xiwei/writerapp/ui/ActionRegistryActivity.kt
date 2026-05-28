@@ -23,6 +23,23 @@ import com.xiwei.writerapp.model.InputSchemaProperty
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 
+/**
+ * ActionRegistryActivity — Action 注册表调试页面
+ *
+ * 列出所有注册的 Action，支持执行 Query/Mutation 类型操作。
+ *
+ * ## 架构定位
+ * - 调试用途，不面向普通用户
+ * - 通过 NativeCoreBridge 调用 Rust Core 的 Action 系统
+ *
+ * ## 职责边界
+ * - **做**：展示 Action 列表、执行 Action、展示结果
+ * - **不做**：Action 的注册和定义（由 Rust Core 负责）
+ *
+ * ## 使用场景
+ * - 开发者调试 Action 系统
+ * - 测试 Rust Core 暴露的操作接口
+ */
 class ActionRegistryActivity : AppCompatActivity() {
 
     private lateinit var bridge: NativeCoreBridge

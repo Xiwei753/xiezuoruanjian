@@ -1,3 +1,62 @@
+//! # 星图数据类型定义模块
+//!
+//! 本模块定义了星图功能的核心数据结构，包括节点类型、边类型、图形结构、
+//! 布局信息以及用于更新操作的补丁结构。
+//!
+//! ## 主要类型
+//!
+//! ### 节点类型 (`StarMapNodeKind`)
+//! - `Character`：角色
+//! - `Event`：事件
+//! - `Location`：地点
+//! - `Item`：物品
+//! - `Concept`：概念
+//! - `Theme`：主题
+//! - `Note`：笔记
+//! - `Organization`：组织
+//! - `Timeline`：时间线
+//! - `Plot`：情节
+//! - `Foreshadowing`：伏笔
+//! - `Chapter`：章节
+//! - `Custom`：自定义类型
+//!
+//! ### 边类型 (`StarMapEdgeKind`)
+//! - `Contains`：包含关系
+//! - `References`：引用关系
+//! - `AppearsIn`：出现在
+//! - `Causes`：因果关系
+//! - `RelatedTo`：相关
+//! - `LocatedAt`：位于
+//! - `CharacterRelation`：角色关系
+//! - `Timeline`：时间关系
+//! - `Foreshadows`：伏笔关系
+//! - `Resolves`：解决关系
+//! - `DependsOn`：依赖关系
+//! - `ConflictsWith`：冲突关系
+//! - `Custom`：自定义关系
+//!
+//! ### 布局类型 (`StarMapLayoutKind`)
+//! - `Freeform`：自由布局
+//! - `AutoRadial`：自动放射状布局
+//! - `Custom`：自定义布局
+//!
+//! ## 数据结构
+//! - `StarMapGraph`：星图图形数据，包含节点和边的集合
+//! - `StarMapNode`：星图节点，表示故事元素
+//! - `StarMapEdge`：星图边，表示元素之间的关系
+//! - `StarMapLayout`：布局信息，包含节点位置
+//! - `StarMapLayoutNode`：单个节点的布局信息
+//! - `StarMapNodePatch`：节点更新补丁
+//! - `StarMapEdgePatch`：边更新补丁
+//!
+//! ## 依赖关系
+//! - `serde`：JSON序列化/反序列化支持
+//!
+//! ## 使用场景
+//! - 定义星图的数据模型
+//! - 支持JSON格式的数据交换
+//! - 为前端提供类型安全的接口
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,13 +1,13 @@
-# Sync Rules
+# 同步规则
 
-This document outlines the synchronization and conflict resolution rules for the shared core.
-- All changes are synchronized to a private Git repository.
-- Conflicts are stored as separate conflict files and never automatically overwrite local data.
+本文档概述了共享核心的同步和冲突解决规则。
+- 所有变更同步到私有 Git 仓库。
+- 冲突存储为单独的冲突文件，绝不自动覆盖本地数据。
 
-## Continuous Integration (CI)
-- Default GitHub Actions workflows are strictly for building the Android debug APK.
-- Linux and desktop builds should be executed manually on the local machine by the user.
+## 持续集成（CI）
+- 默认的 GitHub Actions 工作流严格用于构建 Android debug APK。
+- Linux 和桌面构建应由用户在本地机器上手动执行。
 
-## Synchronization Rules
-- Data sync follows strict whitelist/blacklist configurations defined in the workspace.
-- `app-meta/settings/settings.local.json` and `app-meta/sync/sync_secrets.local.json` are blacklisted and only kept locally.
+## 同步规则
+- 数据同步遵循工作区中定义的严格白名单/黑名单配置。
+- `app-meta/settings/settings.local.json` 和 `app-meta/sync/sync_secrets.local.json` 被列入黑名单，仅保留在本地。

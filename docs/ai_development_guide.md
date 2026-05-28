@@ -1,9 +1,9 @@
-# AI Development Guide
+# AI 开发指南
 
-When contributing to this repository using AI, strictly adhere to the following rules:
+使用 AI 为本仓库做贡献时，请严格遵守以下规则：
 
-1. **Workspace Format is Sacred**: Do not modify the `workspace_format.md` or change how files are stored on disk merely to accommodate UI needs. The workspace format is the single source of truth.
-2. **Docs and Tests First**: When modifying the Rust `writer_core`, you MUST update `docs/core_api.md` and write corresponding `cargo test`s.
-3. **Keep Core Pure**: Do not inject platform-specific UI logic, animation loops, window management, or input method (IME) handling into `writer_core`. The core is strictly for data, logic, and file I/O.
-4. **Data Privacy**: Never output user manuscript content, API keys, or security tokens into application logs.
-5. **Settings Schema**: Any new application setting must be documented in `docs/settings_schema.md` and handled appropriately as local or syncable.
+1. **工作区格式神圣不可侵犯**：不要仅仅为了迁就 UI 需求而修改 `workspace_format.md` 或改变文件在磁盘上的存储方式。工作区格式是唯一的事实来源。
+2. **文档和测试优先**：修改 Rust `writer_core` 时，**必须**更新 `docs/core_api.md` 并编写相应的 `cargo test`。
+3. **保持核心纯净**：不要将平台特定的 UI 逻辑、动画循环、窗口管理或输入法（IME）处理注入 `writer_core`。核心严格用于数据、逻辑和文件 I/O。
+4. **数据隐私**：切勿将用户稿件内容、API 密钥或安全令牌输出到应用日志中。
+5. **设置 Schema**：任何新的应用设置必须记录在 `docs/settings_schema.md` 中，并作为本地或可同步设置进行适当处理。

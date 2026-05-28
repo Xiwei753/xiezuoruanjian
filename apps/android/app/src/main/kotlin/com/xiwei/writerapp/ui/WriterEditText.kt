@@ -8,6 +8,22 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import androidx.appcompat.widget.AppCompatEditText
 
+/**
+ * WriterEditText — 自定义写作编辑器
+ *
+ * 继承 AppCompatEditText，集成平滑光标、打字动画、自动缩进等写作增强功能。
+ *
+ * ## 架构定位
+ * - EditorActivity → WriterEditText → EditorAnimationRuntime / TypingAnimationController / AutoIndentController
+ *
+ * ## 职责边界
+ * - **做**：管理各动画控制器的生命周期、绘制覆盖层
+ * - **不做**：业务逻辑（由 EditorViewModel 负责）
+ *
+ * ## 使用场景
+ * - 编辑器页面的文本输入区域
+ * - 提供平滑光标和打字动画效果
+ */
 class WriterEditText @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,

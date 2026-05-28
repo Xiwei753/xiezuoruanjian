@@ -17,6 +17,22 @@ import java.util.Date
 import java.util.Locale
 import org.json.JSONObject
 
+/**
+ * StatsController — 写作统计控制器
+ *
+ * 加载并展示今日、本周、本月的写作统计数据。
+ *
+ * ## 架构定位
+ * - MainActivity → StatsController → NativeCoreBridge → JNI → Rust Core
+ *
+ * ## 职责边界
+ * - **做**：加载统计数据、格式化展示、计算字数/时长/速度
+ * - **不做**：统计数据的存储（由 Rust Core 负责）
+ *
+ * ## 使用场景
+ * - MainActivity 统计标签页的数据展示
+ * - 展示今日/本周/本月的写作量和速度
+ */
 class StatsController(
     private val activity: MainActivity,
     private val bridge: NativeCoreBridge,

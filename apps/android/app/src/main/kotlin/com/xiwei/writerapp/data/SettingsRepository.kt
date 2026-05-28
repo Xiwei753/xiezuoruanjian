@@ -5,6 +5,23 @@ import com.xiwei.writerapp.model.*
 import com.xiwei.writerapp.model.LocalSettings
 import com.xiwei.writerapp.model.SyncableSettings
 
+/**
+ * SettingsRepository — 设置仓库层
+ *
+ * 对 NativeCoreBridge 设置相关 API 的封装，提供统一的设置读写接口。
+ *
+ * ## 架构定位
+ * - ViewModel → SettingsRepository → NativeCoreBridge → JNI → Rust Core
+ *
+ * ## 职责边界
+ * - **做**：加载/保存本地设置、可同步设置、同步配置和密钥
+ * - **不做**：业务逻辑（只做类型转换和错误处理）
+ *
+ * ## 使用场景
+ * - EditorViewModel 加载编辑器设置
+ * - SettingsActivity 保存用户设置
+ * - SyncPage 加载/保存同步配置
+ */
 class SettingsRepository(context: Context) {
     private val bridge = NativeCoreBridge(context)
 

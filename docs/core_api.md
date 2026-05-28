@@ -1,6 +1,6 @@
 # Core API
 
-The `writer_core` Rust library exposes the following high-level API functions for the clients:
+`writer_core` Rust 库为客户端提供以下高层 API 函数：
 
 - `create_workspace(path: &Path) -> Result<()>`
 - `validate_workspace(path: &Path) -> Result<bool>`
@@ -21,12 +21,12 @@ The `writer_core` Rust library exposes the following high-level API functions fo
 - `backup_project(path: &Path, project_id: &str) -> Result<()>`
 - `move_chapter_to_trash(path: &Path, chapter_id: &str) -> Result<()>`
 
-### File Operations
-All write operations (`save_chapter`, `save_*_settings`) must use atomic writing (write to temporary file, `fsync/flush`, and atomic `rename`).
+### 文件操作
+所有写操作（`save_chapter`、`save_*_settings`）必须使用原子写入（写入临时文件、`fsync/flush`，然后原子 `rename`）。
 
-Chapter writes are guarded against silent data loss. Before writing a chapter, Core reads the existing `chapter.md`. If the existing content is non-empty and a normal save attempts to write empty or whitespace-only content, Core rejects the write with `Error::EmptyOverwriteBlocked` / `blocked_empty_overwrite` and leaves the original file unchanged. Intentional clearing must use `clear_chapter_content`; autosave and normal write paths must not call that API.
+章节写入有防止静默数据丢失的保护机制。在写入章节之前，Core 会读取现有的 `chapter.md`。如果现有内容非空，而普通保存尝试写入空或仅空白的内容，Core 会以 `Error::EmptyOverwriteBlocked` / `blocked_empty_overwrite` 拒绝写入，并保持原文件不变。如需 intentional 清空，必须使用 `clear_chapter_content`；自动保存和普通写入路径不应调用该 API。
 
-Before overwriting existing non-empty chapter text with different content, Core writes a lightweight recovery copy under `backups/chapters/`. Backup filenames include `project_id`, `volume_id`, `chapter_id`, and a timestamp. Core keeps only the most recent chapter backups per chapter to avoid unbounded growth.
+在用不同内容覆盖现有非空章节文本之前，Core 会在 `backups/chapters/` 下写入一个轻量级恢复副本。备份文件名包含 `project_id`、`volume_id`、`chapter_id` 和时间戳。Core 仅保留每个章节最近的备份，以避免无限增长。
 
-### Error Handling
-The core defines a unified `Error` enum (e.g., `writer_core::error::Error`) for all failure modes, instead of relying on string-based errors.
+### 错误处理
+核心定义了统一的 `Error` 枚举（如 `writer_core::error::Error`）来处理所有失败模式，而不是依赖基于字符串的错误。

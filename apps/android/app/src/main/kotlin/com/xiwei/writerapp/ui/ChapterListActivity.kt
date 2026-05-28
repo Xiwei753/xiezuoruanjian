@@ -19,6 +19,23 @@ import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.WorkspaceRepository
 import kotlinx.coroutines.*
 
+/**
+ * ChapterListActivity — 章节列表页面
+ *
+ * 展示作品的卷和章节列表，支持新建、重命名、删除和排序操作。
+ *
+ * ## 架构定位
+ * - 从 MainActivity 跳转，展示指定作品的卷/章结构
+ * - 通过 WorkspaceRepository 与 Rust Core 交互
+ *
+ * ## 职责边界
+ * - **做**：卷/章列表展示、新建卷/章、重命名、删除、拖拽排序
+ * - **不做**：章节内容编辑（由 EditorActivity 负责）
+ *
+ * ## 使用场景
+ * - 用户点击作品卡片后进入
+ * - 管理作品的卷和章节结构
+ */
 class ChapterListActivity : AppCompatActivity() {
     private lateinit var chapterRecyclerView: RecyclerView
     private lateinit var fabNewVolume: ExtendedFloatingActionButton

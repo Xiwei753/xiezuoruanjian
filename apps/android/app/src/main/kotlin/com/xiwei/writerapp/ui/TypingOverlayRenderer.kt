@@ -6,6 +6,24 @@ import android.text.style.ForegroundColorSpan
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.sqrt
 
+/**
+ * TypingOverlayRenderer — 打字动画覆盖层渲染器
+ *
+ * 在文本上方绘制打字动画效果（字符弹出、渐变等），增强写作体验。
+ *
+ * ## 架构定位
+ * - EditorRenderLayer → TypingOverlayRenderer → Canvas 绘制
+ * - 实现 EditorAnimationRuntime.Animatable 接口
+ *
+ * ## 职责边界
+ * - **做**：打字动画的计算和绘制
+ * - **不做**：文本内容管理（由 EditText 负责）
+ *
+ * ## 使用场景
+ * - 用户输入字符时的动画反馈
+ * - 支持逐字符的弹出动画效果
+ */
+
 data class OverlayAnim(
     val insertedStart: Int,
     val insertedText: String,
