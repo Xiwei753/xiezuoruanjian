@@ -2,8 +2,8 @@ package com.xiwei.writerapp.ui
 
 import android.widget.FrameLayout
 import android.widget.Toast
-import com.xiwei.writerapp.data.NativeCoreBridge
-import com.xiwei.writerapp.data.NativeResult
+import com.xiwei.writerapp.data.BridgeResult
+import com.xiwei.writerapp.data.StarMapBridge
 import com.xiwei.writerapp.model.StarMapData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  * 管理星图的加载、渲染和节点操作。
  *
  * ## 架构定位
- * - MainActivity → StarMapController → NativeCoreBridge → JNI → Rust Core
+ * - MainActivity → StarMapController → StarMapBridge → JNI → Rust Core
  *
  * ## 职责边界
  * - **做**：加载星图数据、处理节点拖拽、保存布局、新建节点
@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
  */
 class StarMapController(
     private val activity: MainActivity,
-    private val bridge: NativeCoreBridge,
+    private val bridge: StarMapBridge,
     private val tabContainer: FrameLayout,
     private val canvasView: StarMapCanvasView
 ) {
@@ -60,11 +60,11 @@ class StarMapController(
         if (starmapId.isEmpty()) {
             CoroutineScope(Dispatchers.IO).launch {
                 var starmaps = bridge.listStarmaps()
-                if (starmaps is NativeResult.Success && starmaps.data.isEmpty()) {
+                if (starmaps is BridgeResult.Success && starmaps.data.isEmpty()) {
                     bridge.createStarmap("作品宇宙", "自动生成的默认星图")
                     starmaps = bridge.listStarmaps()
                 }
-                if (starmaps is NativeResult.Success && starmaps.data.isNotEmpty()) {
+                if (starmaps is BridgeResult.Success && starmaps.data.isNotEmpty()) {
                     starmapId = starmaps.data[0].starmapId
                     activity.onStarmapIdInitialized(starmapId)
                     loadGraph()
@@ -81,11 +81,11 @@ class StarMapController(
             val result = bridge.getStarmapGraph(starmapId)
             withContext(Dispatchers.Main) {
                 when (result) {
-                    is NativeResult.Success -> {
+                    is BridgeResult.Success -> {
                         currentData = result.data
                         canvasView.setData(result.data)
                     }
-                    is NativeResult.Error -> {
+                    is BridgeResult.Error -> {
                         Toast.makeText(activity, "Failed to load: ${result.message}", Toast.LENGTH_LONG).show()
                     }
                     else -> {}
@@ -152,9 +152,9 @@ class StarMapController(
         CoroutineScope(Dispatchers.IO).launch {
             val result = bridge.addStarmapNode(starmapId, node)
             withContext(Dispatchers.Main) {
-                if (result is NativeResult.Success) {
+                if (result is BridgeResult.Success) {
                     loadGraph()
-                } else if (result is NativeResult.Error) {
+                } else if (result is BridgeResult.Error) {
                     Toast.makeText(activity, "创建失败: ${result.message}", Toast.LENGTH_SHORT).show()
                 }
             }

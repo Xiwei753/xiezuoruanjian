@@ -27,7 +27,7 @@ Rectangle {
     function loadStarmaps() {
         if (!backendRef) return
         try {
-            starmaps = JSON.parse(backendRef.list_starmaps_json()) || []
+            starmaps = backendRef.list_starmaps() || []
         } catch (e) {
             starmaps = []
         }
@@ -185,16 +185,14 @@ Rectangle {
                 onClicked: {
                     var title = starmapTitleField.text.trim()
                     if (title === "") return
-                    var resultJson = backendRef.create_starmap_json(title, starmapDescField.text.trim(), "")
-                    var result = null
-                    try { result = JSON.parse(resultJson) } catch (e) {}
+                    var result = backendRef.create_starmap(title, starmapDescField.text.trim(), "")
                     if (result && result.success) {
                         createStarmapDialog.close()
                         starmapTitleField.text = ""
                         starmapDescField.text = ""
                         loadStarmaps()
                     } else {
-                        console.warn("[WriterDebug] create_starmap failed:", result ? result.message : resultJson)
+                        console.warn("[WriterDebug] create_starmap failed:", result ? result.message : "empty result")
                     }
                 }
             }

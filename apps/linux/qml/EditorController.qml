@@ -264,8 +264,7 @@ QtObject {
 
         isLoadingChapter = true;
 
-        var resultJson = backendRef.open_chapter_json(pId, vId, cId);
-        var result = JSON.parse(resultJson);
+        var result = backendRef.open_chapter(pId, vId, cId);
 
         if (!result.success) {
             console.error("[WriterDebug] Failed to open chapter:", result.error);
@@ -289,11 +288,6 @@ QtObject {
 
         // Return full result so caller updates chapter state from authoritative source
         return result;
-    }
-
-    function computeWordCount(text) {
-        if (!text) return 0;
-        return text.replace(/\s/g, '').length;
     }
 
     function reportStatsIfChanged(currentText) {

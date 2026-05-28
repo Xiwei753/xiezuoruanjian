@@ -5,20 +5,20 @@
 //! ## 架构定位
 //!
 //! ```text
-//! Android Kotlin UI → NativeCoreBridge.kt → JNI → 本 crate → WriterCore (Core 层)
+//! Android Kotlin UI → 领域 Bridge → NativeCoreBridge.kt → JNI → WriterCore (Core 层)
 //! ```
 //!
 //! ## 职责边界
 //!
-//! - **做**：JString ↔ String 转换、Result → JSON 序列化、JNI 函数注册
+//! - **做**：JString ↔ String 转换、Result → 兼容 DTO 序列化、JNI 函数注册
 //! - **不做**：业务逻辑（全部委托给 `WriterCore`）
-//! - **不做**：错误处理（错误通过 JSON `{ success: false, error: "..." }` 返回给 Kotlin）
+//! - **不做**：错误处理（错误通过稳定 code/message 返回给 Kotlin）
 //!
-//! ## JSON 协议
+//! ## 兼容协议
 //!
-//! 所有 JNI 函数返回 JSON 字符串：
+//! 旧 JNI 函数仍返回 JSON 字符串，但错误必须包含稳定 code：
 //! - 成功：`{ "success": true, "data": <实际数据> }`
-//! - 失败：`{ "success": false, "error": "<错误信息>" }`
+//! - 失败：`{ "success": false, "code": "...", "error": "<错误信息>" }`
 //!
 //! ## 注意事项
 //!
@@ -30,7 +30,6 @@ use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jstring};
 use jni::JNIEnv;
 use serde::Serialize;
-use serde_json::json;
 use writer_core::facade::WriterCore;
 
 /// 将 JString 转换为 Rust String。
@@ -48,23 +47,18 @@ fn jstring_to_string(env: &mut JNIEnv, jstr: &JString) -> Result<String, String>
 /// 将 Core 层 Result 转换为 JSON 字符串返回给 Kotlin。
 ///
 /// 成功时返回 `{ "success": true, "data": ... }`
-/// 失败时返回 `{ "success": false, "error": "..." }`
+/// 失败时返回 `{ "success": false, "code": "...", "error": "..." }`
 fn result_to_jstring<T: Serialize>(
     env: &mut JNIEnv,
     result: Result<T, writer_core::Error>,
 ) -> jstring {
-    let json_str = match result {
-        Ok(data) => json!({
-            "success": true,
-            "data": data
-        })
-        .to_string(),
-        Err(e) => json!({
-            "success": false,
-            "error": e.to_string()
-        })
-        .to_string(),
-    };
+    let json_str = serde_json::to_string(&writer_core::error::BridgeResult::from_result(result))
+        .unwrap_or_else(|e| {
+            format!(
+                r#"{{"success":false,"code":"JSON_ERROR","error":"Failed to serialize bridge result: {}"}}"#,
+                e
+            )
+        });
 
     match env.new_string(json_str) {
         Ok(s) => s.into_raw(),
@@ -360,7 +354,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_readChapte
     let core = WriterCore::new(&workspace_path);
     result_to_jstring(
         &mut env,
-        core.read_chapter(&project_id, &volume_id, &chapter_id),
+        core.open_chapter(&project_id, &volume_id, &chapter_id),
     )
 }
 
@@ -399,7 +393,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_writeChapt
     let core = WriterCore::new(&workspace_path);
     result_to_jstring(
         &mut env,
-        core.write_chapter(&project_id, &volume_id, &chapter_id, &content),
+        core.write_chapter_verified(&project_id, &volume_id, &chapter_id, &content),
     )
 }
 
@@ -433,7 +427,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_clearChapt
     let core = WriterCore::new(&workspace_path);
     result_to_jstring(
         &mut env,
-        core.clear_chapter_content(&project_id, &volume_id, &chapter_id),
+        core.clear_chapter_content_verified(&project_id, &volume_id, &chapter_id),
     )
 }
 

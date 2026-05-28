@@ -40,13 +40,13 @@ Rectangle {
             var wd = ws.getFullYear() + "-" + String(ws.getMonth() + 1).padStart(2, "0") + "-" + String(ws.getDate()).padStart(2, "0")
             var ms = new Date(t.getFullYear(), t.getMonth(), 1)
             var md = ms.getFullYear() + "-" + String(ms.getMonth() + 1).padStart(2, "0") + "-" + String(ms.getDate()).padStart(2, "0")
-            todayStats = JSON.parse(backendRef.get_writing_stats_summary(td, td)) || {}
-            weekStats = JSON.parse(backendRef.get_writing_stats_summary(wd, td)) || {}
-            monthStats = JSON.parse(backendRef.get_writing_stats_summary(md, td)) || {}
-            projectStats = (JSON.parse(backendRef.get_writing_stats_by_project(wd, td)) || {}).projects || []
-            chapterStats = (JSON.parse(backendRef.get_writing_stats_by_chapter(wd, td)) || {}).chapters || []
-            deviceStats = (JSON.parse(backendRef.get_writing_stats_by_device(wd, td)) || {}).devices || []
-            speedCurve = (JSON.parse(backendRef.get_writing_speed_curve(wd, td, 60)) || {}).buckets || []
+            todayStats = backendRef.get_writing_stats_summary_object(td, td) || {}
+            weekStats = backendRef.get_writing_stats_summary_object(wd, td) || {}
+            monthStats = backendRef.get_writing_stats_summary_object(md, td) || {}
+            projectStats = (backendRef.get_writing_stats_by_project_object(wd, td) || {}).projects || []
+            chapterStats = (backendRef.get_writing_stats_by_chapter_object(wd, td) || {}).chapters || []
+            deviceStats = (backendRef.get_writing_stats_by_device_object(wd, td) || {}).devices || []
+            speedCurve = (backendRef.get_writing_speed_curve_object(wd, td, 60) || {}).buckets || []
         } catch (e) {
             todayStats = {}; weekStats = {}; monthStats = {}; projectStats = []; chapterStats = []; deviceStats = []; speedCurve = []
         }

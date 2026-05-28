@@ -50,7 +50,7 @@ Rectangle {
         try {
             var today = new Date()
             var dateStr = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0")
-            var summary = JSON.parse(backendRef.get_writing_stats_summary(dateStr, dateStr))
+            var summary = backendRef.get_writing_stats_summary_object(dateStr, dateStr)
             if (summary && summary.per_project && summary.per_project[projectId]) return summary.per_project[projectId].human_typed_chars || 0
         } catch (e) {}
         return 0

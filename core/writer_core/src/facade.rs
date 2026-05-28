@@ -23,7 +23,7 @@
 
 use crate::action_registry::{ActionDescriptor, ActionRegistry, ActionResult};
 use crate::backup;
-use crate::chapter::{self, Chapter, ChapterContent};
+use crate::chapter::{self, Chapter, ChapterContent, ChapterSaveReceipt};
 use crate::error::Result;
 use crate::index;
 use crate::project::{self, Project};
@@ -34,6 +34,7 @@ use crate::volume::{self, Volume};
 use crate::workspace;
 use crate::writing_stats::api::StatsApi;
 use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -45,6 +46,15 @@ use std::sync::OnceLock;
 pub struct WriterCore {
     workspace_path: PathBuf,
     stats_api: OnceLock<StatsApi>,
+}
+
+/// 打开章节的领域返回值。
+///
+/// 客户端不再自行拼装“正文 + 标题 + note”等字段。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ChapterOpenResult {
+    pub meta: Chapter,
+    pub content: String,
 }
 
 impl WriterCore {
@@ -687,6 +697,19 @@ impl WriterCore {
         chapter::read_chapter(&self.workspace_path, project_id, volume_id, chapter_id)
     }
 
+    pub fn open_chapter(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Result<ChapterOpenResult> {
+        let content = self.read_chapter(project_id, volume_id, chapter_id)?;
+        Ok(ChapterOpenResult {
+            meta: content.meta,
+            content: content.content,
+        })
+    }
+
     /// Write content to a chapter (atomic).
     pub fn write_chapter(
         &self,
@@ -714,13 +737,27 @@ impl WriterCore {
         chapter::clear_chapter_content(&self.workspace_path, project_id, volume_id, chapter_id)
     }
 
+    pub fn clear_chapter_content_verified(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Result<ChapterSaveReceipt> {
+        chapter::clear_chapter_content_verified(
+            &self.workspace_path,
+            project_id,
+            volume_id,
+            chapter_id,
+        )
+    }
+
     pub fn write_chapter_verified(
         &self,
         project_id: &str,
         volume_id: &str,
         chapter_id: &str,
         content: &str,
-    ) -> Result<crate::chapter::ChapterSaveReceipt> {
+    ) -> Result<ChapterSaveReceipt> {
         chapter::save_chapter_verified(
             &self.workspace_path,
             project_id,
@@ -1363,6 +1400,40 @@ mod tests {
             .read_chapter(&project.id, &volume.id, &chapter.id)
             .unwrap();
         assert_eq!(content.content, "Content here");
+    }
+
+    #[test]
+    fn test_facade_open_save_receipt_and_error_code() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        let project = core.create_project("My Project").unwrap();
+        let volume = core.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = core
+            .create_chapter(&project.id, &volume.id, "Ch 1")
+            .unwrap();
+
+        let receipt = core
+            .write_chapter_verified(&project.id, &volume.id, &chapter.id, "Content here")
+            .unwrap();
+        assert_eq!(receipt.word_count, 11);
+        assert!(receipt.content_len > 0);
+
+        let opened = core.open_chapter(&project.id, &volume.id, &chapter.id).unwrap();
+        assert_eq!(opened.meta.id, chapter.id);
+        assert_eq!(opened.content, "Content here");
+
+        let err = core
+            .write_chapter_verified(&project.id, &volume.id, &chapter.id, "")
+            .unwrap_err();
+        assert_eq!(err.code(), "EMPTY_OVERWRITE_BLOCKED");
+
+        let clear_receipt = core
+            .clear_chapter_content_verified(&project.id, &volume.id, &chapter.id)
+            .unwrap();
+        assert_eq!(clear_receipt.word_count, 0);
+        assert_eq!(core.open_chapter(&project.id, &volume.id, &chapter.id).unwrap().content, "");
     }
 
     #[test]

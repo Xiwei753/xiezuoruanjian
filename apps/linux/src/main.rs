@@ -52,6 +52,76 @@ mod document_handler;
 mod starmap_bridge;
 mod sync_bridge;
 
+fn serde_value_to_qjson(value: serde_json::Value) -> QJsonValue {
+    match value {
+        serde_json::Value::Null => QJsonValue::default(),
+        serde_json::Value::Bool(v) => QJsonValue::from(v),
+        serde_json::Value::Number(v) => QJsonValue::from(v.as_f64().unwrap_or_default()),
+        serde_json::Value::String(v) => QJsonValue::from(QString::from(v)),
+        serde_json::Value::Array(values) => {
+            let mut arr = QJsonArray::default();
+            for item in values {
+                arr.push(serde_value_to_qjson(item));
+            }
+            QJsonValue::from(arr)
+        }
+        serde_json::Value::Object(values) => {
+            let mut obj = QJsonObject::default();
+            for (key, item) in values {
+                obj.insert(&key, serde_value_to_qjson(item));
+            }
+            QJsonValue::from(obj)
+        }
+    }
+}
+
+fn serde_to_qjson_object(value: serde_json::Value) -> QJsonObject {
+    if let serde_json::Value::Object(values) = value {
+        let mut obj = QJsonObject::default();
+        for (key, item) in values {
+            obj.insert(&key, serde_value_to_qjson(item));
+        }
+        obj
+    } else {
+        QJsonObject::default()
+    }
+}
+
+fn serde_to_qjson_array(value: serde_json::Value) -> QJsonArray {
+    if let serde_json::Value::Array(values) = value {
+        let mut arr = QJsonArray::default();
+        for item in values {
+            arr.push(serde_value_to_qjson(item));
+        }
+        arr
+    } else {
+        QJsonArray::default()
+    }
+}
+
+fn bridge_error_object(message: &str, code: &str) -> QJsonObject {
+    serde_to_qjson_object(serde_json::json!({
+        "success": false,
+        "code": code,
+        "error": message,
+        "message": message
+    }))
+}
+
+fn qjson_object_from_json(raw: &str) -> QJsonObject {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => serde_to_qjson_object(value),
+        Err(e) => bridge_error_object(&format!("无效 Bridge 返回: {}", e), "JSON_ERROR"),
+    }
+}
+
+fn qjson_array_data_from_json(raw: &str) -> QJsonArray {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => serde_to_qjson_array(value.get("data").cloned().unwrap_or(serde_json::Value::Array(vec![]))),
+        Err(_) => QJsonArray::default(),
+    }
+}
+
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
 enum DebugLevel {
     Error = 1,
@@ -405,6 +475,9 @@ struct AppBackend {
     open_chapter_json: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
     ),
+    open_chapter: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
+    ),
     get_chapter_content: qt_method!(
         fn(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
     ),
@@ -418,17 +491,24 @@ struct AppBackend {
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
     process_writing_event_from_text: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, old_text: QString, new_text: QString)),
     get_writing_stats_summary: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_stats_summary_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
     get_writing_stats_by_project: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_stats_by_project_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
     get_writing_stats_by_chapter: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_stats_by_chapter_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
     get_writing_stats_by_device: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    get_writing_stats_by_device_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
     get_writing_speed_curve: qt_method!(fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString),
+    get_writing_speed_curve_object: qt_method!(fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject),
     flush_writing_stats: qt_method!(fn(&self)),
     flush_recent_edits: qt_method!(fn(&self)),
 
     list_starmaps_json: qt_method!(fn(&self) -> QString),
+    list_starmaps: qt_method!(fn(&self) -> QJsonArray),
     list_starmaps_for_project_json: qt_method!(fn(&self, project_id: QString) -> QString),
     get_starmap_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
     create_starmap_json: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QString),
+    create_starmap: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject),
     create_child_starmap_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
     rename_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
     delete_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
@@ -437,13 +517,21 @@ struct AppBackend {
     get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
     unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
     get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
+    get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
     create_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QString),
+    create_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QJsonObject),
     update_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString),
+    update_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QJsonObject),
     delete_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QString),
+    delete_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject),
     create_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString),
+    create_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QJsonObject),
     update_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString),
+    update_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QJsonObject),
     delete_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString) -> QString),
+    delete_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject),
     save_starmap_layout_json: qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QString),
+    save_starmap_layout: qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
 
     has_selected_chapter: qt_method!(fn(&self) -> bool),
     selected_chapter_exists: qt_method!(fn(&self) -> bool),
@@ -2402,7 +2490,11 @@ impl AppBackend {
 
     fn calculate_word_count(&mut self, text: QString) {
         let text_str = text.to_string();
-        let count = text_str.chars().filter(|c| !c.is_whitespace()).count() as i32;
+        let count = if let Some(core_ref) = &self.core {
+            core_ref.borrow().calculate_word_count(&text_str) as i32
+        } else {
+            writer_core::chapter::calculate_word_count(&text_str) as i32
+        };
         self.set_word_count(count);
     }
 
@@ -3450,13 +3542,48 @@ impl AppBackend {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
-        self.debug_log("chapter", "open_chapter_json_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            return match core.open_chapter(&p, &v, &c) {
+                Ok(content) => serde_json::json!({
+                    "success": true,
+                    "content": content.content,
+                    "title": content.meta.title,
+                    "projectId": p,
+                    "volumeId": v,
+                    "chapterId": c,
+                    "meta": content.meta,
+                }).to_string().into(),
+                Err(e) => serde_json::json!({
+                    "success": false,
+                    "code": e.code(),
+                    "error": format!("读取章节失败: {}", e),
+                    "message": format!("读取章节失败: {}", e),
+                }).to_string().into(),
+            };
+        }
+        serde_json::json!({
+            "success": false,
+            "code": "INVALID_WORKSPACE",
+            "error": "后端未初始化",
+            "message": "后端未初始化",
+        }).to_string().into()
+    }
+
+    fn open_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        self.debug_log("chapter", "open_chapter_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
         
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            let chapters = core.list_chapters(&p, &v).unwrap_or_default();
-            if let Some(chapter) = chapters.iter().find(|ch| ch.id == c) {
-                match core.read_chapter(&p, &v, &c) {
+            let chapter_exists = core
+                .list_chapters(&p, &v)
+                .map(|chapters| chapters.iter().any(|ch| ch.id == c))
+                .unwrap_or(false);
+            if chapter_exists {
+                match core.open_chapter(&p, &v, &c) {
                     Ok(content) => {
                         self.selected_project_id = Some(p.clone());
                         self.selected_volume_id = Some(v.clone());
@@ -3464,33 +3591,30 @@ impl AppBackend {
                         self.selected_item_changed();
                         self.chapter_path_changed();
                         
-                        self.debug_log("chapter", "open_chapter_json_success", &format!("len={}", content.content.len()));
+                        self.debug_log("chapter", "open_chapter_success", &format!("len={}", content.content.len()));
                         
-                        let res = serde_json::json!({
+                        return serde_to_qjson_object(serde_json::json!({
                             "success": true,
                             "content": content.content,
-                            "title": chapter.title,
+                            "title": content.meta.title,
                             "projectId": p,
                             "volumeId": v,
                             "chapterId": c,
-                        });
-                        return res.to_string().into();
+                            "meta": content.meta,
+                        }));
                     }
                     Err(e) => {
-                        self.debug_error("chapter", "open_chapter_json_failed", &format!("error={}", e));
-                        let res = serde_json::json!({ "success": false, "error": format!("读取章节失败: {}", e) });
-                        return res.to_string().into();
+                        self.debug_error("chapter", "open_chapter_failed", &format!("error={}", e));
+                        return bridge_error_object(&format!("读取章节失败: {}", e), e.code());
                     }
                 }
             } else {
-                self.debug_error("chapter", "open_chapter_json_failed", "chapter_not_exists");
-                let res = serde_json::json!({ "success": false, "error": "章节不存在" });
-                return res.to_string().into();
+                self.debug_error("chapter", "open_chapter_failed", "chapter_not_exists");
+                return bridge_error_object("章节不存在", "CHAPTER_NOT_FOUND");
             }
         }
         
-        let res = serde_json::json!({ "success": false, "error": "后端未初始化" });
-        res.to_string().into()
+        bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
     }
 
     fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> bool {
@@ -3550,7 +3674,7 @@ impl AppBackend {
 
         let clear_result = if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            core.clear_chapter_content(&p, &v, &c)
+            core.clear_chapter_content_verified(&p, &v, &c).map(|_| ())
         } else {
             self.debug_error("chapter", "clear_chapter_content_failed", "core_not_initialized");
             self.current_save_status = "清空失败".to_string();
@@ -3750,6 +3874,20 @@ impl AppBackend {
         }
     }
 
+    fn get_writing_stats_summary_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_summary(&sd, &ed) {
+                Ok(val) => serde_to_qjson_object(val),
+                Err(_) => QJsonObject::default(),
+            }
+        } else {
+            QJsonObject::default()
+        }
+    }
+
     fn flush_writing_stats(&self) {
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
@@ -3778,6 +3916,20 @@ impl AppBackend {
         }
     }
 
+    fn get_writing_stats_by_project_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_by_project(&sd, &ed) {
+                Ok(val) => serde_to_qjson_object(val),
+                Err(_) => QJsonObject::default(),
+            }
+        } else {
+            QJsonObject::default()
+        }
+    }
+
     fn get_writing_stats_by_chapter(&self, start_date: QString, end_date: QString) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
@@ -3789,6 +3941,20 @@ impl AppBackend {
             }
         } else {
             "{}".into()
+        }
+    }
+
+    fn get_writing_stats_by_chapter_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_by_chapter(&sd, &ed) {
+                Ok(val) => serde_to_qjson_object(val),
+                Err(_) => QJsonObject::default(),
+            }
+        } else {
+            QJsonObject::default()
         }
     }
 
@@ -3806,6 +3972,20 @@ impl AppBackend {
         }
     }
 
+    fn get_writing_stats_by_device_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_stats_by_device(&sd, &ed) {
+                Ok(val) => serde_to_qjson_object(val),
+                Err(_) => QJsonObject::default(),
+            }
+        } else {
+            QJsonObject::default()
+        }
+    }
+
     fn get_writing_speed_curve(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
@@ -3820,6 +4000,20 @@ impl AppBackend {
         }
     }
 
+    fn get_writing_speed_curve_object(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject {
+        let sd = start_date.to_string();
+        let ed = end_date.to_string();
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            match core.get_writing_speed_curve(&sd, &ed, bucket_minutes) {
+                Ok(val) => serde_to_qjson_object(val),
+                Err(_) => QJsonObject::default(),
+            }
+        } else {
+            QJsonObject::default()
+        }
+    }
+
     // --- StarMap methods ---
     fn list_starmaps_json(&self) -> QString {
         if let Some(core_ref) = &self.core {
@@ -3827,6 +4021,15 @@ impl AppBackend {
             starmap_bridge::list_starmaps(&core).into()
         } else {
             "[]".into()
+        }
+    }
+
+    fn list_starmaps(&self) -> QJsonArray {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            qjson_array_data_from_json(&starmap_bridge::list_starmaps(&core))
+        } else {
+            QJsonArray::default()
         }
     }
 
@@ -3861,6 +4064,11 @@ impl AppBackend {
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
+    }
+
+    fn create_starmap(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject {
+        let raw = self.create_starmap_json(title, description, accent_color).to_string();
+        qjson_object_from_json(&raw)
     }
 
     fn create_child_starmap_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
@@ -3908,6 +4116,11 @@ impl AppBackend {
         }
     }
 
+    fn get_starmap_graph(&self, starmap_id: QString) -> QJsonObject {
+        let raw = self.get_starmap_graph_json(starmap_id).to_string();
+        qjson_object_from_json(&raw)
+    }
+
     fn create_starmap_node_json(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QString {
         let sid = starmap_id.to_string();
         let t = title.to_string();
@@ -3918,6 +4131,11 @@ impl AppBackend {
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
+    }
+
+    fn create_starmap_node(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QJsonObject {
+        let raw = self.create_starmap_node_json(starmap_id, title, kind, x, y).to_string();
+        qjson_object_from_json(&raw)
     }
 
     fn update_starmap_node_json(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString {
@@ -3932,6 +4150,11 @@ impl AppBackend {
         }
     }
 
+    fn update_starmap_node(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QJsonObject {
+        let raw = self.update_starmap_node_json(starmap_id, node_id, patch_json).to_string();
+        qjson_object_from_json(&raw)
+    }
+
     fn delete_starmap_node_json(&mut self, starmap_id: QString, node_id: QString) -> QString {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
@@ -3941,6 +4164,11 @@ impl AppBackend {
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
+    }
+
+    fn delete_starmap_node(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject {
+        let raw = self.delete_starmap_node_json(starmap_id, node_id).to_string();
+        qjson_object_from_json(&raw)
     }
 
     fn create_starmap_edge_json(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString {
@@ -3957,6 +4185,11 @@ impl AppBackend {
         }
     }
 
+    fn create_starmap_edge(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QJsonObject {
+        let raw = self.create_starmap_edge_json(starmap_id, from_node_id, to_node_id, kind, label).to_string();
+        qjson_object_from_json(&raw)
+    }
+
     fn update_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
@@ -3967,6 +4200,11 @@ impl AppBackend {
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
+    }
+
+    fn update_starmap_edge(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QJsonObject {
+        let raw = self.update_starmap_edge_json(starmap_id, edge_id, patch_json).to_string();
+        qjson_object_from_json(&raw)
     }
 
     fn delete_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString) -> QString {
@@ -3980,6 +4218,11 @@ impl AppBackend {
         }
     }
 
+    fn delete_starmap_edge(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject {
+        let raw = self.delete_starmap_edge_json(starmap_id, edge_id).to_string();
+        qjson_object_from_json(&raw)
+    }
+
     fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString {
         let sid = starmap_id.to_string();
         let lj = layout_json.to_string();
@@ -3989,6 +4232,11 @@ impl AppBackend {
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }
+    }
+
+    fn save_starmap_layout(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject {
+        let raw = self.save_starmap_layout_json(starmap_id, layout_json).to_string();
+        qjson_object_from_json(&raw)
     }
 
     fn bind_starmap_to_project_json(&mut self, starmap_id: QString, project_id: QString) -> QString {

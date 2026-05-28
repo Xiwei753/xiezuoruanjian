@@ -58,7 +58,7 @@ pub struct ChapterContent {
 }
 
 /// 章节保存回执（用于客户端确认保存成功）。
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChapterSaveReceipt {
     pub chapter_relative_path: String,
     pub content_len: usize,

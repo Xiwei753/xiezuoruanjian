@@ -1,25 +1,25 @@
 package com.xiwei.writerapp.data
 
-//! # JNI 调用桥接（Android UI 层 - Data 层）
+//! # JNI 兼容适配器（Android Data 层）
 //!
-//! 负责将 Kotlin 方法调用转发到 Rust Core 的 JNI 函数。
+//! 负责加载 native 库，并把旧 JNI 返回包装转换为 Kotlin DTO。
 //!
 //! ## 架构定位
 //!
 //! ```text
-//! Android UI (Activity/ViewModel) → NativeCoreBridge → JNI → Rust Core
+//! Android UI/ViewModel → 领域 Bridge/Repository → NativeCoreBridge → JNI → Rust Core
 //! ```
 //!
 //! ## 职责边界
 //!
-//! - **做**：加载 native 库、调用 JNI 函数、将 JSON 结果反序列化为 Kotlin 模型
+//! - **做**：加载 native 库、调用 JNI 函数、兼容旧 JSON 包装
 //! - **不做**：业务逻辑（全部委托给 Rust Core）
-//! - **不做**：错误处理（错误通过 NativeResult 传递给上层）
+//! - **不做**：面向 UI 暴露大杂烩入口（新调用应通过领域 Bridge）
 //!
 //! ## 注意事项
 //!
 //! - `isLoaded` 标记 native 库是否加载成功，所有方法在调用前检查此标记
-//! - JSON 协议与 Rust Binding 层一致：`{ "success": true/false, "data": ..., "error": ... }`
+//! - 旧兼容包装为 `{ "success": true/false, "data": ..., "code": ..., "error": ... }`
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
@@ -33,7 +33,12 @@ import android.Manifest
 /// JNI 调用结果密封类，用于统一错误处理。
 sealed class NativeResult<out T> {
     data class Success<out T>(val data: T) : NativeResult<T>()
-    data class Error(val message: String) : NativeResult<Nothing>()
+    data class Error(val bridgeError: BridgeError) : NativeResult<Nothing>() {
+        constructor(message: String) : this(BridgeError(BridgeErrorCode.Unknown, message))
+
+        val message: String get() = bridgeError.message
+        val code: BridgeErrorCode get() = bridgeError.code
+    }
     object NotLoaded : NativeResult<Nothing>()
 }
 
@@ -136,6 +141,7 @@ class NativeCoreBridge(context: Context) {
     private data class RustResponse<T>(
         val success: Boolean,
         val data: T?,
+        val code: String?,
         val error: String?
     )
 
@@ -143,6 +149,15 @@ class NativeCoreBridge(context: Context) {
         val meta: ChapterMeta,
         val content: String
     )
+
+    private fun <T> nativeError(response: RustResponse<T>, fallback: String = "Unknown error"): NativeResult.Error {
+        return NativeResult.Error(
+            BridgeError(
+                BridgeErrorCode.fromWire(response.code),
+                response.error ?: fallback
+            )
+        )
+    }
 
     fun createWorkspaceIfNeeded() {
         if (!isLoaded) return
@@ -373,18 +388,17 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    // Update to return Pair to provide meta containing notes, or create a specific data class
-    fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): NativeResult<Pair<String, ChapterMeta>> {
+    fun openChapter(projectId: String, volumeId: String, chapterId: String): NativeResult<ChapterOpenResult> {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = readChapter(workspaceDir, projectId, volumeId, chapterId)
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<RustChapterContent>>() {}.type
-            val response: RustResponse<RustChapterContent> = gson.fromJson(resultJson, type)
+            val type = object : TypeToken<RustResponse<ChapterOpenResult>>() {}.type
+            val response: RustResponse<ChapterOpenResult> = gson.fromJson(resultJson, type)
             return if (response.success && response.data != null) {
-                NativeResult.Success(Pair(response.data.content, response.data.meta))
+                NativeResult.Success(response.data)
             } else {
-                NativeResult.Error(response.error ?: "Unknown error")
+                nativeError(response)
             }
         } catch (e: Throwable) {
             e.printStackTrace()
@@ -392,6 +406,15 @@ class NativeCoreBridge(context: Context) {
                 return NativeResult.NotLoaded
             }
             return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    // Compatibility helper for old repository call sites.
+    fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): NativeResult<Pair<String, ChapterMeta>> {
+        return when (val result = openChapter(projectId, volumeId, chapterId)) {
+            is NativeResult.Success -> NativeResult.Success(Pair(result.data.content, result.data.meta))
+            is NativeResult.Error -> result
+            NativeResult.NotLoaded -> NativeResult.NotLoaded
         }
     }
 
@@ -403,17 +426,46 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): NativeResult<Boolean> {
+    fun saveChapterContentReceipt(projectId: String, volumeId: String, chapterId: String, content: String): NativeResult<ChapterSaveReceipt> {
         if (!isLoaded) return NativeResult.NotLoaded
         try {
             val resultJson = writeChapter(workspaceDir, projectId, volumeId, chapterId, content)
             if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<Any>>() {}.type
-            val response: RustResponse<Any> = gson.fromJson(resultJson, type)
-            return if (response.success) {
-                NativeResult.Success(true)
+            val type = object : TypeToken<RustResponse<ChapterSaveReceipt>>() {}.type
+            val response: RustResponse<ChapterSaveReceipt> = gson.fromJson(resultJson, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
             } else {
-                NativeResult.Error(response.error ?: "Unknown error")
+                nativeError(response)
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            if (e is UnsatisfiedLinkError) {
+                return NativeResult.NotLoaded
+            }
+            return NativeResult.Error(e.message ?: "Exception occurred")
+        }
+    }
+
+    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): NativeResult<Boolean> {
+        return when (val result = saveChapterContentReceipt(projectId, volumeId, chapterId, content)) {
+            is NativeResult.Success -> NativeResult.Success(true)
+            is NativeResult.Error -> result
+            NativeResult.NotLoaded -> NativeResult.NotLoaded
+        }
+    }
+
+    fun clearChapterContentReceipt(projectId: String, volumeId: String, chapterId: String): NativeResult<ChapterSaveReceipt> {
+        if (!isLoaded) return NativeResult.NotLoaded
+        try {
+            val resultJson = clearChapterContentNative(workspaceDir, projectId, volumeId, chapterId)
+            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+            val type = object : TypeToken<RustResponse<ChapterSaveReceipt>>() {}.type
+            val response: RustResponse<ChapterSaveReceipt> = gson.fromJson(resultJson, type)
+            return if (response.success && response.data != null) {
+                NativeResult.Success(response.data)
+            } else {
+                nativeError(response)
             }
         } catch (e: Throwable) {
             e.printStackTrace()
@@ -425,23 +477,10 @@ class NativeCoreBridge(context: Context) {
     }
 
     fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): NativeResult<Boolean> {
-        if (!isLoaded) return NativeResult.NotLoaded
-        try {
-            val resultJson = clearChapterContentNative(workspaceDir, projectId, volumeId, chapterId)
-            if (resultJson.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<Any>>() {}.type
-            val response: RustResponse<Any> = gson.fromJson(resultJson, type)
-            return if (response.success) {
-                NativeResult.Success(true)
-            } else {
-                NativeResult.Error(response.error ?: "Unknown error")
-            }
-        } catch (e: Throwable) {
-            e.printStackTrace()
-            if (e is UnsatisfiedLinkError) {
-                return NativeResult.NotLoaded
-            }
-            return NativeResult.Error(e.message ?: "Exception occurred")
+        return when (val result = clearChapterContentReceipt(projectId, volumeId, chapterId)) {
+            is NativeResult.Success -> NativeResult.Success(true)
+            is NativeResult.Error -> result
+            NativeResult.NotLoaded -> NativeResult.NotLoaded
         }
     }
 

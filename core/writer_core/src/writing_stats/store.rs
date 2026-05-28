@@ -20,7 +20,7 @@
 //!
 //! ## 存储结构
 //!
-//! ```
+//! ```text
 //! app-meta/stats/
 //!   events.local/
 //!     2024-01-01.events.jsonl    # 原始事件（JSONL 格式）

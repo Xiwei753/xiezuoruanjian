@@ -7,9 +7,9 @@
 // 约束：
 //   - 纯状态管理，不包含 UI 渲染
 //   - 通过 backendRef 调用 AppBackend (Rust QObject)
-//   - 图数据通过 JSON 协议与 Core 层交互
+//   - 图数据通过 AppBackend 暴露的对象/数组 DTO 与 Core 层交互
 //
-// 数据流：backendRef (JSON) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
+// 数据流：backendRef (DTO) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
 // =============================================================================
 
 import QtQuick 2.15
@@ -37,13 +37,10 @@ QtObject {
 
     function clearError() { errorMessage = ""; }
 
-    function parseBackendJson(raw, fallbackMessage) {
-        try {
-            return JSON.parse(raw);
-        } catch(e) {
-            setError(fallbackMessage + ": " + e);
-            return { success: false, message: fallbackMessage };
-        }
+    function normalizeBackendResult(raw, fallbackMessage) {
+        if (raw && raw.success !== undefined) return raw;
+        setError(fallbackMessage);
+        return { success: false, message: fallbackMessage };
     }
 
     function ensureBackend() {
@@ -58,7 +55,7 @@ QtObject {
         if (starmapId === "") return;
         if (!ensureBackend()) return;
 
-        var res = parseBackendJson(backendRef.get_starmap_graph_json(starmapId), "加载星图数据失败");
+        var res = normalizeBackendResult(backendRef.get_starmap_graph(starmapId), "加载星图数据失败");
         if (res.success) {
             clearError();
             graphData = res.data.graph;
@@ -180,7 +177,7 @@ QtObject {
 
     function createNode(wx, wy) {
         if (!ensureBackend()) return;
-        var res = parseBackendJson(backendRef.create_starmap_node_json(starmapId, "新节点", "Note", wx, wy), "创建节点失败");
+        var res = normalizeBackendResult(backendRef.create_starmap_node(starmapId, "新节点", "Note", wx, wy), "创建节点失败");
         if (res.success) {
             clearError();
             loadGraph();
@@ -192,7 +189,7 @@ QtObject {
 
     function createEdge(fromId, toId) {
         if (!ensureBackend()) return;
-        var res = parseBackendJson(backendRef.create_starmap_edge_json(starmapId, fromId, toId, "RelatedTo", ""), "创建连线失败");
+        var res = normalizeBackendResult(backendRef.create_starmap_edge(starmapId, fromId, toId, "RelatedTo", ""), "创建连线失败");
         if (res.success) {
             clearError();
             loadGraph();
@@ -208,14 +205,14 @@ QtObject {
             var n = nodesModel[i];
             layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0 });
         }
-        var res = parseBackendJson(backendRef.save_starmap_layout_json(starmapId, JSON.stringify({ kind: "Freeform", nodes: layoutNodes })), "保存布局失败");
+        var res = normalizeBackendResult(backendRef.save_starmap_layout(starmapId, JSON.stringify({ kind: "Freeform", nodes: layoutNodes })), "保存布局失败");
         if (res.success) clearError();
         else setError(res.userMessage || res.message || "保存布局失败");
     }
 
     function updateNode(nodeId, patch) {
         if (!ensureBackend()) return;
-        var res = parseBackendJson(backendRef.update_starmap_node_json(starmapId, nodeId, JSON.stringify(patch)), "更新节点失败");
+        var res = normalizeBackendResult(backendRef.update_starmap_node(starmapId, nodeId, JSON.stringify(patch)), "更新节点失败");
         if (res.success) {
             clearError();
             for (var i = 0; i < nodesModel.length; i++) {
@@ -234,7 +231,7 @@ QtObject {
 
     function deleteNode(nodeId) {
         if (!ensureBackend()) return;
-        var res = parseBackendJson(backendRef.delete_starmap_node_json(starmapId, nodeId), "删除节点失败");
+        var res = normalizeBackendResult(backendRef.delete_starmap_node(starmapId, nodeId), "删除节点失败");
         if (res.success) {
             clearError();
             loadGraph();
@@ -246,7 +243,7 @@ QtObject {
 
     function updateEdge(edgeId, patch) {
         if (!ensureBackend()) return;
-        var res = parseBackendJson(backendRef.update_starmap_edge_json(starmapId, edgeId, JSON.stringify(patch)), "更新连线失败");
+        var res = normalizeBackendResult(backendRef.update_starmap_edge(starmapId, edgeId, JSON.stringify(patch)), "更新连线失败");
         if (res.success) {
             clearError();
             for (var i = 0; i < edgesModel.length; i++) {
@@ -265,7 +262,7 @@ QtObject {
 
     function deleteEdge(edgeId) {
         if (!ensureBackend()) return;
-        var res = parseBackendJson(backendRef.delete_starmap_edge_json(starmapId, edgeId), "删除连线失败");
+        var res = normalizeBackendResult(backendRef.delete_starmap_edge(starmapId, edgeId), "删除连线失败");
         if (res.success) {
             clearError();
             loadGraph();

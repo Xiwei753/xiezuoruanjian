@@ -7,6 +7,7 @@ import android.widget.FrameLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.xiwei.writerapp.data.NativeCoreBridge
+import com.xiwei.writerapp.data.StarMapBridge
 import com.xiwei.writerapp.model.StarMapData
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -41,14 +42,14 @@ import android.os.Build
  *
  * ## 架构定位
  * - 应用入口 Activity，管理底部导航和标签页切换
- * - 通过 NativeCoreBridge 与 Rust Core 交互
+ * - 通过 Repository/领域 Bridge 与 Rust Core 交互
  *
  * ## 职责边界
  * - **做**：作品列表展示、新建作品、标签页切换、主题管理
  * - **不做**：具体业务逻辑（由各 Controller 负责）
  *
  * ## 依赖关系
- * - NativeCoreBridge：Rust Core JNI 桥接
+ * - 领域 Bridge：Rust Core JNI 桥接
  * - StarMapController：星图标签页控制器
  * - StatsController：统计标签页控制器
  *
@@ -118,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         canvasView = findViewById(R.id.canvasView)
         toolbar = findViewById(R.id.toolbar)
 
-        starMapController = StarMapController(this, bridge, tabStarMap, canvasView)
+        starMapController = StarMapController(this, StarMapBridge(bridge), tabStarMap, canvasView)
         statsController = StatsController(this, bridge, tabStats)
 
         // Sync initial state

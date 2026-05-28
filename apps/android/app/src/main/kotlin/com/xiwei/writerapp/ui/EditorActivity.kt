@@ -27,7 +27,11 @@ import android.text.style.BackgroundColorSpan
 import android.util.Log
 import android.widget.Toast
 import com.xiwei.writerapp.R
+import com.xiwei.writerapp.data.SettingsChangeBus
 import com.xiwei.writerapp.data.SyncChangeBus
+import com.xiwei.writerapp.data.WorkspaceRepository
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 /**
  * EditorActivity — 章节编辑器页面
@@ -35,7 +39,7 @@ import com.xiwei.writerapp.data.SyncChangeBus
  * 提供纯文本编辑环境，集成平滑光标、打字动画、自动缩进等写作增强功能。
  *
  * ## 架构定位
- * - EditorActivity → EditorViewModel → WorkspaceRepository → NativeCoreBridge → Rust Core
+ * - EditorActivity → EditorViewModel → WorkspaceRepository → 领域 Bridge → Rust Core
  * - EditorActivity → WriterEditText → EditorAnimationRuntime
  *
  * ## 职责边界
@@ -46,12 +50,6 @@ import com.xiwei.writerapp.data.SyncChangeBus
  * - 用户点击章节后进入编辑器
  * - 进行纯文本写作和编辑
  */
-class EditorActivity : AppCompatActivity() {
-import com.xiwei.writerapp.data.WorkspaceRepository
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
-import com.xiwei.writerapp.data.SettingsChangeBus
-
 class EditorActivity : AppCompatActivity() {
     private lateinit var toolbar: MaterialToolbar
     private lateinit var editorEditText: WriterEditText
