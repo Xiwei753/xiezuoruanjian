@@ -79,8 +79,8 @@ Rectangle {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
-                    fontPopover.visible = !fontPopover.visible;
-                    layoutPopover.visible = false;
+                    if (fontPopover.visible) fontPopover.close(); else fontPopover.open();
+                    layoutPopover.close();
                 }
             }
         }
@@ -123,8 +123,8 @@ Rectangle {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
-                    layoutPopover.visible = !layoutPopover.visible;
-                    fontPopover.visible = false;
+                    if (layoutPopover.visible) layoutPopover.close(); else layoutPopover.open();
+                    fontPopover.close();
                 }
             }
         }
@@ -248,27 +248,21 @@ Rectangle {
     }
 
     // === Font Size Popover ===
-    Rectangle {
+    Popup {
         id: fontPopover
-        visible: false
+        y: root.height + (dt ? dt.sp8 : 8)
+        x: 60
         width: 200
-        height: fontPopoverCol.implicitHeight + (dt ? dt.sp24 : 24)
-        radius: dt ? dt.radiusPanel : 22
-        color: dt ? dt.surface : "#1A1D23"
-        border.color: dt ? dt.border : "#2A2E36"
-        border.width: 1
-        anchors.top: parent.bottom
-        anchors.topMargin: dt ? dt.sp8 : 8
-        anchors.left: parent.left
-        anchors.leftMargin: 60
-        z: 100
+        padding: dt ? dt.sp12 : 12
+        closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+        background: Rectangle {
+            radius: dt ? dt.radiusPanel : 22
+            color: dt ? dt.surface : "#1A1D23"
+            border.color: dt ? dt.border : "#2A2E36"
+            border.width: 1
+        }
 
-        Behavior on visible { NumberAnimation { duration: dt ? dt.animFast : 120 } }
-
-        ColumnLayout {
-            id: fontPopoverCol
-            anchors.fill: parent
-            anchors.margins: dt ? dt.sp12 : 12
+        contentItem: ColumnLayout {
             spacing: dt ? dt.sp12 : 12
 
             Text {
@@ -308,7 +302,10 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.fontSizeChanged(modelData)
+                            onClicked: {
+                                root.fontSizeChanged(modelData)
+                                fontPopover.close()
+                            }
                         }
                     }
                 }
@@ -375,31 +372,24 @@ Rectangle {
                 Layout.alignment: Qt.AlignHCenter
             }
         }
-
     }
 
     // === Layout Popover ===
-    Rectangle {
+    Popup {
         id: layoutPopover
-        visible: false
+        y: root.height + (dt ? dt.sp8 : 8)
+        x: 110
         width: 220
-        height: layoutPopoverCol.implicitHeight + (dt ? dt.sp24 : 24)
-        radius: dt ? dt.radiusPanel : 22
-        color: dt ? dt.surface : "#1A1D23"
-        border.color: dt ? dt.border : "#2A2E36"
-        border.width: 1
-        anchors.top: parent.bottom
-        anchors.topMargin: dt ? dt.sp8 : 8
-        anchors.left: parent.left
-        anchors.leftMargin: 110
-        z: 100
+        padding: dt ? dt.sp12 : 12
+        closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+        background: Rectangle {
+            radius: dt ? dt.radiusPanel : 22
+            color: dt ? dt.surface : "#1A1D23"
+            border.color: dt ? dt.border : "#2A2E36"
+            border.width: 1
+        }
 
-        Behavior on visible { NumberAnimation { duration: dt ? dt.animFast : 120 } }
-
-        ColumnLayout {
-            id: layoutPopoverCol
-            anchors.fill: parent
-            anchors.margins: dt ? dt.sp12 : 12
+        contentItem: ColumnLayout {
             spacing: dt ? dt.sp12 : 12
 
             Text {
@@ -486,18 +476,6 @@ Rectangle {
                     checked: root.firstLineIndent
                     onToggled: root.firstLineIndentToggled()
                 }
-            }
-        }
-
-    }
-
-    // Close popovers on outside click
-    Connections {
-        target: window
-        function onActiveChanged() {
-            if (!window.active) {
-                fontPopover.visible = false;
-                layoutPopover.visible = false;
             }
         }
     }

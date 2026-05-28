@@ -673,6 +673,11 @@ impl WriterCore {
         )
     }
 
+    /// 强制将 recent_edits 缓存落盘。
+    pub fn flush_recent_edits(&self) -> Result<()> {
+        crate::workspace::flush_recent_edits(&self.workspace_path)
+    }
+
     pub fn read_chapter(
         &self,
         project_id: &str,

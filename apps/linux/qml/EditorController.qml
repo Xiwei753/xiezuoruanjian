@@ -301,24 +301,7 @@ QtObject {
         var newText = currentText === undefined ? getEditorPlainText() : currentText;
         if (previousEditorText === newText) return;
 
-        var oldLen = previousEditorText.length;
-        var newLen = newText.length;
-        var diff = newLen - oldLen;
-
-        if (diff > 0) {
-            var source = "human_typed";
-            var inserted = diff;
-            var deleted = 0;
-            var pasted = 0;
-            if (diff > 20) {
-                source = "pasted";
-                pasted = diff;
-                inserted = 0;
-            }
-            backendRef.report_writing_event(projectId, volumeId, chapterId, source, inserted, deleted, pasted);
-        } else if (diff < 0) {
-            backendRef.report_writing_event(projectId, volumeId, chapterId, "deleted", 0, Math.abs(diff), 0);
-        }
+        backendRef.process_writing_event_from_text(projectId, volumeId, chapterId, previousEditorText, newText);
 
         previousEditorText = newText;
     }

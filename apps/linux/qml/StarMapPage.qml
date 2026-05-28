@@ -151,22 +151,51 @@ Rectangle {
         anchors.centerIn: Overlay.overlay
         background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; radius: dt ? dt.radiusMd : 12; border.width: 1 }
         Column {
-            anchors.fill: parent
-            anchors.margins: dt ? dt.sp20 : 20
+            width: parent.width
             spacing: dt ? dt.sp12 : 12
-            TextField { id: starmapTitleField; width: parent.width; placeholderText: "例如：人物关系图" }
-            TextField { id: starmapDescField; width: parent.width; placeholderText: "简要描述这个星图的内容" }
+            padding: dt ? dt.sp20 : 20
+
+            Text {
+                text: "星图名称"
+                color: dt ? dt.textSecondary : "#9CA0AB"
+                font.pixelSize: dt ? dt.fontSm : 12
+                width: parent.width - 40
+            }
+            TextField {
+                id: starmapTitleField
+                width: parent.width - 40
+                placeholderText: "例如：人物关系图"
+            }
+            Text {
+                text: "描述（可选）"
+                color: dt ? dt.textSecondary : "#9CA0AB"
+                font.pixelSize: dt ? dt.fontSm : 12
+                width: parent.width - 40
+            }
+            TextField {
+                id: starmapDescField
+                width: parent.width - 40
+                placeholderText: "简要描述这个星图的内容"
+            }
+            Item { width: 1; height: dt ? dt.sp4 : 4 }
             Button {
                 text: "创建"
                 anchors.right: parent.right
+                anchors.rightMargin: dt ? dt.sp20 : 20
                 onClicked: {
                     var title = starmapTitleField.text.trim()
                     if (title === "") return
-                    backendRef.create_starmap_json(title, starmapDescField.text.trim(), "")
-                    createStarmapDialog.close()
-                    starmapTitleField.text = ""
-                    starmapDescField.text = ""
-                    loadStarmaps()
+                    var resultJson = backendRef.create_starmap_json(title, starmapDescField.text.trim(), "")
+                    var result = null
+                    try { result = JSON.parse(resultJson) } catch (e) {}
+                    if (result && result.success) {
+                        createStarmapDialog.close()
+                        starmapTitleField.text = ""
+                        starmapDescField.text = ""
+                        loadStarmaps()
+                    } else {
+                        console.warn("[WriterDebug] create_starmap failed:", result ? result.message : resultJson)
+                    }
                 }
             }
         }
@@ -192,11 +221,11 @@ Rectangle {
         width: 320
         anchors.centerIn: Overlay.overlay
         Column {
-            anchors.fill: parent
-            anchors.margins: 16
+            width: parent.width
             spacing: 8
-            TextField { id: renameField; width: parent.width; text: renameStarmapDialog.currentTitle }
-            Button { text: "确定"; anchors.right: parent.right; onClicked: { var t = renameField.text.trim(); if (t === "") return; backendRef.rename_starmap_json(renameStarmapDialog.starmapId, t); renameStarmapDialog.close(); loadStarmaps() } }
+            padding: 16
+            TextField { id: renameField; width: parent.width - 32; text: renameStarmapDialog.currentTitle }
+            Button { text: "确定"; anchors.right: parent.right; anchors.rightMargin: 16; onClicked: { var t = renameField.text.trim(); if (t === "") return; backendRef.rename_starmap_json(renameStarmapDialog.starmapId, t); renameStarmapDialog.close(); loadStarmaps() } }
         }
     }
 
@@ -208,11 +237,11 @@ Rectangle {
         width: 320
         anchors.centerIn: Overlay.overlay
         Column {
-            anchors.fill: parent
-            anchors.margins: 16
+            width: parent.width
             spacing: 8
-            TextField { id: childTitleField; width: parent.width; placeholderText: "子星图名称" }
-            Button { text: "创建"; anchors.right: parent.right; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; backendRef.create_child_starmap_json(createChildStarmapDialog.parentId, t, "", ""); createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } }
+            padding: 16
+            TextField { id: childTitleField; width: parent.width - 32; placeholderText: "子星图名称" }
+            Button { text: "创建"; anchors.right: parent.right; anchors.rightMargin: 16; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; backendRef.create_child_starmap_json(createChildStarmapDialog.parentId, t, "", ""); createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } }
         }
     }
 }

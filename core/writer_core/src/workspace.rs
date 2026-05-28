@@ -149,3 +149,17 @@ pub fn record_recent_edit(
 
     Ok(())
 }
+
+/// 强制将 recent_edits 缓存落盘（用于应用退出、切换工作区等场景）。
+pub fn flush_recent_edits(workspace_path: &Path) -> Result<()> {
+    let mutex = RECENT_EDITS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = mutex.lock().unwrap();
+
+    if let Some(edits) = cache.get(workspace_path) {
+        let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
+        let content = serde_json::to_string_pretty(edits)?;
+        crate::storage::atomic_write_string(&recent_path, &content)?;
+    }
+
+    Ok(())
+}

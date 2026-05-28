@@ -416,12 +416,14 @@ struct AppBackend {
     ),
     save_current_chapter: qt_method!(fn(&mut self, content: QString)),
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
+    process_writing_event_from_text: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, old_text: QString, new_text: QString)),
     get_writing_stats_summary: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
     get_writing_stats_by_project: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
     get_writing_stats_by_chapter: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
     get_writing_stats_by_device: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
     get_writing_speed_curve: qt_method!(fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString),
     flush_writing_stats: qt_method!(fn(&self)),
+    flush_recent_edits: qt_method!(fn(&self)),
 
     list_starmaps_json: qt_method!(fn(&self) -> QString),
     list_starmaps_for_project_json: qt_method!(fn(&self, project_id: QString) -> QString),
@@ -3689,6 +3691,51 @@ impl AppBackend {
         }
     }
 
+    fn process_writing_event_from_text(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        old_text: QString,
+        new_text: QString,
+    ) {
+        let pid = project_id.to_string();
+        let vid = volume_id.to_string();
+        let cid = chapter_id.to_string();
+        let ot = old_text.to_string();
+        let nt = new_text.to_string();
+
+        if self.stats_device_id.is_empty() {
+            self.stats_device_id = format!("linux-{}", uuid::Uuid::new_v4());
+            if let Some(core_ref) = &self.core {
+                let core = core_ref.borrow();
+                let mut local = core.load_local_settings().unwrap_or_default();
+                local.stats_device_id = Some(self.stats_device_id.clone());
+                let _ = core.save_local_settings(&local);
+            }
+        }
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if self.stats_last_event_ms == 0 || (now_ms - self.stats_last_event_ms) > 5 * 60 * 1000 {
+            self.stats_session_id = uuid::Uuid::new_v4().to_string();
+        }
+        self.stats_last_event_ms = now_ms;
+
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let _ = core.process_writing_event(
+                &self.stats_device_id,
+                "linux",
+                &pid,
+                &vid,
+                &cid,
+                &ot,
+                &nt,
+                &self.stats_session_id,
+            );
+        }
+    }
+
     fn get_writing_stats_summary(&self, start_date: QString, end_date: QString) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
@@ -3707,6 +3754,13 @@ impl AppBackend {
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
             let _ = core.flush_writing_stats();
+        }
+    }
+
+    fn flush_recent_edits(&self) {
+        if let Some(core_ref) = &self.core {
+            let core = core_ref.borrow();
+            let _ = core.flush_recent_edits();
         }
     }
 
