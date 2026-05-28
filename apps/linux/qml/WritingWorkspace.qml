@@ -340,11 +340,17 @@ Rectangle {
                 onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
             }
 
-            // Editor Area
-            Rectangle {
+            // Main content area (Editor + Drawer)
+            RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: dt ? dt.bg : "#111318"
+                spacing: 0
+
+                // Editor Area
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    color: dt ? dt.bg : "#111318"
 
                 // Paper background
                 Rectangle {
@@ -426,51 +432,52 @@ Rectangle {
             }
 
             // Right drawer button (when closed)
-            Rectangle {
-                visible: !root.drawerOpen
-                Layout.fillHeight: true
-                Layout.preferredWidth: 36
-                color: "transparent"
+                Rectangle {
+                    visible: !root.drawerOpen
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: 36
+                    color: "transparent"
 
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    spacing: dt ? dt.sp8 : 8
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: dt ? dt.sp8 : 8
 
-                    Rectangle {
-                        width: 28; height: 28
-                        radius: dt ? dt.radiusSm : 8
-                        color: drawerBtnHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                        Rectangle {
+                            width: 28; height: 28
+                            radius: dt ? dt.radiusSm : 8
+                            color: drawerBtnHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
 
-                        Text {
-                            anchors.centerIn: parent
-                            text: "\u25B6"
-                            color: dt ? dt.textMuted : "#606470"
-                            font.pixelSize: dt ? dt.fontXs : 11
-                        }
+                            Text {
+                                anchors.centerIn: parent
+                                text: "\u25C0" // Left arrow to indicate it opens from the right
+                                color: dt ? dt.textMuted : "#606470"
+                                font.pixelSize: dt ? dt.fontXs : 11
+                            }
 
-                        MouseArea {
-                            id: drawerBtnHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.drawerOpen = true
+                            MouseArea {
+                                id: drawerBtnHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.drawerOpen = true
+                            }
                         }
                     }
                 }
-            }
 
-            // Right drawer
-            RightDrawer {
-                Layout.fillHeight: true
-                dt: root.dt
-                backendRef: root.backendRef
-                isOpen: root.drawerOpen
-                currentTab: root.drawerTab
-                aiCapable: root.aiCapable
-                aiEnabled: root.aiEnabled
-                onCloseRequested: root.drawerOpen = false
-                onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
-                onOpenSettings: root.openSettings()
+                // Right drawer
+                RightDrawer {
+                    Layout.fillHeight: true
+                    dt: root.dt
+                    backendRef: root.backendRef
+                    isOpen: root.drawerOpen
+                    currentTab: root.drawerTab
+                    aiCapable: root.aiCapable
+                    aiEnabled: root.aiEnabled
+                    onCloseRequested: root.drawerOpen = false
+                    onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
+                    onOpenSettings: root.openSettings()
+                }
             }
         }
     }
