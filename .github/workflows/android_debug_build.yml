@@ -44,18 +44,21 @@ jobs:
       - name: Decode Android Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "Decoding Android keystore from secret..."
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
-            if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
-              echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
-              exit 1
-            fi
-            echo "Keystore decoded successfully."
-          else
-            echo "ANDROID_KEYSTORE_BASE64 secret is not set. Build will use default debug signing."
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::Android signing secrets are incomplete. Refusing to build with runner debug signing."
+            exit 1
           fi
+          echo "Decoding Android keystore from secret..."
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
+            echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
+            exit 1
+          fi
+          echo "Keystore decoded successfully."
 
       - name: Build Android no-ai Debug APK
         env:
@@ -107,18 +110,21 @@ jobs:
       - name: Decode Android Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "Decoding Android keystore from secret..."
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
-            if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
-              echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
-              exit 1
-            fi
-            echo "Keystore decoded successfully."
-          else
-            echo "ANDROID_KEYSTORE_BASE64 secret is not set. Build will use default debug signing."
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::Android signing secrets are incomplete. Refusing to build with runner debug signing."
+            exit 1
           fi
+          echo "Decoding Android keystore from secret..."
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
+            echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
+            exit 1
+          fi
+          echo "Keystore decoded successfully."
 
       - name: Build Android ai Debug APK
         env:
