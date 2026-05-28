@@ -352,10 +352,17 @@ Rectangle {
                     Layout.fillHeight: true
                     color: dt ? dt.bg : "#111318"
 
-                // Paper background
+                // Centered paper container
+                Item {
+                    anchors.fill: parent
+                    anchors.margins: dt ? dt.sp32 : 32
+
+                // Paper background - centered with max width
                 Rectangle {
-                    anchors.fill: editorScroll
-                    anchors.margins: -1
+                    id: paperBg
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Math.min(parent.width, 840)
+                    height: parent.height
                     color: dt ? dt.editorBg : "#191C21"
                     radius: dt ? dt.radiusMd : 12
                     border.color: dt ? dt.border : "#2A2E36"
@@ -364,8 +371,8 @@ Rectangle {
 
                 ScrollView {
                     id: editorScroll
-                    anchors.fill: parent
-                    anchors.margins: dt ? dt.sp32 : 32
+                    anchors.fill: paperBg
+                    anchors.margins: dt ? dt.sp16 : 16
                     clip: true
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                     ScrollBar.vertical: ScrollBar {
@@ -410,6 +417,8 @@ Rectangle {
                         }
                     }
                 }
+
+                } // end paper container Item
 
                 // Empty state
                 ColumnLayout {

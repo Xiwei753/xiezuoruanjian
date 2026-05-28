@@ -129,6 +129,12 @@ QtObject {
         previousEditorText = newText;
     }
 
+    function applyCurrentSettings() {
+        // Property bindings on docHandler already handle line_spacing and text_indent updates.
+        // Font size is bound directly on the TextArea via backendRef.setting_font_size.
+        // No manual action needed — changing backend settings triggers binding updates.
+    }
+
     function formatText() {
         if (!targetTextArea) return;
         var raw = getEditorPlainText();
