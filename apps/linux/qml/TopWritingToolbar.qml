@@ -364,12 +364,6 @@ Rectangle {
             }
         }
 
-        // Close on outside click
-        MouseArea {
-            anchors.fill: parent
-            propagateComposedEvents: true
-            onPressed: mouse.accepted = false
-        }
     }
 
     // === Layout Popover ===
@@ -483,11 +477,6 @@ Rectangle {
             }
         }
 
-        MouseArea {
-            anchors.fill: parent
-            propagateComposedEvents: true
-            onPressed: mouse.accepted = false
-        }
     }
 
     // Close popovers on outside click

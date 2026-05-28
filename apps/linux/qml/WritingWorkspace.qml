@@ -408,9 +408,21 @@ Rectangle {
 
                                 text: ""
 
+                                Keys.onPressed: function(event) {
+                                    if (event.key === Qt.Key_Backspace ||
+                                        event.key === Qt.Key_Delete ||
+                                        (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
+                                        editorController.markPotentialExplicitClear();
+                                    }
+                                }
+
                                 SmoothCursor {
                                     targetTextArea: editorArea
                                     dt: root.dt
+                                    smoothCursorEnabled: root.backendRef ? root.backendRef.setting_smooth_cursor_enabled : true
+                                    typingAnimationEnabled: root.backendRef ? root.backendRef.setting_typing_animation_enabled : true
+                                    cursorAnimationDuration: root.backendRef ? root.backendRef.setting_smooth_cursor_duration_ms : 80
+                                    typingAnimationDuration: root.backendRef ? root.backendRef.setting_typing_animation_duration_ms : 100
                                 }
                             }
                         }
