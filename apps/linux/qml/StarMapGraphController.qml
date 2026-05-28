@@ -1,3 +1,17 @@
+// =============================================================================
+// StarMapGraphController.qml — 星图图控制器
+// =============================================================================
+//
+// 层级：Linux UI 层（QML 逻辑控制器）
+// 职责：加载/保存星图图数据+布局、节点/边增删改、选区管理
+// 约束：
+//   - 纯状态管理，不包含 UI 渲染
+//   - 通过 backendRef 调用 AppBackend (Rust QObject)
+//   - 图数据通过 JSON 协议与 Core 层交互
+//
+// 数据流：backendRef (JSON) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
+// =============================================================================
+
 import QtQuick 2.15
 
 QtObject {

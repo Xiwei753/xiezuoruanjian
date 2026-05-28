@@ -1,3 +1,23 @@
+// =============================================================================
+// EditorController.qml — 编辑器逻辑控制器
+// =============================================================================
+//
+// 层级：Linux UI 层（QML 逻辑控制器）
+// 职责：章节打开/保存、自动保存、格式应用、保存守卫（防误触）
+// 约束：
+//   - 不包含 UI 渲染，只管理编辑器状态
+//   - 通过 backendRef 调用 AppBackend (Rust QObject)
+//   - 通过 targetTextArea 绑定 QTextArea
+//   - 通过 documentHandler 调用 DocumentHandler (Rust QObject) 做排版
+//
+// 关键流程：
+//   openChapter() → read_chapter → set_plain_text → apply_format
+//   saveCurrentChapter() → get_plain_text → sanitize → save_chapter
+//
+// 防死循环机制：
+//   isLoadingChapter 标记防止 chapter_path_changed 信号重入
+// =============================================================================
+
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import Writer 1.0

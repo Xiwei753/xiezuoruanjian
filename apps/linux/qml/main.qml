@@ -1,7 +1,21 @@
+// =============================================================================
+// main.qml — 应用入口窗口
+// =============================================================================
+//
+// 层级：Linux UI 层（QML 页面）
+// 职责：应用主窗口、全局路由管理、初始化 AppBackend、全局错误处理
+// 约束：
+//   - 不包含任何业务逻辑，所有操作委托给 AppBackend (Rust QObject)
+//   - 页面切换通过 appController.route 状态驱动
+//   - 不直接操作文件系统或 Core 层
+//
+// 调用链：main.qml → AppBackend (Rust QObject) → WriterCore (Core 层)
+// =============================================================================
+
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Window 2.15
+import QtQuick.Window 1.15
 import WriterApp 1.0
 
 ApplicationWindow {

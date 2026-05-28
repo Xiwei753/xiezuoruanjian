@@ -1,3 +1,17 @@
+// =============================================================================
+// EditorPage.qml — 编辑器页面
+// =============================================================================
+//
+// 层级：Linux UI 层（QML UI 组件）
+// 职责：正文编辑区域、TextArea 绑定、DocumentHandler 排版绑定
+// 约束：
+//   - 纯 UI 组件，业务逻辑委托给 EditorController
+//   - 通过 DocumentHandler (Rust QObject) 做视觉排版
+//   - 正文永远是纯文本，禁止保存 HTML 内容
+//
+// 排版流程：TextArea.text → DocumentHandler.apply_format() → 视觉排版
+// =============================================================================
+
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15

@@ -1,7 +1,19 @@
+// =============================================================================
+// SyncPage.qml — 同步页面
+// =============================================================================
+//
+// 层级：Linux UI 层（QML 页面）
+// 职责：同步配置展示、手动同步触发、同步诊断、错误展示
+// 约束：
+//   - 通过 backendRef 调用 AppBackend (Rust QObject) 执行同步
+//   - 监听 sync_action_completed / sync_status_changed 信号
+//   - 不直接操作 Git 或文件系统
+// =============================================================================
+
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Window 2.15
+import QtQuick.Window 1.15
 
 Rectangle {
     id: root
