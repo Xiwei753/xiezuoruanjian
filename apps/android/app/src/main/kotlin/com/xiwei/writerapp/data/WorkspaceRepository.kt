@@ -213,4 +213,22 @@ class WorkspaceRepository(val context: Context) {
     }
 
     fun getWorkspaceDir(): String = com.xiwei.writerapp.data.WorkspaceManager.getWorkspaceDir(context).absolutePath
+
+    fun calculateWordCount(text: String): Int {
+        return bridge.calculateWordCount(text)
+    }
+
+    fun processWritingEvent(
+        deviceId: String,
+        platform: String,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        oldText: String,
+        newText: String,
+        sessionId: String
+    ): Boolean {
+        return bridge.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, sessionId)
+    }
+
 }

@@ -8,7 +8,9 @@ pub mod storage;
 pub mod validation;
 
 pub use anchor::{MindMapAnchor, MindMapLink};
-pub use graph::{MindMapEdgeKind, MindMapGraph, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind};
+pub use graph::{
+    MindMapEdgeKind, MindMapGraph, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind,
+};
 pub use layout::{LayoutKind, MindMapLayout, MindMapLayoutNode};
 pub use snapshot::{MindMapBounds, MindMapSnapshot, MindMapSnapshotEdge, MindMapSnapshotNode};
 
@@ -17,8 +19,16 @@ pub fn generate_snapshot(
     project_id: &str,
 ) -> crate::error::Result<MindMapSnapshot> {
     // 1. Check if project exists
-    let project = core.list_projects()?.into_iter().find(|p| p.id == project_id)
-        .ok_or_else(|| crate::error::Error::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "Project not found")))?;
+    let project = core
+        .list_projects()?
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| {
+            crate::error::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Project not found",
+            ))
+        })?;
 
     // 2. Try to load an existing graph
     match storage::load_mind_map_graph(core, project_id, None) {
@@ -26,7 +36,10 @@ pub fn generate_snapshot(
             // Found a custom graph (or migrated V1).
             // Must validate before generating snapshot.
             validation::validate_graph(&graph, core).map_err(|e| {
-                crate::error::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{:?}", e)))
+                crate::error::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ))
             })?;
 
             // Try to load layout, fallback to calculate_layout if not found
@@ -142,8 +155,8 @@ fn generate_auto_graph_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::facade::WriterCore;
+    use tempfile::tempdir;
 
     #[test]
     fn test_generate_auto_graph() {
@@ -152,7 +165,8 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         let proj = core.create_project("Test Project").unwrap();
         let vol = core.create_volume(&proj.id, "Test Volume").unwrap();
-        core.create_chapter(&proj.id, &vol.id, "Test Chapter 1").unwrap();
+        core.create_chapter(&proj.id, &vol.id, "Test Chapter 1")
+            .unwrap();
 
         let snapshot = generate_snapshot(&core, &proj.id).unwrap();
 

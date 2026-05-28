@@ -18,7 +18,8 @@ mod tests {
 
         let project = create_project(workspace_path, "Test Project").unwrap();
         let volume = create_volume(workspace_path, &project.id, "Test Volume").unwrap();
-        let chapter = create_chapter(workspace_path, &project.id, &volume.id, "Test Chapter").unwrap();
+        let chapter =
+            create_chapter(workspace_path, &project.id, &volume.id, "Test Chapter").unwrap();
 
         (dir, project, volume, chapter)
     }
@@ -55,7 +56,10 @@ mod tests {
         .unwrap();
 
         assert!(receipt.chapter_relative_path.ends_with("/chapter.md"));
-        assert_eq!(receipt.content_hash, format!("{:x}", md5::compute("Hello World!".as_bytes())));
+        assert_eq!(
+            receipt.content_hash,
+            format!("{:x}", md5::compute("Hello World!".as_bytes()))
+        );
 
         let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Hello World!");
@@ -147,7 +151,10 @@ mod tests {
             " \n\t",
         )
         .unwrap_err();
-        assert!(matches!(whitespace_err, Error::EmptyOverwriteBlocked { .. }));
+        assert!(matches!(
+            whitespace_err,
+            Error::EmptyOverwriteBlocked { .. }
+        ));
 
         let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Original content");

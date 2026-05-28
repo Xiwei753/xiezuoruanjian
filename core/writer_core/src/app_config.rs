@@ -15,7 +15,10 @@ pub struct AppConfig {
 fn config_dir() -> Option<PathBuf> {
     if let Some(config_dir) = std::env::var_os("XDG_CONFIG_HOME") {
         Some(PathBuf::from(config_dir).join(CONFIG_DIR_NAME))
-    } else { std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join(CONFIG_DIR_NAME)) }
+    } else {
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".config").join(CONFIG_DIR_NAME))
+    }
 }
 
 fn config_path() -> Option<PathBuf> {

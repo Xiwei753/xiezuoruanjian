@@ -108,14 +108,13 @@ impl DocumentHandler {
             blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
             blockFormat.setTextIndent(indent);
 
-            QStringList lines = text.split("\n");
-            for (int i = 0; i < lines.size(); ++i) {
-                cursor.setBlockFormat(blockFormat);
-                cursor.insertText(lines[i]);
-                if (i < lines.size() - 1) {
-                    cursor.insertBlock();
-                }
-            }
+            doc->setPlainText(text);
+
+            QTextCursor formatCursor(doc);
+            formatCursor.beginEditBlock();
+            formatCursor.select(QTextCursor::Document);
+            formatCursor.mergeBlockFormat(blockFormat);
+            formatCursor.endEditBlock();
 
             cursor.endEditBlock();
         });

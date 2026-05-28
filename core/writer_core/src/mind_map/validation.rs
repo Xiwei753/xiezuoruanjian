@@ -21,7 +21,10 @@ pub enum ValidationError {
     DuplicateLinkId(String),
 }
 
-pub fn validate_graph(graph: &MindMapGraph, core: &crate::facade::WriterCore) -> Result<(), ValidationError> {
+pub fn validate_graph(
+    graph: &MindMapGraph,
+    core: &crate::facade::WriterCore,
+) -> Result<(), ValidationError> {
     if graph.id.is_empty() {
         return Err(ValidationError::EmptyGraphId);
     }
@@ -29,7 +32,9 @@ pub fn validate_graph(graph: &MindMapGraph, core: &crate::facade::WriterCore) ->
         return Err(ValidationError::EmptyProjectId);
     }
     if graph.schema_version != 2 {
-        return Err(ValidationError::UnsupportedSchemaVersion(graph.schema_version));
+        return Err(ValidationError::UnsupportedSchemaVersion(
+            graph.schema_version,
+        ));
     }
 
     // Validate project existence
@@ -66,10 +71,16 @@ pub fn validate_graph(graph: &MindMapGraph, core: &crate::facade::WriterCore) ->
             return Err(ValidationError::DuplicateEdgeId(edge.id.clone()));
         }
         if !node_ids.contains(&edge.from) {
-            return Err(ValidationError::EdgeReferencesMissingNode(edge.id.clone(), edge.from.clone()));
+            return Err(ValidationError::EdgeReferencesMissingNode(
+                edge.id.clone(),
+                edge.from.clone(),
+            ));
         }
         if !node_ids.contains(&edge.to) {
-            return Err(ValidationError::EdgeReferencesMissingNode(edge.id.clone(), edge.to.clone()));
+            return Err(ValidationError::EdgeReferencesMissingNode(
+                edge.id.clone(),
+                edge.to.clone(),
+            ));
         }
     }
 
@@ -95,7 +106,10 @@ pub fn validate_graph(graph: &MindMapGraph, core: &crate::facade::WriterCore) ->
             return Err(ValidationError::DuplicateAnchorId(anchor.id.clone()));
         }
         if !valid_chapter_ids.contains(&anchor.chapter_id) {
-            return Err(ValidationError::AnchorChapterNotInProject(anchor.id.clone(), anchor.chapter_id.clone()));
+            return Err(ValidationError::AnchorChapterNotInProject(
+                anchor.id.clone(),
+                anchor.chapter_id.clone(),
+            ));
         }
     }
 
@@ -109,10 +123,16 @@ pub fn validate_graph(graph: &MindMapGraph, core: &crate::facade::WriterCore) ->
             return Err(ValidationError::DuplicateLinkId(link.id.clone()));
         }
         if !node_ids.contains(&link.node_id) {
-            return Err(ValidationError::LinkReferencesMissingNode(link.id.clone(), link.node_id.clone()));
+            return Err(ValidationError::LinkReferencesMissingNode(
+                link.id.clone(),
+                link.node_id.clone(),
+            ));
         }
         if !anchor_ids.contains(&link.anchor_id) {
-            return Err(ValidationError::LinkReferencesMissingAnchor(link.id.clone(), link.anchor_id.clone()));
+            return Err(ValidationError::LinkReferencesMissingAnchor(
+                link.id.clone(),
+                link.anchor_id.clone(),
+            ));
         }
     }
 
@@ -122,9 +142,11 @@ pub fn validate_graph(graph: &MindMapGraph, core: &crate::facade::WriterCore) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::facade::WriterCore;
-    use crate::mind_map::graph::{MindMapGraphNode, MindMapNodeKind, MindMapGraphEdge, MindMapEdgeKind};
+    use crate::mind_map::graph::{
+        MindMapEdgeKind, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind,
+    };
+    use tempfile::tempdir;
 
     #[test]
     fn test_validate_graph_missing_nodes() {
@@ -138,29 +160,25 @@ mod tests {
             id: "g1".into(),
             project_id: proj.id.clone(),
             title: "Test".into(),
-            nodes: vec![
-                MindMapGraphNode {
-                    id: "n1".into(),
-                    title: "Node 1".into(),
-                    kind: MindMapNodeKind::Note,
-                    payload: None,
-                    tags: vec![],
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
-            edges: vec![
-                MindMapGraphEdge {
-                    id: "e1".into(),
-                    from: "n1".into(),
-                    to: "n2".into(), // n2 is missing
-                    kind: MindMapEdgeKind::Custom,
-                    label: None,
-                    payload: None,
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            nodes: vec![MindMapGraphNode {
+                id: "n1".into(),
+                title: "Node 1".into(),
+                kind: MindMapNodeKind::Note,
+                payload: None,
+                tags: vec![],
+                created_at: 0,
+                updated_at: 0,
+            }],
+            edges: vec![MindMapGraphEdge {
+                id: "e1".into(),
+                from: "n1".into(),
+                to: "n2".into(), // n2 is missing
+                kind: MindMapEdgeKind::Custom,
+                label: None,
+                payload: None,
+                created_at: 0,
+                updated_at: 0,
+            }],
             anchors: vec![],
             links: vec![],
             created_at: 0,
@@ -168,7 +186,13 @@ mod tests {
         };
 
         let result = validate_graph(&graph, &core);
-        assert_eq!(result, Err(ValidationError::EdgeReferencesMissingNode("e1".into(), "n2".into())));
+        assert_eq!(
+            result,
+            Err(ValidationError::EdgeReferencesMissingNode(
+                "e1".into(),
+                "n2".into()
+            ))
+        );
     }
 
     #[test]
@@ -201,7 +225,7 @@ mod tests {
                     tags: vec![],
                     created_at: 0,
                     updated_at: 0,
-                }
+                },
             ],
             edges: vec![],
             anchors: vec![],
@@ -228,17 +252,15 @@ mod tests {
             id: "g1".into(),
             project_id: proj.id.clone(),
             title: "Test".into(),
-            nodes: vec![
-                MindMapGraphNode {
-                    id: "n1".into(),
-                    title: "Node 1".into(),
-                    kind: MindMapNodeKind::Note,
-                    payload: None,
-                    tags: vec![],
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            nodes: vec![MindMapGraphNode {
+                id: "n1".into(),
+                title: "Node 1".into(),
+                kind: MindMapNodeKind::Note,
+                payload: None,
+                tags: vec![],
+                created_at: 0,
+                updated_at: 0,
+            }],
             edges: vec![],
             anchors: vec![
                 crate::mind_map::anchor::MindMapAnchor {
@@ -266,7 +288,7 @@ mod tests {
                     checksum: "".into(),
                     created_at: 0,
                     updated_at: 0,
-                }
+                },
             ],
             links: vec![],
             created_at: 0,
@@ -289,29 +311,25 @@ mod tests {
             id: "g1".into(),
             project_id: proj.id.clone(),
             title: "Test".into(),
-            nodes: vec![
-                MindMapGraphNode {
-                    id: "n1".into(),
-                    title: "Node 1".into(),
-                    kind: MindMapNodeKind::Note,
-                    payload: None,
-                    tags: vec![],
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            nodes: vec![MindMapGraphNode {
+                id: "n1".into(),
+                title: "Node 1".into(),
+                kind: MindMapNodeKind::Note,
+                payload: None,
+                tags: vec![],
+                created_at: 0,
+                updated_at: 0,
+            }],
             edges: vec![],
             anchors: vec![],
-            links: vec![
-                crate::mind_map::anchor::MindMapLink {
-                    id: "".into(), // Empty
-                    node_id: "n1".into(),
-                    anchor_id: "a1".into(),
-                    kind: "Primary".into(),
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            links: vec![crate::mind_map::anchor::MindMapLink {
+                id: "".into(), // Empty
+                node_id: "n1".into(),
+                anchor_id: "a1".into(),
+                kind: "Primary".into(),
+                created_at: 0,
+                updated_at: 0,
+            }],
             created_at: 0,
             updated_at: 0,
         };
@@ -334,33 +352,29 @@ mod tests {
             id: "g1".into(),
             project_id: proj.id.clone(),
             title: "Test".into(),
-            nodes: vec![
-                MindMapGraphNode {
-                    id: "n1".into(),
-                    title: "Node 1".into(),
-                    kind: MindMapNodeKind::Note,
-                    payload: None,
-                    tags: vec![],
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            nodes: vec![MindMapGraphNode {
+                id: "n1".into(),
+                title: "Node 1".into(),
+                kind: MindMapNodeKind::Note,
+                payload: None,
+                tags: vec![],
+                created_at: 0,
+                updated_at: 0,
+            }],
             edges: vec![],
-            anchors: vec![
-                crate::mind_map::anchor::MindMapAnchor {
-                    id: "a1".into(),
-                    project_id: proj.id.clone(),
-                    chapter_id: chap.id.clone(),
-                    start_offset: 0,
-                    end_offset: 0,
-                    selected_text: "".into(),
-                    prefix_text: "".into(),
-                    suffix_text: "".into(),
-                    checksum: "".into(),
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            anchors: vec![crate::mind_map::anchor::MindMapAnchor {
+                id: "a1".into(),
+                project_id: proj.id.clone(),
+                chapter_id: chap.id.clone(),
+                start_offset: 0,
+                end_offset: 0,
+                selected_text: "".into(),
+                prefix_text: "".into(),
+                suffix_text: "".into(),
+                checksum: "".into(),
+                created_at: 0,
+                updated_at: 0,
+            }],
             links: vec![
                 crate::mind_map::anchor::MindMapLink {
                     id: "l1".into(),
@@ -377,7 +391,7 @@ mod tests {
                     kind: "Primary".into(),
                     created_at: 0,
                     updated_at: 0,
-                }
+                },
             ],
             created_at: 0,
             updated_at: 0,
@@ -401,33 +415,29 @@ mod tests {
             id: "g1".into(),
             project_id: proj.id.clone(),
             title: "Test".into(),
-            nodes: vec![
-                MindMapGraphNode {
-                    id: "n1".into(),
-                    title: "Node 1".into(),
-                    kind: MindMapNodeKind::Note,
-                    payload: None,
-                    tags: vec![],
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            nodes: vec![MindMapGraphNode {
+                id: "n1".into(),
+                title: "Node 1".into(),
+                kind: MindMapNodeKind::Note,
+                payload: None,
+                tags: vec![],
+                created_at: 0,
+                updated_at: 0,
+            }],
             edges: vec![],
-            anchors: vec![
-                crate::mind_map::anchor::MindMapAnchor {
-                    id: "".into(), // Empty
-                    project_id: proj.id.clone(),
-                    chapter_id: chap.id.clone(),
-                    start_offset: 0,
-                    end_offset: 0,
-                    selected_text: "".into(),
-                    prefix_text: "".into(),
-                    suffix_text: "".into(),
-                    checksum: "".into(),
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            anchors: vec![crate::mind_map::anchor::MindMapAnchor {
+                id: "".into(), // Empty
+                project_id: proj.id.clone(),
+                chapter_id: chap.id.clone(),
+                start_offset: 0,
+                end_offset: 0,
+                selected_text: "".into(),
+                prefix_text: "".into(),
+                suffix_text: "".into(),
+                checksum: "".into(),
+                created_at: 0,
+                updated_at: 0,
+            }],
             links: vec![],
             created_at: 0,
             updated_at: 0,
@@ -437,4 +447,3 @@ mod tests {
         assert_eq!(result, Err(ValidationError::EmptyAnchorId));
     }
 }
-

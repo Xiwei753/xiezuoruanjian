@@ -108,37 +108,68 @@ pub fn rename_volume(
 pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -> Result<()> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
-    let volume_dir = workspace_path.join("projects").join(project_id).join("volumes").join(volume_id);
-    let target_canon = crate::delete_guard::validate_delete_target(workspace_path, &volume_dir, "volume.json")?;
+    let volume_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id);
+    let target_canon =
+        crate::delete_guard::validate_delete_target(workspace_path, &volume_dir, "volume.json")?;
 
     let trash_dir = workspace_path.join("app-meta/sync/trash");
-        let _ = fs::create_dir_all(&trash_dir);
-        let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), volume_id));
-        fs::rename(&target_canon, &trash_path)?;
+    let _ = fs::create_dir_all(&trash_dir);
+    let trash_path = trash_dir.join(format!(
+        "{}_{}_{}",
+        chrono::Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4(),
+        volume_id
+    ));
+    fs::rename(&target_canon, &trash_path)?;
 
-        // Also update tombstone
-        if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
-             let rel_volume_dir = volume_dir.strip_prefix(workspace_path).unwrap_or(&volume_dir).to_string_lossy().replace("\\", "/");
-             let rel_trash_path = trash_path.strip_prefix(workspace_path).unwrap_or(&trash_path).to_string_lossy().replace("\\", "/");
+    // Also update tombstone
+    if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
+        let rel_volume_dir = volume_dir
+            .strip_prefix(workspace_path)
+            .unwrap_or(&volume_dir)
+            .to_string_lossy()
+            .replace("\\", "/");
+        let rel_trash_path = trash_path
+            .strip_prefix(workspace_path)
+            .unwrap_or(&trash_path)
+            .to_string_lossy()
+            .replace("\\", "/");
 
-             for entry in walkdir::WalkDir::new(&trash_path).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
-                 let rel_file_path = entry.path().strip_prefix(&trash_path).unwrap_or(entry.path()).to_string_lossy().replace("\\", "/");
-                 let original_file_path = format!("{}/{}", rel_volume_dir, rel_file_path);
-                 let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
+        for entry in walkdir::WalkDir::new(&trash_path)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let rel_file_path = entry
+                .path()
+                .strip_prefix(&trash_path)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace("\\", "/");
+            let original_file_path = format!("{}/{}", rel_volume_dir, rel_file_path);
+            let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
 
-                 let tombstone = crate::sync_service::Tombstone {
-                     original_path: original_file_path.clone(),
-                     trash_path: new_trash_path,
-                     deleted_at: chrono::Utc::now().timestamp(),
-                     purge_after: chrono::Utc::now().timestamp() + 30 * 24 * 3600,
-                     deleted_by: "local".to_string(),
-                     original_hash: state.known_files.get(&original_file_path).cloned().unwrap_or_default(),
-                     kind: "local_delete".to_string(),
-                 };
-                 state.tombstones.push(tombstone);
-             }
-             let _ = crate::sync_service::SyncService::save_sync_state(workspace_path, &state);
+            let tombstone = crate::sync_service::Tombstone {
+                original_path: original_file_path.clone(),
+                trash_path: new_trash_path,
+                deleted_at: chrono::Utc::now().timestamp(),
+                purge_after: chrono::Utc::now().timestamp() + 30 * 24 * 3600,
+                deleted_by: "local".to_string(),
+                original_hash: state
+                    .known_files
+                    .get(&original_file_path)
+                    .cloned()
+                    .unwrap_or_default(),
+                kind: "local_delete".to_string(),
+            };
+            state.tombstones.push(tombstone);
         }
+        let _ = crate::sync_service::SyncService::save_sync_state(workspace_path, &state);
+    }
     Ok(())
 }
 

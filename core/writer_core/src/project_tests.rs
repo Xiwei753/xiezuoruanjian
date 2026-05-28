@@ -45,7 +45,11 @@ mod tests_facade {
         let _proj = core.create_project("Test Project Facade").unwrap();
 
         let tree_after = core.list_projects().unwrap();
-        assert_eq!(tree_after.len(), 1, "Tree should have 1 project after creation");
+        assert_eq!(
+            tree_after.len(),
+            1,
+            "Tree should have 1 project after creation"
+        );
         assert_eq!(tree_after[0].title, "Test Project Facade");
     }
 }

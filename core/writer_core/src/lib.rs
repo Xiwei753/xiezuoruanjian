@@ -1,8 +1,8 @@
-pub(crate) mod delete_guard;
 pub mod action_registry;
+pub(crate) mod delete_guard;
 // Always export these for UniFFI
 pub mod ai_service;
-pub use crate::ai_service::{AiActionResponse, AiAction, AiActionType};
+pub use crate::ai_service::{AiAction, AiActionResponse, AiActionType};
 pub mod app_config;
 pub mod graph_service;
 pub mod proofreading_service;
@@ -14,16 +14,16 @@ pub mod chapter;
 pub mod editor;
 pub mod error;
 pub mod index;
+pub mod mind_map;
 pub mod project;
 pub mod settings;
+pub mod starmap;
 pub mod storage;
 pub mod sync;
 pub mod trash;
 pub mod volume;
 pub mod workspace;
-pub mod mind_map;
 pub mod writing_stats;
-pub mod starmap;
 
 pub use error::{Error, Result};
 

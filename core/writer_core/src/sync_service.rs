@@ -1,6 +1,6 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use base64::Engine;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -13,7 +13,6 @@ pub enum BackendType {
     S3,
     LocalFolder,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -67,7 +66,9 @@ pub struct SyncConfig {
     pub android_has_access_network_state_permission: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 fn default_proxy_type() -> String {
     "auto".to_string()
@@ -198,7 +199,11 @@ pub fn mask_token_in_url(url: &str) -> String {
 /// 1. Redact URL userinfo (https://user:token@host/path -> https://***@host/path)
 /// 2. If a known token string is provided, redact every occurrence of it.
 /// 3. Does NOT touch ordinary error text, git return codes, or libgit2 messages.
-pub fn redact_secrets_from_message(msg: &str, known_token: Option<&str>, remote_url: Option<&str>) -> String {
+pub fn redact_secrets_from_message(
+    msg: &str,
+    known_token: Option<&str>,
+    remote_url: Option<&str>,
+) -> String {
     let mut result = msg.to_string();
 
     // 1. Always redact URL userinfo
@@ -228,11 +233,18 @@ pub fn redact_secrets_from_message(msg: &str, known_token: Option<&str>, remote_
         if let Some(start) = result.find("://") {
             let before = &result[..start];
             // Look backwards for start of scheme
-            let scheme_start = before.rfind(|c: char| !c.is_alphanumeric() && c != '+' && c != '-' && c != '.')
+            let scheme_start = before
+                .rfind(|c: char| !c.is_alphanumeric() && c != '+' && c != '-' && c != '.')
                 .map(|p| p + 1)
                 .unwrap_or(0);
             let scheme = &result[scheme_start..start];
-            if scheme == "http" || scheme == "https" || scheme == "ssh" || scheme == "git" || scheme == "socks5" || scheme == "socks5h" {
+            if scheme == "http"
+                || scheme == "https"
+                || scheme == "ssh"
+                || scheme == "git"
+                || scheme == "socks5"
+                || scheme == "socks5h"
+            {
                 let rest = &result[start + 3..];
                 if let Some(at_pos) = rest.find('@') {
                     let before_at = &rest[..at_pos];
@@ -241,7 +253,8 @@ pub fn redact_secrets_from_message(msg: &str, known_token: Option<&str>, remote_
                         let redacted = format!("{}://***@", scheme);
                         let after_at = &rest[at_pos + 1..];
                         // Find end (space, newline, comma, end-of-string)
-                        let end = after_at.find(|c: char| c.is_whitespace() || c == ',' || c == ')' || c == ']')
+                        let end = after_at
+                            .find(|c: char| c.is_whitespace() || c == ',' || c == ')' || c == ']')
                             .unwrap_or(after_at.len());
                         let full = format!("{}://{}{}", scheme, before_at, &after_at[..end]);
                         let replacement = format!("{}***@{}", redacted, &after_at[..end]);
@@ -315,7 +328,6 @@ pub struct SyncConflict {
     pub created_at: i64,
     pub description: String,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkProbeResult {
@@ -550,7 +562,9 @@ impl Git2Backend {
         if let Some(cfg) = config {
             if cfg.proxy_enabled {
                 if cfg.proxy_host.is_empty() {
-                    return Err(crate::Error::Other("Proxy host cannot be empty".to_string()));
+                    return Err(crate::Error::Other(
+                        "Proxy host cannot be empty".to_string(),
+                    ));
                 }
                 if cfg.proxy_port == 0 {
                     return Err(crate::Error::Other("Proxy port is invalid".to_string()));
@@ -577,14 +591,15 @@ impl Git2Backend {
         Ok(proxy_opts)
     }
 
-    fn build_callbacks<'a>(auth: Option<&'a GitAuth>, username_override: Option<&'a str>) -> git2::RemoteCallbacks<'a> {
+    fn build_callbacks<'a>(
+        auth: Option<&'a GitAuth>,
+        username_override: Option<&'a str>,
+    ) -> git2::RemoteCallbacks<'a> {
         let mut callbacks = git2::RemoteCallbacks::new();
         if let Some(auth) = auth {
             callbacks.credentials(move |_url, username_from_url, _allowed_types| match auth {
                 GitAuth::HttpsToken { username, token } => {
-                    let user = username_override
-                        .or(username_from_url)
-                        .unwrap_or(username);
+                    let user = username_override.or(username_from_url).unwrap_or(username);
                     git2::Cred::userpass_plaintext(user, token)
                 }
                 GitAuth::SshDeployKey => {
@@ -598,32 +613,20 @@ impl Git2Backend {
 
 impl GitBackend for Git2Backend {
     fn init_repo(&self, local_repo_path: &Path) -> crate::Result<()> {
-        git2::Repository::init(local_repo_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        git2::Repository::init(local_repo_path)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 
     fn ensure_remote(&self, local_repo_path: &Path, remote_url: &str) -> crate::Result<()> {
-        let repo = git2::Repository::open(local_repo_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let repo = git2::Repository::open(local_repo_path)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         if repo.find_remote("origin").is_err() {
-            repo.remote("origin", remote_url).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+            repo.remote("origin", remote_url)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         } else {
-            repo.remote_set_url("origin", remote_url).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+            repo.remote_set_url("origin", remote_url)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         }
         Ok(())
     }
@@ -633,17 +636,11 @@ impl GitBackend for Git2Backend {
     }
 
     fn is_worktree_empty_or_git_only(&self, local_repo_path: &Path) -> crate::Result<bool> {
-        let entries = std::fs::read_dir(local_repo_path).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let entries = std::fs::read_dir(local_repo_path)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         for entry in entries {
-            let entry = entry.map_err(|e| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+            let entry =
+                entry.map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
             let name = entry.file_name();
             if name != ".git" {
                 return Ok(false);
@@ -660,7 +657,13 @@ impl GitBackend for Git2Backend {
         proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let mut fetch_options = git2::FetchOptions::new();
-        let username_override = proxy_config.and_then(|c| if c.username.is_empty() { None } else { Some(c.username.as_str()) });
+        let username_override = proxy_config.and_then(|c| {
+            if c.username.is_empty() {
+                None
+            } else {
+                Some(c.username.as_str())
+            }
+        });
         let callbacks = Self::build_callbacks(auth, username_override);
         fetch_options.remote_callbacks(callbacks);
         let proxy_opts = Self::build_proxy_options(proxy_config)?;
@@ -671,20 +674,13 @@ impl GitBackend for Git2Backend {
 
         builder
             .clone(remote_url, local_repo_path)
-            .map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 
     fn open_repo(&self, local_repo_path: &Path) -> crate::Result<()> {
-        git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        git2::Repository::open(local_repo_path)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 
@@ -695,11 +691,8 @@ impl GitBackend for Git2Backend {
         auth: Option<&GitAuth>,
         proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
-        let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let repo = git2::Repository::open(local_repo_path)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         // Record transaction anchors
         let is_unborn = repo.head().is_err();
@@ -729,39 +722,37 @@ impl GitBackend for Git2Backend {
             }
         };
 
-        let mut remote = repo.find_remote("origin").map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let mut remote = repo
+            .find_remote("origin")
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let mut fetch_options = git2::FetchOptions::new();
-        let username_override = proxy_config.and_then(|c| if c.username.is_empty() { None } else { Some(c.username.as_str()) });
+        let username_override = proxy_config.and_then(|c| {
+            if c.username.is_empty() {
+                None
+            } else {
+                Some(c.username.as_str())
+            }
+        });
         fetch_options.remote_callbacks(Self::build_callbacks(auth, username_override));
         fetch_options.proxy_options(Self::build_proxy_options(proxy_config)?);
 
         if let Err(e) = remote.fetch(&[branch], Some(&mut fetch_options), None) {
             rollback(&repo);
-            return Err(crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            )));
+            return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
         }
 
         let fetch_head = repo
             .find_reference("FETCH_HEAD")
             .map_err(|e: git2::Error| {
                 rollback(&repo);
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
+                crate::Error::Io(std::io::Error::other(e.to_string()))
             })?;
         let fetch_commit =
             repo.reference_to_annotated_commit(&fetch_head)
                 .map_err(|e: git2::Error| {
                     rollback(&repo);
-                    crate::Error::Io(std::io::Error::other(
-                        e.to_string(),
-                    ))
+                    crate::Error::Io(std::io::Error::other(e.to_string()))
                 })?;
 
         // Handle unborn local repository
@@ -773,7 +764,10 @@ impl GitBackend for Git2Backend {
                     return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             };
-            if let Err(e) = repo.checkout_tree(commit_obj.as_object(), Some(git2::build::CheckoutBuilder::default().force())) {
+            if let Err(e) = repo.checkout_tree(
+                commit_obj.as_object(),
+                Some(git2::build::CheckoutBuilder::default().force()),
+            ) {
                 rollback(&repo);
                 return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
@@ -792,14 +786,14 @@ impl GitBackend for Git2Backend {
             .merge_analysis(&[&fetch_commit])
             .map_err(|e: git2::Error| {
                 rollback(&repo);
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
+                crate::Error::Io(std::io::Error::other(e.to_string()))
             })?;
 
         // Pre-pull safety check: check for index conflicts and blocking untracked files
         let refname = format!("refs/heads/{}", branch);
-        if let Ok(statuses) = repo.statuses(Some(git2::StatusOptions::new().include_untracked(true))) {
+        if let Ok(statuses) =
+            repo.statuses(Some(git2::StatusOptions::new().include_untracked(true)))
+        {
             let mut blocking_files = Vec::new();
             for entry in statuses.iter() {
                 if let Some(path) = entry.path() {
@@ -807,7 +801,10 @@ impl GitBackend for Git2Backend {
                         continue;
                     }
                     let status = entry.status();
-                    if status.is_index_new() || status.is_index_deleted() || status.is_index_modified() {
+                    if status.is_index_new()
+                        || status.is_index_deleted()
+                        || status.is_index_modified()
+                    {
                         // Index has conflicts or unmerged entries
                         if status.is_conflicted() {
                             rollback(&repo);
@@ -817,7 +814,8 @@ impl GitBackend for Git2Backend {
                                 local_dirty: true,
                                 remote_changed: true,
                                 conflicted_files: conflicts,
-                                blocked_reason: "本地 Git 暂存区存在未解决的冲突，请先解决冲突。".to_string(),
+                                blocked_reason: "本地 Git 暂存区存在未解决的冲突，请先解决冲突。"
+                                    .to_string(),
                                 safe_next_steps: vec![
                                     "备份当前工作区。".to_string(),
                                     "运行诊断确认网络/认证没问题。".to_string(),
@@ -825,16 +823,16 @@ impl GitBackend for Git2Backend {
                                 ],
                             };
                             let payload = serde_json::to_string(&summary).unwrap_or_default();
-                            return Err(crate::Error::Io(std::io::Error::other(
-                                format!("checkout_conflict_payload:{}", payload),
-                            )));
+                            return Err(crate::Error::Io(std::io::Error::other(format!(
+                                "checkout_conflict_payload:{}",
+                                payload
+                            ))));
                         }
                     }
                     // Check for untracked files that would be overwritten
-                    if status.is_wt_new()
-                        && SyncService::is_whitelisted_path(path) {
-                            blocking_files.push(path.to_string());
-                        }
+                    if status.is_wt_new() && SyncService::is_whitelisted_path(path) {
+                        blocking_files.push(path.to_string());
+                    }
                 }
             }
             if !blocking_files.is_empty() {
@@ -844,7 +842,10 @@ impl GitBackend for Git2Backend {
                     local_dirty: true,
                     remote_changed: true,
                     conflicted_files: blocking_files.clone(),
-                    blocked_reason: format!("本地工作区有 {} 个未跟踪文件会阻止远端 checkout。", blocking_files.len()),
+                    blocked_reason: format!(
+                        "本地工作区有 {} 个未跟踪文件会阻止远端 checkout。",
+                        blocking_files.len()
+                    ),
                     safe_next_steps: vec![
                         "备份当前工作区。".to_string(),
                         "运行诊断确认网络/认证没问题。".to_string(),
@@ -852,9 +853,10 @@ impl GitBackend for Git2Backend {
                     ],
                 };
                 let payload = serde_json::to_string(&summary).unwrap_or_default();
-                return Err(crate::Error::Io(std::io::Error::other(
-                    format!("checkout_conflict_payload:{}", payload),
-                )));
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "checkout_conflict_payload:{}",
+                    payload
+                ))));
             }
         }
 
@@ -867,7 +869,7 @@ impl GitBackend for Git2Backend {
             // Step 1: Dry-run checkout to detect conflicts before making any changes
             let conflicted_paths = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
             let cp_clone = conflicted_paths.clone();
-            
+
             let mut dry_run_builder = git2::build::CheckoutBuilder::default();
             dry_run_builder.notify_on(git2::CheckoutNotificationType::CONFLICT);
             dry_run_builder.notify(move |_, path, _, _, _| {
@@ -886,10 +888,7 @@ impl GitBackend for Git2Backend {
                     return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             };
-            if let Err(e) = repo.checkout_tree(
-                fetch_tree.as_object(),
-                Some(&mut dry_run_builder),
-            ) {
+            if let Err(e) = repo.checkout_tree(fetch_tree.as_object(), Some(&mut dry_run_builder)) {
                 rollback(&repo);
                 let err_msg = e.to_string();
                 if err_msg.contains("conflict") || err_msg.contains("Conflict") {
@@ -899,7 +898,8 @@ impl GitBackend for Git2Backend {
                         local_dirty: true,
                         remote_changed: true,
                         conflicted_files: paths,
-                        blocked_reason: "本地未提交的改动与远端更新冲突，Git 无法安全检出。".to_string(),
+                        blocked_reason: "本地未提交的改动与远端更新冲突，Git 无法安全检出。"
+                            .to_string(),
                         safe_next_steps: vec![
                             "备份当前工作区。".to_string(),
                             "运行诊断确认网络/认证没问题。".to_string(),
@@ -907,13 +907,15 @@ impl GitBackend for Git2Backend {
                         ],
                     };
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::Io(std::io::Error::other(
-                        format!("checkout_conflict_payload:{}", payload),
-                    )));
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "checkout_conflict_payload:{}",
+                        payload
+                    ))));
                 }
-                return Err(crate::Error::Io(std::io::Error::other(
-                    format!("checkout dry-run failed: {}", err_msg),
-                )));
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "checkout dry-run failed: {}",
+                    err_msg
+                ))));
             }
 
             // Step 2: Actual checkout (safe) - still no ref/head change yet
@@ -929,9 +931,7 @@ impl GitBackend for Git2Backend {
                 Some(git2::build::CheckoutBuilder::default().safe()),
             ) {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                )));
+                return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
 
             // Step 3: Only after successful checkout, update ref and head
@@ -939,38 +939,39 @@ impl GitBackend for Git2Backend {
                 Ok(r) => r,
                 Err(e) => {
                     rollback(&repo);
-                    return Err(crate::Error::Io(std::io::Error::other(
-                        e.to_string(),
-                    )));
+                    return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
                 }
             };
             if let Err(e) = reference.set_target(fetch_commit.id(), "Fast-Forward") {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                )));
+                return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
             if let Err(e) = repo.set_head(&refname) {
                 rollback(&repo);
-                return Err(crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                )));
+                return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
         } else if analysis.0.is_normal() {
             let mut merge_opts = git2::MergeOptions::new();
             if let Err(e) = repo.merge(&[&fetch_commit], Some(&mut merge_opts), None) {
                 rollback(&repo);
                 let err_msg = e.to_string();
-                if e.code() == git2::ErrorCode::Conflict || e.class() == git2::ErrorClass::Checkout || err_msg.contains("conflict") || err_msg.contains("Conflict") {
-                    let summary = build_conflict_summary(&repo, Some(fetch_commit.id()), "本地未提交的改动或冲突阻止了合并操作。");
+                if e.code() == git2::ErrorCode::Conflict
+                    || e.class() == git2::ErrorClass::Checkout
+                    || err_msg.contains("conflict")
+                    || err_msg.contains("Conflict")
+                {
+                    let summary = build_conflict_summary(
+                        &repo,
+                        Some(fetch_commit.id()),
+                        "本地未提交的改动或冲突阻止了合并操作。",
+                    );
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::Io(std::io::Error::other(
-                        format!("checkout_conflict_payload:{}", payload),
-                    )));
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "checkout_conflict_payload:{}",
+                        payload
+                    ))));
                 }
-                return Err(crate::Error::Io(std::io::Error::other(
-                    err_msg,
-                )));
+                return Err(crate::Error::Io(std::io::Error::other(err_msg)));
             }
 
             let mut index = match repo.index() {
@@ -988,9 +989,20 @@ impl GitBackend for Git2Backend {
                 if let Ok(mut conflicts) = index.conflicts() {
                     let mut settings_conflict = None;
                     for c in conflicts.by_ref().flatten() {
-                        let path_opt = c.our.as_ref().map(|o| String::from_utf8_lossy(&o.path).to_string())
-                            .or_else(|| c.their.as_ref().map(|t| String::from_utf8_lossy(&t.path).to_string()))
-                            .or_else(|| c.ancestor.as_ref().map(|a| String::from_utf8_lossy(&a.path).to_string()));
+                        let path_opt = c
+                            .our
+                            .as_ref()
+                            .map(|o| String::from_utf8_lossy(&o.path).to_string())
+                            .or_else(|| {
+                                c.their
+                                    .as_ref()
+                                    .map(|t| String::from_utf8_lossy(&t.path).to_string())
+                            })
+                            .or_else(|| {
+                                c.ancestor
+                                    .as_ref()
+                                    .map(|a| String::from_utf8_lossy(&a.path).to_string())
+                            });
                         if let Some(p) = path_opt {
                             if p == "app-meta/settings/settings.sync.json" {
                                 settings_conflict = Some(c);
@@ -1000,43 +1012,67 @@ impl GitBackend for Git2Backend {
                     }
 
                     if let Some(c) = settings_conflict {
-                        let base_json = c.ancestor.as_ref()
+                        let base_json = c
+                            .ancestor
+                            .as_ref()
                             .and_then(|entry| repo.find_blob(entry.id).ok())
                             .and_then(|blob| {
                                 let s = std::str::from_utf8(blob.content()).ok()?;
-                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s).ok()
+                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                                    s,
+                                )
+                                .ok()
                             })
                             .unwrap_or_default();
 
-                        let local_json = c.our.as_ref()
+                        let local_json = c
+                            .our
+                            .as_ref()
                             .and_then(|entry| repo.find_blob(entry.id).ok())
                             .and_then(|blob| {
                                 let s = std::str::from_utf8(blob.content()).ok()?;
-                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s).ok()
+                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                                    s,
+                                )
+                                .ok()
                             })
                             .unwrap_or_default();
 
-                        let remote_json = c.their.as_ref()
+                        let remote_json = c
+                            .their
+                            .as_ref()
                             .and_then(|entry| repo.find_blob(entry.id).ok())
                             .and_then(|blob| {
                                 let s = std::str::from_utf8(blob.content()).ok()?;
-                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s).ok()
+                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                                    s,
+                                )
+                                .ok()
                             })
                             .unwrap_or_default();
 
-                        match SyncService::semantic_merge_json(&base_json, &local_json, &remote_json) {
+                        match SyncService::semantic_merge_json(
+                            &base_json,
+                            &local_json,
+                            &remote_json,
+                        ) {
                             Ok(merged_map) => {
                                 let merged_value = serde_json::Value::Object(merged_map);
-                                let merged_str = serde_json::to_string_pretty(&merged_value).unwrap_or_default();
-                                
-                                let settings_path = local_repo_path.join("app-meta/settings/settings.sync.json");
+                                let merged_str =
+                                    serde_json::to_string_pretty(&merged_value).unwrap_or_default();
+
+                                let settings_path =
+                                    local_repo_path.join("app-meta/settings/settings.sync.json");
                                 if let Some(parent) = settings_path.parent() {
                                     std::fs::create_dir_all(parent).ok();
                                 }
                                 let _ = std::fs::write(&settings_path, &merged_str);
 
                                 if let Ok(mut mut_index) = repo.index() {
-                                    if mut_index.add_path(Path::new("app-meta/settings/settings.sync.json")).is_ok() {
+                                    if mut_index
+                                        .add_path(Path::new("app-meta/settings/settings.sync.json"))
+                                        .is_ok()
+                                    {
                                         let _ = mut_index.write();
                                         resolved_settings = true;
                                     }
@@ -1059,9 +1095,10 @@ impl GitBackend for Git2Backend {
             if let Some(details) = settings_conflict_details {
                 rollback(&repo);
                 let payload = serde_json::to_string(&details).unwrap_or_default();
-                return Err(crate::Error::Io(std::io::Error::other(
-                    format!("settings_conflict_payload:{}", payload),
-                )));
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "settings_conflict_payload:{}",
+                    payload
+                ))));
             }
 
             if index.has_conflicts() {
@@ -1140,75 +1177,50 @@ impl GitBackend for Git2Backend {
     }
 
     fn stage_paths(&self, local_repo_path: &Path, paths: &[&str]) -> crate::Result<()> {
-        let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
-        let mut index = repo.index().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let repo = git2::Repository::open(local_repo_path)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        let mut index = repo
+            .index()
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         for p in paths {
             if SyncService::is_blacklisted_path(p) || !SyncService::is_whitelisted_path(p) {
                 continue;
             }
-            index.add_path(Path::new(p)).map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+            index
+                .add_path(Path::new(p))
+                .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         }
-        index.write().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        index
+            .write()
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 
     fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>> {
-        let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
-        let mut index = repo.index().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
-        let oid = index.write_tree().map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
-        let signature =
-            git2::Signature::now("Sync User", "sync@writer.app").map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+        let repo = git2::Repository::open(local_repo_path)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        let mut index = repo
+            .index()
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        let oid = index
+            .write_tree()
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        let signature = git2::Signature::now("Sync User", "sync@writer.app")
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
-        let tree = repo.find_tree(oid).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let tree = repo
+            .find_tree(oid)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let head_commit = match repo.head() {
             Ok(head) => {
                 let target = head.target().ok_or_else(|| {
-                    crate::Error::Io(std::io::Error::other(
-                        "HEAD target not found",
-                    ))
+                    crate::Error::Io(std::io::Error::other("HEAD target not found"))
                 })?;
-                Some(repo.find_commit(target).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(
-                        e.to_string(),
-                    ))
-                })?)
+                Some(
+                    repo.find_commit(target)
+                        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?,
+                )
             }
             Err(_) => None,
         };
@@ -1233,11 +1245,7 @@ impl GitBackend for Git2Backend {
                 &tree,
                 &parent_refs,
             )
-            .map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         Ok(Some(commit_id.to_string()))
     }
@@ -1249,11 +1257,8 @@ impl GitBackend for Git2Backend {
         auth: Option<&GitAuth>,
         proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
-        let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let repo = git2::Repository::open(local_repo_path)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         // 1. Check index conflicts
         if let Ok(index) = repo.index() {
@@ -1278,9 +1283,10 @@ impl GitBackend for Git2Backend {
             (false, Some(commit)) => {
                 // Branch ref doesn't exist but HEAD has a commit. Reconstruct it.
                 repo.branch(branch, &commit, false).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(
-                        format!("fatal_error: Failed to reconstruct branch ref: {}", e),
-                    ))
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "fatal_error: Failed to reconstruct branch ref: {}",
+                        e
+                    )))
                 })?;
                 let _ = repo.set_head(&branch_ref_name);
             }
@@ -1292,34 +1298,31 @@ impl GitBackend for Git2Backend {
             }
         }
 
-        let mut remote = repo.find_remote("origin").map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let mut remote = repo
+            .find_remote("origin")
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let mut push_options = git2::PushOptions::new();
-        let username_override = proxy_config.and_then(|c| if c.username.is_empty() { None } else { Some(c.username.as_str()) });
+        let username_override = proxy_config.and_then(|c| {
+            if c.username.is_empty() {
+                None
+            } else {
+                Some(c.username.as_str())
+            }
+        });
         push_options.remote_callbacks(Self::build_callbacks(auth, username_override));
         push_options.proxy_options(Self::build_proxy_options(proxy_config)?);
 
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
         remote
             .push(&[&refspec], Some(&mut push_options))
-            .map_err(|e: git2::Error| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(())
     }
 
     fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>> {
-        let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let repo = git2::Repository::open(local_repo_path)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         if let Ok(head) = repo.head() {
             if let Some(target) = head.target() {
                 return Ok(Some(target.to_string()));
@@ -1329,18 +1332,13 @@ impl GitBackend for Git2Backend {
     }
 
     fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>> {
-        let repo = git2::Repository::open(local_repo_path).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let repo = git2::Repository::open(local_repo_path)
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true);
-        let statuses = repo.statuses(Some(&mut opts)).map_err(|e: git2::Error| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let statuses = repo
+            .statuses(Some(&mut opts))
+            .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let mut res = Vec::new();
         for entry in statuses.iter() {
             if let Some(path) = entry.path() {
@@ -1427,7 +1425,6 @@ struct ProbedClient {
 }
 
 impl GitHubApiBackend {
-
     fn classify_reqwest_error(e: &reqwest::Error) -> (String, String) {
         let msg = e.to_string().to_lowercase();
         if msg.contains("dns") || msg.contains("resolve") || msg.contains("name resolution") {
@@ -1435,7 +1432,10 @@ impl GitHubApiBackend {
         } else if msg.contains("ssl") || msg.contains("certificate") || msg.contains("tls") {
             ("tls_failed".to_string(), "SSL/TLS 握手失败".to_string())
         } else if msg.contains("connection refused") {
-            ("connection_refused".to_string(), "连接被拒绝 (端口可能未开放)".to_string())
+            (
+                "connection_refused".to_string(),
+                "连接被拒绝 (端口可能未开放)".to_string(),
+            )
         } else if e.is_timeout() || msg.contains("timeout") {
             ("timeout".to_string(), "连接超时".to_string())
         } else {
@@ -1443,39 +1443,105 @@ impl GitHubApiBackend {
         }
     }
 
-    fn build_auto_client(config: &SyncConfig, secrets: &SyncSecrets, workspace_path: Option<&Path>) -> crate::Result<(ProbedClient, Vec<NetworkProbeResult>)> {
+    fn build_auto_client(
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+        workspace_path: Option<&Path>,
+    ) -> crate::Result<(ProbedClient, Vec<NetworkProbeResult>)> {
         let mut probe_summary = Vec::new();
         let token = secrets.token.clone().unwrap_or_default();
         let api_base = Self::api_base_url(&config.remote_url);
-        let test_url = format!("{}/rate_limit", if api_base.starts_with("https://api.github.com/repos/") { "https://api.github.com" } else { &api_base });
+        let test_url = format!(
+            "{}/rate_limit",
+            if api_base.starts_with("https://api.github.com/repos/") {
+                "https://api.github.com"
+            } else {
+                &api_base
+            }
+        );
 
         let mut candidates = match config.proxy_type.as_str() {
             "auto" | "" => vec![
-                ("direct".to_string(), "none".to_string(), "".to_string(), 0u16),
-                ("http_local_7890".to_string(), "http".to_string(), "127.0.0.1".to_string(), 7890u16),
-                ("socks5_local_7891".to_string(), "socks5".to_string(), "127.0.0.1".to_string(), 7891u16),
+                (
+                    "direct".to_string(),
+                    "none".to_string(),
+                    "".to_string(),
+                    0u16,
+                ),
+                (
+                    "http_local_7890".to_string(),
+                    "http".to_string(),
+                    "127.0.0.1".to_string(),
+                    7890u16,
+                ),
+                (
+                    "socks5_local_7891".to_string(),
+                    "socks5".to_string(),
+                    "127.0.0.1".to_string(),
+                    7891u16,
+                ),
             ],
-            "none" => vec![
-                ("direct".to_string(), "none".to_string(), "".to_string(), 0u16),
-            ],
+            "none" => vec![(
+                "direct".to_string(),
+                "none".to_string(),
+                "".to_string(),
+                0u16,
+            )],
             "http" => {
-                let host = if config.proxy_host.is_empty() { "127.0.0.1" } else { &config.proxy_host };
-                let port = if config.proxy_port > 0 { config.proxy_port } else { 7890 };
-                vec![
-                    (format!("http_{}:{}", host, port), "http".to_string(), host.to_string(), port),
-                ]
-            },
+                let host = if config.proxy_host.is_empty() {
+                    "127.0.0.1"
+                } else {
+                    &config.proxy_host
+                };
+                let port = if config.proxy_port > 0 {
+                    config.proxy_port
+                } else {
+                    7890
+                };
+                vec![(
+                    format!("http_{}:{}", host, port),
+                    "http".to_string(),
+                    host.to_string(),
+                    port,
+                )]
+            }
             "socks5" => {
-                let host = if config.proxy_host.is_empty() { "127.0.0.1" } else { &config.proxy_host };
-                let port = if config.proxy_port > 0 { config.proxy_port } else { 7891 };
-                vec![
-                    (format!("socks5_{}:{}", host, port), "socks5".to_string(), host.to_string(), port),
-                ]
-            },
+                let host = if config.proxy_host.is_empty() {
+                    "127.0.0.1"
+                } else {
+                    &config.proxy_host
+                };
+                let port = if config.proxy_port > 0 {
+                    config.proxy_port
+                } else {
+                    7891
+                };
+                vec![(
+                    format!("socks5_{}:{}", host, port),
+                    "socks5".to_string(),
+                    host.to_string(),
+                    port,
+                )]
+            }
             _ => vec![
-                ("direct".to_string(), "none".to_string(), "".to_string(), 0u16),
-                ("http_local_7890".to_string(), "http".to_string(), "127.0.0.1".to_string(), 7890u16),
-                ("socks5_local_7891".to_string(), "socks5".to_string(), "127.0.0.1".to_string(), 7891u16),
+                (
+                    "direct".to_string(),
+                    "none".to_string(),
+                    "".to_string(),
+                    0u16,
+                ),
+                (
+                    "http_local_7890".to_string(),
+                    "http".to_string(),
+                    "127.0.0.1".to_string(),
+                    7890u16,
+                ),
+                (
+                    "socks5_local_7891".to_string(),
+                    "socks5".to_string(),
+                    "127.0.0.1".to_string(),
+                    7891u16,
+                ),
             ],
         };
 
@@ -1508,11 +1574,16 @@ impl GitHubApiBackend {
 
             match builder.build() {
                 Ok(client) => {
-                    let req = client.get(&test_url)
+                    let req = client
+                        .get(&test_url)
                         .header("User-Agent", "WriterApp/1.0")
                         .header("Accept", "application/vnd.github+json");
 
-                    let req = if !token.is_empty() { req.header("Authorization", format!("Bearer {}", token)) } else { req };
+                    let req = if !token.is_empty() {
+                        req.header("Authorization", format!("Bearer {}", token))
+                    } else {
+                        req
+                    };
 
                     match req.send() {
                         Ok(resp) => {
@@ -1536,13 +1607,27 @@ impl GitHubApiBackend {
                             working_config.proxy_port = *p_port;
                             working_config.proxy_enabled = *p_type != "none";
                             let final_client = build_http_client(Some(&working_config))?;
-                            return Ok((ProbedClient { client: final_client, mode: mode_name.clone() }, probe_summary));
+                            return Ok((
+                                ProbedClient {
+                                    client: final_client,
+                                    mode: mode_name.clone(),
+                                },
+                                probe_summary,
+                            ));
                         }
                         Err(e) => {
                             let raw = e.to_string();
-                            let sanitized = if !token.is_empty() { raw.replace(&token, "***TOKEN***") } else { raw.clone() };
+                            let sanitized = if !token.is_empty() {
+                                raw.replace(&token, "***TOKEN***")
+                            } else {
+                                raw.clone()
+                            };
                             let truncated = if sanitized.len() > 200 {
-                                format!("{}...[truncated {} bytes]", &sanitized[..200], sanitized.len() - 200)
+                                format!(
+                                    "{}...[truncated {} bytes]",
+                                    &sanitized[..200],
+                                    sanitized.len() - 200
+                                )
                             } else {
                                 sanitized
                             };
@@ -1569,11 +1654,28 @@ impl GitHubApiBackend {
             }
         }
 
-        let error_detail = probe_summary.iter().map(|p| {
-            let err_suffix = p.raw_error.as_ref().map(|e| format!(" ({})", e)).unwrap_or_default();
-            format!("  [{}] {}: {}{}", if p.success { "OK" } else { "FAIL" }, p.mode, p.message, err_suffix)
-        }).collect::<Vec<_>>().join("\n");
-        Err(crate::Error::Other(format!("network_probe_failed: 所有网络路径探测均失败:\n{}", error_detail)))
+        let error_detail = probe_summary
+            .iter()
+            .map(|p| {
+                let err_suffix = p
+                    .raw_error
+                    .as_ref()
+                    .map(|e| format!(" ({})", e))
+                    .unwrap_or_default();
+                format!(
+                    "  [{}] {}: {}{}",
+                    if p.success { "OK" } else { "FAIL" },
+                    p.mode,
+                    p.message,
+                    err_suffix
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(crate::Error::Other(format!(
+            "network_probe_failed: 所有网络路径探测均失败:\n{}",
+            error_detail
+        )))
     }
 
     fn api_base_url(remote_url: &str) -> String {
@@ -1597,9 +1699,15 @@ impl SyncBackend for GitHubApiBackend {
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
-        result.remote_url_sanitized = sanitize_remote_url(&config.remote_url).sanitized_url.clone();
+        result.remote_url_sanitized = sanitize_remote_url(&config.remote_url)
+            .sanitized_url
+            .clone();
         result.transport = "https".to_string();
-        result.app_proxy_status = if config.proxy_enabled { "已启用".to_string() } else { "未启用".to_string() };
+        result.app_proxy_status = if config.proxy_enabled {
+            "已启用".to_string()
+        } else {
+            "未启用".to_string()
+        };
 
         if !config.android_has_internet_permission {
             result.user_message = "缺少 INTERNET 权限。".to_string();
@@ -1632,7 +1740,13 @@ impl SyncBackend for GitHubApiBackend {
 
         let api_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
 
-        match client.get(&api_url).header("Authorization", format!("Bearer {}", token)).header("User-Agent", "WriterApp/1.0").header("Accept", "application/vnd.github+json").send() {
+        match client
+            .get(&api_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+        {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let body = resp.text().unwrap_or_default();
@@ -1646,19 +1760,34 @@ impl SyncBackend for GitHubApiBackend {
                     result.repo_status = "ok".to_string();
                     result.branch_ok = true;
                     result.branch_status = "ok".to_string();
-                    result.user_message = format!("诊断成功：GitHub API 可达，Token 有效，仓库和分支存在。(使用网络模式: {})", mode);
+                    result.user_message = format!(
+                        "诊断成功：GitHub API 可达，Token 有效，仓库和分支存在。(使用网络模式: {})",
+                        mode
+                    );
                 } else if status == 401 || status == 403 {
                     result.network_ok = true;
                     result.network_status = "ok".to_string();
                     result.auth_ok = false;
                     result.auth_status = "failed".to_string();
-                    result.error_category = if status == 401 { "token_invalid" } else { "token_permission_denied" }.to_string();
+                    result.error_category = if status == 401 {
+                        "token_invalid"
+                    } else {
+                        "token_permission_denied"
+                    }
+                    .to_string();
                     result.user_message = if status == 401 {
                         format!("身份验证失败。Token 无效或已过期。(使用网络模式: {})", mode)
                     } else {
-                        format!("Token 权限不足。请确认 Token 具有 repo 权限范围。(使用网络模式: {})", mode)
+                        format!(
+                            "Token 权限不足。请确认 Token 具有 repo 权限范围。(使用网络模式: {})",
+                            mode
+                        )
                     };
-                    result.raw_error = Some(format!("HTTP {} (body truncated): {}", status, &body.chars().take(200).collect::<String>()));
+                    result.raw_error = Some(format!(
+                        "HTTP {} (body truncated): {}",
+                        status,
+                        &body.chars().take(200).collect::<String>()
+                    ));
                 } else if status == 404 {
                     result.network_ok = true;
                     result.network_status = "ok".to_string();
@@ -1667,31 +1796,64 @@ impl SyncBackend for GitHubApiBackend {
                     result.repo_ok = false;
                     result.repo_status = "failed".to_string();
                     result.error_category = "repo_not_found_or_no_permission".to_string();
-                    result.user_message = format!("找不到仓库或分支。请检查仓库地址和分支名称。(使用网络模式: {})", mode);
-                    result.raw_error = Some(format!("HTTP {} (body truncated): {}", status, &body.chars().take(200).collect::<String>()));
+                    result.user_message = format!(
+                        "找不到仓库或分支。请检查仓库地址和分支名称。(使用网络模式: {})",
+                        mode
+                    );
+                    result.raw_error = Some(format!(
+                        "HTTP {} (body truncated): {}",
+                        status,
+                        &body.chars().take(200).collect::<String>()
+                    ));
                 } else {
                     result.network_ok = false;
                     result.network_status = "failed".to_string();
                     result.error_category = "github_network_failed".to_string();
-                    result.user_message = format!("GitHub API 返回意外状态码: {} (使用网络模式: {})", status, mode);
-                    result.raw_error = Some(format!("HTTP {} (body truncated): {}", status, &body.chars().take(200).collect::<String>()));
+                    result.user_message = format!(
+                        "GitHub API 返回意外状态码: {} (使用网络模式: {})",
+                        status, mode
+                    );
+                    result.raw_error = Some(format!(
+                        "HTTP {} (body truncated): {}",
+                        status,
+                        &body.chars().take(200).collect::<String>()
+                    ));
                 }
             }
             Err(e) => {
                 let err_msg = e.to_string().to_lowercase();
                 result.raw_error = Some(e.to_string());
-                if err_msg.contains("dns") || err_msg.contains("resolve") || err_msg.contains("name resolution") {
+                if err_msg.contains("dns")
+                    || err_msg.contains("resolve")
+                    || err_msg.contains("name resolution")
+                {
                     result.error_category = "dns_failed".to_string();
-                    result.user_message = format!("无法解析 GitHub API 地址。请检查网络/DNS 设置。(尝试过的最后模式: {})", mode);
-                } else if err_msg.contains("ssl") || err_msg.contains("certificate") || err_msg.contains("tls") {
+                    result.user_message = format!(
+                        "无法解析 GitHub API 地址。请检查网络/DNS 设置。(尝试过的最后模式: {})",
+                        mode
+                    );
+                } else if err_msg.contains("ssl")
+                    || err_msg.contains("certificate")
+                    || err_msg.contains("tls")
+                {
                     result.error_category = "tls_failed".to_string();
-                    result.user_message = format!("SSL/TLS 连接失败。请检查网络环境或系统时间。(尝试过的最后模式: {})", mode);
-                } else if err_msg.contains("connection refused") || err_msg.contains("timeout") || err_msg.contains("network unreachable") {
+                    result.user_message = format!(
+                        "SSL/TLS 连接失败。请检查网络环境或系统时间。(尝试过的最后模式: {})",
+                        mode
+                    );
+                } else if err_msg.contains("connection refused")
+                    || err_msg.contains("timeout")
+                    || err_msg.contains("network unreachable")
+                {
                     result.error_category = "github_network_failed".to_string();
-                    result.user_message = format!("网络连接失败或超时。所有尝试路径均不可用。(尝试过的最后模式: {})", mode);
+                    result.user_message = format!(
+                        "网络连接失败或超时。所有尝试路径均不可用。(尝试过的最后模式: {})",
+                        mode
+                    );
                 } else {
                     result.error_category = "github_network_failed".to_string();
-                    result.user_message = format!("GitHub API 请求失败: {} (尝试过的最后模式: {})", e, mode);
+                    result.user_message =
+                        format!("GitHub API 请求失败: {} (尝试过的最后模式: {})", e, mode);
                 }
                 result.network_ok = false;
                 result.network_status = "failed".to_string();
@@ -1719,7 +1881,12 @@ impl SyncBackend for GitHubApiBackend {
         ))
     }
 
-    fn sync(&self, workspace_path: &Path, config: &SyncConfig, secrets: &SyncSecrets) -> crate::Result<SyncResult> {
+    fn sync(
+        &self,
+        workspace_path: &Path,
+        config: &SyncConfig,
+        secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
         eprintln!(
             "[sync] backend_type=github_api sync_mode=lww_manifest entry=GitHubApiBackend::sync remote_url={}",
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
@@ -1776,7 +1943,8 @@ impl SyncBackend for LocalFolderBackend {
         _secrets: &SyncSecrets,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
-        result.user_message = "LocalFolder 后端尚未实现。此后端用于配合 Syncthing 等外部同步工具。".to_string();
+        result.user_message =
+            "LocalFolder 后端尚未实现。此后端用于配合 Syncthing 等外部同步工具。".to_string();
         result.error_category = "backend_not_implemented".to_string();
         Ok(result)
     }
@@ -1867,16 +2035,15 @@ fn build_http_client(config: Option<&SyncConfig>) -> crate::Result<reqwest::bloc
                 "socks5" => format!("socks5h://{}:{}", cfg.proxy_host, cfg.proxy_port),
                 _ => format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port),
             };
-            let proxy = reqwest::Proxy::all(&proxy_url).map_err(|e| {
-                crate::Error::Other(format!("Failed to configure proxy: {}", e))
-            })?;
+            let proxy = reqwest::Proxy::all(&proxy_url)
+                .map_err(|e| crate::Error::Other(format!("Failed to configure proxy: {}", e)))?;
             builder = builder.proxy(proxy);
         }
     }
 
-    let client = builder.build().map_err(|e| {
-        crate::Error::Other(format!("Failed to build HTTP client: {}", e))
-    })?;
+    let client = builder
+        .build()
+        .map_err(|e| crate::Error::Other(format!("Failed to build HTTP client: {}", e)))?;
     Ok(client)
 }
 
@@ -1988,13 +2155,18 @@ fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
     if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
         for entry in statuses.iter() {
             if let Some(path) = entry.path() {
-                if SyncService::is_blacklisted_path(path) || !SyncService::is_whitelisted_path(path) {
+                if SyncService::is_blacklisted_path(path) || !SyncService::is_whitelisted_path(path)
+                {
                     continue;
                 }
                 let status = entry.status();
-                if status.is_wt_modified() || status.is_index_modified() ||
-                   status.is_wt_new() || status.is_index_new() ||
-                   status.is_wt_deleted() || status.is_index_deleted() {
+                if status.is_wt_modified()
+                    || status.is_index_modified()
+                    || status.is_wt_new()
+                    || status.is_index_new()
+                    || status.is_wt_deleted()
+                    || status.is_index_deleted()
+                {
                     local_dirty = true;
                     dirty_files.push(path.to_string());
                 }
@@ -2019,7 +2191,9 @@ fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
                         best_path = Some(String::from_utf8_lossy(&ancestor.path).to_string());
                     }
                     if let Some(path) = best_path {
-                        if !SyncService::is_blacklisted_path(&path) && SyncService::is_whitelisted_path(&path) {
+                        if !SyncService::is_blacklisted_path(&path)
+                            && SyncService::is_whitelisted_path(&path)
+                        {
                             conflicted.push(path);
                         }
                     }
@@ -2038,7 +2212,7 @@ fn build_conflict_summary(
     blocked_reason: &str,
 ) -> SyncConflictSummary {
     let (local_dirty, dirty_files) = collect_git_status_summary(repo);
-    
+
     let mut remote_changed = false;
     if let Some(remote_oid) = fetch_commit_id {
         if let Ok(head) = repo.head() {
@@ -2140,12 +2314,11 @@ fn get_user_friendly_error(err: &str) -> String {
         return "代理 127.0.0.1:7890 连接被拒绝，请确认手机代理 App 开启本机 HTTP 端口，或选择不使用手动代理，改走系统 VPN/全局模式。".to_string();
     }
     if e.contains("unsupported proxy protocol") && e.contains("socks5") {
-        return "当前构建版本的底层网络库不支持 SOCKS5 代理。请尝试使用 HTTP 代理或更新应用。".to_string();
+        return "当前构建版本的底层网络库不支持 SOCKS5 代理。请尝试使用 HTTP 代理或更新应用。"
+            .to_string();
     }
     format!("同步失败，请检查网络重试。({})", err)
 }
-
-
 
 fn fetch_and_reset_local_repo(
     workspace_path: &Path,
@@ -2154,9 +2327,10 @@ fn fetch_and_reset_local_repo(
     new_commit_sha: &str,
 ) -> crate::Result<()> {
     if let Ok(repo) = git2::Repository::open(workspace_path) {
-        let mut remote = repo.find_remote("origin").or_else(|_| {
-            repo.remote("origin", &config.remote_url)
-        }).map_err(|e| crate::Error::Other(e.to_string()))?;
+        let mut remote = repo
+            .find_remote("origin")
+            .or_else(|_| repo.remote("origin", &config.remote_url))
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
 
         let mut fetch_opts = git2::FetchOptions::new();
         if !token.is_empty() {
@@ -2175,16 +2349,26 @@ fn fetch_and_reset_local_repo(
             }
         }
 
-        let refspec = format!("refs/heads/{}:refs/remotes/origin/{}", config.branch, config.branch);
-        remote.fetch(&[refspec], Some(&mut fetch_opts), None).map_err(|e| crate::Error::Other(e.to_string()))?;
+        let refspec = format!(
+            "refs/heads/{}:refs/remotes/origin/{}",
+            config.branch, config.branch
+        );
+        remote
+            .fetch(&[refspec], Some(&mut fetch_opts), None)
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
 
-        let commit_oid = git2::Oid::from_str(new_commit_sha).map_err(|e| crate::Error::Other(e.to_string()))?;
-        let commit_obj = repo.find_commit(commit_oid).map_err(|e| crate::Error::Other(e.to_string()))?;
+        let commit_oid =
+            git2::Oid::from_str(new_commit_sha).map_err(|e| crate::Error::Other(e.to_string()))?;
+        let commit_obj = repo
+            .find_commit(commit_oid)
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
 
-        repo.reset(commit_obj.as_object(), git2::ResetType::Mixed, None).map_err(|e| crate::Error::Other(e.to_string()))?;
+        repo.reset(commit_obj.as_object(), git2::ResetType::Mixed, None)
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
 
         let branch_ref_name = format!("refs/heads/{}", config.branch);
-        repo.reference(&branch_ref_name, commit_oid, true, "LWW sync update").map_err(|e| crate::Error::Other(e.to_string()))?;
+        repo.reference(&branch_ref_name, commit_oid, true, "LWW sync update")
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
 
         let _ = repo.set_head(&format!("refs/heads/{}", config.branch));
     }
@@ -2192,7 +2376,6 @@ fn fetch_and_reset_local_repo(
 }
 
 impl SyncService {
-
     pub fn perform_sync_diagnostics(
         config: &SyncConfig,
         secrets: &SyncSecrets,
@@ -2208,7 +2391,8 @@ impl SyncService {
         };
 
         result.android_has_internet_permission = config.android_has_internet_permission;
-        result.android_has_access_network_state_permission = config.android_has_access_network_state_permission;
+        result.android_has_access_network_state_permission =
+            config.android_has_access_network_state_permission;
 
         if !config.android_has_internet_permission {
             result.user_message = "缺少 INTERNET 权限。Android 应用无法联网，请在 AndroidManifest.xml 中添加 android.permission.INTERNET。".to_string();
@@ -2246,9 +2430,9 @@ impl SyncService {
             return Ok(result);
         }
 
-
         if config.proxy_enabled {
-            result.app_proxy_status = "已启用 (注意：底层网络探测已精简，实际以最终请求结果为准)".to_string();
+            result.app_proxy_status =
+                "已启用 (注意：底层网络探测已精简，实际以最终请求结果为准)".to_string();
         } else {
             result.app_proxy_status = "未启用".to_string();
         }
@@ -2260,9 +2444,14 @@ impl SyncService {
         }
 
         let token_from_parsed = parsed.extracted_token;
-        let token = secrets.token.clone().or(token_from_parsed).unwrap_or_default();
+        let token = secrets
+            .token
+            .clone()
+            .or(token_from_parsed)
+            .unwrap_or_default();
         if token.is_empty() {
-            result.user_message = "缺少 GitHub Token。请在设置中配置，这是目前最推荐的同步方式。".to_string();
+            result.user_message =
+                "缺少 GitHub Token。请在设置中配置，这是目前最推荐的同步方式。".to_string();
             result.error_category = "token_missing".to_string();
             return Ok(result);
         }
@@ -2282,131 +2471,134 @@ impl SyncService {
         result.branch_status = "assumed_exists".to_string();
 
         result.success = true;
-        result.user_message = "基础配置检查通过。底层网络直连已简化，实际网络状况以执行同步时为准。".to_string();
+        result.user_message =
+            "基础配置检查通过。底层网络直连已简化，实际网络状况以执行同步时为准。".to_string();
 
         Ok(result)
     }
 
+    fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::Result<()> {
+        let branch_ref_name = format!("refs/heads/{}", branch);
 
-fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::Result<()> {
-    let branch_ref_name = format!("refs/heads/{}", branch);
-    
-    // 1. Clean up any leftover merge/rebase/etc. states first to ensure clean execution.
-    let _ = repo.cleanup_state();
+        // 1. Clean up any leftover merge/rebase/etc. states first to ensure clean execution.
+        let _ = repo.cleanup_state();
 
-    if repo.find_reference(&branch_ref_name).is_ok() {
-        // Branch exists, make sure HEAD points to it (symbolically or directly)
-        let _ = repo.set_head(&branch_ref_name);
-        return Ok(());
-    }
-
-    // Branch does not exist. Check if HEAD exists and points to a valid commit
-    if let Ok(head_ref) = repo.head() {
-        if let Ok(commit) = head_ref.peel_to_commit() {
-            // Create branch pointing to this commit
-            repo.branch(branch, &commit, false).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(
-                    format!("Failed to create branch '{}': {}", branch, e),
-                ))
-            })?;
-            repo.set_head(&branch_ref_name).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(
-                    format!("Failed to set HEAD to '{}': {}", branch, e),
-                ))
-            })?;
+        if repo.find_reference(&branch_ref_name).is_ok() {
+            // Branch exists, make sure HEAD points to it (symbolically or directly)
+            let _ = repo.set_head(&branch_ref_name);
             return Ok(());
         }
+
+        // Branch does not exist. Check if HEAD exists and points to a valid commit
+        if let Ok(head_ref) = repo.head() {
+            if let Ok(commit) = head_ref.peel_to_commit() {
+                // Create branch pointing to this commit
+                repo.branch(branch, &commit, false).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "Failed to create branch '{}': {}",
+                        branch, e
+                    )))
+                })?;
+                repo.set_head(&branch_ref_name).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "Failed to set HEAD to '{}': {}",
+                        branch, e
+                    )))
+                })?;
+                return Ok(());
+            }
+        }
+
+        // HEAD is unborn/empty (no commits yet). Set HEAD symbolically.
+        // The first commit will automatically create this branch.
+        repo.set_head(&branch_ref_name).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "Failed to set symbolic HEAD to '{}': {}",
+                branch, e
+            )))
+        })?;
+
+        Ok(())
     }
 
-    // HEAD is unborn/empty (no commits yet). Set HEAD symbolically.
-    // The first commit will automatically create this branch.
-    repo.set_head(&branch_ref_name).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(
-            format!("Failed to set symbolic HEAD to '{}': {}", branch, e),
-        ))
-    })?;
+    fn semantic_merge_json(
+        base: &serde_json::Map<String, serde_json::Value>,
+        local: &serde_json::Map<String, serde_json::Value>,
+        remote: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, Vec<SettingConflictDetail>> {
+        let mut merged = serde_json::Map::new();
+        let mut conflicts = Vec::new();
 
-    Ok(())
-}
+        // Collect all keys from all three maps
+        let mut keys: std::collections::HashSet<&String> = base.keys().collect();
+        keys.extend(local.keys());
+        keys.extend(remote.keys());
 
-fn semantic_merge_json(
-    base: &serde_json::Map<String, serde_json::Value>,
-    local: &serde_json::Map<String, serde_json::Value>,
-    remote: &serde_json::Map<String, serde_json::Value>,
-) -> Result<serde_json::Map<String, serde_json::Value>, Vec<SettingConflictDetail>> {
-    let mut merged = serde_json::Map::new();
-    let mut conflicts = Vec::new();
+        for key in keys {
+            let base_val = base.get(key);
+            let local_val = local.get(key);
+            let remote_val = remote.get(key);
 
-    // Collect all keys from all three maps
-    let mut keys: std::collections::HashSet<&String> = base.keys().collect();
-    keys.extend(local.keys());
-    keys.extend(remote.keys());
-
-    for key in keys {
-        let base_val = base.get(key);
-        let local_val = local.get(key);
-        let remote_val = remote.get(key);
-
-        match (base_val, local_val, remote_val) {
-            (None, None, None) => {}
-            (_, Some(l), None) => {
-                if base_val == Some(l) {
-                    // Deleted in remote, unmodified in local
-                } else {
-                    conflicts.push(SettingConflictDetail {
-                        key: key.clone(),
-                        local_value: l.clone(),
-                        remote_value: serde_json::Value::Null,
-                    });
+            match (base_val, local_val, remote_val) {
+                (None, None, None) => {}
+                (_, Some(l), None) => {
+                    if base_val == Some(l) {
+                        // Deleted in remote, unmodified in local
+                    } else {
+                        conflicts.push(SettingConflictDetail {
+                            key: key.clone(),
+                            local_value: l.clone(),
+                            remote_value: serde_json::Value::Null,
+                        });
+                    }
                 }
-            }
-            (_, None, Some(r)) => {
-                if base_val == Some(r) {
-                    // Deleted in local, unmodified in remote
-                } else {
-                    conflicts.push(SettingConflictDetail {
-                        key: key.clone(),
-                        local_value: serde_json::Value::Null,
-                        remote_value: r.clone(),
-                    });
+                (_, None, Some(r)) => {
+                    if base_val == Some(r) {
+                        // Deleted in local, unmodified in remote
+                    } else {
+                        conflicts.push(SettingConflictDetail {
+                            key: key.clone(),
+                            local_value: serde_json::Value::Null,
+                            remote_value: r.clone(),
+                        });
+                    }
                 }
-            }
-            (Some(b), Some(l), Some(r)) => {
-                if l == r {
-                    merged.insert(key.clone(), l.clone());
-                } else if l == b {
-                    merged.insert(key.clone(), r.clone());
-                } else if r == b {
-                    merged.insert(key.clone(), l.clone());
-                } else {
-                    conflicts.push(SettingConflictDetail {
-                        key: key.clone(),
-                        local_value: l.clone(),
-                        remote_value: r.clone(),
-                    });
+                (Some(b), Some(l), Some(r)) => {
+                    if l == r {
+                        merged.insert(key.clone(), l.clone());
+                    } else if l == b {
+                        merged.insert(key.clone(), r.clone());
+                    } else if r == b {
+                        merged.insert(key.clone(), l.clone());
+                    } else {
+                        conflicts.push(SettingConflictDetail {
+                            key: key.clone(),
+                            local_value: l.clone(),
+                            remote_value: r.clone(),
+                        });
+                    }
                 }
-            }
-            (None, Some(l), Some(r)) => {
-                if l == r {
-                    merged.insert(key.clone(), l.clone());
-                } else {
-                    conflicts.push(SettingConflictDetail {
-                        key: key.clone(),
-                        local_value: l.clone(),
-                        remote_value: r.clone(),
-                    });
+                (None, Some(l), Some(r)) => {
+                    if l == r {
+                        merged.insert(key.clone(), l.clone());
+                    } else {
+                        conflicts.push(SettingConflictDetail {
+                            key: key.clone(),
+                            local_value: l.clone(),
+                            remote_value: r.clone(),
+                        });
+                    }
                 }
+                (Some(_b), None, None) => {}
             }
-            (Some(_b), None, None) => {}
+        }
+
+        if !conflicts.is_empty() {
+            Err(conflicts)
+        } else {
+            Ok(merged)
         }
     }
-
-    if !conflicts.is_empty() {
-        Err(conflicts)
-    } else {
-        Ok(merged)
-    }
-}
 
     pub fn perform_sync_dry_run(
         workspace_path: &Path,
@@ -2498,7 +2690,8 @@ fn semantic_merge_json(
                     if attempt >= max_retries {
                         result.status = SyncStatus::RecoverableError(e.to_string());
                         result.error = Some(e.to_string());
-                        result.user_message = Some(format!("同步失败，已重试 {} 次。错误: {}", max_retries, e));
+                        result.user_message =
+                            Some(format!("同步失败，已重试 {} 次。错误: {}", max_retries, e));
                         return Ok(result);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -2518,7 +2711,8 @@ fn semantic_merge_json(
         result: &mut SyncResult,
     ) -> crate::Result<SyncResult> {
         let branch_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
-        let resp = client.get(&branch_url)
+        let resp = client
+            .get(&branch_url)
             .header("Authorization", format!("Bearer {}", token))
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
@@ -2530,37 +2724,50 @@ fn semantic_merge_json(
         let mut remote_tree_files = std::collections::HashMap::new();
 
         if resp.status().as_u16() == 200 {
-            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
-            latest_commit_sha = json["object"]["sha"].as_str().unwrap_or_default().to_string();
+            let json: serde_json::Value = resp
+                .json()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+            latest_commit_sha = json["object"]["sha"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
 
             // get commit
             let commit_url = format!("{}/git/commits/{}", api_base, latest_commit_sha);
-            let resp = client.get(&commit_url)
+            let resp = client
+                .get(&commit_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
                 .send()
                 .map_err(|e| crate::Error::Other(e.to_string()))?;
             if resp.status().as_u16() == 200 {
-                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                let json: serde_json::Value = resp
+                    .json()
+                    .map_err(|e| crate::Error::Other(e.to_string()))?;
                 base_tree_sha = json["tree"]["sha"].as_str().unwrap_or_default().to_string();
             }
 
             // get tree recursively
             if !base_tree_sha.is_empty() {
                 let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, base_tree_sha);
-                let resp = client.get(&tree_url)
+                let resp = client
+                    .get(&tree_url)
                     .header("Authorization", format!("Bearer {}", token))
                     .header("User-Agent", "WriterApp/1.0")
                     .header("Accept", "application/vnd.github+json")
                     .send()
                     .map_err(|e| crate::Error::Other(e.to_string()))?;
                 if resp.status().as_u16() == 200 {
-                    let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                    let json: serde_json::Value = resp
+                        .json()
+                        .map_err(|e| crate::Error::Other(e.to_string()))?;
                     if let Some(tree) = json["tree"].as_array() {
                         for item in tree {
                             if item["type"].as_str() == Some("blob") {
-                                if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
+                                if let (Some(path), Some(sha)) =
+                                    (item["path"].as_str(), item["sha"].as_str())
+                                {
                                     remote_tree_files.insert(path.to_string(), sha.to_string());
                                 }
                             }
@@ -2572,8 +2779,12 @@ fn semantic_merge_json(
 
         let mut remote_manifest = SyncManifest::default();
         if remote_tree_files.contains_key("app-meta/sync/manifest.sync.json") {
-            let manifest_url = format!("{}/contents/app-meta/sync/manifest.sync.json?ref={}", api_base, config.branch);
-            let resp = client.get(&manifest_url)
+            let manifest_url = format!(
+                "{}/contents/app-meta/sync/manifest.sync.json?ref={}",
+                api_base, config.branch
+            );
+            let resp = client
+                .get(&manifest_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
@@ -2584,8 +2795,11 @@ fn semantic_merge_json(
                 if let Some(content_b64) = json["content"].as_str() {
                     let content_b64 = content_b64.replace("\n", "");
                     use base64::Engine;
-                    if let Ok(content_bytes) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
-                        if let Ok(manifest) = serde_json::from_slice::<SyncManifest>(&content_bytes) {
+                    if let Ok(content_bytes) =
+                        base64::engine::general_purpose::STANDARD.decode(&content_b64)
+                    {
+                        if let Ok(manifest) = serde_json::from_slice::<SyncManifest>(&content_bytes)
+                        {
                             remote_manifest = manifest;
                         }
                     }
@@ -2602,17 +2816,24 @@ fn semantic_merge_json(
             if entry.sync_kind == SyncKind::Upload {
                 let path = entry.relative_path.clone();
                 let local_hash = entry.file_hash.clone();
-                
+
                 let updated_at_ms;
                 let op = "upsert".to_string();
 
                 if let Some(known_hash) = state.known_files.get(&path) {
                     if *known_hash == local_hash {
-                        updated_at_ms = state.known_files_updated_at.get(&path).cloned().unwrap_or(0);
+                        updated_at_ms = state
+                            .known_files_updated_at
+                            .get(&path)
+                            .cloned()
+                            .unwrap_or(0);
                     } else {
                         let modified_ms = std::fs::metadata(workspace_path.join(&path))
                             .and_then(|m| m.modified())
-                            .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(std::io::Error::other))
+                            .and_then(|t| {
+                                t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                    .map_err(std::io::Error::other)
+                            })
                             .map(|d| d.as_millis() as i64)
                             .unwrap_or(now_ms);
                         updated_at_ms = modified_ms;
@@ -2620,20 +2841,26 @@ fn semantic_merge_json(
                 } else {
                     let modified_ms = std::fs::metadata(workspace_path.join(&path))
                         .and_then(|m| m.modified())
-                        .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(std::io::Error::other))
+                        .and_then(|t| {
+                            t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                .map_err(std::io::Error::other)
+                        })
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(now_ms);
                     updated_at_ms = modified_ms;
                 }
 
-                local_records.insert(path.clone(), ManifestFileRecord {
-                    path,
-                    content_hash: local_hash,
-                    updated_at_ms,
-                    device_id: state.device_id.clone(),
-                    op,
-                    schema_version: 1,
-                });
+                local_records.insert(
+                    path.clone(),
+                    ManifestFileRecord {
+                        path,
+                        content_hash: local_hash,
+                        updated_at_ms,
+                        device_id: state.device_id.clone(),
+                        op,
+                        schema_version: 1,
+                    },
+                );
             }
         }
 
@@ -2645,18 +2872,23 @@ fn semantic_merge_json(
                 }
                 if !workspace_path.join(path).exists() {
                     let mut updated_at_ms = now_ms;
-                    if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path) {
+                    if let Some(tombstone) =
+                        state.tombstones.iter().find(|t| t.original_path == *path)
+                    {
                         updated_at_ms = tombstone.deleted_at * 1000;
                     }
-                    
-                    local_records.insert(path.clone(), ManifestFileRecord {
-                        path: path.clone(),
-                        content_hash: String::new(),
-                        updated_at_ms,
-                        device_id: state.device_id.clone(),
-                        op: "delete".to_string(),
-                        schema_version: 1,
-                    });
+
+                    local_records.insert(
+                        path.clone(),
+                        ManifestFileRecord {
+                            path: path.clone(),
+                            content_hash: String::new(),
+                            updated_at_ms,
+                            device_id: state.device_id.clone(),
+                            op: "delete".to_string(),
+                            schema_version: 1,
+                        },
+                    );
                 }
             }
         }
@@ -2665,20 +2897,23 @@ fn semantic_merge_json(
         for rec in remote_manifest.files {
             remote_records.insert(rec.path.clone(), rec);
         }
-        
+
         for (path, sha) in &remote_tree_files {
             if !remote_records.contains_key(path) {
                 if !Self::is_whitelisted_path(path) || Self::is_blacklisted_path(path) {
                     continue;
                 }
-                remote_records.insert(path.clone(), ManifestFileRecord {
-                    path: path.clone(),
-                    content_hash: sha.clone(),
-                    updated_at_ms: 0,
-                    device_id: "remote".to_string(),
-                    op: "upsert".to_string(),
-                    schema_version: 1,
-                });
+                remote_records.insert(
+                    path.clone(),
+                    ManifestFileRecord {
+                        path: path.clone(),
+                        content_hash: sha.clone(),
+                        updated_at_ms: 0,
+                        device_id: "remote".to_string(),
+                        op: "upsert".to_string(),
+                        schema_version: 1,
+                    },
+                );
             }
         }
 
@@ -2690,8 +2925,11 @@ fn semantic_merge_json(
         let mut remote_deletes_count = Vec::new();
         let mut overwritten_files = Vec::new();
 
-        let all_paths: std::collections::HashSet<String> = local_records.keys().cloned()
-            .chain(remote_records.keys().cloned()).collect();
+        let all_paths: std::collections::HashSet<String> = local_records
+            .keys()
+            .cloned()
+            .chain(remote_records.keys().cloned())
+            .collect();
 
         for path in all_paths {
             let local_opt = local_records.get(&path);
@@ -2718,14 +2956,17 @@ fn semantic_merge_json(
                     if remote_rec.updated_at_ms > local_rec.updated_at_ms {
                         remote_wins = true;
                     } else if remote_rec.updated_at_ms == local_rec.updated_at_ms
-                        && remote_rec.device_id > local_rec.device_id {
-                            remote_wins = true;
-                        }
+                        && remote_rec.device_id > local_rec.device_id
+                    {
+                        remote_wins = true;
+                    }
 
                     if remote_wins {
                         merged_manifest_files.insert(path.clone(), remote_rec.clone());
                         if remote_rec.op == "upsert" {
-                            if local_rec.op == "delete" || local_rec.content_hash != remote_rec.content_hash {
+                            if local_rec.op == "delete"
+                                || local_rec.content_hash != remote_rec.content_hash
+                            {
                                 overwritten_files.push(path.clone());
                                 to_download.push(path);
                             }
@@ -2739,7 +2980,9 @@ fn semantic_merge_json(
                     } else {
                         merged_manifest_files.insert(path.clone(), local_rec.clone());
                         if local_rec.op == "upsert" {
-                            if remote_rec.op == "delete" || remote_rec.content_hash != local_rec.content_hash {
+                            if remote_rec.op == "delete"
+                                || remote_rec.content_hash != local_rec.content_hash
+                            {
                                 overwritten_files.push(path.clone());
                                 to_upload.push(path);
                             }
@@ -2759,10 +3002,19 @@ fn semantic_merge_json(
         for path in &to_delete_local {
             let full_path = workspace_path.join(path);
             if full_path.exists() {
-                let filename = full_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let filename = full_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let trash_dir = workspace_path.join("app-meta/sync/trash");
                 let _ = std::fs::create_dir_all(&trash_dir);
-                let trash_path = trash_dir.join(format!("{}_{}_{}", chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4(), filename));
+                let trash_path = trash_dir.join(format!(
+                    "{}_{}_{}",
+                    chrono::Utc::now().timestamp_millis(),
+                    uuid::Uuid::new_v4(),
+                    filename
+                ));
                 let _ = std::fs::rename(&full_path, &trash_path);
             }
         }
@@ -2770,7 +3022,8 @@ fn semantic_merge_json(
         // Download remote files
         for path in &to_download {
             let api_content_url = format!("{}/contents/{}?ref={}", api_base, path, config.branch);
-            let dl_resp = client.get(&api_content_url)
+            let dl_resp = client
+                .get(&api_content_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
@@ -2781,19 +3034,26 @@ fn semantic_merge_json(
                 if let Some(content_b64) = json["content"].as_str() {
                     let content_b64 = content_b64.replace("\n", "");
                     use base64::Engine;
-                    if let Ok(content) = base64::engine::general_purpose::STANDARD.decode(&content_b64) {
+                    if let Ok(content) =
+                        base64::engine::general_purpose::STANDARD.decode(&content_b64)
+                    {
                         let full_path = workspace_path.join(path);
                         if let Some(parent) = full_path.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
-                        let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                        let tmp_path =
+                            full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                         if std::fs::write(&tmp_path, content).is_ok() {
                             let _ = std::fs::rename(tmp_path, &full_path);
                         }
                     }
                 }
             } else {
-                return Err(crate::Error::Other(format!("Failed to download file {}: {}", path, dl_resp.status())));
+                return Err(crate::Error::Other(format!(
+                    "Failed to download file {}: {}",
+                    path,
+                    dl_resp.status()
+                )));
             }
         }
 
@@ -2802,25 +3062,31 @@ fn semantic_merge_json(
         // Upload whitelisted files
         for path in &to_upload {
             let full_path = workspace_path.join(path);
-            if !full_path.exists() { continue; }
+            if !full_path.exists() {
+                continue;
+            }
 
-            let content = std::fs::read(&full_path).map_err(|e| crate::Error::Other(format!("读取文件失败 {}: {}", path, e)))?;
+            let content = std::fs::read(&full_path)
+                .map_err(|e| crate::Error::Other(format!("读取文件失败 {}: {}", path, e)))?;
 
             let blob_url = format!("{}/git/blobs", api_base);
             let blob_payload = serde_json::json!({
                 "content": base64::engine::general_purpose::STANDARD.encode(&content),
                 "encoding": "base64"
             });
-            let resp = client.post(&blob_url)
+            let resp = client
+                .post(&blob_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
                 .json(&blob_payload)
                 .send()
                 .map_err(|e| crate::Error::Other(e.to_string()))?;
-            
+
             if resp.status().as_u16() == 201 {
-                let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+                let json: serde_json::Value = resp
+                    .json()
+                    .map_err(|e| crate::Error::Other(e.to_string()))?;
                 let sha = json["sha"].as_str().unwrap_or_default().to_string();
                 tree_nodes.push(serde_json::json!({
                     "path": path,
@@ -2829,34 +3095,39 @@ fn semantic_merge_json(
                     "sha": sha
                 }));
             } else {
-                return Err(crate::Error::Other(format!("Failed to upload blob for {}: {}", path, resp.status())));
+                return Err(crate::Error::Other(format!(
+                    "Failed to upload blob for {}: {}",
+                    path,
+                    resp.status()
+                )));
             }
         }
 
         let purge_time = now_ms - 30 * 24 * 3600 * 1000;
-        let mut manifest_files_vec: Vec<ManifestFileRecord> = merged_manifest_files.values().cloned().collect();
-        manifest_files_vec.retain(|rec| {
-            rec.op != "delete" || rec.updated_at_ms > purge_time
-        });
+        let mut manifest_files_vec: Vec<ManifestFileRecord> =
+            merged_manifest_files.values().cloned().collect();
+        manifest_files_vec.retain(|rec| rec.op != "delete" || rec.updated_at_ms > purge_time);
 
         let sync_manifest = SyncManifest {
             files: manifest_files_vec,
         };
-        
+
         let manifest_json = serde_json::to_string_pretty(&sync_manifest).unwrap_or_default();
         let manifest_path = "app-meta/sync/manifest.sync.json";
         let full_manifest_path = workspace_path.join(manifest_path);
         if let Some(parent) = full_manifest_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        std::fs::write(&full_manifest_path, &manifest_json).map_err(|e| crate::Error::Other(format!("Failed to write manifest locally: {}", e)))?;
+        std::fs::write(&full_manifest_path, &manifest_json)
+            .map_err(|e| crate::Error::Other(format!("Failed to write manifest locally: {}", e)))?;
 
         let blob_url = format!("{}/git/blobs", api_base);
         let blob_payload = serde_json::json!({
             "content": base64::engine::general_purpose::STANDARD.encode(manifest_json.as_bytes()),
             "encoding": "base64"
         });
-        let resp = client.post(&blob_url)
+        let resp = client
+            .post(&blob_url)
             .header("Authorization", format!("Bearer {}", token))
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
@@ -2864,10 +3135,15 @@ fn semantic_merge_json(
             .send()
             .map_err(|e| crate::Error::Other(e.to_string()))?;
         let manifest_sha = if resp.status().as_u16() == 201 {
-            let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+            let json: serde_json::Value = resp
+                .json()
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
             json["sha"].as_str().unwrap_or_default().to_string()
         } else {
-            return Err(crate::Error::Other(format!("Failed to upload manifest blob: {}", resp.status())));
+            return Err(crate::Error::Other(format!(
+                "Failed to upload manifest blob: {}",
+                resp.status()
+            )));
         };
 
         tree_nodes.push(serde_json::json!({
@@ -2898,7 +3174,8 @@ fn semantic_merge_json(
         }
 
         let tree_url = format!("{}/git/trees", api_base);
-        let resp = client.post(&tree_url)
+        let resp = client
+            .post(&tree_url)
             .header("Authorization", format!("Bearer {}", token))
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
@@ -2906,9 +3183,14 @@ fn semantic_merge_json(
             .send()
             .map_err(|e| crate::Error::Other(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(crate::Error::Other(format!("Failed to create tree: {}", resp.status())));
+            return Err(crate::Error::Other(format!(
+                "Failed to create tree: {}",
+                resp.status()
+            )));
         }
-        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+        let json: serde_json::Value = resp
+            .json()
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
         let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
 
         let commit_url = format!("{}/git/commits", api_base);
@@ -2919,7 +3201,8 @@ fn semantic_merge_json(
         if !latest_commit_sha.is_empty() {
             commit_payload["parents"] = serde_json::json!(vec![latest_commit_sha.clone()]);
         }
-        let resp = client.post(&commit_url)
+        let resp = client
+            .post(&commit_url)
             .header("Authorization", format!("Bearer {}", token))
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
@@ -2927,9 +3210,14 @@ fn semantic_merge_json(
             .send()
             .map_err(|e| crate::Error::Other(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(crate::Error::Other(format!("Failed to create commit: {}", resp.status())));
+            return Err(crate::Error::Other(format!(
+                "Failed to create commit: {}",
+                resp.status()
+            )));
         }
-        let json: serde_json::Value = resp.json().map_err(|e| crate::Error::Other(e.to_string()))?;
+        let json: serde_json::Value = resp
+            .json()
+            .map_err(|e| crate::Error::Other(e.to_string()))?;
         let new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
 
         if !latest_commit_sha.is_empty() {
@@ -2938,7 +3226,8 @@ fn semantic_merge_json(
                 "sha": new_commit_sha,
                 "force": false
             });
-            let resp = client.patch(&ref_url)
+            let resp = client
+                .patch(&ref_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
@@ -2949,7 +3238,10 @@ fn semantic_merge_json(
                 return Err(crate::Error::Other("occ_conflict".to_string()));
             }
             if !resp.status().is_success() {
-                return Err(crate::Error::Other(format!("Failed to update ref: {}", resp.status())));
+                return Err(crate::Error::Other(format!(
+                    "Failed to update ref: {}",
+                    resp.status()
+                )));
             }
         } else {
             let ref_url = format!("{}/git/refs", api_base);
@@ -2957,7 +3249,8 @@ fn semantic_merge_json(
                 "ref": format!("refs/heads/{}", config.branch),
                 "sha": new_commit_sha
             });
-            let resp = client.post(&ref_url)
+            let resp = client
+                .post(&ref_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
@@ -2965,7 +3258,10 @@ fn semantic_merge_json(
                 .send()
                 .map_err(|e| crate::Error::Other(e.to_string()))?;
             if !resp.status().is_success() {
-                return Err(crate::Error::Other(format!("Failed to create ref: {}", resp.status())));
+                return Err(crate::Error::Other(format!(
+                    "Failed to create ref: {}",
+                    resp.status()
+                )));
             }
         }
 
@@ -2973,34 +3269,46 @@ fn semantic_merge_json(
         state.last_synced_commit = Some(new_commit_sha.clone());
         state.last_error = None;
         state.last_successful_network_mode = Some(mode.to_string());
-        
+
         let post_local_entries = Self::scan_workspace_for_sync(workspace_path)?;
         state.known_files.clear();
         state.known_files_updated_at.clear();
         for entry in post_local_entries {
             if entry.sync_kind == SyncKind::Upload {
-                state.known_files.insert(entry.relative_path.clone(), entry.file_hash.clone());
-                
+                state
+                    .known_files
+                    .insert(entry.relative_path.clone(), entry.file_hash.clone());
+
                 let matched_rec = merged_manifest_files.get(&entry.relative_path);
                 let t = matched_rec.map(|r| r.updated_at_ms).unwrap_or_else(|| {
                     std::fs::metadata(workspace_path.join(&entry.relative_path))
                         .and_then(|m| m.modified())
-                        .and_then(|time| time.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(std::io::Error::other))
+                        .and_then(|time| {
+                            time.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                .map_err(std::io::Error::other)
+                        })
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(now_ms)
                 });
                 state.known_files_updated_at.insert(entry.relative_path, t);
             }
         }
-        
-        state.tombstones.retain(|t| {
-            t.purge_after > chrono::Utc::now().timestamp()
-        });
-        
+
+        state
+            .tombstones
+            .retain(|t| t.purge_after > chrono::Utc::now().timestamp());
+
         Self::save_sync_state(workspace_path, state)?;
 
-        let has_changes = !to_upload.is_empty() || !to_download.is_empty() || !local_deletes_count.is_empty() || !remote_deletes_count.is_empty();
-        result.status = if has_changes { SyncStatus::LatestWinsApplied } else { SyncStatus::NoChanges };
+        let has_changes = !to_upload.is_empty()
+            || !to_download.is_empty()
+            || !local_deletes_count.is_empty()
+            || !remote_deletes_count.is_empty();
+        result.status = if has_changes {
+            SyncStatus::LatestWinsApplied
+        } else {
+            SyncStatus::NoChanges
+        };
         result.uploaded_files = to_upload;
         result.downloaded_files = to_download;
         result.local_deletes = local_deletes_count;
@@ -3012,7 +3320,7 @@ fn semantic_merge_json(
         } else {
             FirstSyncMode::AlreadyGitRepo
         };
-        
+
         result.user_message = Some(format!(
             "双向同步完成。上传: {}, 下载: {}, 本地删除: {}, 远端删除: {}, 覆盖: {} (网络模式: {})。",
             result.uploaded_files.len(),
@@ -3061,9 +3369,10 @@ fn semantic_merge_json(
                     || msg.contains("failed to resolve address")
                     || msg.contains("SOCKS5")
                 {
-                    return crate::Error::Io(std::io::Error::other(
-                        format!("代理不可用/端口不通: {}", msg),
-                    ));
+                    return crate::Error::Io(std::io::Error::other(format!(
+                        "代理不可用/端口不通: {}",
+                        msg
+                    )));
                 }
             }
             e
@@ -3072,10 +3381,22 @@ fn semantic_merge_json(
         let classify_error = |e_str: &str| -> SyncStatus {
             let lower = e_str.to_lowercase();
             if lower.contains("recoverable_error") {
-                SyncStatus::RecoverableError(e_str.replace("recoverable_error:", "").trim().to_string())
+                SyncStatus::RecoverableError(
+                    e_str.replace("recoverable_error:", "").trim().to_string(),
+                )
             } else if lower.contains("fatal_error") {
                 SyncStatus::FatalError(e_str.replace("fatal_error:", "").trim().to_string())
-            } else if lower.contains("auth") || lower.contains("token") || lower.contains("credential") || lower.contains("proxy") || lower.contains("resolve") || lower.contains("network") || lower.contains("unborn") || lower.contains("timeout") || lower.contains("connect") || lower.contains("could not resolve") {
+            } else if lower.contains("auth")
+                || lower.contains("token")
+                || lower.contains("credential")
+                || lower.contains("proxy")
+                || lower.contains("resolve")
+                || lower.contains("network")
+                || lower.contains("unborn")
+                || lower.contains("timeout")
+                || lower.contains("connect")
+                || lower.contains("could not resolve")
+            {
                 SyncStatus::RecoverableError(e_str.to_string())
             } else {
                 SyncStatus::FatalError(e_str.to_string())
@@ -3083,7 +3404,11 @@ fn semantic_merge_json(
         };
 
         let token_from_parsed = parsed.extracted_token;
-        let token = secrets.token.clone().or(token_from_parsed).unwrap_or_default();
+        let token = secrets
+            .token
+            .clone()
+            .or(token_from_parsed)
+            .unwrap_or_default();
         if token.is_empty() {
             return Ok(SyncResult::error(
                 SyncStatus::Error("No token provided".to_string()),
@@ -3102,12 +3427,10 @@ fn semantic_merge_json(
         };
 
         let auth = match &config.transport {
-            SyncTransport::HttpsToken => {
-                Some(GitAuth::HttpsToken {
-                    username: username_for_cred.clone(),
-                    token: token.clone(),
-                })
-            }
+            SyncTransport::HttpsToken => Some(GitAuth::HttpsToken {
+                username: username_for_cred.clone(),
+                token: token.clone(),
+            }),
             SyncTransport::SshDeployKey => {
                 return Ok(SyncResult::error(
                     SyncStatus::Error("SshDeployKey is not implemented".to_string()),
@@ -3136,12 +3459,7 @@ fn semantic_merge_json(
                 result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
                 result.user_message = Some("已克隆远端仓库到空工作区。".to_string());
                 if let Err(e) = backend
-                    .clone_repo(
-                        &sanitized_url,
-                        workspace_path,
-                        auth.as_ref(),
-                        Some(config),
-                    )
+                    .clone_repo(&sanitized_url, workspace_path, auth.as_ref(), Some(config))
                     .map_err(map_git_error)
                 {
                     return Ok(SyncResult::error(
@@ -3258,10 +3576,15 @@ fn semantic_merge_json(
             .err();
         if let Some(e) = pull_failed {
             let e_str = e.to_string(); // we should not to_lowercase before matching payload
-            
+
             if e_str.contains("settings_conflict_payload:") {
-                let payload_str = e_str.split("settings_conflict_payload:").nth(1).unwrap_or("").trim();
-                let details: Option<Vec<SettingConflictDetail>> = serde_json::from_str(payload_str).ok();
+                let payload_str = e_str
+                    .split("settings_conflict_payload:")
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim();
+                let details: Option<Vec<SettingConflictDetail>> =
+                    serde_json::from_str(payload_str).ok();
                 let mut res = SyncResult::error(
                     SyncStatus::Conflict,
                     result.first_sync_mode,
@@ -3274,7 +3597,8 @@ fn semantic_merge_json(
                     local_dirty: true,
                     remote_changed: true,
                     conflicted_files: vec!["app-meta/settings/settings.sync.json".to_string()],
-                    blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。".to_string(),
+                    blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。"
+                        .to_string(),
                     safe_next_steps: vec![
                         "手动检查本地与远端设置。".to_string(),
                         "重新保存设置以覆盖或重新同步。".to_string(),
@@ -3285,9 +3609,13 @@ fn semantic_merge_json(
             }
 
             if e_str.contains("checkout_conflict_payload:") {
-                let payload_str = e_str.split("checkout_conflict_payload:").nth(1).unwrap_or("").trim();
+                let payload_str = e_str
+                    .split("checkout_conflict_payload:")
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim();
                 let summary: Option<SyncConflictSummary> = serde_json::from_str(payload_str).ok();
-                
+
                 let mut res = SyncResult::error(
                     SyncStatus::Conflict,
                     result.first_sync_mode,
@@ -3300,7 +3628,10 @@ fn semantic_merge_json(
 
             let e_str_lower = e_str.to_lowercase();
             // Checkout conflict / local blocking file (fallback)
-            if e_str_lower.contains("checkout_conflict") || e_str_lower.contains("local_blocking_file") || e_str_lower.contains("conflict prevents checkout") {
+            if e_str_lower.contains("checkout_conflict")
+                || e_str_lower.contains("local_blocking_file")
+                || e_str_lower.contains("conflict prevents checkout")
+            {
                 let mut res = SyncResult::error(
                     SyncStatus::Conflict,
                     result.first_sync_mode,
@@ -3308,8 +3639,15 @@ fn semantic_merge_json(
                     format!("Pull failed: {}", e),
                 );
                 if let Ok(repo) = git2::Repository::open(workspace_path) {
-                    let fetch_commit_id = repo.find_reference("FETCH_HEAD").ok().and_then(|r| r.target());
-                    let summary = build_conflict_summary(&repo, fetch_commit_id, "本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。");
+                    let fetch_commit_id = repo
+                        .find_reference("FETCH_HEAD")
+                        .ok()
+                        .and_then(|r| r.target());
+                    let summary = build_conflict_summary(
+                        &repo,
+                        fetch_commit_id,
+                        "本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。",
+                    );
                     res.conflict_summary = Some(summary);
                 }
                 return Ok(res);
@@ -3388,8 +3726,7 @@ fn semantic_merge_json(
                         } else if let Some(their) = &c.their {
                             best_path = Some(String::from_utf8_lossy(&their.path).to_string());
                         } else if let Some(ancestor) = &c.ancestor {
-                            best_path =
-                                Some(String::from_utf8_lossy(&ancestor.path).to_string());
+                            best_path = Some(String::from_utf8_lossy(&ancestor.path).to_string());
                         }
 
                         let real_path = match best_path {
@@ -3397,9 +3734,8 @@ fn semantic_merge_json(
                             None => {
                                 result.status = SyncStatus::Conflict;
                                 result.error = Some("Sync Conflict: unknown path".to_string());
-                                result.user_message = Some(
-                                    "存在无法识别路径的冲突文件，需要手动处理。".to_string(),
-                                );
+                                result.user_message =
+                                    Some("存在无法识别路径的冲突文件，需要手动处理。".to_string());
                                 continue;
                             }
                         };
@@ -3476,7 +3812,10 @@ fn semantic_merge_json(
                 }
 
                 let (local_dirty, _) = collect_git_status_summary(&repo);
-                let fetch_commit_id = repo.find_reference("FETCH_HEAD").ok().and_then(|r| r.target());
+                let fetch_commit_id = repo
+                    .find_reference("FETCH_HEAD")
+                    .ok()
+                    .and_then(|r| r.target());
                 let mut remote_changed = false;
                 if let Some(remote_oid) = fetch_commit_id {
                     if let Ok(head) = repo.head() {
@@ -3487,9 +3826,13 @@ fn semantic_merge_json(
                         }
                     }
                 }
-                
-                let conflicted_files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
-                
+
+                let conflicted_files = result
+                    .conflicts
+                    .iter()
+                    .map(|c| c.local_path.clone())
+                    .collect::<Vec<_>>();
+
                 result.conflict_summary = Some(SyncConflictSummary {
                     status: "conflict".to_string(),
                     local_dirty,
@@ -3825,7 +4168,8 @@ fn semantic_merge_json(
                 continue;
             }
 
-            if entry.sync_kind == SyncKind::Upload || entry.sync_kind == SyncKind::ConflictCandidate {
+            if entry.sync_kind == SyncKind::Upload || entry.sync_kind == SyncKind::ConflictCandidate
+            {
                 local_files.insert(entry.relative_path.clone());
                 let known_hash_opt = state.known_files.get(&entry.relative_path);
                 if is_first_sync {
@@ -3900,11 +4244,8 @@ fn semantic_merge_json(
             std::fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(state).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let content = serde_json::to_string_pretty(state)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let tmp_path = state_path.with_extension("tmp");
         std::fs::write(&tmp_path, content)?;
@@ -3943,11 +4284,8 @@ fn semantic_merge_json(
 
         conflicts.push(conflict);
 
-        let content = serde_json::to_string_pretty(&conflicts).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let content = serde_json::to_string_pretty(&conflicts)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let tmp_path = conflicts_path.with_extension("tmp");
         std::fs::write(&tmp_path, content)?;
@@ -3984,18 +4322,30 @@ mod tests {
         assert!(SyncService::is_blacklisted_path(
             "app-meta/sync/sync_secrets.local.json.tmp"
         ));
-        assert!(SyncService::is_blacklisted_path("app-meta/sync/sync_state.json"));
-        assert!(SyncService::is_blacklisted_path("app-meta/sync/state.local.json"));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/sync_state.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/state.local.json"
+        ));
         assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
         assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp"));
     }
 
     #[test]
     fn test_ai_paths_blacklisted() {
-        assert!(SyncService::is_blacklisted_path("app-meta/ai/secrets.local.json"));
-        assert!(SyncService::is_blacklisted_path("app-meta/ai/config.local.json"));
-        assert!(SyncService::is_blacklisted_path("app-meta/ai/conversations.local/chat.json"));
-        assert!(SyncService::is_blacklisted_path("app-meta/ai/cache/model_cache.bin"));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/secrets.local.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/config.local.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/conversations.local/chat.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/cache/model_cache.bin"
+        ));
         assert!(SyncService::is_blacklisted_path("app-meta/ai/"));
     }
 
@@ -5071,12 +5421,14 @@ mod tests {
             }
         }
 
-        let res =
-            SyncService::perform_sync(dir.path(), &config, &secrets, &MockEmptyRemoteBackend)
-                .unwrap();
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockEmptyRemoteBackend)
+            .unwrap();
         assert_eq!(res.status, SyncStatus::Success);
         assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
-        assert!(res.user_message.unwrap().contains("已初始化远端分支并完成首次同步"));
+        assert!(res
+            .user_message
+            .unwrap()
+            .contains("已初始化远端分支并完成首次同步"));
     }
 
     #[test]
@@ -5103,11 +5455,22 @@ mod tests {
         let file_path = dir.path().join("app-meta/settings/settings.sync.json");
         std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
         std::fs::write(&file_path, "{}").unwrap();
-        index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
         index.write().unwrap();
         let oid = index.write_tree().unwrap();
         let tree = repo.find_tree(oid).unwrap();
-        let commit_oid = repo.commit(Some("refs/heads/main"), &signature, &signature, "Initial commit", &tree, &[]).unwrap();
+        let commit_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Initial commit",
+                &tree,
+                &[],
+            )
+            .unwrap();
 
         // Delete the branch reference, keeping HEAD detached pointing to the commit
         repo.set_head_detached(commit_oid).unwrap();
@@ -5132,50 +5495,81 @@ mod tests {
         let mut index = repo.index().unwrap();
         let file_path = dir.path().join("app-meta/settings/settings.sync.json");
         std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
-        
+
         let base_content = r#"{"font_size": 12, "theme": "dark"}"#;
         std::fs::write(&file_path, base_content).unwrap();
-        index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
         index.write().unwrap();
         let oid = index.write_tree().unwrap();
         let tree = repo.find_tree(oid).unwrap();
-        let base_commit_oid = repo.commit(Some("refs/heads/main"), &signature, &signature, "Base commit", &tree, &[]).unwrap();
+        let base_commit_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Base commit",
+                &tree,
+                &[],
+            )
+            .unwrap();
         repo.set_head("refs/heads/main").unwrap();
 
         // Clone local repo to remote right after base commit (so remote shares base commit OID and history)
         let remote_dir = tempfile::tempdir().unwrap();
-        let remote_repo = git2::Repository::clone(dir.path().to_str().unwrap(), remote_dir.path()).unwrap();
+        let remote_repo =
+            git2::Repository::clone(dir.path().to_str().unwrap(), remote_dir.path()).unwrap();
 
         // Now modify local settings.sync.json and commit it in local repo (local divergent change)
         let local_content = r#"{"font_size": 16, "theme": "dark"}"#;
         std::fs::write(&file_path, local_content).unwrap();
-        index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
         index.write().unwrap();
         let oid = index.write_tree().unwrap();
         let tree = repo.find_tree(oid).unwrap();
-        let local_commit_oid = repo.commit(Some("refs/heads/main"), &signature, &signature, "Local commit", &tree, &[&repo.find_commit(base_commit_oid).unwrap()]).unwrap();
+        let local_commit_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Local commit",
+                &tree,
+                &[&repo.find_commit(base_commit_oid).unwrap()],
+            )
+            .unwrap();
 
         // In remote repo, modify settings.sync.json to a conflicting value and commit (remote divergent change)
-        let remote_file_path = remote_dir.path().join("app-meta/settings/settings.sync.json");
+        let remote_file_path = remote_dir
+            .path()
+            .join("app-meta/settings/settings.sync.json");
         let remote_content = r#"{"font_size": 20, "theme": "dark"}"#;
         std::fs::write(&remote_file_path, remote_content).unwrap();
         let mut remote_index = remote_repo.index().unwrap();
-        remote_index.add_path(Path::new("app-meta/settings/settings.sync.json")).unwrap();
+        remote_index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
         remote_index.write().unwrap();
         let remote_oid = remote_index.write_tree().unwrap();
         let remote_tree = remote_repo.find_tree(remote_oid).unwrap();
         let remote_base_commit = remote_repo.find_commit(base_commit_oid).unwrap();
-        let _remote_commit_oid = remote_repo.commit(
-            Some("refs/heads/main"),
-            &signature,
-            &signature,
-            "Remote commit",
-            &remote_tree,
-            &[&remote_base_commit],
-        ).unwrap();
+        let _remote_commit_oid = remote_repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Remote commit",
+                &remote_tree,
+                &[&remote_base_commit],
+            )
+            .unwrap();
 
         // Add remote to local repo
-        let mut remote = repo.remote("origin", remote_dir.path().to_str().unwrap()).unwrap();
+        let mut remote = repo
+            .remote("origin", remote_dir.path().to_str().unwrap())
+            .unwrap();
         remote.fetch(&["main"], None, None).unwrap();
 
         // Verify pull/merge fails with settings_conflict_payload
@@ -5207,16 +5601,16 @@ mod tests {
         std::sync::Arc<std::sync::Mutex<String>>,
         std::thread::JoinHandle<()>,
     ) {
-        use std::net::TcpListener;
         use std::io::{Read, Write};
-        use std::thread;
-        use std::sync::{Arc, Mutex};
+        use std::net::TcpListener;
         use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::thread;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let addr = format!("http://127.0.0.1:{}", port);
-        
+
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
 
@@ -5257,10 +5651,12 @@ mod tests {
                                         status_line = "HTTP/1.1 404 Not Found";
                                         response_body = r#"{"message":"Not Found"}"#.to_string();
                                     } else {
-                                        response_body = r#"{"object":{"sha":"mock_commit_sha"}}"#.to_string();
+                                        response_body =
+                                            r#"{"object":{"sha":"mock_commit_sha"}}"#.to_string();
                                     }
                                 } else if path.contains("/git/commits/mock_commit_sha") {
-                                    response_body = r#"{"tree":{"sha":"mock_tree_sha"}}"#.to_string();
+                                    response_body =
+                                        r#"{"tree":{"sha":"mock_tree_sha"}}"#.to_string();
                                 } else if path.contains("/git/trees/mock_tree_sha") {
                                     let mut tree_list = Vec::new();
                                     let m = manifest_clone.lock().unwrap();
@@ -5279,29 +5675,37 @@ mod tests {
                                             }));
                                         }
                                     }
-                                    response_body = serde_json::json!({ "tree": tree_list }).to_string();
-                                } else if path.contains("/contents/app-meta/sync/manifest.sync.json") {
+                                    response_body =
+                                        serde_json::json!({ "tree": tree_list }).to_string();
+                                } else if path
+                                    .contains("/contents/app-meta/sync/manifest.sync.json")
+                                {
                                     let m = manifest_clone.lock().unwrap();
                                     if m.is_empty() {
                                         status_line = "HTTP/1.1 404 Not Found";
                                     } else {
-                                        let encoded = base64::engine::general_purpose::STANDARD.encode(m.as_bytes());
+                                        let encoded = base64::engine::general_purpose::STANDARD
+                                            .encode(m.as_bytes());
                                         response_body = serde_json::json!({
                                             "content": encoded,
                                             "encoding": "base64"
-                                        }).to_string();
+                                        })
+                                        .to_string();
                                     }
                                 } else if path.contains("/contents/") {
                                     if let Some(idx) = path.find("/contents/") {
                                         let file_path = &path[idx + 10..];
-                                        let file_path = file_path.split('?').next().unwrap_or(file_path);
+                                        let file_path =
+                                            file_path.split('?').next().unwrap_or(file_path);
                                         let fls = files_clone.lock().unwrap();
                                         if let Some(content) = fls.get(file_path) {
-                                            let encoded = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+                                            let encoded = base64::engine::general_purpose::STANDARD
+                                                .encode(content.as_bytes());
                                             response_body = serde_json::json!({
                                                 "content": encoded,
                                                 "encoding": "base64"
-                                            }).to_string();
+                                            })
+                                            .to_string();
                                         } else {
                                             status_line = "HTTP/1.1 404 Not Found";
                                         }
@@ -5310,12 +5714,23 @@ mod tests {
                                     status_line = "HTTP/1.1 201 Created";
                                     if let Some(body_start) = req.find("\r\n\r\n") {
                                         let body = &req[body_start + 4..];
-                                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                                        if let Ok(val) =
+                                            serde_json::from_str::<serde_json::Value>(body)
+                                        {
                                             if let Some(b64_content) = val["content"].as_str() {
-                                                if let Ok(decoded_bytes) = base64::engine::general_purpose::STANDARD.decode(b64_content) {
-                                                    if let Ok(decoded_str) = String::from_utf8(decoded_bytes) {
-                                                        if decoded_str.contains("manifest.sync.json") || decoded_str.contains("\"files\":") {
-                                                            let mut m = manifest_clone.lock().unwrap();
+                                                if let Ok(decoded_bytes) =
+                                                    base64::engine::general_purpose::STANDARD
+                                                        .decode(b64_content)
+                                                {
+                                                    if let Ok(decoded_str) =
+                                                        String::from_utf8(decoded_bytes)
+                                                    {
+                                                        if decoded_str
+                                                            .contains("manifest.sync.json")
+                                                            || decoded_str.contains("\"files\":")
+                                                        {
+                                                            let mut m =
+                                                                manifest_clone.lock().unwrap();
                                                             *m = decoded_str;
                                                         }
                                                     }
@@ -5328,7 +5743,9 @@ mod tests {
                                     status_line = "HTTP/1.1 201 Created";
                                     if let Some(body_start) = req.find("\r\n\r\n") {
                                         let body = &req[body_start + 4..];
-                                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                                        if let Ok(val) =
+                                            serde_json::from_str::<serde_json::Value>(body)
+                                        {
                                             if let Some(tree_nodes) = val["tree"].as_array() {
                                                 let mut fls = files_clone.lock().unwrap();
                                                 for node in tree_nodes {
@@ -5352,7 +5769,8 @@ mod tests {
                                 } else if method == "POST" && path.contains("/git/refs") {
                                     status_line = "HTTP/1.1 201 Created";
                                     response_body = r#"{}"#.to_string();
-                                } else if method == "PATCH" && path.contains("/git/refs/heads/main") {
+                                } else if method == "PATCH" && path.contains("/git/refs/heads/main")
+                                {
                                     response_body = r#"{}"#.to_string();
                                 }
 
@@ -5381,25 +5799,24 @@ mod tests {
     fn test_perform_lww_sync_first_download() {
         let dir = tempdir().unwrap();
         let mut initial_files = std::collections::HashMap::new();
-        initial_files.insert("projects/p1/project.json".to_string(), "remote content".to_string());
-        
+        initial_files.insert(
+            "projects/p1/project.json".to_string(),
+            "remote content".to_string(),
+        );
+
         let initial_manifest = SyncManifest {
-            files: vec![
-                ManifestFileRecord {
-                    path: "projects/p1/project.json".to_string(),
-                    content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
-                    updated_at_ms: 1000,
-                    device_id: "device_remote".to_string(),
-                    op: "upsert".to_string(),
-                    schema_version: 1,
-                }
-            ]
+            files: vec![ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
+                updated_at_ms: 1000,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
         };
 
-        let (mock_url, shutdown, _files, _manifest, server_thread) = start_mock_github_api(
-            Some(initial_manifest),
-            initial_files,
-        );
+        let (mock_url, shutdown, _files, _manifest, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
 
         let config = SyncConfig {
             enabled: true,
@@ -5424,8 +5841,12 @@ mod tests {
         };
 
         let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
-        assert!(res.downloaded_files.contains(&"projects/p1/project.json".to_string()));
-        assert!(res.downloaded_files.contains(&"app-meta/sync/manifest.sync.json".to_string()));
+        assert!(res
+            .downloaded_files
+            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res
+            .downloaded_files
+            .contains(&"app-meta/sync/manifest.sync.json".to_string()));
         assert!(res.uploaded_files.is_empty());
         assert!(res.local_deletes.is_empty());
         assert!(res.remote_deletes.is_empty());
@@ -5446,16 +5867,20 @@ mod tests {
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
-        state
-            .known_files
-            .insert("projects/p1/project.json".to_string(), "old_hash".to_string());
+        state.known_files.insert(
+            "projects/p1/project.json".to_string(),
+            "old_hash".to_string(),
+        );
         state
             .known_files_updated_at
             .insert("projects/p1/project.json".to_string(), 1000);
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         let mut initial_files = std::collections::HashMap::new();
-        initial_files.insert("projects/p1/project.json".to_string(), "remote content".to_string());
+        initial_files.insert(
+            "projects/p1/project.json".to_string(),
+            "remote content".to_string(),
+        );
         let initial_manifest = SyncManifest {
             files: vec![ManifestFileRecord {
                 path: "projects/p1/project.json".to_string(),
@@ -5492,7 +5917,9 @@ mod tests {
         };
 
         let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
-        assert!(res.local_deletes.contains(&"projects/p1/project.json".to_string()));
+        assert!(res
+            .local_deletes
+            .contains(&"projects/p1/project.json".to_string()));
 
         let final_m: SyncManifest =
             serde_json::from_str(&manifest_str.lock().unwrap().clone()).unwrap();
@@ -5584,15 +6011,31 @@ mod tests {
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
-        state.known_files.insert("projects/p1/project.json".to_string(), format!("{:x}", md5::compute("local base".as_bytes())));
-        state.known_files_updated_at.insert("projects/p1/project.json".to_string(), 1000);
-        state.known_files.insert("projects/p2/project.json".to_string(), format!("{:x}", md5::compute("local older content".as_bytes())));
-        state.known_files_updated_at.insert("projects/p2/project.json".to_string(), 1000);
+        state.known_files.insert(
+            "projects/p1/project.json".to_string(),
+            format!("{:x}", md5::compute("local base".as_bytes())),
+        );
+        state
+            .known_files_updated_at
+            .insert("projects/p1/project.json".to_string(), 1000);
+        state.known_files.insert(
+            "projects/p2/project.json".to_string(),
+            format!("{:x}", md5::compute("local older content".as_bytes())),
+        );
+        state
+            .known_files_updated_at
+            .insert("projects/p2/project.json".to_string(), 1000);
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         let mut initial_files = std::collections::HashMap::new();
-        initial_files.insert("projects/p1/project.json".to_string(), "remote older content".to_string());
-        initial_files.insert("projects/p2/project.json".to_string(), "remote newer content".to_string());
+        initial_files.insert(
+            "projects/p1/project.json".to_string(),
+            "remote older content".to_string(),
+        );
+        initial_files.insert(
+            "projects/p2/project.json".to_string(),
+            "remote newer content".to_string(),
+        );
 
         let initial_manifest = SyncManifest {
             files: vec![
@@ -5611,14 +6054,12 @@ mod tests {
                     device_id: "device_remote".to_string(),
                     op: "upsert".to_string(),
                     schema_version: 1,
-                }
-            ]
+                },
+            ],
         };
 
-        let (mock_url, shutdown, _files_map, manifest_str, server_thread) = start_mock_github_api(
-            Some(initial_manifest),
-            initial_files,
-        );
+        let (mock_url, shutdown, _files_map, manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
 
         let config = SyncConfig {
             enabled: true,
@@ -5643,9 +6084,13 @@ mod tests {
         };
 
         let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
-        
-        assert!(res.uploaded_files.contains(&"projects/p1/project.json".to_string()));
-        assert!(res.downloaded_files.contains(&"projects/p2/project.json".to_string()));
+
+        assert!(res
+            .uploaded_files
+            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res
+            .downloaded_files
+            .contains(&"projects/p2/project.json".to_string()));
 
         let content_p2 = std::fs::read_to_string(&local_p2).unwrap();
         assert_eq!(content_p2, "remote newer content");
@@ -5653,7 +6098,11 @@ mod tests {
         let final_m_str = manifest_str.lock().unwrap().clone();
         assert!(!final_m_str.is_empty());
         let final_m: SyncManifest = serde_json::from_str(&final_m_str).unwrap();
-        let p1_rec = final_m.files.iter().find(|f| f.path == "projects/p1/project.json").unwrap();
+        let p1_rec = final_m
+            .files
+            .iter()
+            .find(|f| f.path == "projects/p1/project.json")
+            .unwrap();
         assert_eq!(p1_rec.device_id, "device_local");
         assert_eq!(p1_rec.op, "upsert");
 

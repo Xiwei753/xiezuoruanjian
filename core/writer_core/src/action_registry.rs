@@ -378,7 +378,9 @@ mod tests {
         let registry = ActionRegistry::new();
         let actions = registry.list_registered_actions();
         assert!(!actions.is_empty());
-        assert!(actions.iter().any(|a| a.id == "settings.editor.font_size.set"));
+        assert!(actions
+            .iter()
+            .any(|a| a.id == "settings.editor.font_size.set"));
     }
 
     #[test]
@@ -387,10 +389,14 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         core.create_workspace().unwrap();
 
-        let result = core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 20.0}"#, "").unwrap();
+        let result = core
+            .execute_action("settings.editor.font_size.set", r#"{"fontSize": 20.0}"#, "")
+            .unwrap();
         assert!(result.success);
 
-        let get_result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+        let get_result = core
+            .execute_action("settings.editor.font_size.get", "", "")
+            .unwrap();
         assert!(get_result.success);
         let data = get_result.data.unwrap();
         let val = data.get("fontSize").unwrap().as_f64().unwrap();
@@ -398,7 +404,13 @@ mod tests {
         let source = data.get("source").unwrap().as_str().unwrap();
         assert_eq!(source, "syncable");
 
-        let fail_result = core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 100.0}"#, "").unwrap();
+        let fail_result = core
+            .execute_action(
+                "settings.editor.font_size.set",
+                r#"{"fontSize": 100.0}"#,
+                "",
+            )
+            .unwrap();
         assert!(!fail_result.success);
     }
 
@@ -419,7 +431,9 @@ mod tests {
         syncable.font_size = 24.0;
         core.save_syncable_settings(&syncable).unwrap();
 
-        let result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+        let result = core
+            .execute_action("settings.editor.font_size.get", "", "")
+            .unwrap();
         assert!(result.success);
         let data = result.data.unwrap();
         assert_eq!(data.get("fontSize").unwrap().as_f64().unwrap(), 24.0);
@@ -436,7 +450,9 @@ mod tests {
         local.editor_font_size = 18.0;
         core.save_local_settings(&local).unwrap();
 
-        let result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+        let result = core
+            .execute_action("settings.editor.font_size.get", "", "")
+            .unwrap();
         assert!(result.success);
         let data = result.data.unwrap();
         assert_eq!(data.get("fontSize").unwrap().as_f64().unwrap(), 18.0);
@@ -449,7 +465,8 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         core.create_workspace().unwrap();
 
-        core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 22.0}"#, "").unwrap();
+        core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 22.0}"#, "")
+            .unwrap();
 
         let syncable = core.load_syncable_settings().unwrap();
         assert_eq!(syncable.font_size, 22.0);
@@ -468,7 +485,8 @@ mod tests {
         local.editor_font_size = 14.0;
         core.save_local_settings(&local).unwrap();
 
-        core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 28.0}"#, "").unwrap();
+        core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 28.0}"#, "")
+            .unwrap();
 
         let local_after = core.load_local_settings().unwrap();
         assert_eq!(local_after.editor_font_size, 14.0);
@@ -483,7 +501,9 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         core.create_workspace().unwrap();
 
-        let result = core.execute_action("settings.editor.font_size.set", r#"{"fontSize": 16.0}"#, "").unwrap();
+        let result = core
+            .execute_action("settings.editor.font_size.set", r#"{"fontSize": 16.0}"#, "")
+            .unwrap();
         assert!(result.success);
         let data = result.data.unwrap();
         assert_eq!(data.get("source").unwrap().as_str().unwrap(), "syncable");
@@ -499,7 +519,9 @@ fn test_execute_invalid_json() {
     let core = WriterCore::new(temp_dir.path());
     core.create_workspace().unwrap();
 
-    let result = core.execute_action("settings.editor.font_size.set", "{invalid json}", "").unwrap();
+    let result = core
+        .execute_action("settings.editor.font_size.set", "{invalid json}", "")
+        .unwrap();
     assert!(!result.success);
     assert_eq!(result.message.unwrap(), "invalid args json");
 }

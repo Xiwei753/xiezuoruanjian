@@ -67,18 +67,16 @@ pub fn generate_snapshot(
         .collect();
 
     // 2. Build anchor_ids set
-    let anchor_ids: HashSet<&str> = graph
-        .anchors
-        .iter()
-        .map(|a| a.id.as_str())
-        .collect();
+    let anchor_ids: HashSet<&str> = graph.anchors.iter().map(|a| a.id.as_str()).collect();
 
     // 3. Build link_count_by_node_id and broken_link_by_node_id
     let mut link_count_by_node_id = HashMap::new();
     let mut broken_link_by_node_id = HashMap::new();
 
     for link in &graph.links {
-        *link_count_by_node_id.entry(link.node_id.as_str()).or_insert(0) += 1;
+        *link_count_by_node_id
+            .entry(link.node_id.as_str())
+            .or_insert(0) += 1;
         if !anchor_ids.contains(link.anchor_id.as_str()) {
             broken_link_by_node_id.insert(link.node_id.as_str(), true);
         }
@@ -94,13 +92,27 @@ pub fn generate_snapshot(
             (0.0, 0.0, 100.0, 50.0, 25.0, false)
         };
 
-        if x - w / 2.0 < min_x { min_x = x - w / 2.0; }
-        if y - h / 2.0 < min_y { min_y = y - h / 2.0; }
-        if x + w / 2.0 > max_x { max_x = x + w / 2.0; }
-        if y + h / 2.0 > max_y { max_y = y + h / 2.0; }
+        if x - w / 2.0 < min_x {
+            min_x = x - w / 2.0;
+        }
+        if y - h / 2.0 < min_y {
+            min_y = y - h / 2.0;
+        }
+        if x + w / 2.0 > max_x {
+            max_x = x + w / 2.0;
+        }
+        if y + h / 2.0 > max_y {
+            max_y = y + h / 2.0;
+        }
 
-        let anchor_count = link_count_by_node_id.get(g_node.id.as_str()).copied().unwrap_or(0);
-        let broken_link = broken_link_by_node_id.get(g_node.id.as_str()).copied().unwrap_or(false);
+        let anchor_count = link_count_by_node_id
+            .get(g_node.id.as_str())
+            .copied()
+            .unwrap_or(0);
+        let broken_link = broken_link_by_node_id
+            .get(g_node.id.as_str())
+            .copied()
+            .unwrap_or(false);
 
         snapshot_nodes.push(MindMapSnapshotNode {
             id: g_node.id.clone(),
@@ -125,20 +137,29 @@ pub fn generate_snapshot(
         max_y = 200.0;
     }
 
-    let snapshot_edges = graph.edges.iter().map(|e| MindMapSnapshotEdge {
-        id: e.id.clone(),
-        from: e.from.clone(),
-        to: e.to.clone(),
-        kind: format!("{:?}", e.kind),
-        label: e.label.clone(),
-    }).collect();
+    let snapshot_edges = graph
+        .edges
+        .iter()
+        .map(|e| MindMapSnapshotEdge {
+            id: e.id.clone(),
+            from: e.from.clone(),
+            to: e.to.clone(),
+            kind: format!("{:?}", e.kind),
+            label: e.label.clone(),
+        })
+        .collect();
 
     MindMapSnapshot {
         project_id: graph.project_id.clone(),
         layout_kind: format!("{:?}", layout.kind),
         nodes: snapshot_nodes,
         edges: snapshot_edges,
-        bounds: MindMapBounds { min_x, min_y, max_x, max_y },
+        bounds: MindMapBounds {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        },
         generated_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

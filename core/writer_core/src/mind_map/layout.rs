@@ -32,7 +32,10 @@ pub struct MindMapLayoutNode {
     pub z_index: i32,
 }
 
-pub fn calculate_layout(graph: &crate::mind_map::graph::MindMapGraph, kind: LayoutKind) -> MindMapLayout {
+pub fn calculate_layout(
+    graph: &crate::mind_map::graph::MindMapGraph,
+    kind: LayoutKind,
+) -> MindMapLayout {
     match kind {
         LayoutKind::AutoRadial => calculate_radial_layout(graph),
         _ => calculate_freeform_layout(graph), // Fallback
@@ -44,7 +47,10 @@ fn calculate_radial_layout(graph: &crate::mind_map::graph::MindMapGraph) -> Mind
 
     // Reconstruct tree from graph
     // Find project node
-    let project_node = graph.nodes.iter().find(|n| n.kind == crate::mind_map::graph::MindMapNodeKind::Project);
+    let project_node = graph
+        .nodes
+        .iter()
+        .find(|n| n.kind == crate::mind_map::graph::MindMapNodeKind::Project);
 
     if let Some(project) = project_node {
         layout_nodes.push(MindMapLayoutNode {
@@ -59,8 +65,15 @@ fn calculate_radial_layout(graph: &crate::mind_map::graph::MindMapGraph) -> Mind
         });
 
         // Volumes
-        let volumes: Vec<_> = graph.edges.iter()
-            .filter(|e| e.from == project.id && graph.nodes.iter().any(|n| n.id == e.to && n.kind == crate::mind_map::graph::MindMapNodeKind::Volume))
+        let volumes: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| {
+                e.from == project.id
+                    && graph.nodes.iter().any(|n| {
+                        n.id == e.to && n.kind == crate::mind_map::graph::MindMapNodeKind::Volume
+                    })
+            })
             .map(|e| e.to.clone())
             .collect();
 
@@ -90,8 +103,16 @@ fn calculate_radial_layout(graph: &crate::mind_map::graph::MindMapGraph) -> Mind
             });
 
             // Chapters
-            let chapters: Vec<_> = graph.edges.iter()
-                .filter(|e| e.from == *vol_id && graph.nodes.iter().any(|n| n.id == e.to && n.kind == crate::mind_map::graph::MindMapNodeKind::Chapter))
+            let chapters: Vec<_> = graph
+                .edges
+                .iter()
+                .filter(|e| {
+                    e.from == *vol_id
+                        && graph.nodes.iter().any(|n| {
+                            n.id == e.to
+                                && n.kind == crate::mind_map::graph::MindMapNodeKind::Chapter
+                        })
+                })
                 .map(|e| e.to.clone())
                 .collect();
 

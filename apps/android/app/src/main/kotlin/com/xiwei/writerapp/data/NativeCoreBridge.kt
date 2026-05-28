@@ -1584,4 +1584,46 @@ class NativeCoreBridge(context: Context) {
             NativeResult.Error(e.message ?: "Exception occurred")
         }
     }
+
+    private external fun calculateWordCountNative(text: String): Int
+
+    private external fun processWritingEventNative(
+        workspaceDir: String,
+        deviceId: String,
+        platform: String,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        oldText: String,
+        newText: String,
+        sessionId: String
+    ): Boolean
+
+    fun calculateWordCount(text: String): Int {
+        if (!isLoaded) return 0
+        return try {
+            calculateWordCountNative(text)
+        } catch (e: Throwable) {
+            0
+        }
+    }
+
+    fun processWritingEvent(
+        deviceId: String,
+        platform: String,
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        oldText: String,
+        newText: String,
+        sessionId: String
+    ): Boolean {
+        if (!isLoaded) return false
+        return try {
+            processWritingEventNative(workspaceDir, deviceId, platform, projectId, volumeId, chapterId, oldText, newText, sessionId)
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
 }
