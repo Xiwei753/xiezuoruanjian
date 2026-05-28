@@ -1,3 +1,4 @@
+use crate::action_registry::{ActionDescriptor, ActionRegistry, ActionResult};
 use crate::backup;
 use crate::chapter::{self, Chapter, ChapterContent};
 use crate::error::Result;
@@ -10,10 +11,9 @@ use crate::volume::{self, Volume};
 use crate::workspace;
 use crate::writing_stats::api::StatsApi;
 use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use crate::action_registry::{ActionDescriptor, ActionResult, ActionRegistry};
-use serde_json::Value;
 
 /// The main entry point for client applications (Android, Linux).
 /// This struct holds the workspace root and provides high-level methods.
@@ -32,7 +32,8 @@ impl WriterCore {
     }
 
     fn get_stats_api(&self) -> &StatsApi {
-        self.stats_api.get_or_init(|| StatsApi::new(&self.workspace_path))
+        self.stats_api
+            .get_or_init(|| StatsApi::new(&self.workspace_path))
     }
 
     /// Access to the workspace path for internal modules
@@ -52,15 +53,25 @@ impl WriterCore {
 
     /// List all projects in the workspace.
 
-    pub fn get_mind_map_snapshot(&self, project_id: &str) -> Result<crate::mind_map::MindMapSnapshot> {
+    pub fn get_mind_map_snapshot(
+        &self,
+        project_id: &str,
+    ) -> Result<crate::mind_map::MindMapSnapshot> {
         crate::mind_map::generate_snapshot(self, project_id)
     }
 
-    pub fn create_mind_map_graph(&self, project_id: &str, title: &str) -> Result<crate::mind_map::graph::MindMapGraph> {
+    pub fn create_mind_map_graph(
+        &self,
+        project_id: &str,
+        title: &str,
+    ) -> Result<crate::mind_map::graph::MindMapGraph> {
         crate::mind_map::edit::create_mind_map_graph(self, project_id, title)
     }
 
-    pub fn list_mind_map_graphs(&self, project_id: &str) -> Result<crate::mind_map::edit::MindMapGraphsList> {
+    pub fn list_mind_map_graphs(
+        &self,
+        project_id: &str,
+    ) -> Result<crate::mind_map::edit::MindMapGraphsList> {
         crate::mind_map::edit::list_mind_map_graphs(self, project_id)
     }
 
@@ -68,39 +79,91 @@ impl WriterCore {
         crate::mind_map::edit::set_default_mind_map_graph(self, project_id, graph_id)
     }
 
-    pub fn create_mind_map_node(&self, project_id: &str, graph_id: &str, node: crate::mind_map::graph::MindMapGraphNode) -> Result<crate::mind_map::graph::MindMapGraphNode> {
+    pub fn create_mind_map_node(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node: crate::mind_map::graph::MindMapGraphNode,
+    ) -> Result<crate::mind_map::graph::MindMapGraphNode> {
         crate::mind_map::edit::create_mind_map_node(self, project_id, graph_id, node)
     }
 
-    pub fn update_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, patch: crate::mind_map::edit::MindMapGraphNodePatch) -> Result<crate::mind_map::graph::MindMapGraphNode> {
+    pub fn update_mind_map_node(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node_id: &str,
+        patch: crate::mind_map::edit::MindMapGraphNodePatch,
+    ) -> Result<crate::mind_map::graph::MindMapGraphNode> {
         crate::mind_map::edit::update_mind_map_node(self, project_id, graph_id, node_id, patch)
     }
 
-    pub fn delete_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, cascade: bool) -> Result<()> {
+    pub fn delete_mind_map_node(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node_id: &str,
+        cascade: bool,
+    ) -> Result<()> {
         crate::mind_map::edit::delete_mind_map_node(self, project_id, graph_id, node_id, cascade)
     }
 
-    pub fn create_mind_map_edge(&self, project_id: &str, graph_id: &str, edge: crate::mind_map::graph::MindMapGraphEdge) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
+    pub fn create_mind_map_edge(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        edge: crate::mind_map::graph::MindMapGraphEdge,
+    ) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
         crate::mind_map::edit::create_mind_map_edge(self, project_id, graph_id, edge)
     }
 
-    pub fn update_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str, patch: crate::mind_map::edit::MindMapGraphEdgePatch) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
+    pub fn update_mind_map_edge(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        edge_id: &str,
+        patch: crate::mind_map::edit::MindMapGraphEdgePatch,
+    ) -> Result<crate::mind_map::graph::MindMapGraphEdge> {
         crate::mind_map::edit::update_mind_map_edge(self, project_id, graph_id, edge_id, patch)
     }
 
-    pub fn delete_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str) -> Result<()> {
+    pub fn delete_mind_map_edge(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        edge_id: &str,
+    ) -> Result<()> {
         crate::mind_map::edit::delete_mind_map_edge(self, project_id, graph_id, edge_id)
     }
 
-    pub fn create_mind_map_anchor(&self, project_id: &str, graph_id: &str, anchor: crate::mind_map::anchor::MindMapAnchor) -> Result<crate::mind_map::anchor::MindMapAnchor> {
+    pub fn create_mind_map_anchor(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        anchor: crate::mind_map::anchor::MindMapAnchor,
+    ) -> Result<crate::mind_map::anchor::MindMapAnchor> {
         crate::mind_map::edit::create_mind_map_anchor(self, project_id, graph_id, anchor)
     }
 
-    pub fn bind_mind_map_node_to_anchor(&self, project_id: &str, graph_id: &str, node_id: &str, anchor_id: &str, link_kind: &str) -> Result<crate::mind_map::anchor::MindMapLink> {
-        crate::mind_map::edit::bind_mind_map_node_to_anchor(self, project_id, graph_id, node_id, anchor_id, link_kind)
+    pub fn bind_mind_map_node_to_anchor(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node_id: &str,
+        anchor_id: &str,
+        link_kind: &str,
+    ) -> Result<crate::mind_map::anchor::MindMapLink> {
+        crate::mind_map::edit::bind_mind_map_node_to_anchor(
+            self, project_id, graph_id, node_id, anchor_id, link_kind,
+        )
     }
 
-    pub fn save_mind_map_layout(&self, project_id: &str, graph_id: &str, layout: crate::mind_map::layout::MindMapLayout) -> Result<()> {
+    pub fn save_mind_map_layout(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        layout: crate::mind_map::layout::MindMapLayout,
+    ) -> Result<()> {
         crate::mind_map::edit::save_mind_map_layout(self, project_id, graph_id, layout)
     }
 
@@ -114,7 +177,12 @@ impl WriterCore {
         Ok(registry.get_action(action_id))
     }
 
-    pub fn execute_action(&self, action_id: &str, args_json: &str, _context_json: &str) -> crate::error::Result<ActionResult> {
+    pub fn execute_action(
+        &self,
+        action_id: &str,
+        args_json: &str,
+        _context_json: &str,
+    ) -> crate::error::Result<ActionResult> {
         let registry = ActionRegistry::new();
         let _action = registry.get_action(action_id).ok_or_else(|| {
             crate::Error::Io(std::io::Error::new(
@@ -126,7 +194,18 @@ impl WriterCore {
         let args: Value = if args_json.trim().is_empty() {
             Value::Null
         } else {
-            match serde_json::from_str(args_json) { Ok(v) => v, Err(_) => return Ok(ActionResult { success: false, message: Some("invalid args json".to_string()), data: None, proposed_ui: None, requires_confirmation: None }) }
+            match serde_json::from_str(args_json) {
+                Ok(v) => v,
+                Err(_) => {
+                    return Ok(ActionResult {
+                        success: false,
+                        message: Some("invalid args json".to_string()),
+                        data: None,
+                        proposed_ui: None,
+                        requires_confirmation: None,
+                    })
+                }
+            }
         };
 
         match action_id {
@@ -155,7 +234,9 @@ impl WriterCore {
                     Ok(ActionResult {
                         success: true,
                         message: Some("Font size updated".to_string()),
-                        data: Some(serde_json::json!({ "fontSize": font_size, "source": "syncable" })),
+                        data: Some(
+                            serde_json::json!({ "fontSize": font_size, "source": "syncable" }),
+                        ),
                         proposed_ui: None,
                         requires_confirmation: None,
                     })
@@ -270,7 +351,7 @@ impl WriterCore {
                         data: None,
                         proposed_ui: None,
                         requires_confirmation: None,
-                    })
+                    }),
                 }
             }
             "sync.plan.preview" => {
@@ -290,7 +371,7 @@ impl WriterCore {
                         data: None,
                         proposed_ui: None,
                         requires_confirmation: None,
-                    })
+                    }),
                 }
             }
             "settings.editor.line_spacing.get" => {
@@ -298,7 +379,9 @@ impl WriterCore {
                 Ok(ActionResult {
                     success: true,
                     message: None,
-                    data: Some(serde_json::json!({ "multiplier": settings.editor_line_spacing_multiplier })),
+                    data: Some(
+                        serde_json::json!({ "multiplier": settings.editor_line_spacing_multiplier }),
+                    ),
                     proposed_ui: None,
                     requires_confirmation: None,
                 })
@@ -308,7 +391,9 @@ impl WriterCore {
                     if !(1.0..=3.0).contains(&multiplier) {
                         return Ok(ActionResult {
                             success: false,
-                            message: Some("Line spacing multiplier must be between 1.0 and 3.0".to_string()),
+                            message: Some(
+                                "Line spacing multiplier must be between 1.0 and 3.0".to_string(),
+                            ),
                             data: None,
                             proposed_ui: None,
                             requires_confirmation: None,
@@ -339,7 +424,9 @@ impl WriterCore {
                 Ok(ActionResult {
                     success: true,
                     message: None,
-                    data: Some(serde_json::json!({ "enabled": settings.auto_indent_enabled, "widthChars": settings.auto_indent_width })),
+                    data: Some(
+                        serde_json::json!({ "enabled": settings.auto_indent_enabled, "widthChars": settings.auto_indent_width }),
+                    ),
                     proposed_ui: None,
                     requires_confirmation: None,
                 })
@@ -439,15 +526,13 @@ impl WriterCore {
                     requires_confirmation: None,
                 })
             }
-            _ => {
-                Ok(ActionResult {
-                    success: false,
-                    message: Some(format!("Action execution not implemented: {}", action_id)),
-                    data: None,
-                    proposed_ui: None,
-                    requires_confirmation: None,
-                })
-            }
+            _ => Ok(ActionResult {
+                success: false,
+                message: Some(format!("Action execution not implemented: {}", action_id)),
+                data: None,
+                proposed_ui: None,
+                requires_confirmation: None,
+            }),
         }
     }
 
@@ -473,6 +558,61 @@ impl WriterCore {
     /// List chapters in a volume.
     pub fn list_chapters(&self, project_id: &str, volume_id: &str) -> Result<Vec<Chapter>> {
         chapter::list_chapters(&self.workspace_path, project_id, volume_id)
+    }
+
+    pub fn calculate_word_count(&self, text: &str) -> u32 {
+        chapter::calculate_word_count(text)
+    }
+
+    pub fn process_writing_event(
+        &self,
+        device_id: &str,
+        platform_str: &str,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        old_text: &str,
+        new_text: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        let old_len = old_text.chars().count() as i32;
+        let new_len = new_text.chars().count() as i32;
+        let diff = new_len - old_len;
+
+        if diff == 0 {
+            return Ok(());
+        }
+
+        let mut source_str = "human_typed";
+        let mut inserted = diff as u32;
+        let mut deleted = 0;
+        let mut pasted = 0;
+
+        if diff > 0 {
+            if diff > 20 {
+                source_str = "pasted";
+                pasted = diff as u32;
+                inserted = 0;
+            }
+        } else {
+            source_str = "deleted";
+            deleted = diff.abs() as u32;
+            inserted = 0;
+        }
+
+        self.record_writing_event(
+            device_id,
+            platform_str,
+            project_id,
+            volume_id,
+            chapter_id,
+            source_str,
+            inserted,
+            deleted,
+            pasted,
+            0,
+            session_id,
+        )
     }
 
     /// Create a new chapter.
@@ -711,7 +851,6 @@ impl WriterCore {
         crate::sync_service::SyncService::get_sync_ignored_paths(&self.workspace_path)
     }
 
-
     pub fn perform_sync_diagnostics(
         &self,
         config: &crate::sync_service::SyncConfig,
@@ -747,12 +886,8 @@ impl WriterCore {
             return Ok(crate::sync_service::SyncSecrets::default());
         }
         let content = std::fs::read_to_string(&secrets_path)?;
-        let secrets: crate::sync_service::SyncSecrets =
-            serde_json::from_str(&content).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+        let secrets: crate::sync_service::SyncSecrets = serde_json::from_str(&content)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(secrets)
     }
 
@@ -766,11 +901,8 @@ impl WriterCore {
         if let Some(parent) = secrets_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serde_json::to_string_pretty(secrets).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let content = serde_json::to_string_pretty(secrets)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let tmp_path = secrets_path.with_extension("tmp");
         std::fs::write(&tmp_path, content)?;
         std::fs::rename(tmp_path, secrets_path)?;
@@ -798,17 +930,10 @@ impl WriterCore {
             });
         }
         let content = std::fs::read_to_string(&config_path)?;
-        let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
-        let mut config: crate::sync_service::SyncConfig =
-            serde_json::from_str(&content).map_err(|e| {
-                crate::Error::Io(std::io::Error::other(
-                    e.to_string(),
-                ))
-            })?;
+        let raw: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        let mut config: crate::sync_service::SyncConfig = serde_json::from_str(&content)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let backend_missing = raw
             .as_object()
@@ -831,11 +956,8 @@ impl WriterCore {
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serde_json::to_string_pretty(config).map_err(|e| {
-            crate::Error::Io(std::io::Error::other(
-                e.to_string(),
-            ))
-        })?;
+        let content = serde_json::to_string_pretty(config)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let tmp_path = config_path.with_extension("tmp");
         std::fs::write(&tmp_path, content)?;
         std::fs::rename(tmp_path, config_path)?;
@@ -926,7 +1048,10 @@ impl WriterCore {
         crate::starmap::list_starmaps(&self.workspace_path)
     }
 
-    pub fn list_starmaps_for_project(&self, project_id: &str) -> Result<Vec<crate::starmap::StarMapMeta>> {
+    pub fn list_starmaps_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<crate::starmap::StarMapMeta>> {
         crate::starmap::list_starmaps_for_project(&self.workspace_path, project_id)
     }
 
@@ -934,15 +1059,36 @@ impl WriterCore {
         crate::starmap::get_starmap(&self.workspace_path, starmap_id)
     }
 
-    pub fn create_starmap(&self, title: &str, description: &str, accent_color: Option<&str>) -> Result<crate::starmap::StarMapMeta> {
+    pub fn create_starmap(
+        &self,
+        title: &str,
+        description: &str,
+        accent_color: Option<&str>,
+    ) -> Result<crate::starmap::StarMapMeta> {
         crate::starmap::create_starmap(&self.workspace_path, title, description, accent_color)
     }
 
-    pub fn create_child_starmap(&self, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> Result<crate::starmap::StarMapMeta> {
-        crate::starmap::create_child_starmap(&self.workspace_path, parent_id, title, description, accent_color)
+    pub fn create_child_starmap(
+        &self,
+        parent_id: &str,
+        title: &str,
+        description: &str,
+        accent_color: Option<&str>,
+    ) -> Result<crate::starmap::StarMapMeta> {
+        crate::starmap::create_child_starmap(
+            &self.workspace_path,
+            parent_id,
+            title,
+            description,
+            accent_color,
+        )
     }
 
-    pub fn rename_starmap(&self, starmap_id: &str, new_title: &str) -> Result<crate::starmap::StarMapMeta> {
+    pub fn rename_starmap(
+        &self,
+        starmap_id: &str,
+        new_title: &str,
+    ) -> Result<crate::starmap::StarMapMeta> {
         crate::starmap::rename_starmap(&self.workspace_path, starmap_id, new_title)
     }
 
@@ -958,7 +1104,10 @@ impl WriterCore {
         crate::starmap::set_main_starmap_for_project(&self.workspace_path, starmap_id, project_id)
     }
 
-    pub fn get_main_starmap_for_project(&self, project_id: &str) -> Result<Option<crate::starmap::StarMapMeta>> {
+    pub fn get_main_starmap_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<crate::starmap::StarMapMeta>> {
         crate::starmap::get_main_starmap_for_project(&self.workspace_path, project_id)
     }
 
@@ -966,19 +1115,43 @@ impl WriterCore {
         crate::starmap::unbind_starmap_from_project(&self.workspace_path, starmap_id)
     }
 
-    pub fn get_starmap_graph(&self, starmap_id: &str) -> Result<crate::starmap::types::StarMapGraph> {
+    pub fn get_starmap_graph(
+        &self,
+        starmap_id: &str,
+    ) -> Result<crate::starmap::types::StarMapGraph> {
         crate::starmap::graph::get_starmap_graph(&self.workspace_path, starmap_id)
     }
 
-    pub fn save_starmap_graph(&self, starmap_id: &str, graph: &crate::starmap::types::StarMapGraph) -> Result<()> {
+    pub fn save_starmap_graph(
+        &self,
+        starmap_id: &str,
+        graph: &crate::starmap::types::StarMapGraph,
+    ) -> Result<()> {
         crate::starmap::graph::save_starmap_graph(&self.workspace_path, starmap_id, graph)
     }
 
-    pub fn add_starmap_node(&self, starmap_id: &str, node: crate::starmap::types::StarMapNode, default_x: f32, default_y: f32) -> Result<crate::starmap::types::StarMapNode> {
-        crate::starmap::graph::add_starmap_node(&self.workspace_path, starmap_id, node, default_x, default_y)
+    pub fn add_starmap_node(
+        &self,
+        starmap_id: &str,
+        node: crate::starmap::types::StarMapNode,
+        default_x: f32,
+        default_y: f32,
+    ) -> Result<crate::starmap::types::StarMapNode> {
+        crate::starmap::graph::add_starmap_node(
+            &self.workspace_path,
+            starmap_id,
+            node,
+            default_x,
+            default_y,
+        )
     }
 
-    pub fn update_starmap_node(&self, starmap_id: &str, node_id: &str, patch: crate::starmap::types::StarMapNodePatch) -> Result<crate::starmap::types::StarMapNode> {
+    pub fn update_starmap_node(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+        patch: crate::starmap::types::StarMapNodePatch,
+    ) -> Result<crate::starmap::types::StarMapNode> {
         crate::starmap::graph::update_starmap_node(&self.workspace_path, starmap_id, node_id, patch)
     }
 
@@ -986,11 +1159,20 @@ impl WriterCore {
         crate::starmap::graph::delete_starmap_node(&self.workspace_path, starmap_id, node_id)
     }
 
-    pub fn add_starmap_edge(&self, starmap_id: &str, edge: crate::starmap::types::StarMapEdge) -> Result<crate::starmap::types::StarMapEdge> {
+    pub fn add_starmap_edge(
+        &self,
+        starmap_id: &str,
+        edge: crate::starmap::types::StarMapEdge,
+    ) -> Result<crate::starmap::types::StarMapEdge> {
         crate::starmap::graph::add_starmap_edge(&self.workspace_path, starmap_id, edge)
     }
 
-    pub fn update_starmap_edge(&self, starmap_id: &str, edge_id: &str, patch: crate::starmap::types::StarMapEdgePatch) -> Result<crate::starmap::types::StarMapEdge> {
+    pub fn update_starmap_edge(
+        &self,
+        starmap_id: &str,
+        edge_id: &str,
+        patch: crate::starmap::types::StarMapEdgePatch,
+    ) -> Result<crate::starmap::types::StarMapEdge> {
         crate::starmap::graph::update_starmap_edge(&self.workspace_path, starmap_id, edge_id, patch)
     }
 
@@ -998,11 +1180,18 @@ impl WriterCore {
         crate::starmap::graph::delete_starmap_edge(&self.workspace_path, starmap_id, edge_id)
     }
 
-    pub fn get_starmap_layout(&self, starmap_id: &str) -> Result<crate::starmap::types::StarMapLayout> {
+    pub fn get_starmap_layout(
+        &self,
+        starmap_id: &str,
+    ) -> Result<crate::starmap::types::StarMapLayout> {
         crate::starmap::graph::get_starmap_layout(&self.workspace_path, starmap_id)
     }
 
-    pub fn save_starmap_layout(&self, starmap_id: &str, layout: &crate::starmap::types::StarMapLayout) -> Result<()> {
+    pub fn save_starmap_layout(
+        &self,
+        starmap_id: &str,
+        layout: &crate::starmap::types::StarMapLayout,
+    ) -> Result<()> {
         crate::starmap::graph::save_starmap_layout(&self.workspace_path, starmap_id, layout)
     }
 
@@ -1174,7 +1363,9 @@ mod tests {
         assert_eq!(loaded_syncable.font_size, 18.0);
         assert_eq!(loaded_syncable.theme_mode, "system");
 
-        let get_result = core.execute_action("settings.editor.font_size.get", "", "").unwrap();
+        let get_result = core
+            .execute_action("settings.editor.font_size.get", "", "")
+            .unwrap();
         assert!(get_result.success);
         let data = get_result.data.unwrap();
         assert_eq!(data.get("fontSize").unwrap().as_f64().unwrap(), 18.0);
@@ -1201,7 +1392,10 @@ mod tests {
         // Load non-existent should give default
         let config = core.load_sync_config().unwrap();
         assert!(!config.enabled);
-        assert_eq!(config.backend_type, crate::sync_service::BackendType::GithubApi);
+        assert_eq!(
+            config.backend_type,
+            crate::sync_service::BackendType::GithubApi
+        );
 
         // Save new config
         let mut new_config = config.clone();
@@ -1236,9 +1430,7 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         core.create_workspace().unwrap();
 
-        let config_path = temp_dir
-            .path()
-            .join("app-meta/sync/sync_config.json");
+        let config_path = temp_dir.path().join("app-meta/sync/sync_config.json");
         std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         std::fs::write(
             &config_path,
@@ -1260,10 +1452,16 @@ mod tests {
         .unwrap();
 
         let loaded = core.load_sync_config().unwrap();
-        assert_eq!(loaded.backend_type, crate::sync_service::BackendType::GithubApi);
+        assert_eq!(
+            loaded.backend_type,
+            crate::sync_service::BackendType::GithubApi
+        );
 
         let persisted = core.load_sync_config().unwrap();
-        assert_eq!(persisted.backend_type, crate::sync_service::BackendType::GithubApi);
+        assert_eq!(
+            persisted.backend_type,
+            crate::sync_service::BackendType::GithubApi
+        );
     }
 
     #[test]

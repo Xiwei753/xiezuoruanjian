@@ -45,15 +45,15 @@ pub fn resolve_anchor(anchor: &MindMapAnchor, chapter_content: &str) -> ResolveA
     }
 
     // 2. Fallback: Search using prefix + selectedText + suffix
-    let search_pattern = format!("{}{}{}", anchor.prefix_text, anchor.selected_text, anchor.suffix_text);
+    let search_pattern = format!(
+        "{}{}{}",
+        anchor.prefix_text, anchor.selected_text, anchor.suffix_text
+    );
 
     if let Some(index) = chapter_content.find(&search_pattern) {
         let new_start = index + anchor.prefix_text.len();
         let new_end = new_start + anchor.selected_text.len();
-        return ResolveAnchorResult::Success {
-            new_start,
-            new_end,
-        };
+        return ResolveAnchorResult::Success { new_start, new_end };
     }
 
     // Still not found? Try finding just the selected text if we really want to be aggressive,

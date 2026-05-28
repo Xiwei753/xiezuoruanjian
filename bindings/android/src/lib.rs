@@ -1,3 +1,4 @@
+use jni::objects::JObject;
 use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jstring};
 use jni::JNIEnv;
@@ -1972,4 +1973,86 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let core = WriterCore::new(&workspace_path);
     result_to_jstring(&mut env, core.get_writing_speed_curve(&start_date, &end_date, bucket_minutes as u32))
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_calculateWordCountNative(
+    mut env: JNIEnv,
+    _this: JObject,
+    text_j: JString,
+) -> jni::sys::jint {
+    let text = match jstring_to_string(&mut env, &text_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    writer_core::chapter::calculate_word_count(&text) as jni::sys::jint
+}
+
+
+#[no_mangle]
+pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_processWritingEventNative(
+    mut env: JNIEnv,
+    _this: JObject,
+    workspace_path_j: JString,
+    device_id_j: JString,
+    platform_j: JString,
+    project_id_j: JString,
+    volume_id_j: JString,
+    chapter_id_j: JString,
+    old_text_j: JString,
+    new_text_j: JString,
+    session_id_j: JString,
+) -> jni::sys::jboolean {
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let device_id = match jstring_to_string(&mut env, &device_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let platform = match jstring_to_string(&mut env, &platform_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let project_id = match jstring_to_string(&mut env, &project_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let volume_id = match jstring_to_string(&mut env, &volume_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let chapter_id = match jstring_to_string(&mut env, &chapter_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let old_text = match jstring_to_string(&mut env, &old_text_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let new_text = match jstring_to_string(&mut env, &new_text_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let session_id = match jstring_to_string(&mut env, &session_id_j) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let core = writer_core::facade::WriterCore::new(&workspace_path);
+    match core.process_writing_event(
+        &device_id,
+        &platform,
+        &project_id,
+        &volume_id,
+        &chapter_id,
+        &old_text,
+        &new_text,
+        &session_id,
+    ) {
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
 }

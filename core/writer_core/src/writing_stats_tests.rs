@@ -1,7 +1,7 @@
-use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
+use crate::writing_stats::aggregate::StatsAggregator;
 use crate::writing_stats::api::StatsApi;
 use crate::writing_stats::store::StatsStore;
-use crate::writing_stats::aggregate::StatsAggregator;
+use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
 use tempfile::tempdir;
 
 #[test]
@@ -10,16 +10,27 @@ fn test_human_typed_counts_as_pure_input() {
     let api = StatsApi::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::HumanTyped, 10, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        10,
+        0,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
-    let summary = api.get_stats_summary(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
 
     assert_eq!(summary["total_human_typed_chars"], 10);
     assert_eq!(summary["total_pasted_chars"], 0);
@@ -33,16 +44,27 @@ fn test_pasted_does_not_count_as_human_typed() {
     let api = StatsApi::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::Pasted, 0, 0, 20, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::Pasted,
+        0,
+        0,
+        20,
+        0,
+        "s1",
     );
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
-    let summary = api.get_stats_summary(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
 
     assert_eq!(summary["total_human_typed_chars"], 0);
     assert_eq!(summary["total_pasted_chars"], 20);
@@ -54,22 +76,42 @@ fn test_deleted_does_not_cancel_human_typed() {
     let api = StatsApi::new(temp_dir.path());
 
     let event1 = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::HumanTyped, 10, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        10,
+        0,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event1).unwrap();
 
     let event2 = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::Deleted, 0, 3, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::Deleted,
+        0,
+        3,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event2).unwrap();
 
     let today = StatsApi::today_date();
-    let summary = api.get_stats_summary(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
 
     assert_eq!(summary["total_human_typed_chars"], 10);
     assert_eq!(summary["total_deleted_chars"], 3);
@@ -82,16 +124,27 @@ fn test_ai_inserted_not_counted_as_human() {
     let api = StatsApi::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::AiInserted, 0, 0, 0, 50, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::AiInserted,
+        0,
+        0,
+        0,
+        50,
+        "s1",
     );
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
-    let summary = api.get_stats_summary(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
 
     assert_eq!(summary["total_human_typed_chars"], 0);
     assert_eq!(summary["total_ai_inserted_chars"], 50);
@@ -103,16 +156,27 @@ fn test_sync_remote_not_counted_as_local_input() {
     let api = StatsApi::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::SyncRemote, 0, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::SyncRemote,
+        0,
+        0,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
-    let summary = api.get_stats_summary(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
 
     assert_eq!(summary["total_human_typed_chars"], 0);
     assert_eq!(summary["total_net_delta_chars"], 0);
@@ -124,8 +188,17 @@ fn test_daily_aggregation_idempotent() {
     let agg = StatsAggregator::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::HumanTyped, 10, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        10,
+        0,
+        0,
+        0,
+        "s1",
     );
 
     agg.aggregate_single_event(&event).unwrap();
@@ -149,29 +222,55 @@ fn test_multi_device_no_overlap() {
     let api = StatsApi::new(temp_dir.path());
 
     let event1 = WritingInputEvent::new(
-        "dev-linux", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::HumanTyped, 10, 0, 0, 0, "s1",
+        "dev-linux",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        10,
+        0,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event1).unwrap();
 
     let event2 = WritingInputEvent::new(
-        "dev-android", Platform::Android, "proj1", "vol1", "chap1",
-        EventSource::HumanTyped, 20, 0, 0, 0, "s2",
+        "dev-android",
+        Platform::Android,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        20,
+        0,
+        0,
+        0,
+        "s2",
     );
     api.record_event(event2).unwrap();
 
     let today = StatsApi::today_date();
-    let device_stats = api.get_stats_by_device(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let device_stats = api
+        .get_stats_by_device(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
     let devices = device_stats["devices"].as_array().unwrap();
     assert_eq!(devices.len(), 2);
 
-    let linux_dev = devices.iter().find(|d| d["device_id"] == "dev-linux").unwrap();
+    let linux_dev = devices
+        .iter()
+        .find(|d| d["device_id"] == "dev-linux")
+        .unwrap();
     assert_eq!(linux_dev["human_typed_chars"], 10);
 
-    let android_dev = devices.iter().find(|d| d["device_id"] == "dev-android").unwrap();
+    let android_dev = devices
+        .iter()
+        .find(|d| d["device_id"] == "dev-android")
+        .unwrap();
     assert_eq!(android_dev["human_typed_chars"], 20);
 }
 
@@ -203,13 +302,20 @@ fn test_speed_buckets_generation() {
     }
 
     let today = StatsApi::today_date();
-    let speed_curve = api.get_speed_curve(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }, 1).unwrap();
+    let speed_curve = api
+        .get_speed_curve(
+            &DateRange {
+                start_date: today.clone(),
+                end_date: today,
+            },
+            1,
+        )
+        .unwrap();
     let buckets = speed_curve["buckets"].as_array().unwrap();
     assert!(!buckets.is_empty());
-    assert!(buckets.iter().any(|b| b["chars_typed"].as_u64().unwrap() > 0));
+    assert!(buckets
+        .iter()
+        .any(|b| b["chars_typed"].as_u64().unwrap() > 0));
 }
 
 #[test]
@@ -218,16 +324,27 @@ fn test_per_project_tracking() {
     let api = StatsApi::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj-abc", "vol1", "chap1",
-        EventSource::HumanTyped, 15, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj-abc",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        15,
+        0,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
-    let project_stats = api.get_stats_by_project(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let project_stats = api
+        .get_stats_by_project(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
     let projects = project_stats["projects"].as_array().unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0]["project_id"], "proj-abc");
@@ -240,16 +357,27 @@ fn test_per_chapter_tracking() {
     let api = StatsApi::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap-xyz",
-        EventSource::HumanTyped, 25, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap-xyz",
+        EventSource::HumanTyped,
+        25,
+        0,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
-    let chapter_stats = api.get_stats_by_chapter(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let chapter_stats = api
+        .get_stats_by_chapter(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
     let chapters = chapter_stats["chapters"].as_array().unwrap();
     assert_eq!(chapters.len(), 1);
     assert_eq!(chapters[0]["chapter_id"], "chap-xyz");
@@ -262,8 +390,17 @@ fn test_event_file_written() {
     let store = StatsStore::new(temp_dir.path());
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::HumanTyped, 10, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        10,
+        0,
+        0,
+        0,
+        "s1",
     );
 
     store.record_event(event.clone()).unwrap();
@@ -357,16 +494,27 @@ fn test_char_count_uses_unicode_scalar() {
     let char_count = chinese_text.chars().count();
 
     let event = WritingInputEvent::new(
-        "dev-1", Platform::Linux, "proj1", "vol1", "chap1",
-        EventSource::HumanTyped, char_count as u32, 0, 0, 0, "s1",
+        "dev-1",
+        Platform::Linux,
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        char_count as u32,
+        0,
+        0,
+        0,
+        "s1",
     );
     api.record_event(event).unwrap();
 
     let today = StatsApi::today_date();
-    let summary = api.get_stats_summary(&DateRange {
-        start_date: today.clone(),
-        end_date: today,
-    }).unwrap();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
 
     assert_eq!(summary["total_human_typed_chars"], 4);
 }
@@ -378,24 +526,44 @@ fn test_facade_record_writing_event() {
     let core = crate::facade::WriterCore::new(temp_dir.path());
 
     core.record_writing_event(
-        "dev-1", "linux", "proj1", "vol1", "chap1",
-        "human_typed", 10, 0, 0, 0, "s1",
-    ).unwrap();
+        "dev-1",
+        "linux",
+        "proj1",
+        "vol1",
+        "chap1",
+        "human_typed",
+        10,
+        0,
+        0,
+        0,
+        "s1",
+    )
+    .unwrap();
 
     core.record_writing_event(
-        "dev-1", "linux", "proj1", "vol1", "chap1",
-        "pasted", 0, 0, 20, 0, "s1",
-    ).unwrap();
+        "dev-1", "linux", "proj1", "vol1", "chap1", "pasted", 0, 0, 20, 0, "s1",
+    )
+    .unwrap();
 
     core.record_writing_event(
-        "dev-1", "linux", "proj1", "vol1", "chap1",
-        "deleted", 0, 5, 0, 0, "s1",
-    ).unwrap();
+        "dev-1", "linux", "proj1", "vol1", "chap1", "deleted", 0, 5, 0, 0, "s1",
+    )
+    .unwrap();
 
     core.record_writing_event(
-        "dev-1", "android", "proj1", "vol1", "chap1",
-        "ai_inserted", 0, 0, 0, 30, "s1",
-    ).unwrap();
+        "dev-1",
+        "android",
+        "proj1",
+        "vol1",
+        "chap1",
+        "ai_inserted",
+        0,
+        0,
+        0,
+        30,
+        "s1",
+    )
+    .unwrap();
 
     core.flush_writing_stats().unwrap();
 
@@ -438,12 +606,15 @@ fn test_load_chapter_does_not_produce_input_events() {
     let project = core.create_project("Test").unwrap();
     let volume = core.create_volume(&project.id, "Vol").unwrap();
     let chapter = core.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
-    core.write_chapter(&project.id, &volume.id, &chapter.id, "Hello world").unwrap();
+    core.write_chapter(&project.id, &volume.id, &chapter.id, "Hello world")
+        .unwrap();
 
     let today = StatsApi::today_date();
     let summary_before = core.get_writing_stats_summary(&today, &today).unwrap();
 
-    let _content = core.read_chapter(&project.id, &volume.id, &chapter.id).unwrap();
+    let _content = core
+        .read_chapter(&project.id, &volume.id, &chapter.id)
+        .unwrap();
 
     let summary_after = core.get_writing_stats_summary(&today, &today).unwrap();
     assert_eq!(summary_before, summary_after);

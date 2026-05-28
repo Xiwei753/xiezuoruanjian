@@ -103,20 +103,22 @@ impl StatsStore {
 
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let should_flush = {
-            let mut buffer = self.event_buffer.lock().map_err(|e| {
-                crate::Error::Other(format!("Failed to lock event buffer: {}", e))
-            })?;
-            buffer.push(event);
-            let mut last_flush = self.last_flush_ms.lock().map_err(|e| {
-                crate::Error::Other(format!("Failed to lock flush timer: {}", e))
-            })?;
-            let should = buffer.len() >= MAX_BUFFER_SIZE || (now_ms - *last_flush) >= FLUSH_DEBOUNCE_MS;
-            if should {
-                *last_flush = now_ms;
-            }
-            should
-        };
+        let should_flush =
+            {
+                let mut buffer = self.event_buffer.lock().map_err(|e| {
+                    crate::Error::Other(format!("Failed to lock event buffer: {}", e))
+                })?;
+                buffer.push(event);
+                let mut last_flush = self.last_flush_ms.lock().map_err(|e| {
+                    crate::Error::Other(format!("Failed to lock flush timer: {}", e))
+                })?;
+                let should =
+                    buffer.len() >= MAX_BUFFER_SIZE || (now_ms - *last_flush) >= FLUSH_DEBOUNCE_MS;
+                if should {
+                    *last_flush = now_ms;
+                }
+                should
+            };
 
         if should_flush {
             self.flush_events()?;
@@ -126,9 +128,10 @@ impl StatsStore {
 
     pub fn flush_events(&self) -> Result<()> {
         let events = {
-            let mut buffer = self.event_buffer.lock().map_err(|e| {
-                crate::Error::Other(format!("Failed to lock event buffer: {}", e))
-            })?;
+            let mut buffer = self
+                .event_buffer
+                .lock()
+                .map_err(|e| crate::Error::Other(format!("Failed to lock event buffer: {}", e)))?;
             std::mem::take(&mut *buffer)
         };
 
@@ -177,7 +180,11 @@ impl StatsStore {
         Ok(events)
     }
 
-    pub fn load_events_range(&self, start_date: &str, end_date: &str) -> Result<Vec<WritingInputEvent>> {
+    pub fn load_events_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<WritingInputEvent>> {
         let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
             .map_err(|e| crate::Error::Other(format!("Invalid start date: {}", e)))?;
         let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
@@ -219,13 +226,18 @@ impl StatsStore {
     }
 
     pub fn save_or_merge_daily_stats(&self, stats: &DailyStats) -> Result<()> {
-        let mut file = self.load_daily_stats_file(&stats.date)?
+        let mut file = self
+            .load_daily_stats_file(&stats.date)?
             .unwrap_or_else(|| DailyStatsFile {
                 date: stats.date.clone(),
                 devices: Vec::new(),
             });
 
-        if let Some(existing) = file.devices.iter_mut().find(|d| d.device_id == stats.device_id) {
+        if let Some(existing) = file
+            .devices
+            .iter_mut()
+            .find(|d| d.device_id == stats.device_id)
+        {
             self.merge_daily_stats(existing, stats)?;
         } else {
             file.devices.push(stats.clone());
@@ -241,7 +253,11 @@ impl StatsStore {
         }
     }
 
-    pub fn load_daily_stats_range(&self, start_date: &str, end_date: &str) -> Result<Vec<DailyStats>> {
+    pub fn load_daily_stats_range(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<DailyStats>> {
         let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
             .map_err(|e| crate::Error::Other(format!("Invalid start date: {}", e)))?;
         let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
@@ -273,7 +289,10 @@ impl StatsStore {
 
         let mut daily_stats_list = Vec::new();
         for ((date, device_id), day_events) in &by_date_device {
-            let platform = day_events.first().map(|e| e.platform.to_string()).unwrap_or_default();
+            let platform = day_events
+                .first()
+                .map(|e| e.platform.to_string())
+                .unwrap_or_default();
             let mut stats = DailyStats {
                 date: date.clone(),
                 device_id: device_id.clone(),
@@ -299,32 +318,62 @@ impl StatsStore {
                 }
                 stats.total_net_delta_chars += event.net_delta_chars as i64;
 
-                let proj = stats.per_project.entry(event.project_id.clone()).or_default();
+                let proj = stats
+                    .per_project
+                    .entry(event.project_id.clone())
+                    .or_default();
                 match event.source {
-                    crate::writing_stats::EventSource::HumanTyped => proj.human_typed_chars += event.inserted_chars as u64,
-                    crate::writing_stats::EventSource::Pasted => proj.pasted_chars += event.pasted_chars as u64,
-                    crate::writing_stats::EventSource::Deleted => proj.deleted_chars += event.deleted_chars as u64,
-                    crate::writing_stats::EventSource::AiInserted => proj.ai_inserted_chars += event.ai_inserted_chars as u64,
+                    crate::writing_stats::EventSource::HumanTyped => {
+                        proj.human_typed_chars += event.inserted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::Pasted => {
+                        proj.pasted_chars += event.pasted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::Deleted => {
+                        proj.deleted_chars += event.deleted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::AiInserted => {
+                        proj.ai_inserted_chars += event.ai_inserted_chars as u64
+                    }
                     _ => {}
                 }
                 proj.net_delta_chars += event.net_delta_chars as i64;
 
                 let vol = stats.per_volume.entry(event.volume_id.clone()).or_default();
                 match event.source {
-                    crate::writing_stats::EventSource::HumanTyped => vol.human_typed_chars += event.inserted_chars as u64,
-                    crate::writing_stats::EventSource::Pasted => vol.pasted_chars += event.pasted_chars as u64,
-                    crate::writing_stats::EventSource::Deleted => vol.deleted_chars += event.deleted_chars as u64,
-                    crate::writing_stats::EventSource::AiInserted => vol.ai_inserted_chars += event.ai_inserted_chars as u64,
+                    crate::writing_stats::EventSource::HumanTyped => {
+                        vol.human_typed_chars += event.inserted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::Pasted => {
+                        vol.pasted_chars += event.pasted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::Deleted => {
+                        vol.deleted_chars += event.deleted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::AiInserted => {
+                        vol.ai_inserted_chars += event.ai_inserted_chars as u64
+                    }
                     _ => {}
                 }
                 vol.net_delta_chars += event.net_delta_chars as i64;
 
-                let chap = stats.per_chapter.entry(event.chapter_id.clone()).or_default();
+                let chap = stats
+                    .per_chapter
+                    .entry(event.chapter_id.clone())
+                    .or_default();
                 match event.source {
-                    crate::writing_stats::EventSource::HumanTyped => chap.human_typed_chars += event.inserted_chars as u64,
-                    crate::writing_stats::EventSource::Pasted => chap.pasted_chars += event.pasted_chars as u64,
-                    crate::writing_stats::EventSource::Deleted => chap.deleted_chars += event.deleted_chars as u64,
-                    crate::writing_stats::EventSource::AiInserted => chap.ai_inserted_chars += event.ai_inserted_chars as u64,
+                    crate::writing_stats::EventSource::HumanTyped => {
+                        chap.human_typed_chars += event.inserted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::Pasted => {
+                        chap.pasted_chars += event.pasted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::Deleted => {
+                        chap.deleted_chars += event.deleted_chars as u64
+                    }
+                    crate::writing_stats::EventSource::AiInserted => {
+                        chap.ai_inserted_chars += event.ai_inserted_chars as u64
+                    }
                     _ => {}
                 }
                 chap.net_delta_chars += event.net_delta_chars as i64;
@@ -380,7 +429,11 @@ impl StatsStore {
         Ok(daily_stats_list)
     }
 
-    fn compute_speed_buckets(&self, events: &[&WritingInputEvent], bucket_ms: i64) -> Result<Vec<SpeedBucket>> {
+    fn compute_speed_buckets(
+        &self,
+        events: &[&WritingInputEvent],
+        bucket_ms: i64,
+    ) -> Result<Vec<SpeedBucket>> {
         if events.is_empty() {
             return Ok(Vec::new());
         }
@@ -427,7 +480,11 @@ impl StatsStore {
         Ok(dt.format("%Y-%m-%d").to_string())
     }
 
-    pub fn merge_daily_stats(&self, existing: &mut DailyStats, incoming: &DailyStats) -> Result<()> {
+    pub fn merge_daily_stats(
+        &self,
+        existing: &mut DailyStats,
+        incoming: &DailyStats,
+    ) -> Result<()> {
         if existing.date != incoming.date || existing.device_id != incoming.device_id {
             return Err(crate::Error::Other(
                 "Cannot merge stats from different dates or devices".to_string(),

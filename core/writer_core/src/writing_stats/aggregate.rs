@@ -56,32 +56,62 @@ impl StatsAggregator {
         }
         stats.total_net_delta_chars += event.net_delta_chars as i64;
 
-        let proj = stats.per_project.entry(event.project_id.clone()).or_default();
+        let proj = stats
+            .per_project
+            .entry(event.project_id.clone())
+            .or_default();
         match event.source {
-            crate::writing_stats::EventSource::HumanTyped => proj.human_typed_chars += event.inserted_chars as u64,
-            crate::writing_stats::EventSource::Pasted => proj.pasted_chars += event.pasted_chars as u64,
-            crate::writing_stats::EventSource::Deleted => proj.deleted_chars += event.deleted_chars as u64,
-            crate::writing_stats::EventSource::AiInserted => proj.ai_inserted_chars += event.ai_inserted_chars as u64,
+            crate::writing_stats::EventSource::HumanTyped => {
+                proj.human_typed_chars += event.inserted_chars as u64
+            }
+            crate::writing_stats::EventSource::Pasted => {
+                proj.pasted_chars += event.pasted_chars as u64
+            }
+            crate::writing_stats::EventSource::Deleted => {
+                proj.deleted_chars += event.deleted_chars as u64
+            }
+            crate::writing_stats::EventSource::AiInserted => {
+                proj.ai_inserted_chars += event.ai_inserted_chars as u64
+            }
             _ => {}
         }
         proj.net_delta_chars += event.net_delta_chars as i64;
 
         let vol = stats.per_volume.entry(event.volume_id.clone()).or_default();
         match event.source {
-            crate::writing_stats::EventSource::HumanTyped => vol.human_typed_chars += event.inserted_chars as u64,
-            crate::writing_stats::EventSource::Pasted => vol.pasted_chars += event.pasted_chars as u64,
-            crate::writing_stats::EventSource::Deleted => vol.deleted_chars += event.deleted_chars as u64,
-            crate::writing_stats::EventSource::AiInserted => vol.ai_inserted_chars += event.ai_inserted_chars as u64,
+            crate::writing_stats::EventSource::HumanTyped => {
+                vol.human_typed_chars += event.inserted_chars as u64
+            }
+            crate::writing_stats::EventSource::Pasted => {
+                vol.pasted_chars += event.pasted_chars as u64
+            }
+            crate::writing_stats::EventSource::Deleted => {
+                vol.deleted_chars += event.deleted_chars as u64
+            }
+            crate::writing_stats::EventSource::AiInserted => {
+                vol.ai_inserted_chars += event.ai_inserted_chars as u64
+            }
             _ => {}
         }
         vol.net_delta_chars += event.net_delta_chars as i64;
 
-        let chap = stats.per_chapter.entry(event.chapter_id.clone()).or_default();
+        let chap = stats
+            .per_chapter
+            .entry(event.chapter_id.clone())
+            .or_default();
         match event.source {
-            crate::writing_stats::EventSource::HumanTyped => chap.human_typed_chars += event.inserted_chars as u64,
-            crate::writing_stats::EventSource::Pasted => chap.pasted_chars += event.pasted_chars as u64,
-            crate::writing_stats::EventSource::Deleted => chap.deleted_chars += event.deleted_chars as u64,
-            crate::writing_stats::EventSource::AiInserted => chap.ai_inserted_chars += event.ai_inserted_chars as u64,
+            crate::writing_stats::EventSource::HumanTyped => {
+                chap.human_typed_chars += event.inserted_chars as u64
+            }
+            crate::writing_stats::EventSource::Pasted => {
+                chap.pasted_chars += event.pasted_chars as u64
+            }
+            crate::writing_stats::EventSource::Deleted => {
+                chap.deleted_chars += event.deleted_chars as u64
+            }
+            crate::writing_stats::EventSource::AiInserted => {
+                chap.ai_inserted_chars += event.ai_inserted_chars as u64
+            }
             _ => {}
         }
         chap.net_delta_chars += event.net_delta_chars as i64;
@@ -154,8 +184,17 @@ mod tests {
         let agg = StatsAggregator::new(temp_dir.path());
 
         let event = WritingInputEvent::new(
-            "device-1", Platform::Linux, "proj1", "vol1", "chap1",
-            EventSource::HumanTyped, 10, 0, 0, 0, "session-1",
+            "device-1",
+            Platform::Linux,
+            "proj1",
+            "vol1",
+            "chap1",
+            EventSource::HumanTyped,
+            10,
+            0,
+            0,
+            0,
+            "session-1",
         );
 
         agg.aggregate_single_event(&event).unwrap();
@@ -175,8 +214,17 @@ mod tests {
         let agg = StatsAggregator::new(temp_dir.path());
 
         let event = WritingInputEvent::new(
-            "device-1", Platform::Linux, "proj1", "vol1", "chap1",
-            EventSource::Pasted, 0, 0, 20, 0, "session-1",
+            "device-1",
+            Platform::Linux,
+            "proj1",
+            "vol1",
+            "chap1",
+            EventSource::Pasted,
+            0,
+            0,
+            20,
+            0,
+            "session-1",
         );
 
         agg.aggregate_single_event(&event).unwrap();
@@ -194,14 +242,32 @@ mod tests {
         let agg = StatsAggregator::new(temp_dir.path());
 
         let event1 = WritingInputEvent::new(
-            "device-1", Platform::Linux, "proj1", "vol1", "chap1",
-            EventSource::HumanTyped, 10, 0, 0, 0, "session-1",
+            "device-1",
+            Platform::Linux,
+            "proj1",
+            "vol1",
+            "chap1",
+            EventSource::HumanTyped,
+            10,
+            0,
+            0,
+            0,
+            "session-1",
         );
         agg.aggregate_single_event(&event1).unwrap();
 
         let event2 = WritingInputEvent::new(
-            "device-1", Platform::Linux, "proj1", "vol1", "chap1",
-            EventSource::Deleted, 0, 3, 0, 0, "session-1",
+            "device-1",
+            Platform::Linux,
+            "proj1",
+            "vol1",
+            "chap1",
+            EventSource::Deleted,
+            0,
+            3,
+            0,
+            0,
+            "session-1",
         );
         agg.aggregate_single_event(&event2).unwrap();
 
@@ -219,8 +285,17 @@ mod tests {
         let agg = StatsAggregator::new(temp_dir.path());
 
         let event = WritingInputEvent::new(
-            "device-1", Platform::Linux, "proj1", "vol1", "chap1",
-            EventSource::AiInserted, 0, 0, 0, 50, "session-1",
+            "device-1",
+            Platform::Linux,
+            "proj1",
+            "vol1",
+            "chap1",
+            EventSource::AiInserted,
+            0,
+            0,
+            0,
+            50,
+            "session-1",
         );
 
         agg.aggregate_single_event(&event).unwrap();
@@ -238,8 +313,17 @@ mod tests {
         let agg = StatsAggregator::new(temp_dir.path());
 
         let event = WritingInputEvent::new(
-            "device-1", Platform::Linux, "proj-abc", "vol1", "chap1",
-            EventSource::HumanTyped, 15, 0, 0, 0, "session-1",
+            "device-1",
+            Platform::Linux,
+            "proj-abc",
+            "vol1",
+            "chap1",
+            EventSource::HumanTyped,
+            15,
+            0,
+            0,
+            0,
+            "session-1",
         );
 
         agg.aggregate_single_event(&event).unwrap();
@@ -257,14 +341,32 @@ mod tests {
         let agg = StatsAggregator::new(temp_dir.path());
 
         let event1 = WritingInputEvent::new(
-            "device-linux", Platform::Linux, "proj1", "vol1", "chap1",
-            EventSource::HumanTyped, 10, 0, 0, 0, "session-1",
+            "device-linux",
+            Platform::Linux,
+            "proj1",
+            "vol1",
+            "chap1",
+            EventSource::HumanTyped,
+            10,
+            0,
+            0,
+            0,
+            "session-1",
         );
         agg.aggregate_single_event(&event1).unwrap();
 
         let event2 = WritingInputEvent::new(
-            "device-android", Platform::Android, "proj1", "vol1", "chap1",
-            EventSource::HumanTyped, 20, 0, 0, 0, "session-2",
+            "device-android",
+            Platform::Android,
+            "proj1",
+            "vol1",
+            "chap1",
+            EventSource::HumanTyped,
+            20,
+            0,
+            0,
+            0,
+            "session-2",
         );
         agg.aggregate_single_event(&event2).unwrap();
 
@@ -272,10 +374,16 @@ mod tests {
         let all_stats = agg.store().load_all_daily_stats_for_date(&date).unwrap();
         assert_eq!(all_stats.len(), 2);
 
-        let stats_linux = all_stats.iter().find(|s| s.device_id == "device-linux").unwrap();
+        let stats_linux = all_stats
+            .iter()
+            .find(|s| s.device_id == "device-linux")
+            .unwrap();
         assert_eq!(stats_linux.total_human_typed_chars, 10);
 
-        let stats_android = all_stats.iter().find(|s| s.device_id == "device-android").unwrap();
+        let stats_android = all_stats
+            .iter()
+            .find(|s| s.device_id == "device-android")
+            .unwrap();
         assert_eq!(stats_android.total_human_typed_chars, 20);
     }
 

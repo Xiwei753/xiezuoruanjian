@@ -1,6 +1,6 @@
 use crate::mind_map::graph::MindMapGraph;
-use std::fs;
 use serde::{Deserialize, Serialize};
+use std::fs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,7 +54,9 @@ pub fn load_mind_map_graph(
         let json_str = fs::read_to_string(&graph_path)?;
         let graph: MindMapGraph = serde_json::from_str(&json_str)?;
         if graph.schema_version != 2 {
-            return Err(crate::error::Error::Json(serde::de::Error::custom(format!("Unsupported schema version: {}", graph.schema_version))));
+            return Err(crate::error::Error::Json(serde::de::Error::custom(
+                format!("Unsupported schema version: {}", graph.schema_version),
+            )));
         }
         return Ok(graph);
     } else {
@@ -75,7 +77,9 @@ pub fn load_mind_map_graph(
                 )));
             }
 
-            let graph_path = mind_map_dir.join("graphs").join(format!("{}.json", index.default_graph_id));
+            let graph_path = mind_map_dir
+                .join("graphs")
+                .join(format!("{}.json", index.default_graph_id));
             if !graph_path.exists() {
                 return Err(crate::error::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -85,7 +89,9 @@ pub fn load_mind_map_graph(
             let json_str = fs::read_to_string(&graph_path)?;
             let graph: MindMapGraph = serde_json::from_str(&json_str)?;
             if graph.schema_version != 2 {
-                return Err(crate::error::Error::Json(serde::de::Error::custom(format!("Unsupported schema version: {}", graph.schema_version))));
+                return Err(crate::error::Error::Json(serde::de::Error::custom(
+                    format!("Unsupported schema version: {}", graph.schema_version),
+                )));
             }
             return Ok(graph);
         }
@@ -105,7 +111,9 @@ pub fn load_mind_map_graph(
                 let json_str = fs::read_to_string(&json_files[0])?;
                 let graph: MindMapGraph = serde_json::from_str(&json_str)?;
                 if graph.schema_version != 2 {
-                    return Err(crate::error::Error::Json(serde::de::Error::custom(format!("Unsupported schema version: {}", graph.schema_version))));
+                    return Err(crate::error::Error::Json(serde::de::Error::custom(
+                        format!("Unsupported schema version: {}", graph.schema_version),
+                    )));
                 }
                 return Ok(graph);
             } else if json_files.len() > 1 {
@@ -129,10 +137,16 @@ pub fn save_mind_map_graph(
 ) -> crate::error::Result<()> {
     // Validate first
     crate::mind_map::validation::validate_graph(graph, core).map_err(|e| {
-        crate::error::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{:?}", e)))
+        crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{:?}", e),
+        ))
     })?;
 
-    let project_path = core.workspace_path().join("projects").join(&graph.project_id);
+    let project_path = core
+        .workspace_path()
+        .join("projects")
+        .join(&graph.project_id);
     let mind_map_dir = project_path.join("mind_map");
     let graphs_dir = mind_map_dir.join("graphs");
 
@@ -183,7 +197,10 @@ pub fn load_mind_map_layout(
     graph_id: &str,
 ) -> crate::error::Result<crate::mind_map::layout::MindMapLayout> {
     let project_path = core.workspace_path().join("projects").join(project_id);
-    let layout_path = project_path.join("mind_map").join("layouts").join(format!("{}.json", graph_id));
+    let layout_path = project_path
+        .join("mind_map")
+        .join("layouts")
+        .join(format!("{}.json", graph_id));
     if !layout_path.exists() {
         return Err(crate::error::Error::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -213,9 +230,9 @@ pub fn save_mind_map_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::facade::WriterCore;
     use crate::mind_map::graph::{MindMapGraphNode, MindMapNodeKind};
+    use tempfile::tempdir;
 
     #[test]
     fn test_v1_migration_success() {
@@ -244,7 +261,11 @@ mod tests {
             "edges": []
         }"#;
 
-        let v1_path = temp_dir.path().join("projects").join(&proj.id).join("mind_map.json");
+        let v1_path = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map.json");
         fs::write(&v1_path, v1_json).unwrap();
 
         // Load graph which should trigger V1 migration
@@ -254,11 +275,19 @@ mod tests {
 
         // Verify V1 file is renamed/moved to mind_map.v1.backup.json
         assert!(!v1_path.exists());
-        let backup_path = temp_dir.path().join("projects").join(&proj.id).join("mind_map.v1.backup.json");
+        let backup_path = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map.v1.backup.json");
         assert!(backup_path.exists());
 
         // Verify V2 structure exists
-        let mind_map_dir = temp_dir.path().join("projects").join(&proj.id).join("mind_map");
+        let mind_map_dir = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map");
         let graph_path = mind_map_dir.join("graphs").join("migrated_v1.json");
         assert!(graph_path.exists());
 
@@ -292,7 +321,11 @@ mod tests {
             "updatedAt": 0
         }"#;
 
-        let v1_path = temp_dir.path().join("projects").join(&proj.id).join("mind_map.json");
+        let v1_path = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map.json");
         fs::write(&v1_path, future_json).unwrap();
 
         // Load graph which should fail during migration due to unsupported schema version
@@ -301,7 +334,11 @@ mod tests {
 
         // Verify V1 file still exists and was not renamed/removed
         assert!(v1_path.exists());
-        let backup_path = temp_dir.path().join("projects").join(&proj.id).join("mind_map.v1.backup.json");
+        let backup_path = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map.v1.backup.json");
         assert!(!backup_path.exists());
     }
 
@@ -317,17 +354,15 @@ mod tests {
             id: "graph_new".into(),
             project_id: proj.id.clone(),
             title: "New Graph".into(),
-            nodes: vec![
-                MindMapGraphNode {
-                    id: "n1".into(),
-                    title: "Node 1".into(),
-                    kind: MindMapNodeKind::Note,
-                    payload: None,
-                    tags: vec![],
-                    created_at: 0,
-                    updated_at: 0,
-                }
-            ],
+            nodes: vec![MindMapGraphNode {
+                id: "n1".into(),
+                title: "Node 1".into(),
+                kind: MindMapNodeKind::Note,
+                payload: None,
+                tags: vec![],
+                created_at: 0,
+                updated_at: 0,
+            }],
             edges: vec![],
             anchors: vec![],
             links: vec![],
@@ -337,7 +372,11 @@ mod tests {
 
         save_mind_map_graph(&core, &graph).unwrap();
 
-        let mind_map_dir = temp_dir.path().join("projects").join(&proj.id).join("mind_map");
+        let mind_map_dir = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map");
         let index_path = mind_map_dir.join("index.json");
         assert!(index_path.exists());
 
@@ -384,10 +423,23 @@ mod tests {
         };
 
         // Write directly to bypass save_mind_map_graph (so no index.json is created)
-        let graphs_dir = temp_dir.path().join("projects").join(&proj.id).join("mind_map").join("graphs");
+        let graphs_dir = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map")
+            .join("graphs");
         fs::create_dir_all(&graphs_dir).unwrap();
-        fs::write(graphs_dir.join("g1.json"), serde_json::to_string(&graph1).unwrap()).unwrap();
-        fs::write(graphs_dir.join("g2.json"), serde_json::to_string(&graph2).unwrap()).unwrap();
+        fs::write(
+            graphs_dir.join("g1.json"),
+            serde_json::to_string(&graph1).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            graphs_dir.join("g2.json"),
+            serde_json::to_string(&graph2).unwrap(),
+        )
+        .unwrap();
 
         // Loading without specifying graph_id should fail because there is no index but multiple graphs exist
         let result = load_mind_map_graph(&core, &proj.id, None);
@@ -451,7 +503,11 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         let proj = core.create_project("Test Project").unwrap();
 
-        let mind_map_dir = temp_dir.path().join("projects").join(&proj.id).join("mind_map");
+        let mind_map_dir = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map");
         fs::create_dir_all(&mind_map_dir).unwrap();
         fs::write(mind_map_dir.join("index.json"), "{ invalid json }").unwrap();
 
@@ -472,7 +528,11 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         let proj = core.create_project("Test Project").unwrap();
 
-        let mind_map_dir = temp_dir.path().join("projects").join(&proj.id).join("mind_map");
+        let mind_map_dir = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map");
         fs::create_dir_all(&mind_map_dir).unwrap();
         let bad_index = r#"{
             "schemaVersion": 999,
@@ -499,7 +559,11 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         let proj = core.create_project("Test Project").unwrap();
 
-        let mind_map_dir = temp_dir.path().join("projects").join(&proj.id).join("mind_map");
+        let mind_map_dir = temp_dir
+            .path()
+            .join("projects")
+            .join(&proj.id)
+            .join("mind_map");
         fs::create_dir_all(&mind_map_dir).unwrap();
         let index = r#"{
             "schemaVersion": 2,

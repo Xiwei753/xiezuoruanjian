@@ -1,5 +1,7 @@
-use crate::mind_map::graph::{MindMapGraph, MindMapGraphNode, MindMapGraphEdge, MindMapNodeKind, MindMapEdgeKind};
 use crate::mind_map::anchor::{MindMapAnchor, MindMapLink};
+use crate::mind_map::graph::{
+    MindMapEdgeKind, MindMapGraph, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind,
+};
 use crate::mind_map::layout::MindMapLayout;
 use crate::mind_map::storage::{self, MindMapIndex};
 use crate::mind_map::validation;
@@ -131,7 +133,7 @@ pub fn list_mind_map_graphs(
     }
     let mind_map_dir = project_path.join("mind_map");
     let index_path = mind_map_dir.join("index.json");
-    
+
     let mut default_graph_id = None;
     if index_path.exists() {
         if let Ok(index_str) = fs::read_to_string(&index_path) {
@@ -161,7 +163,7 @@ pub fn list_mind_map_graphs(
             }
         }
     }
-    
+
     Ok(MindMapGraphsList {
         default_graph_id,
         graphs,
@@ -233,7 +235,7 @@ pub fn create_mind_map_node(
         .as_millis() as u64;
     node.created_at = now;
     node.updated_at = now;
-    
+
     let node_clone = node.clone();
     mutate_mind_map_graph(core, project_id, graph_id, move |graph| {
         if graph.nodes.iter().any(|n| n.id == node.id) {
@@ -257,12 +259,17 @@ pub fn update_mind_map_node(
 ) -> crate::error::Result<MindMapGraphNode> {
     let mut updated_node = None;
     mutate_mind_map_graph(core, project_id, graph_id, |graph| {
-        let node = graph.nodes.iter_mut().find(|n| n.id == node_id)
-            .ok_or_else(|| crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Node not found: {}", node_id),
-            )))?;
-        
+        let node = graph
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == node_id)
+            .ok_or_else(|| {
+                crate::error::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Node not found: {}", node_id),
+                ))
+            })?;
+
         if let Some(t) = patch.title {
             node.title = t;
         }
@@ -283,9 +290,9 @@ pub fn update_mind_map_node(
         updated_node = Some(node.clone());
         Ok(())
     })?;
-    updated_node.ok_or_else(|| crate::error::Error::Io(std::io::Error::other(
-        "Failed to retrieve updated node",
-    )))
+    updated_node.ok_or_else(|| {
+        crate::error::Error::Io(std::io::Error::other("Failed to retrieve updated node"))
+    })
 }
 
 pub fn delete_mind_map_node(
@@ -297,21 +304,32 @@ pub fn delete_mind_map_node(
 ) -> crate::error::Result<()> {
     mutate_mind_map_graph(core, project_id, graph_id, |graph| {
         // Check if node exists
-        let node_index = graph.nodes.iter().position(|n| n.id == node_id)
-            .ok_or_else(|| crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Node not found: {}", node_id),
-            )))?;
+        let node_index = graph
+            .nodes
+            .iter()
+            .position(|n| n.id == node_id)
+            .ok_or_else(|| {
+                crate::error::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Node not found: {}", node_id),
+                ))
+            })?;
 
         // Check references
-        let is_referenced_by_edge = graph.edges.iter().any(|e| e.from == node_id || e.to == node_id);
+        let is_referenced_by_edge = graph
+            .edges
+            .iter()
+            .any(|e| e.from == node_id || e.to == node_id);
         let is_referenced_by_link = graph.links.iter().any(|l| l.node_id == node_id);
 
         if is_referenced_by_edge || is_referenced_by_link {
             if !cascade {
                 return Err(crate::error::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("Node {} is referenced by edges or links, cannot delete without cascade", node_id),
+                    format!(
+                        "Node {} is referenced by edges or links, cannot delete without cascade",
+                        node_id
+                    ),
                 )));
             } else {
                 // Cascade delete: remove referencing edges and links
@@ -377,11 +395,16 @@ pub fn update_mind_map_edge(
 ) -> crate::error::Result<MindMapGraphEdge> {
     let mut updated_edge = None;
     mutate_mind_map_graph(core, project_id, graph_id, |graph| {
-        let edge = graph.edges.iter_mut().find(|e| e.id == edge_id)
-            .ok_or_else(|| crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Edge not found: {}", edge_id),
-            )))?;
+        let edge = graph
+            .edges
+            .iter_mut()
+            .find(|e| e.id == edge_id)
+            .ok_or_else(|| {
+                crate::error::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Edge not found: {}", edge_id),
+                ))
+            })?;
 
         if let Some(k) = patch.kind {
             edge.kind = k;
@@ -400,9 +423,9 @@ pub fn update_mind_map_edge(
         updated_edge = Some(edge.clone());
         Ok(())
     })?;
-    updated_edge.ok_or_else(|| crate::error::Error::Io(std::io::Error::other(
-        "Failed to retrieve updated edge",
-    )))
+    updated_edge.ok_or_else(|| {
+        crate::error::Error::Io(std::io::Error::other("Failed to retrieve updated edge"))
+    })
 }
 
 pub fn delete_mind_map_edge(
@@ -412,11 +435,16 @@ pub fn delete_mind_map_edge(
     edge_id: &str,
 ) -> crate::error::Result<()> {
     mutate_mind_map_graph(core, project_id, graph_id, |graph| {
-        let edge_index = graph.edges.iter().position(|e| e.id == edge_id)
-            .ok_or_else(|| crate::error::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Edge not found: {}", edge_id),
-            )))?;
+        let edge_index = graph
+            .edges
+            .iter()
+            .position(|e| e.id == edge_id)
+            .ok_or_else(|| {
+                crate::error::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("Edge not found: {}", edge_id),
+                ))
+            })?;
         graph.edges.remove(edge_index);
         Ok(())
     })
@@ -490,10 +518,17 @@ pub fn bind_mind_map_node_to_anchor(
                 format!("Anchor not found: {}", link.anchor_id),
             )));
         }
-        if graph.links.iter().any(|l| l.node_id == link.node_id && l.anchor_id == link.anchor_id) {
+        if graph
+            .links
+            .iter()
+            .any(|l| l.node_id == link.node_id && l.anchor_id == link.anchor_id)
+        {
             return Err(crate::error::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
-                format!("Link already exists between node {} and anchor {}", link.node_id, link.anchor_id),
+                format!(
+                    "Link already exists between node {} and anchor {}",
+                    link.node_id, link.anchor_id
+                ),
             )));
         }
         graph.links.push(link);
@@ -537,10 +572,12 @@ pub fn save_mind_map_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::facade::WriterCore;
-    use crate::mind_map::graph::{MindMapGraphNode, MindMapNodeKind, MindMapGraphEdge, MindMapEdgeKind};
+    use crate::mind_map::graph::{
+        MindMapEdgeKind, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind,
+    };
     use crate::mind_map::layout::MindMapLayoutNode;
+    use tempfile::tempdir;
 
     #[test]
     fn test_mind_map_edit_flow() {
@@ -581,7 +618,8 @@ mod tests {
             payload: None,
             tags: Some(vec!["main".to_string()]),
         };
-        let updated_node = update_mind_map_node(&core, &proj.id, &graph.id, "node_1", patch).unwrap();
+        let updated_node =
+            update_mind_map_node(&core, &proj.id, &graph.id, "node_1", patch).unwrap();
         assert_eq!(updated_node.title, "Character A Updated");
         assert_eq!(updated_node.tags, vec!["main"]);
 
@@ -644,7 +682,10 @@ mod tests {
         let created_anchor = create_mind_map_anchor(&core, &proj.id, &graph.id, anchor).unwrap();
         assert_eq!(created_anchor.id, "anchor_1");
 
-        let link = bind_mind_map_node_to_anchor(&core, &proj.id, &graph.id, "node_1", "anchor_1", "Primary").unwrap();
+        let link = bind_mind_map_node_to_anchor(
+            &core, &proj.id, &graph.id, "node_1", "anchor_1", "Primary",
+        )
+        .unwrap();
         assert_eq!(link.node_id, "node_1");
         assert_eq!(link.anchor_id, "anchor_1");
 
@@ -655,7 +696,7 @@ mod tests {
 
         // 11. Test delete node with cascade (should delete edge_1 and link)
         delete_mind_map_node(&core, &proj.id, &graph.id, "node_1", true).unwrap();
-        
+
         let loaded_graph = storage::load_mind_map_graph(&core, &proj.id, Some(&graph.id)).unwrap();
         assert!(!loaded_graph.nodes.iter().any(|n| n.id == "node_1"));
         assert!(!loaded_graph.edges.iter().any(|e| e.id == "edge_1"));
@@ -686,7 +727,7 @@ mod tests {
         // 13. Create another graph and set default
         let graph2 = create_mind_map_graph(&core, &proj.id, "Graph 2").unwrap();
         set_default_mind_map_graph(&core, &proj.id, &graph2.id).unwrap();
-        
+
         let list2 = list_mind_map_graphs(&core, &proj.id).unwrap();
         assert_eq!(list2.default_graph_id.unwrap(), graph2.id);
 

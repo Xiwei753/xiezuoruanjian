@@ -123,7 +123,8 @@ pub fn list_starmaps(workspace: &Path) -> Result<Vec<StarMapMeta>> {
 
 pub fn list_starmaps_for_project(workspace: &Path, project_id: &str) -> Result<Vec<StarMapMeta>> {
     let all = list_starmaps(workspace)?;
-    Ok(all.into_iter()
+    Ok(all
+        .into_iter()
         .filter(|m| m.project_id.as_deref() == Some(project_id) || m.project_id.is_none())
         .collect())
 }
@@ -256,11 +257,7 @@ pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn bind_starmap_to_project(
-    workspace: &Path,
-    starmap_id: &str,
-    project_id: &str,
-) -> Result<()> {
+pub fn bind_starmap_to_project(workspace: &Path, starmap_id: &str, project_id: &str) -> Result<()> {
     let mut meta = load_starmap_meta(workspace, starmap_id)?;
     meta.project_id = Some(project_id.to_string());
     meta.updated_at = now_epoch();
@@ -324,10 +321,7 @@ pub fn get_main_starmap_for_project(
     Ok(None)
 }
 
-pub fn unbind_starmap_from_project(
-    workspace: &Path,
-    starmap_id: &str,
-) -> Result<()> {
+pub fn unbind_starmap_from_project(workspace: &Path, starmap_id: &str) -> Result<()> {
     let mut meta = load_starmap_meta(workspace, starmap_id)?;
     meta.project_id = None;
     meta.is_main_for_project = false;
@@ -399,9 +393,13 @@ mod tests {
     fn test_create_child_starmap() {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
-        let child = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+        let child =
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
 
-        assert_eq!(child.parent_starmap_id.as_deref(), Some(parent.starmap_id.as_str()));
+        assert_eq!(
+            child.parent_starmap_id.as_deref(),
+            Some(parent.starmap_id.as_str())
+        );
         assert_eq!(child.project_id, None);
 
         let refreshed_parent = get_starmap(dir.path(), &parent.starmap_id).unwrap();
@@ -425,8 +423,10 @@ mod tests {
     fn test_delete_cascades_children() {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
-        let _child1 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
-        let _child2 = create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
+        let _child1 =
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+        let _child2 =
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
 
         delete_starmap(dir.path(), &parent.starmap_id).unwrap();
 

@@ -214,32 +214,9 @@ class EditorViewModel(
         }
         statsLastEventMs = nowMs
 
-        val oldLen = oldText.length
-        val newLen = newText.length
-        val diff = newLen - oldLen
-
-        if (diff > 0) {
-            var source = "human_typed"
-            var inserted = diff
-            var deleted = 0
-            var pasted = 0
-
-            if (diff > 20) {
-                source = "pasted"
-                pasted = diff
-                inserted = 0
-            }
-
-            workspaceRepository.recordWritingEvent(
-                statsDeviceId, pid, vid, cid,
-                source, inserted, deleted, pasted, 0, statsSessionId
-            )
-        } else if (diff < 0) {
-            workspaceRepository.recordWritingEvent(
-                statsDeviceId, pid, vid, cid,
-                "deleted", 0, Math.abs(diff), 0, 0, statsSessionId
-            )
-        }
+        workspaceRepository.processWritingEvent(
+            statsDeviceId, "android", pid, vid, cid, oldText, newText, statsSessionId
+        )
     }
 
     private fun scheduleAutoSave(content: String) {
@@ -348,7 +325,7 @@ class EditorViewModel(
     }
 
     private fun calculateWordCount(text: String): Int {
-        return text.count { !it.isWhitespace() }
+        return workspaceRepository.calculateWordCount(text)
     }
 
     private suspend fun emitErrorEvent(message: String) {

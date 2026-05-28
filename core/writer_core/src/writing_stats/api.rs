@@ -1,8 +1,8 @@
 use crate::error::Result;
 use crate::writing_stats::aggregate::StatsAggregator;
 use crate::writing_stats::{DateRange, WritingInputEvent};
-use std::path::Path;
 use serde_json::Value;
+use std::path::Path;
 
 pub struct StatsApi {
     aggregator: StatsAggregator,
@@ -20,10 +20,10 @@ impl StatsApi {
     }
 
     pub fn get_stats_summary(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self.aggregator.store().load_daily_stats_range(
-            &range.start_date,
-            &range.end_date,
-        )?;
+        let daily_stats = self
+            .aggregator
+            .store()
+            .load_daily_stats_range(&range.start_date, &range.end_date)?;
 
         let mut total_human_typed: u64 = 0;
         let mut total_pasted: u64 = 0;
@@ -60,19 +60,18 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_project(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self.aggregator.store().load_daily_stats_range(
-            &range.start_date,
-            &range.end_date,
-        )?;
+        let daily_stats = self
+            .aggregator
+            .store()
+            .load_daily_stats_range(&range.start_date, &range.end_date)?;
 
         let mut by_project: std::collections::HashMap<String, serde_json::Value> =
             std::collections::HashMap::new();
 
         for stats in &daily_stats {
             for (project_id, proj_stats) in &stats.per_project {
-                let entry = by_project
-                    .entry(project_id.clone())
-                    .or_insert_with(|| serde_json::json!({
+                let entry = by_project.entry(project_id.clone()).or_insert_with(|| {
+                    serde_json::json!({
                         "project_id": project_id,
                         "human_typed_chars": 0u64,
                         "pasted_chars": 0u64,
@@ -80,26 +79,33 @@ impl StatsApi {
                         "ai_inserted_chars": 0u64,
                         "net_delta_chars": 0i64,
                         "active_seconds": 0u64,
-                    }));
+                    })
+                });
 
                 if let Some(obj) = entry.as_object_mut() {
                     *obj.get_mut("human_typed_chars").unwrap() = serde_json::json!(
-                        obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0) + proj_stats.human_typed_chars
+                        obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0)
+                            + proj_stats.human_typed_chars
                     );
                     *obj.get_mut("pasted_chars").unwrap() = serde_json::json!(
-                        obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0) + proj_stats.pasted_chars
+                        obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0)
+                            + proj_stats.pasted_chars
                     );
                     *obj.get_mut("deleted_chars").unwrap() = serde_json::json!(
-                        obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0) + proj_stats.deleted_chars
+                        obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0)
+                            + proj_stats.deleted_chars
                     );
                     *obj.get_mut("ai_inserted_chars").unwrap() = serde_json::json!(
-                        obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0) + proj_stats.ai_inserted_chars
+                        obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0)
+                            + proj_stats.ai_inserted_chars
                     );
                     *obj.get_mut("net_delta_chars").unwrap() = serde_json::json!(
-                        obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0) + proj_stats.net_delta_chars
+                        obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0)
+                            + proj_stats.net_delta_chars
                     );
                     *obj.get_mut("active_seconds").unwrap() = serde_json::json!(
-                        obj.get("active_seconds").unwrap().as_u64().unwrap_or(0) + proj_stats.active_seconds
+                        obj.get("active_seconds").unwrap().as_u64().unwrap_or(0)
+                            + proj_stats.active_seconds
                     );
                 }
             }
@@ -116,19 +122,18 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_chapter(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self.aggregator.store().load_daily_stats_range(
-            &range.start_date,
-            &range.end_date,
-        )?;
+        let daily_stats = self
+            .aggregator
+            .store()
+            .load_daily_stats_range(&range.start_date, &range.end_date)?;
 
         let mut by_chapter: std::collections::HashMap<String, serde_json::Value> =
             std::collections::HashMap::new();
 
         for stats in &daily_stats {
             for (chapter_id, chap_stats) in &stats.per_chapter {
-                let entry = by_chapter
-                    .entry(chapter_id.clone())
-                    .or_insert_with(|| serde_json::json!({
+                let entry = by_chapter.entry(chapter_id.clone()).or_insert_with(|| {
+                    serde_json::json!({
                         "chapter_id": chapter_id,
                         "human_typed_chars": 0u64,
                         "pasted_chars": 0u64,
@@ -136,26 +141,33 @@ impl StatsApi {
                         "ai_inserted_chars": 0u64,
                         "net_delta_chars": 0i64,
                         "active_seconds": 0u64,
-                    }));
+                    })
+                });
 
                 if let Some(obj) = entry.as_object_mut() {
                     *obj.get_mut("human_typed_chars").unwrap() = serde_json::json!(
-                        obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0) + chap_stats.human_typed_chars
+                        obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0)
+                            + chap_stats.human_typed_chars
                     );
                     *obj.get_mut("pasted_chars").unwrap() = serde_json::json!(
-                        obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0) + chap_stats.pasted_chars
+                        obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0)
+                            + chap_stats.pasted_chars
                     );
                     *obj.get_mut("deleted_chars").unwrap() = serde_json::json!(
-                        obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0) + chap_stats.deleted_chars
+                        obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0)
+                            + chap_stats.deleted_chars
                     );
                     *obj.get_mut("ai_inserted_chars").unwrap() = serde_json::json!(
-                        obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0) + chap_stats.ai_inserted_chars
+                        obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0)
+                            + chap_stats.ai_inserted_chars
                     );
                     *obj.get_mut("net_delta_chars").unwrap() = serde_json::json!(
-                        obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0) + chap_stats.net_delta_chars
+                        obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0)
+                            + chap_stats.net_delta_chars
                     );
                     *obj.get_mut("active_seconds").unwrap() = serde_json::json!(
-                        obj.get("active_seconds").unwrap().as_u64().unwrap_or(0) + chap_stats.active_seconds
+                        obj.get("active_seconds").unwrap().as_u64().unwrap_or(0)
+                            + chap_stats.active_seconds
                     );
                 }
             }
@@ -172,18 +184,17 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_device(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self.aggregator.store().load_daily_stats_range(
-            &range.start_date,
-            &range.end_date,
-        )?;
+        let daily_stats = self
+            .aggregator
+            .store()
+            .load_daily_stats_range(&range.start_date, &range.end_date)?;
 
         let mut by_device: std::collections::HashMap<String, serde_json::Value> =
             std::collections::HashMap::new();
 
         for stats in &daily_stats {
-            let entry = by_device
-                .entry(stats.device_id.clone())
-                .or_insert_with(|| serde_json::json!({
+            let entry = by_device.entry(stats.device_id.clone()).or_insert_with(|| {
+                serde_json::json!({
                     "device_id": stats.device_id,
                     "platform": stats.platform,
                     "human_typed_chars": 0u64,
@@ -193,29 +204,36 @@ impl StatsApi {
                     "net_delta_chars": 0i64,
                     "active_seconds": 0u64,
                     "sessions_count": 0u32,
-                }));
+                })
+            });
 
             if let Some(obj) = entry.as_object_mut() {
                 *obj.get_mut("human_typed_chars").unwrap() = serde_json::json!(
-                    obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0) + stats.total_human_typed_chars
+                    obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0)
+                        + stats.total_human_typed_chars
                 );
                 *obj.get_mut("pasted_chars").unwrap() = serde_json::json!(
-                    obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0) + stats.total_pasted_chars
+                    obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0)
+                        + stats.total_pasted_chars
                 );
                 *obj.get_mut("deleted_chars").unwrap() = serde_json::json!(
-                    obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0) + stats.total_deleted_chars
+                    obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0)
+                        + stats.total_deleted_chars
                 );
                 *obj.get_mut("ai_inserted_chars").unwrap() = serde_json::json!(
-                    obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0) + stats.total_ai_inserted_chars
+                    obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0)
+                        + stats.total_ai_inserted_chars
                 );
                 *obj.get_mut("net_delta_chars").unwrap() = serde_json::json!(
-                    obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0) + stats.total_net_delta_chars
+                    obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0)
+                        + stats.total_net_delta_chars
                 );
                 *obj.get_mut("active_seconds").unwrap() = serde_json::json!(
                     obj.get("active_seconds").unwrap().as_u64().unwrap_or(0) + stats.active_seconds
                 );
                 *obj.get_mut("sessions_count").unwrap() = serde_json::json!(
-                    obj.get("sessions_count").unwrap().as_u64().unwrap_or(0) + stats.sessions_count as u64
+                    obj.get("sessions_count").unwrap().as_u64().unwrap_or(0)
+                        + stats.sessions_count as u64
                 );
             }
         }
@@ -230,16 +248,10 @@ impl StatsApi {
         }))
     }
 
-    pub fn get_speed_curve(
-        &self,
-        range: &DateRange,
-        bucket_minutes: u32,
-    ) -> Result<Value> {
-        let buckets = self.aggregator.get_speed_curve(
-            &range.start_date,
-            &range.end_date,
-            bucket_minutes,
-        )?;
+    pub fn get_speed_curve(&self, range: &DateRange, bucket_minutes: u32) -> Result<Value> {
+        let buckets =
+            self.aggregator
+                .get_speed_curve(&range.start_date, &range.end_date, bucket_minutes)?;
 
         let bucket_json: Vec<Value> = buckets
             .iter()

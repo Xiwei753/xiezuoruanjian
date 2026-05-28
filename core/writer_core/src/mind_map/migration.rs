@@ -1,5 +1,7 @@
-use crate::mind_map::graph::{MindMapGraph, MindMapGraphNode, MindMapGraphEdge, MindMapNodeKind, MindMapEdgeKind};
 use crate::mind_map::anchor::{MindMapAnchor, MindMapLink};
+use crate::mind_map::graph::{
+    MindMapEdgeKind, MindMapGraph, MindMapGraphEdge, MindMapGraphNode, MindMapNodeKind,
+};
 
 // Represents V1 structures for parsing old files
 #[derive(serde::Deserialize)]
@@ -47,13 +49,18 @@ struct V1MindMapGraph {
     pub links: Vec<MindMapLink>,
 }
 
-pub fn migrate_graph_schema(json_str: &str, project_id: &str) -> Result<MindMapGraph, crate::error::Error> {
+pub fn migrate_graph_schema(
+    json_str: &str,
+    project_id: &str,
+) -> Result<MindMapGraph, crate::error::Error> {
     // Try to parse as V2 first
     if let Ok(v2_graph) = serde_json::from_str::<MindMapGraph>(json_str) {
         if v2_graph.schema_version == 2 {
             return Ok(v2_graph);
         } else {
-             return Err(crate::error::Error::Json(serde::de::Error::custom("Unsupported schema version")));
+            return Err(crate::error::Error::Json(serde::de::Error::custom(
+                "Unsupported schema version",
+            )));
         }
     }
 
@@ -65,45 +72,54 @@ pub fn migrate_graph_schema(json_str: &str, project_id: &str) -> Result<MindMapG
         .unwrap_or_default()
         .as_millis() as u64;
 
-    let v2_nodes = v1_graph.nodes.into_iter().map(|n| {
-        let kind = match n.kind.as_str() {
-            "Project" => MindMapNodeKind::Project,
-            "Volume" => MindMapNodeKind::Volume,
-            "Chapter" => MindMapNodeKind::Chapter,
-            "Character" => MindMapNodeKind::Character,
-            "Event" => MindMapNodeKind::Event,
-            "Location" => MindMapNodeKind::Location,
-            _ => MindMapNodeKind::Custom,
-        };
+    let v2_nodes = v1_graph
+        .nodes
+        .into_iter()
+        .map(|n| {
+            let kind = match n.kind.as_str() {
+                "Project" => MindMapNodeKind::Project,
+                "Volume" => MindMapNodeKind::Volume,
+                "Chapter" => MindMapNodeKind::Chapter,
+                "Character" => MindMapNodeKind::Character,
+                "Event" => MindMapNodeKind::Event,
+                "Location" => MindMapNodeKind::Location,
+                _ => MindMapNodeKind::Custom,
+            };
 
-        MindMapGraphNode {
-            id: n.id,
-            title: n.title,
-            kind,
-            payload: None,
-            tags: vec![],
-            created_at: now,
-            updated_at: now,
-        }
-    }).collect();
+            MindMapGraphNode {
+                id: n.id,
+                title: n.title,
+                kind,
+                payload: None,
+                tags: vec![],
+                created_at: now,
+                updated_at: now,
+            }
+        })
+        .collect();
 
-    let v2_edges = v1_graph.edges.into_iter().enumerate().map(|(i, e)| {
-        let kind = match e.kind.as_str() {
-            "hierarchy" => MindMapEdgeKind::Contains,
-            "References" => MindMapEdgeKind::References,
-            _ => MindMapEdgeKind::Custom,
-        };
-        MindMapGraphEdge {
-            id: format!("migrated_edge_{}_{}_{}", i, e.from, e.to),
-            from: e.from,
-            to: e.to,
-            kind,
-            label: None,
-            payload: None,
-            created_at: now,
-            updated_at: now,
-        }
-    }).collect();
+    let v2_edges = v1_graph
+        .edges
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let kind = match e.kind.as_str() {
+                "hierarchy" => MindMapEdgeKind::Contains,
+                "References" => MindMapEdgeKind::References,
+                _ => MindMapEdgeKind::Custom,
+            };
+            MindMapGraphEdge {
+                id: format!("migrated_edge_{}_{}_{}", i, e.from, e.to),
+                from: e.from,
+                to: e.to,
+                kind,
+                label: None,
+                payload: None,
+                created_at: now,
+                updated_at: now,
+            }
+        })
+        .collect();
 
     Ok(MindMapGraph {
         schema_version: 2,
@@ -155,9 +171,15 @@ mod tests {
         assert_eq!(migrated.schema_version, 2);
         assert_eq!(migrated.project_id, "p1");
         assert_eq!(migrated.nodes.len(), 1);
-        assert_eq!(migrated.nodes[0].kind, crate::mind_map::graph::MindMapNodeKind::Character);
+        assert_eq!(
+            migrated.nodes[0].kind,
+            crate::mind_map::graph::MindMapNodeKind::Character
+        );
         assert_eq!(migrated.edges.len(), 1);
-        assert_eq!(migrated.edges[0].kind, crate::mind_map::graph::MindMapEdgeKind::References);
+        assert_eq!(
+            migrated.edges[0].kind,
+            crate::mind_map::graph::MindMapEdgeKind::References
+        );
     }
 
     #[test]

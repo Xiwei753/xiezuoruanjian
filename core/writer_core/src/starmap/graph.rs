@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use crate::starmap::types::*;
-use crate::starmap::{load_starmap_meta, starmaps_dir, update_starmap_stats, now_epoch};
+use crate::starmap::{load_starmap_meta, now_epoch, starmaps_dir, update_starmap_stats};
 use crate::storage::atomic_write_string;
 use std::fs;
 use std::path::Path;
@@ -52,7 +52,13 @@ pub fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &StarMapGra
         }
     }
 
-    update_starmap_stats(workspace, starmap_id, node_count, edge_count, linked_chapters)?;
+    update_starmap_stats(
+        workspace,
+        starmap_id,
+        node_count,
+        edge_count,
+        linked_chapters,
+    )?;
     Ok(())
 }
 
@@ -67,7 +73,11 @@ pub fn get_starmap_layout(workspace: &Path, starmap_id: &str) -> Result<StarMapL
     Ok(layout)
 }
 
-pub fn save_starmap_layout(workspace: &Path, starmap_id: &str, layout: &StarMapLayout) -> Result<()> {
+pub fn save_starmap_layout(
+    workspace: &Path,
+    starmap_id: &str,
+    layout: &StarMapLayout,
+) -> Result<()> {
     let starmap_dir = starmaps_dir(workspace).join(starmap_id);
     fs::create_dir_all(&starmap_dir)?;
 
@@ -76,7 +86,13 @@ pub fn save_starmap_layout(workspace: &Path, starmap_id: &str, layout: &StarMapL
     Ok(())
 }
 
-pub fn add_starmap_node(workspace: &Path, starmap_id: &str, node: StarMapNode, default_x: f32, default_y: f32) -> Result<StarMapNode> {
+pub fn add_starmap_node(
+    workspace: &Path,
+    starmap_id: &str,
+    node: StarMapNode,
+    default_x: f32,
+    default_y: f32,
+) -> Result<StarMapNode> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
     let new_node = node.clone();
     graph.nodes.push(new_node.clone());
@@ -156,7 +172,11 @@ pub fn delete_starmap_node(workspace: &Path, starmap_id: &str, node_id: &str) ->
     Ok(())
 }
 
-pub fn add_starmap_edge(workspace: &Path, starmap_id: &str, edge: StarMapEdge) -> Result<StarMapEdge> {
+pub fn add_starmap_edge(
+    workspace: &Path,
+    starmap_id: &str,
+    edge: StarMapEdge,
+) -> Result<StarMapEdge> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
 
     if !graph.nodes.iter().any(|n| n.id == edge.from)
@@ -223,9 +243,9 @@ pub fn delete_starmap_edge(workspace: &Path, starmap_id: &str, edge_id: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-    use crate::workspace::create_workspace;
     use crate::starmap::create_starmap;
+    use crate::workspace::create_workspace;
+    use tempfile::tempdir;
 
     fn setup_workspace() -> tempfile::TempDir {
         let dir = tempdir().unwrap();
