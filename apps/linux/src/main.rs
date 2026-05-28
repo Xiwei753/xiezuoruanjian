@@ -388,6 +388,7 @@ struct AppBackend {
     setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
     setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
     setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
+    setting_monet_color: qt_property!(QString; READ setting_monet_color WRITE set_setting_monet_color NOTIFY settings_changed),
 
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
@@ -587,6 +588,7 @@ struct AppBackend {
     current_setting_auto_indent_enabled: bool,
     current_setting_auto_indent_width: f32,
     current_setting_theme_mode: String,
+    current_setting_monet_color: String,
     current_setting_typing_animation_enabled: bool,
     current_setting_smooth_cursor_enabled: bool,
     current_setting_typing_animation_duration_ms: u32,
@@ -1201,6 +1203,9 @@ impl AppBackend {
     }
     fn set_setting_theme_mode(&mut self, val: QString) { self.current_setting_theme_mode = val.to_string(); self.settings_changed(); }
 
+    fn setting_monet_color(&self) -> QString { self.current_setting_monet_color.clone().into() }
+    fn set_setting_monet_color(&mut self, val: QString) { self.current_setting_monet_color = val.to_string(); self.settings_changed(); }
+
     fn setting_typing_animation_enabled(&self) -> bool { self.current_setting_typing_animation_enabled }
     fn set_setting_typing_animation_enabled(&mut self, val: bool) { self.current_setting_typing_animation_enabled = val; self.settings_changed(); self.save_local_settings(); }
 
@@ -1259,6 +1264,7 @@ impl AppBackend {
         // Load theme mode from app_config (when no workspace is open)
         // Default to "system"
         self.current_setting_theme_mode = "system".to_string();
+        self.current_setting_monet_color = "".to_string();
         self.settings_changed();
     }
 
@@ -1715,7 +1721,9 @@ impl AppBackend {
                     }
                 }
                 self.current_setting_theme_mode = sync_settings.theme_mode.clone();
+                self.current_setting_monet_color = sync_settings.monet_color.clone();
             } else {
+                self.current_setting_monet_color = "".to_string();
                 if let Ok(local) = core.load_local_settings() {
                     self.current_setting_font_size = local.editor_font_size;
                 }
@@ -1760,6 +1768,7 @@ impl AppBackend {
             let mut syncable = core.load_syncable_settings().unwrap_or_default();
             syncable.font_size = self.current_setting_font_size as f64;
             syncable.theme_mode = self.current_setting_theme_mode.clone();
+            syncable.monet_color = self.current_setting_monet_color.clone();
 
             let syncable_save = core.save_syncable_settings(&syncable);
             self.debug_log("settings", "save_syncable_settings_result", &format!("success={}", syncable_save.is_ok()));

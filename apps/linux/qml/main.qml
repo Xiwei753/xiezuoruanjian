@@ -60,6 +60,7 @@ ApplicationWindow {
             if (appState.settings && appState.settings.themeMode === "light") return false;
             return backend.system_color_scheme !== "light";
         }
+        monetColor: appBackend.setting_monet_color
     }
 
     AppBackend {

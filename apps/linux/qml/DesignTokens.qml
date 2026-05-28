@@ -4,6 +4,7 @@ QtObject {
     id: dt
 
     property bool isDark: true
+    property string monetColor: ""
 
     // --- Background ---
     property color darkBg: "#111318"
@@ -37,10 +38,17 @@ QtObject {
     property color textMuted: isDark ? "#606470" : "#8E9099"
 
     // --- Accent ---
-    property color accent: isDark ? "#7B8CDE" : "#5B6BC0"
-    property color accentSoft: isDark ? Qt.rgba(0.48, 0.55, 0.87, 0.12) : Qt.rgba(0.36, 0.42, 0.75, 0.08)
-    property color accentHover: isDark ? "#8E9EE8" : "#4A5AB0"
-    property color accentText: isDark ? "#C5CCEE" : "#3D4D9E"
+    property color defaultAccent: isDark ? "#7B8CDE" : "#5B6BC0"
+    property color defaultAccentHover: isDark ? "#8E9EE8" : "#4A5AB0"
+    property color defaultAccentText: isDark ? "#C5CCEE" : "#3D4D9E"
+
+    // Check if monetColor is valid hex color
+    property bool hasMonetColor: monetColor.length === 7 && monetColor.startsWith("#")
+
+    property color accent: hasMonetColor ? monetColor : defaultAccent
+    property color accentSoft: hasMonetColor ? Qt.rgba(accent.r, accent.g, accent.b, 0.12) : (isDark ? Qt.rgba(0.48, 0.55, 0.87, 0.12) : Qt.rgba(0.36, 0.42, 0.75, 0.08))
+    property color accentHover: hasMonetColor ? (isDark ? Qt.lighter(accent, 1.15) : Qt.darker(accent, 1.15)) : defaultAccentHover
+    property color accentText: hasMonetColor ? (isDark ? Qt.lighter(accent, 1.3) : Qt.darker(accent, 1.3)) : defaultAccentText
 
     // --- Semantic ---
     property color danger: isDark ? "#E06060" : "#D33030"
