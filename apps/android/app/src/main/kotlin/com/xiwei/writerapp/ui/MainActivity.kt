@@ -32,6 +32,7 @@ import com.xiwei.writerapp.model.Project
 import com.xiwei.writerapp.model.RecentEdit
 import com.xiwei.writerapp.model.LocalSettings
 import androidx.appcompat.app.AppCompatDelegate
+import android.os.Build
 
 class MainActivity : AppCompatActivity() {
     private lateinit var projectRecyclerView: RecyclerView
@@ -190,6 +191,25 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         loadProjects()
         loadRecentEdits()
+        syncMonetColor()
+    }
+
+    private fun syncMonetColor() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
+                val hexColor = String.format("#%06X", 0xFFFFFF and colorInt)
+
+                if (::settingsRepository.isInitialized) {
+                    val syncable = settingsRepository.getSyncableSettings()
+                    if (syncable.monetColor != hexColor) {
+                        settingsRepository.saveSyncableSettings(syncable.copy(monetColor = hexColor))
+                    }
+                }
+            } catch (e: Exception) {
+                System.err.println("Failed to extract Monet color: ${e.message}")
+            }
+        }
     }
 
     private fun loadRecentEdits() {

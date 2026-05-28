@@ -103,6 +103,8 @@ pub struct SyncableSettings {
     pub font_size: f64,
     #[serde(default)]
     pub theme_mode: String,
+    #[serde(default)]
+    pub monet_color: String,
 }
 
 pub fn load_local_settings(workspace_path: &Path) -> Result<LocalSettings> {

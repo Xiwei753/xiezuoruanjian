@@ -30,7 +30,8 @@ data class LocalSettings(
 
 data class SyncableSettings(
     @SerializedName("fontSize") val fontSize: Double = 0.0,
-    @SerializedName("themeMode") val themeMode: String = ""
+    @SerializedName("themeMode") val themeMode: String = "",
+    @SerializedName("monetColor") val monetColor: String = ""
 )
 
 data class Project(
