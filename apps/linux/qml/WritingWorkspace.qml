@@ -352,93 +352,89 @@ Rectangle {
                     Layout.fillHeight: true
                     color: dt ? dt.bg : "#111318"
 
-                // Centered paper container
-                Item {
-                    anchors.fill: parent
-                    anchors.margins: dt ? dt.sp32 : 32
+                    // Centered paper container
+                    Item {
+                        anchors.fill: parent
+                        anchors.margins: dt ? dt.sp32 : 32
 
-                // Paper background - centered with max width
-                Rectangle {
-                    id: paperBg
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: Math.min(parent.width, 840)
-                    height: parent.height
-                    color: dt ? dt.editorBg : "#191C21"
-                    radius: dt ? dt.radiusMd : 12
-                    border.color: dt ? dt.border : "#2A2E36"
-                    border.width: 1
-                }
+                        // Paper background - centered, max width
+                        Rectangle {
+                            id: paperBg
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: Math.min(parent.width, 820)
+                            height: parent.height
+                            color: dt ? dt.editorBg : "#191C21"
+                            radius: dt ? dt.radiusMd : 12
+                            border.color: dt ? dt.border : "#2A2E36"
+                            border.width: 1
+                        }
 
-                ScrollView {
-                    id: editorScroll
-                    anchors.fill: paperBg
-                    anchors.margins: dt ? dt.sp16 : 16
-                    clip: true
-                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                    ScrollBar.vertical: ScrollBar {
-                        policy: ScrollBar.AsNeeded
-                        parent: editorScroll
-                        anchors.top: editorScroll.top
-                        anchors.bottom: editorScroll.bottom
-                        anchors.right: editorScroll.right
+                        ScrollView {
+                            id: editorScroll
+                            anchors.fill: paperBg
+                            anchors.margins: dt ? dt.sp20 : 20
+                            clip: true
+                            contentWidth: availableWidth
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AsNeeded
+                                parent: editorScroll
+                                anchors.top: editorScroll.top
+                                anchors.bottom: editorScroll.bottom
+                                anchors.right: editorScroll.right
+                            }
+
+                            TextArea {
+                                id: editorArea
+                                width: editorScroll.availableWidth
+                                height: Math.max(implicitHeight, editorScroll.availableHeight)
+                                color: dt ? dt.editorText : "#2C2E36"
+                                font.pixelSize: root.backendRef ? root.backendRef.setting_font_size : 16
+                                font.family: "serif"
+                                wrapMode: TextArea.Wrap
+                                verticalAlignment: TextInput.AlignTop
+                                background: Rectangle { color: "transparent" }
+                                enabled: root.chapterId !== ""
+                                focus: true
+                                activeFocusOnTab: true
+                                selectByMouse: true
+                                persistentSelection: true
+                                leftPadding: dt ? dt.sp16 : 16
+                                rightPadding: dt ? dt.sp16 : 16
+                                topPadding: dt ? dt.sp16 : 16
+                                bottomPadding: dt ? dt.sp16 : 16
+
+                                cursorVisible: false
+
+                                text: ""
+
+                                SmoothCursor {
+                                    targetTextArea: editorArea
+                                    dt: root.dt
+                                }
+                            }
+                        }
                     }
 
-                    TextArea {
-                        id: editorArea
-                        width: editorScroll.availableWidth
-                        height: Math.max(implicitHeight, editorScroll.availableHeight)
-                        color: dt ? dt.editorText : "#2C2E36"
-                        font.pixelSize: root.backendRef ? root.backendRef.setting_font_size : 16
-                        font.family: "serif"
-                        wrapMode: TextArea.Wrap
-                        verticalAlignment: TextInput.AlignTop
-                        background: Rectangle { color: "transparent" }
-                        enabled: root.chapterId !== ""
-                        focus: true
-                        activeFocusOnTab: true
-                        selectByMouse: true
-                        persistentSelection: true
-                        leftPadding: dt ? dt.sp16 : 16
-                        rightPadding: dt ? dt.sp16 : 16
-                        topPadding: dt ? dt.sp16 : 16
-                        bottomPadding: dt ? dt.sp16 : 16
+                    // Empty state
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: dt ? dt.sp12 : 12
+                        visible: !root.chapterId
 
-                        cursorVisible: false
-
-                        text: ""
-
-
-
-
-
-                        SmoothCursor {
-                            targetTextArea: editorArea
-                            dt: root.dt
+                        Text {
+                            text: "\uD83D\uDCDD"
+                            font.pixelSize: 40
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Text {
+                            text: "选择一个章节开始写作"
+                            color: dt ? dt.textSecondary : "#9CA0AB"
+                            font.pixelSize: dt ? dt.fontLg : 16
+                            Layout.alignment: Qt.AlignHCenter
                         }
                     }
                 }
-
-                } // end paper container Item
-
-                // Empty state
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    spacing: dt ? dt.sp12 : 12
-                    visible: !root.chapterId
-
-                    Text {
-                        text: "\uD83D\uDCDD"
-                        font.pixelSize: 40
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                    Text {
-                        text: "选择一个章节开始写作"
-                        color: dt ? dt.textSecondary : "#9CA0AB"
-                        font.pixelSize: dt ? dt.fontLg : 16
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                }
-            }
 
             // Right drawer button (when closed)
                 Rectangle {
