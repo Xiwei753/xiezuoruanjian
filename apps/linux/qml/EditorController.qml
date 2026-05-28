@@ -8,12 +8,15 @@ QtObject {
     // Target UI bindings
     property var targetTextArea: null
     property var backendRef: null
+
+    // Chapter state — single source of truth, updated only after successful load
     property string projectId: ""
     property string volumeId: ""
     property string chapterId: ""
+    property string chapterTitle: ""
     property string saveStatus: backendRef ? backendRef.save_status : ""
 
-    // Logical States
+    // Internal state
     property bool isLoadingChapter: false
     property string previousEditorText: ""
 
@@ -22,7 +25,7 @@ QtObject {
         interval: backendRef ? backendRef.setting_auto_save_delay_ms : 1500
         repeat: false
         onTriggered: {
-            if (!backendRef || !chapterId || !projectId || !volumeId) return;
+            if (!backendRef || !controller.chapterId || !controller.projectId || !controller.volumeId) return;
             if (!backendRef.setting_auto_save_enabled) return;
             controller.saveCurrentChapter();
         }
@@ -62,37 +65,25 @@ QtObject {
         }
     }
 
+    // Safe plain text extraction via QTextDocument::toPlainText() in Rust.
+    // Never returns HTML regardless of textFormat setting.
     function getEditorPlainText() {
-        if (!targetTextArea) return "";
-        var txt = targetTextArea.getText(0, targetTextArea.length);
-        return txt.replace(/\u2029/g, "\n");
+        return docHandler.get_plain_text();
     }
 
-    function sanitizePlainText(text) {
-        if (!text) return text;
-        var hasHtml = /<(?:html|body|div|span|p|br|img|style|script|font|b|i|u|strong|em|h[1-6]|ul|ol|li|table|tr|td|th|a|abbr|blockquote|pre|code|sup|sub)\b/i.test(text);
-        if (hasHtml) {
-            console.warn("[WriterDebug] Plain text contains HTML tags, stripping before save.");
-            text = text.replace(/<[^>]+>/g, "");
-            text = text.replace(/&amp;/g, "&")
-                       .replace(/&lt;/g, "<")
-                       .replace(/&gt;/g, ">")
-                       .replace(/&quot;/g, "\"")
-                       .replace(/&#39;/g, "'")
-                       .replace(/&nbsp;/g, " ");
-        }
-        return text;
-    }
-
+    // Unified save entry — always writes plain text via backend.
+    // No HTML sanitization needed: get_plain_text() already guarantees pure text.
     function saveCurrentChapter() {
         if (!backendRef || !chapterId || !projectId || !volumeId) return;
-        var plainText = sanitizePlainText(controller.getEditorPlainText());
+        var plainText = getEditorPlainText();
         backendRef.save_chapter(projectId, volumeId, chapterId, plainText);
     }
 
+    // Load chapter: content comes from Rust core as plain text.
+    // Returns the full result object so caller can update state.
     function loadChapterContentWithIds(pId, vId, cId) {
-        if (!cId || !pId || !vId || !backendRef || !targetTextArea) return false;
-        if (isLoadingChapter) return false;
+        if (!cId || !pId || !vId || !backendRef || !targetTextArea) return null;
+        if (isLoadingChapter) return null;
 
         isLoadingChapter = true;
 
@@ -100,21 +91,24 @@ QtObject {
         var result = JSON.parse(resultJson);
 
         if (!result.success) {
-            console.error("Failed to open chapter:", result.error);
+            console.error("[WriterDebug] Failed to open chapter:", result.error);
             isLoadingChapter = false;
-            return false;
+            return null;
         }
 
-        var content = result.content;
+        var content = result.content || "";
 
-        targetTextArea.textFormat = TextEdit.RichText;
+        // Use PlainText mode: line spacing/indent are applied via QTextDocument
+        // block formats in DocumentHandler, not via HTML.
+        targetTextArea.textFormat = TextEdit.PlainText;
         docHandler.set_plain_text(content);
         docHandler.clear_undo_stack();
 
-        previousEditorText = content;
-
+        previousEditorText = getEditorPlainText();
         isLoadingChapter = false;
-        return true;
+
+        // Return full result so caller updates chapter state from authoritative source
+        return result;
     }
 
     function computeWordCount(text) {
@@ -152,8 +146,7 @@ QtObject {
     function applyCurrentSettings() {
         // Property bindings on docHandler already handle line_spacing and text_indent updates.
         // Font size is bound directly on the TextArea via backendRef.setting_font_size.
-        // No manual action needed — changing backend settings triggers binding updates
-        // without save storms or chapter reloads.
+        // No manual action needed.
     }
 
     function formatText() {
@@ -173,11 +166,10 @@ QtObject {
             formatted.push(p);
         }
 
-        var plain = sanitizePlainText(formatted.join("\n"));
+        var plain = formatted.join("\n");
 
         isLoadingChapter = true;
         var cursor = targetTextArea.cursorPosition;
-        targetTextArea.textFormat = TextEdit.RichText;
         docHandler.set_plain_text(plain);
 
         targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);

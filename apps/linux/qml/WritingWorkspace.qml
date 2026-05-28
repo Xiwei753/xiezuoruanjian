@@ -8,17 +8,17 @@ Rectangle {
     property var backendRef: null
     property var appState: ({})
     property var tree: []
-    property string projectId: ""
-    property string volumeId: ""
-    property string chapterId: ""
-    property string chapterTitle: ""
     property string projectTitle: ""
-    property bool isLoadingChapter: false
-    property string previousEditorText: ""
     property bool drawerOpen: false
     property int drawerTab: 0
     property bool aiCapable: false
     property bool aiEnabled: false
+
+    // Chapter state — delegated to EditorController, read-only here for UI binding
+    readonly property string projectId: editorController.projectId
+    readonly property string volumeId: editorController.volumeId
+    readonly property string chapterId: editorController.chapterId
+    readonly property string chapterTitle: editorController.chapterTitle
 
     signal backToProjects()
     signal openSettings()
@@ -51,9 +51,6 @@ Rectangle {
         id: editorController
         targetTextArea: editorArea
         backendRef: root.backendRef
-        projectId: root.projectId
-        volumeId: root.volumeId
-        chapterId: root.chapterId
     }
 
     onTreeChanged: populateTreeModel()
@@ -71,16 +68,22 @@ Rectangle {
 
     function openChapter(pId, vId, cId, cTitle) {
         if (!pId || !vId || !cId) return;
-        if (root.projectId === pId && root.volumeId === vId && root.chapterId === cId && !editorController.isLoadingChapter) {
+        // Prevent re-opening the same chapter (anti-loop guard)
+        if (editorController.projectId === pId &&
+            editorController.volumeId === vId &&
+            editorController.chapterId === cId &&
+            !editorController.isLoadingChapter) {
             return;
         }
-        
-        var success = editorController.loadChapterContentWithIds(pId, vId, cId);
-        if (success) {
-            root.projectId = pId;
-            root.volumeId = vId;
-            root.chapterId = cId;
-            root.chapterTitle = cTitle || "";
+
+        // loadChapterContentWithIds returns null on failure, result object on success.
+        // State is only updated after content is successfully loaded.
+        var result = editorController.loadChapterContentWithIds(pId, vId, cId);
+        if (result) {
+            editorController.projectId = result.projectId || pId;
+            editorController.volumeId = result.volumeId || vId;
+            editorController.chapterId = result.chapterId || cId;
+            editorController.chapterTitle = result.title || cTitle || "";
         }
     }
 

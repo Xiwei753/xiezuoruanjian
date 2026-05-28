@@ -25,6 +25,7 @@ pub struct DocumentHandler {
 
     apply_format: qt_method!(fn(&self)),
     set_plain_text: qt_method!(fn(&self, text: QString)),
+    get_plain_text: qt_method!(fn(&self) -> QString),
     clear_undo_stack: qt_method!(fn(&self)),
 
     current_doc: QVariant,
@@ -118,6 +119,20 @@ impl DocumentHandler {
 
             cursor.endEditBlock();
         });
+    }
+
+    fn get_plain_text(&self) -> QString {
+        let doc_variant = self.current_doc.clone();
+
+        cpp!(unsafe [doc_variant as "QVariant"] -> QString as "QString" {
+            QObject* obj = doc_variant.value<QObject*>();
+            if (!obj) return QString();
+            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
+            if (!qquick_doc) return QString();
+            QTextDocument* doc = qquick_doc->textDocument();
+            if (!doc) return QString();
+            return doc->toPlainText();
+        })
     }
 
     fn clear_undo_stack(&self) {
