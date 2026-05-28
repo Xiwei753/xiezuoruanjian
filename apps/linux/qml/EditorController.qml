@@ -25,6 +25,8 @@ import Writer 1.0
 QtObject {
     id: controller
 
+    signal emptySaveBlocked(string message)
+
     // Target UI bindings
     property var targetTextArea: null
     property var backendRef: null
@@ -256,6 +258,7 @@ QtObject {
         } else {
             if (result && result.code === "EMPTY_OVERWRITE_BLOCKED") {
                 logWriterWarning("empty_save_blocked", "blocked by core: " + (result.message || ""));
+                controller.emptySaveBlocked(result.message || "检测到异常空内容覆盖，已阻止保存。");
             }
             return false;
         }

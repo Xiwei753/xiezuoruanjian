@@ -63,6 +63,24 @@ Rectangle {
         id: editorController
         targetTextArea: editorArea
         backendRef: root.backendRef
+        onEmptySaveBlocked: function(msg) {
+            emptySaveDialogText.text = msg;
+            emptySaveDialog.open();
+        }
+    }
+
+    Dialog {
+        id: emptySaveDialog
+        title: "保存被阻止"
+        modal: true
+        standardButtons: Dialog.Ok
+        anchors.centerIn: parent
+
+        contentItem: Text {
+            id: emptySaveDialogText
+            text: "检测到异常空内容覆盖，已阻止保存。"
+            color: dt ? dt.textPrimary : "#E2E4E9"
+        }
     }
 
     onTreeChanged: populateTreeModel()

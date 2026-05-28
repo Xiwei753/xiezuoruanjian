@@ -50,6 +50,7 @@ use writer_core::facade::WriterCore;
 
 mod document_handler;
 mod starmap_bridge;
+mod writing_bridge;
 mod sync_bridge;
 
 fn serde_value_to_qjson(value: serde_json::Value) -> QJsonValue {
@@ -487,7 +488,6 @@ struct AppBackend {
     clear_chapter_content: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
     ),
-    save_current_chapter: qt_method!(fn(&mut self, content: QString)),
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
     process_writing_event_from_text: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, old_text: QString, new_text: QString)),
     get_writing_stats_summary: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
@@ -3578,39 +3578,27 @@ impl AppBackend {
         
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            let chapter_exists = core
-                .list_chapters(&p, &v)
-                .map(|chapters| chapters.iter().any(|ch| ch.id == c))
-                .unwrap_or(false);
-            if chapter_exists {
-                match core.open_chapter(&p, &v, &c) {
-                    Ok(content) => {
-                        self.selected_project_id = Some(p.clone());
-                        self.selected_volume_id = Some(v.clone());
-                        self.selected_chapter_id = Some(c.clone());
-                        self.selected_item_changed();
-                        self.chapter_path_changed();
-                        
-                        self.debug_log("chapter", "open_chapter_success", &format!("len={}", content.content.len()));
-                        
-                        return serde_to_qjson_object(serde_json::json!({
-                            "success": true,
-                            "content": content.content,
-                            "title": content.meta.title,
-                            "projectId": p,
-                            "volumeId": v,
-                            "chapterId": c,
-                            "meta": content.meta,
-                        }));
-                    }
-                    Err(e) => {
-                        self.debug_error("chapter", "open_chapter_failed", &format!("error={}", e));
-                        return bridge_error_object(&format!("读取章节失败: {}", e), e.code());
-                    }
+            match writing_bridge::open_chapter(&core, &p, &v, &c) {
+                Ok(val) => {
+                    self.selected_project_id = Some(p.clone());
+                    self.selected_volume_id = Some(v.clone());
+                    self.selected_chapter_id = Some(c.clone());
+                    self.selected_item_changed();
+                    self.chapter_path_changed();
+                    
+                    self.debug_log("chapter", "open_chapter_success", "len_loaded");
+                    return serde_to_qjson_object(val);
                 }
-            } else {
-                self.debug_error("chapter", "open_chapter_failed", "chapter_not_exists");
-                return bridge_error_object("章节不存在", "CHAPTER_NOT_FOUND");
+                Err(e) if e == "chapter_not_exists" => {
+                    self.debug_error("chapter", "open_chapter_failed", "chapter_not_exists");
+                    return bridge_error_object("章节不存在", "CHAPTER_NOT_FOUND");
+                }
+                Err(e) => {
+                    self.debug_error("chapter", "open_chapter_failed", &e);
+                    // Extract code and message if it's a formatted error string?
+                    // For now just wrap it
+                    return bridge_error_object(&format!("读取章节失败: {}", e), "READ_ERROR");
+                }
             }
         }
         
@@ -3625,45 +3613,41 @@ impl AppBackend {
         let len = text_str.len();
         self.debug_log("chapter", "save_chapter_start", &format!("len={}", len));
         
-        let save_res = if let Some(core_ref) = &self.core {
+        let save_result = if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            let chapters = core.list_chapters(&p, &v).unwrap_or_default();
-            if chapters.iter().any(|ch| ch.id == c) {
-                Some(core.write_chapter_verified(&p, &v, &c, &text_str))
-            } else {
-                None
-            }
+            Some(writing_bridge::save_chapter(&core, &p, &v, &c, &text_str))
         } else {
-            self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
-            return bridge_error_object("后端未初始化", "INVALID_WORKSPACE");
+            None
         };
-
-        let result_obj = match save_res {
-            Some(Ok(receipt)) => {
+        
+        let result_obj = match save_result {
+            Some(Ok(val)) => {
                 self.debug_log("chapter", "save_chapter_success", "");
                 self.current_save_status = "已保存".to_string();
                 self.workspace_content_changed();
-                let obj = serde_json::json!({
-                    "success": true,
-                    "data": receipt
-                });
-                serde_to_qjson_object(obj)
+                serde_to_qjson_object(val)
             }
             Some(Err(e)) => {
-                self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
-                if is_empty_overwrite_blocked(&e) {
-                    let msg = blocked_empty_overwrite_user_message();
-                    self.current_save_status = msg.to_string();
-                    self.set_error(msg);
+                let err_str = e.to_string();
+                if err_str.contains("chapter_not_exists") {
+                    self.debug_error("chapter", "save_chapter_failed", "chapter_not_exists");
+                    self.current_save_status = "保存失败: 章节不存在".to_string();
+                    bridge_error_object("章节不存在", "CHAPTER_NOT_FOUND")
                 } else {
-                    self.current_save_status = "保存失败".to_string();
+                    self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
+                    if is_empty_overwrite_blocked(&e) {
+                        let msg = blocked_empty_overwrite_user_message();
+                        self.current_save_status = msg.to_string();
+                        self.set_error(msg);
+                    } else {
+                        self.current_save_status = "保存失败".to_string();
+                    }
+                    bridge_error_object(&format!("保存失败: {}", e), e.code())
                 }
-                bridge_error_object(&format!("保存失败: {}", e), e.code())
             }
             None => {
-                self.debug_error("chapter", "save_chapter_failed", "chapter_not_exists");
-                self.current_save_status = "保存失败: 章节不存在".to_string();
-                bridge_error_object("章节不存在", "CHAPTER_NOT_FOUND")
+                self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
+                bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
             }
         };
         
@@ -3679,28 +3663,20 @@ impl AppBackend {
 
         let clear_result = if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            core.clear_chapter_content_verified(&p, &v, &c)
+            Some(writing_bridge::clear_chapter_content(&core, &p, &v, &c))
         } else {
-            self.debug_error("chapter", "clear_chapter_content_failed", "core_not_initialized");
-            self.current_save_status = "清空失败".to_string();
-            self.save_status_changed();
-            self.set_error("清空章节失败: 后端未初始化");
-            return bridge_error_object("清空章节失败: 后端未初始化", "INVALID_WORKSPACE");
+            None
         };
 
         match clear_result {
-            Ok(receipt) => {
+            Some(Ok(val)) => {
                 self.debug_log("chapter", "clear_chapter_content_success", &format!("chapter_id={}", c));
                 self.current_save_status = "已清空".to_string();
                 self.save_status_changed();
                 self.workspace_content_changed();
-                let obj = serde_json::json!({
-                    "success": true,
-                    "data": receipt
-                });
-                serde_to_qjson_object(obj)
+                serde_to_qjson_object(val)
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 let err_msg = format!("清空章节失败: {}", e);
                 self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
                 self.current_save_status = "清空失败".to_string();
@@ -3708,72 +3684,17 @@ impl AppBackend {
                 self.set_error(&err_msg);
                 bridge_error_object(&err_msg, e.code())
             }
-        }
-    }
-
-    fn save_current_chapter(&mut self, content: QString) {
-        let text_str = content.to_string();
-        let len = text_str.len();
-        self.debug_log("chapter", "save_current_chapter_start", &format!("len={}", len));
-        if !self.selected_chapter_exists() {
-            self.set_error("当前章节已不存在，已停止保存。");
-            self.debug_error("chapter", "save_current_chapter_failed", "chapter_not_exists");
-            return;
-        }
-
-        let save_result = if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
-            &self.core,
-            &self.selected_project_id,
-            &self.selected_volume_id,
-            &self.selected_chapter_id,
-        ) {
-            let core = core_ref.borrow();
-            core.write_chapter_verified(p, v, c, &text_str)
-        } else {
-            self.debug_error("chapter", "save_current_chapter_failed", "selection_missing");
-            return;
-        };
-
-        match save_result {
-            Ok(receipt) => {
-                self.current_save_status = "已保存".to_string();
+            None => {
+                self.debug_error("chapter", "clear_chapter_content_failed", "core_not_initialized");
+                self.current_save_status = "清空失败".to_string();
                 self.save_status_changed();
-                self.flush_writing_stats();
-                let p = self.selected_project_id.clone().unwrap_or_default();
-                let v = self.selected_volume_id.clone().unwrap_or_default();
-                let c = self.selected_chapter_id.clone().unwrap_or_default();
-                self.debug_log(
-                    "chapter",
-                    "save_current_chapter_success",
-                    &format!(
-                        "project_id={}, volume_id={}, chapter_id={}, chapter_path={}, content_len={}, content_hash={}, meta_hash={}, updated_at={}, word_count={}",
-                        p,
-                        v,
-                        c,
-                        receipt.chapter_relative_path,
-                        receipt.content_len,
-                        receipt.content_hash,
-                        receipt.meta_hash,
-                        receipt.updated_at,
-                        receipt.word_count
-                    ),
-                );
-            }
-            Err(e) => {
-                let err_msg = if is_empty_overwrite_blocked(&e) {
-                    blocked_empty_overwrite_user_message().to_string()
-                } else {
-                    format!("保存失败: {}", e)
-                };
-                if is_empty_overwrite_blocked(&e) {
-                    self.current_save_status = err_msg.clone();
-                    self.save_status_changed();
-                }
-                self.set_error(&err_msg);
-                self.debug_error("chapter", "save_current_chapter_failed", &err_msg);
+                self.set_error("清空章节失败: 后端未初始化");
+                bridge_error_object("清空章节失败: 后端未初始化", "INVALID_WORKSPACE")
             }
         }
     }
+
+
 
     fn report_writing_event(
         &mut self,
@@ -3808,9 +3729,8 @@ impl AppBackend {
 
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            let _ = core.record_writing_event(
-                &self.stats_device_id,
-                "linux",
+            writing_bridge::report_writing_event(
+                &core,
                 &pid,
                 &vid,
                 &cid,
@@ -3819,6 +3739,7 @@ impl AppBackend {
                 deleted_chars,
                 pasted_chars,
                 0,
+                &self.stats_device_id,
                 &self.stats_session_id,
             );
         }
