@@ -11,7 +11,10 @@
 
 - **Android 三层架构**：`ViewModel/UI → 领域 Bridge (WorkspaceBridge, WritingBridge 等) → NativeCoreBridge (JNI 适配层) → Rust Core`
 - **Linux 三层架构**：`QML UI → AppBackend (QObject 适配层) → 领域 Bridge (writing_bridge 等) → Rust Core`
-
+  - Linux `writing_bridge` 已从字符串错误改为稳定 Core Error 与 DTOs（如 `LinuxChapterOpenData`, `ChapterSaveReceipt`）。
+  - `main.rs` 只是 QObject 适配层，仅做 QJsonObject 转换，不处理具体业务逻辑或控制流。
+  - QML 只读取 QJsonObject 字段（`success`, `data`, `code` 等），不处理 JSON 字符串解析（`JSON.parse`）。
+  - Legacy `JSON over JNI` 目前只在 Android `NativeCoreBridge` 兼容层内保留。
 在关键业务路径（如保存章节），错误必须向上传递为明确的类型（如 Android 中的 `BridgeResult`，Linux 中的 `QJsonObject`），不允许退化成无上下文的 `bool`。
 
 ## 关键领域接口：
