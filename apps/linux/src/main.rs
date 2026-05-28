@@ -109,6 +109,13 @@ fn bridge_error_object(message: &str, code: &str) -> QJsonObject {
     }))
 }
 
+fn bridge_success_object(data: serde_json::Value) -> QJsonObject {
+    serde_to_qjson_object(serde_json::json!({
+        "success": true,
+        "data": data
+    }))
+}
+
 fn qjson_object_from_json(raw: &str) -> QJsonObject {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value) => serde_to_qjson_object(value),
@@ -3623,10 +3630,7 @@ impl AppBackend {
                 self.current_save_status = "已保存".to_string();
                 self.workspace_content_changed();
                 self.flush_writing_stats();
-                serde_to_qjson_object(serde_json::json!({
-                    "success": true,
-                    "data": receipt
-                }))
+                bridge_success_object(serde_json::to_value(receipt).unwrap())
             }
             Some(Err(e)) => {
                 self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
@@ -3668,10 +3672,7 @@ impl AppBackend {
                 self.current_save_status = "已清空".to_string();
                 self.save_status_changed();
                 self.workspace_content_changed();
-                serde_to_qjson_object(serde_json::json!({
-                    "success": true,
-                    "data": receipt
-                }))
+                bridge_success_object(serde_json::to_value(receipt).unwrap())
             }
             Some(Err(e)) => {
                 let err_msg = format!("清空章节失败: {}", e);
@@ -3708,25 +3709,11 @@ impl AppBackend {
         let cid = chapter_id.to_string();
         let src = source.to_string();
 
-        if self.stats_device_id.is_empty() {
-            self.stats_device_id = format!("linux-{}", uuid::Uuid::new_v4());
-            if let Some(core_ref) = &self.core {
-                let core = core_ref.borrow();
-                let mut local = core.load_local_settings().unwrap_or_default();
-                local.stats_device_id = Some(self.stats_device_id.clone());
-                let _ = core.save_local_settings(&local);
-            }
-        }
-
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        if self.stats_last_event_ms == 0 || (now_ms - self.stats_last_event_ms) > 5 * 60 * 1000 {
-            self.stats_session_id = uuid::Uuid::new_v4().to_string();
-        }
-        self.stats_last_event_ms = now_ms;
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            let _ = writing_bridge::report_writing_event(
+            writing_bridge::ensure_stats_session(&core, &mut self.stats_device_id, &mut self.stats_session_id, &mut self.stats_last_event_ms);
+            
+            if let Err(e) = writing_bridge::report_writing_event(
                 &core,
                 &pid,
                 &vid,
@@ -3738,7 +3725,10 @@ impl AppBackend {
                 0,
                 &self.stats_device_id,
                 &self.stats_session_id,
-            );
+            ) {
+                self.debug_error("stats", "report_writing_event_failed", &e.to_string());
+            }
+            self.flush_writing_stats();
         }
     }
 
@@ -3756,34 +3746,23 @@ impl AppBackend {
         let ot = old_text.to_string();
         let nt = new_text.to_string();
 
-        if self.stats_device_id.is_empty() {
-            self.stats_device_id = format!("linux-{}", uuid::Uuid::new_v4());
-            if let Some(core_ref) = &self.core {
-                let core = core_ref.borrow();
-                let mut local = core.load_local_settings().unwrap_or_default();
-                local.stats_device_id = Some(self.stats_device_id.clone());
-                let _ = core.save_local_settings(&local);
-            }
-        }
-
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        if self.stats_last_event_ms == 0 || (now_ms - self.stats_last_event_ms) > 5 * 60 * 1000 {
-            self.stats_session_id = uuid::Uuid::new_v4().to_string();
-        }
-        self.stats_last_event_ms = now_ms;
-
         if let Some(core_ref) = &self.core {
             let core = core_ref.borrow();
-            let _ = core.process_writing_event(
-                &self.stats_device_id,
-                "linux",
+            writing_bridge::ensure_stats_session(&core, &mut self.stats_device_id, &mut self.stats_session_id, &mut self.stats_last_event_ms);
+            
+            if let Err(e) = writing_bridge::process_writing_event_from_text(
+                &core,
                 &pid,
                 &vid,
                 &cid,
                 &ot,
                 &nt,
+                &self.stats_device_id,
                 &self.stats_session_id,
-            );
+            ) {
+                self.debug_error("stats", "process_writing_event_from_text_failed", &e.to_string());
+            }
+            self.flush_writing_stats();
         }
     }
 

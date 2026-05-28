@@ -73,7 +73,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var toolbar: MaterialToolbar
 
     var starmapId: String = ""
-    private val bridge by lazy { NativeCoreBridge(this) }
+    
     private lateinit var starMapController: StarMapController
     private lateinit var statsController: StatsController
 
@@ -119,8 +119,8 @@ class MainActivity : AppCompatActivity() {
         canvasView = findViewById(R.id.canvasView)
         toolbar = findViewById(R.id.toolbar)
 
-        starMapController = StarMapController(this, StarMapBridge(bridge), tabStarMap, canvasView)
-        statsController = StatsController(this, bridge, tabStats)
+        starMapController = StarMapController(this, com.xiwei.writerapp.data.BridgeProvider.getStarmapBridge(this), tabStarMap, canvasView)
+        statsController = StatsController(this, com.xiwei.writerapp.data.BridgeProvider.getStatsBridge(this), tabStats)
 
         // Sync initial state
         when (bottomNav.selectedItemId) {

@@ -5,8 +5,10 @@ import android.widget.TextView
 import android.view.LayoutInflater
 import android.view.View
 import com.xiwei.writerapp.R
-import com.xiwei.writerapp.data.NativeCoreBridge
-import com.xiwei.writerapp.data.NativeResult
+import com.xiwei.writerapp.data.StatsBridge
+import com.xiwei.writerapp.data.BridgeResult
+import com.xiwei.writerapp.data.StatsSummary
+import com.xiwei.writerapp.data.ProjectStatsSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -23,7 +25,7 @@ import org.json.JSONObject
  * 加载并展示今日、本周、本月的写作统计数据。
  *
  * ## 架构定位
- * - MainActivity → StatsController → NativeCoreBridge → JNI → Rust Core
+ * - MainActivity → StatsController → StatsBridge → NativeCoreBridge → JNI → Rust Core
  *
  * ## 职责边界
  * - **做**：加载统计数据、格式化展示、计算字数/时长/速度
@@ -35,7 +37,7 @@ import org.json.JSONObject
  */
 class StatsController(
     private val activity: MainActivity,
-    private val bridge: NativeCoreBridge,
+    private val bridge: StatsBridge,
     private val tabContainer: FrameLayout
 ) {
 
@@ -70,61 +72,54 @@ class StatsController(
         val weekStartStr = dateFormat.format(cal.time)
 
         CoroutineScope(Dispatchers.IO).launch {
-            val todayStatsJson = bridge.getWritingStatsSummary(todayStr, todayStr)
-            val weekStatsJson = bridge.getWritingStatsSummary(weekStartStr, todayStr)
+            val todayStatsResult = bridge.getWritingStatsSummary(todayStr, todayStr)
+            val weekStatsResult = bridge.getWritingStatsSummary(weekStartStr, todayStr)
             val projectStatsResult = bridge.getWritingStatsByProject(weekStartStr, todayStr)
 
             withContext(Dispatchers.Main) {
-                tvTodayStats.text = formatSummary(todayStatsJson)
-                tvWeekStats.text = formatSummary(weekStatsJson)
+                tvTodayStats.text = formatSummary(todayStatsResult)
+                tvWeekStats.text = formatSummary(weekStatsResult)
                 tvProjectStats.text = formatProjectStats(projectStatsResult)
             }
         }
     }
 
-    private fun formatSummary(jsonStr: String?): String {
-        if (jsonStr.isNullOrEmpty()) return "加载失败"
-        return try {
-            val json = JSONObject(jsonStr)
-            val chars = json.optInt("total_human_typed_chars", 0)
-            val activeSeconds = json.optInt("total_active_seconds", 0)
-            val duration = if (activeSeconds > 3600) {
-                "${activeSeconds / 3600}时${(activeSeconds % 3600) / 60}分"
-            } else {
-                "${activeSeconds / 60}分"
+    private fun formatSummary(result: BridgeResult<StatsSummary>): String {
+        return when (result) {
+            is BridgeResult.Success -> {
+                val stats = result.data
+                val chars = stats.totalHumanTypedChars ?: 0
+                val activeSeconds = stats.totalActiveSeconds ?: 0
+                val duration = if (activeSeconds > 3600) {
+                    "${activeSeconds / 3600}时${(activeSeconds % 3600) / 60}分"
+                } else {
+                    "${activeSeconds / 60}分"
+                }
+                "纯输入: $chars 字\n活跃时长: $duration"
             }
-            "纯输入: $chars 字\n活跃时长: $duration"
-        } catch (e: Exception) {
-            "解析失败"
+            is BridgeResult.Error -> "加载失败: ${result.message}"
+            BridgeResult.NotLoaded -> "未加载"
         }
     }
 
-    private fun formatProjectStats(result: NativeResult<Any>): String {
+    private fun formatProjectStats(result: BridgeResult<ProjectStatsSummary>): String {
         return when (result) {
-            is NativeResult.Success -> {
-                try {
-                    // data from getWritingStatsByProject is mapped to Any, so it's likely a Map/List or we can just toString it and parse as JSON
-                    val jsonStr = com.google.gson.Gson().toJson(result.data)
-                    val json = JSONObject(jsonStr)
-                    val projects = json.optJSONArray("projects")
-                    if (projects != null && projects.length() > 0) {
-                        val sb = java.lang.StringBuilder()
-                        for (i in 0 until projects.length()) {
-                            val p = projects.getJSONObject(i)
-                            val title = p.optString("project_title", "未命名")
-                            val chars = p.optInt("human_typed_chars", 0)
-                            sb.append("${i + 1}. $title: $chars 字\n")
-                        }
-                        sb.toString().trim()
-                    } else {
-                        "暂无数据"
-                    }
-                } catch (e: Exception) {
-                    "解析失败"
+            is BridgeResult.Success -> {
+                val statsMap = result.data.projects
+                if (statsMap.isNullOrEmpty()) {
+                    return "无项目数据"
                 }
+                val sb = StringBuilder()
+                for (projectStats in statsMap) {
+                    val chars = projectStats.humanTypedChars ?: 0
+                    val title = projectStats.projectTitle ?: "未命名"
+                    sb.append("项目: $title\n")
+                    sb.append("输入: $chars 字\n\n")
+                }
+                sb.toString()
             }
-            is NativeResult.Error -> "加载失败: ${result.message}"
-            else -> "未知状态"
+            is BridgeResult.Error -> "加载失败: ${result.message}"
+            BridgeResult.NotLoaded -> "未加载"
         }
     }
 }

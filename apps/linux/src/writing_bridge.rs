@@ -79,3 +79,45 @@ pub fn report_writing_event(
         session_id
     )
 }
+
+pub fn process_writing_event_from_text(
+    core: &WriterCore,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    old_text: &str,
+    new_text: &str,
+    device_id: &str,
+    session_id: &str
+) -> Result<(), Error> {
+    core.process_writing_event(
+        device_id,
+        "linux",
+        project_id,
+        volume_id,
+        chapter_id,
+        old_text,
+        new_text,
+        session_id
+    )
+}
+
+pub fn ensure_stats_session(
+    core: &WriterCore,
+    device_id: &mut String,
+    session_id: &mut String,
+    last_event_ms: &mut i64
+) {
+    if device_id.is_empty() {
+        *device_id = format!("linux-{}", uuid::Uuid::new_v4());
+        let mut local = core.load_local_settings().unwrap_or_default();
+        local.stats_device_id = Some(device_id.clone());
+        let _ = core.save_local_settings(&local);
+    }
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if *last_event_ms == 0 || (now_ms - *last_event_ms) > 5 * 60 * 1000 {
+        *session_id = uuid::Uuid::new_v4().to_string();
+    }
+    *last_event_ms = now_ms;
+}

@@ -14,6 +14,8 @@ import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
 import com.google.android.material.divider.MaterialDivider
 import com.xiwei.writerapp.R
+import com.xiwei.writerapp.data.ActionBridge
+import com.xiwei.writerapp.data.BridgeProvider
 import com.xiwei.writerapp.data.NativeCoreBridge
 import com.xiwei.writerapp.data.NativeResult
 import com.xiwei.writerapp.data.SettingsChangeBus
@@ -30,7 +32,7 @@ import com.google.gson.JsonElement
  *
  * ## 架构定位
  * - 调试用途，不面向普通用户
- * - 通过 NativeCoreBridge 调用 Rust Core 的 Action 系统
+ * - 通过 ActionBridge 调用 Rust Core 的 Action 系统
  *
  * ## 职责边界
  * - **做**：展示 Action 列表、执行 Action、展示结果
@@ -42,7 +44,7 @@ import com.google.gson.JsonElement
  */
 class ActionRegistryActivity : AppCompatActivity() {
 
-    private lateinit var bridge: NativeCoreBridge
+    private lateinit var bridge: ActionBridge
     private lateinit var actionContainer: LinearLayout
     private lateinit var tvLoading: TextView
     private val gson = Gson()
@@ -51,7 +53,8 @@ class ActionRegistryActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_action_registry)
 
-        bridge = NativeCoreBridge(this)
+         
+        bridge = BridgeProvider.getActionBridge(this)
         actionContainer = findViewById(R.id.actionContainer)
         tvLoading = findViewById(R.id.tvLoading)
 
@@ -66,10 +69,10 @@ class ActionRegistryActivity : AppCompatActivity() {
         tvLoading.visibility = View.VISIBLE
         actionContainer.removeViews(1, actionContainer.childCount - 1)
 
-        if (!bridge.isLoaded) {
-            tvLoading.text = getString(R.string.action_not_loaded)
-            return
-        }
+        // bridge.isLoaded check is no longer available directly on ActionBridge
+        // It should be fine, as we don't strictly need it or we can pass loaded state.
+        // Let's just catch exceptions or handle results.
+        // Wait, listRegisteredActions returns NativeResult.NotLoaded if not loaded.
 
         val result = bridge.listRegisteredActions()
         when (result) {

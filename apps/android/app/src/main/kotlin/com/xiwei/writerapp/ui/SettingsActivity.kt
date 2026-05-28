@@ -23,7 +23,6 @@ import com.xiwei.writerapp.model.SyncConfig
 import com.xiwei.writerapp.model.SyncTransport
 import com.xiwei.writerapp.model.SyncSecrets
 import com.xiwei.writerapp.data.NativeResult
-import com.xiwei.writerapp.data.NativeCoreBridge
 import com.xiwei.writerapp.model.FirstSyncMode
 import com.xiwei.writerapp.data.SyncSession
 
@@ -34,7 +33,7 @@ import com.xiwei.writerapp.data.SyncSession
  *
  * ## 架构定位
  * - 通过 SettingsRepository 读写设置
- * - 通过 NativeCoreBridge 执行同步操作
+ * - 通过 SettingsRepository 执行同步操作
  *
  * ## 职责边界
  * - **做**：设置展示、保存、同步配置、同步诊断、同步执行
@@ -242,8 +241,9 @@ class SettingsActivity : AppCompatActivity() {
 
         // AI settings - hide section if AI not available (compile-time)
         val aiAvailable = try {
-            val bridge = NativeCoreBridge(this)
-            bridge.aiAvailable()
+            if (::settingsRepository.isInitialized) {
+                settingsRepository.aiAvailable()
+            } else false
         } catch (e: Exception) { false }
         if (aiAvailable) {
             tvAiSection.visibility = android.view.View.VISIBLE

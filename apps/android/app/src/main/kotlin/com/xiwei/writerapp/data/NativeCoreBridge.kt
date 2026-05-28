@@ -6,9 +6,17 @@ package com.xiwei.writerapp.data
 //!
 //! ## 架构定位
 //!
-//! ```text
-//! Android UI/ViewModel → 领域 Bridge/Repository → NativeCoreBridge → JNI → Rust Core
-//! ```
+/**
+ * `NativeCoreBridge` 是负责与 Rust JNI 层通信的核心适配器类。
+ *
+ * 【架构边界警告 - 桥接第四阶段最终收口】
+ * - `NativeCoreBridge` 是遗留的 JSON over JNI 兼容中心。
+ * - 只有 `WorkspaceBridge`, `WritingBridge` 等专用领域 Bridge 允许直接调用它。
+ * - Repository, ViewModel, Activity 严禁直接 `new NativeCoreBridge()`，必须使用 `BridgeProvider`。
+ * - 新业务功能不应在此处继续堆砌纯 JSON 解析逻辑，而应利用领域 Bridge。
+ *
+ * 该类目前主要维护旧有功能的序列化/反序列化逻辑，并将 JNI 返回的 JSON 字符串映射为 `NativeResult<T>`。
+ */
 //!
 //! ## 职责边界
 //!

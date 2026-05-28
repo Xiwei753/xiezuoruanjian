@@ -23,7 +23,7 @@ import com.xiwei.writerapp.model.SyncableSettings
  * - SyncPage 加载/保存同步配置
  */
 class SettingsRepository(context: Context) {
-    private val bridge = NativeCoreBridge(context)
+    private val bridge = BridgeProvider.getNativeStatusBridge(context)
 
     fun getLocalSettings(): LocalSettings {
         return when (val result = bridge.getLocalSettings()) {
@@ -146,6 +146,10 @@ class SettingsRepository(context: Context) {
             }
             NativeResult.NotLoaded -> false
         }
+    }
+
+    fun aiAvailable(): Boolean {
+        return bridge.aiAvailable()
     }
 
     fun performSyncDiagnostics(config: SyncConfig): NativeResult<SyncDiagnosticsResult> {

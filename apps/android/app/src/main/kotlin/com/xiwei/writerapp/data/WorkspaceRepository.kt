@@ -3,11 +3,10 @@ package com.xiwei.writerapp.data
 import android.content.Context
 import com.xiwei.writerapp.model.*
 
-class WorkspaceRepository(val context: Context) {
-    private val nativeBridge = NativeCoreBridge(context)
-    private val workspaceBridge = WorkspaceBridge(nativeBridge)
-    private val writingBridge = WritingBridge(nativeBridge)
-    private val statsBridge = StatsBridge(nativeBridge)
+class WorkspaceRepository(private val context: Context) {
+    private val workspaceBridge = BridgeProvider.getWorkspaceBridge(context)
+    private val writingBridge = BridgeProvider.getWritingBridge(context)
+    private val statsBridge = BridgeProvider.getStatsBridge(context)
 
     init {
         workspaceBridge.createWorkspaceIfNeeded()
