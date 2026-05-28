@@ -1,6 +1,26 @@
+//! # 删除安全守卫（Core 层）
+//!
+//! 所有删除操作（项目、卷、章节）必须经过此模块验证。
+//!
+//! ## 安全机制
+//!
+//! 1. **ID 段验证**：防止路径穿越攻击（`..`、`/`、`\`）
+//! 2. **符号链接检查**：拒绝删除符号链接指向的目标
+//! 3. **工作区根保护**：绝对不允许删除工作区根目录
+//! 4. **标记文件验证**：确认目标是正确的业务目录（通过 marker file）
+//!
+//! ## 调用方
+//!
+//! - `project::delete_project()` → `validate_delete_target(..., "project.json")`
+//! - `volume::delete_volume()` → `validate_delete_target(..., "volume.json")`
+//! - `chapter::delete_chapter()` → `validate_delete_target(..., "chapter.meta.json")`
+
 use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
 
+/// 验证 ID 段是否安全（不含路径分隔符和 `..`）。
+///
+/// 所有从外部接收的 ID（project_id、volume_id、chapter_id）都必须先经过此验证。
 pub fn validate_id_segment(id: &str) -> Result<&str> {
     let id = id.trim();
     if id.is_empty() {
@@ -15,6 +35,13 @@ pub fn validate_id_segment(id: &str) -> Result<&str> {
     Ok(id)
 }
 
+/// 验证删除目标是否合法。
+///
+/// 检查项：
+/// 1. 目标路径存在且是目录（非符号链接）
+/// 2. 目标不在工作区根目录
+/// 3. 目标在工作区内部（防止 `..` 逃逸）
+/// 4. 目标包含预期的标记文件（如 `project.json`）
 pub fn validate_delete_target(
     workspace_path: &Path,
     target_path: &Path,

@@ -1,3 +1,23 @@
+//! # 项目管理（Core 层）
+//!
+//! 负责作品（Project）的 CRUD、统计、排序、重命名、删除。
+//!
+//! ## 职责边界
+//!
+//! - **做**：项目创建/列表/重命名/删除/排序/统计
+//! - **不做**：卷和章节管理（由 `volume.rs` / `chapter.rs` 负责）
+//! - **删除安全**：所有删除操作经过 `delete_guard` 验证，删除后移入 trash 目录并记录 tombstone
+//!
+//! ## 目录结构
+//!
+//! ```text
+//! projects/
+//!   {project_id}/
+//!     project.json          # 项目元数据（id、title、order、时间戳）
+//!     volumes/              # 所有卷
+//!     characters/           # 角色数据（预留）
+//! ```
+
 use crate::error::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -5,6 +25,7 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+/// 项目元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Project {
     pub id: String,

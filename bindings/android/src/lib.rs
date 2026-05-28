@@ -1,3 +1,30 @@
+//! # Android JNI 桥接层（Binding 层）
+//!
+//! 本 crate 是 Android 客户端与 Rust Core 之间的桥梁。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! Android Kotlin UI → NativeCoreBridge.kt → JNI → 本 crate → WriterCore (Core 层)
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：JString ↔ String 转换、Result → JSON 序列化、JNI 函数注册
+//! - **不做**：业务逻辑（全部委托给 `WriterCore`）
+//! - **不做**：错误处理（错误通过 JSON `{ success: false, error: "..." }` 返回给 Kotlin）
+//!
+//! ## JSON 协议
+//!
+//! 所有 JNI 函数返回 JSON 字符串：
+//! - 成功：`{ "success": true, "data": <实际数据> }`
+//! - 失败：`{ "success": false, "error": "<错误信息>" }`
+//!
+//! ## 注意事项
+//!
+//! - 本 crate 不允许添加业务逻辑，只做类型转换
+//! - 所有 `WriterCore` 方法调用都在这里，便于追踪调用链
+
 use jni::objects::JObject;
 use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jstring};
@@ -6,7 +33,9 @@ use serde::Serialize;
 use serde_json::json;
 use writer_core::facade::WriterCore;
 
-// Helper to convert JString to Rust String
+/// 将 JString 转换为 Rust String。
+///
+/// 如果 JString 为 null，返回空字符串。
 fn jstring_to_string(env: &mut JNIEnv, jstr: &JString) -> Result<String, String> {
     if jstr.is_null() {
         return Ok(String::new());
@@ -16,7 +45,10 @@ fn jstring_to_string(env: &mut JNIEnv, jstr: &JString) -> Result<String, String>
         .map_err(|e| format!("Failed to get string: {}", e))
 }
 
-// Helper to return JSON or error JSON
+/// 将 Core 层 Result 转换为 JSON 字符串返回给 Kotlin。
+///
+/// 成功时返回 `{ "success": true, "data": ... }`
+/// 失败时返回 `{ "success": false, "error": "..." }`
 fn result_to_jstring<T: Serialize>(
     env: &mut JNIEnv,
     result: Result<T, writer_core::Error>,

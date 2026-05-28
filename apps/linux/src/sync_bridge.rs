@@ -1,14 +1,34 @@
+//! # 同步桥接（Linux UI 层 - Backend Adapter）
+//!
+//! 同步相关的辅助函数：错误掩码、错误分类、诊断状态判定。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! QML SyncPage → sync_bridge::mask_sync_error() / sync_error_category()
+//!   → WriterCore / sync_service
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：错误消息脱敏（移除 Token）、错误分类（网络/认证/冲突等）、诊断状态判定
+//! - **不做**：实际同步操作（由 WriterCore::perform_sync 负责）
+//! - **不做**：同步配置管理（由 WriterCore::load_sync_config 负责）
+
 use writer_core::sync_service::{SyncConfig, SyncSecrets, SyncDiagnosticsResult};
 
+/// 同步任务结果封装。
 pub struct SyncTaskOutcome {
     pub sync_status: String,
     pub action_result: String,
 }
 
+/// 对错误消息进行脱敏处理（移除 Token、密钥等敏感信息）。
 pub fn mask_sync_error(msg: &str) -> String {
     writer_core::sync_service::redact_secrets_from_message(msg, None, None)
 }
 
+/// 根据错误消息内容分类错误类型（用于 UI 展示不同的错误提示）。
 pub fn sync_error_category(msg: &str) -> String {
     let lower = msg.to_lowercase();
     if lower.contains("token") && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided")) {

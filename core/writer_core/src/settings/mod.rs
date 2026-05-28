@@ -1,9 +1,28 @@
+//! # 设置管理（Core 层）
+//!
+//! 管理两类设置：
+//!
+//! 1. **LocalSettings（本地设置）**：仅存储在本地，不同步
+//!    - 窗口大小、自动保存开关、字号、行距、自动缩进、动画开关等
+//!    - 文件路径：`app-meta/settings/settings.local.json`
+//!
+//! 2. **SyncableSettings（可同步设置）**：会随工作区同步到其他设备
+//!    - 字号、主题模式、Monet 颜色
+//!    - 文件路径：`app-meta/settings/settings.sync.json`
+//!
+//! ## 职责边界
+//!
+//! - **做**：设置的加载/保存/默认值/有效字号计算
+//! - **不做**：设置 UI 展示（由客户端负责）
+//! - **修改设置后**：客户端需要监听设置变更事件并刷新 UI
+
 pub mod models;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+/// 本地设置（不同步到其他设备）。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {

@@ -1,5 +1,26 @@
 package com.xiwei.writerapp.data
 
+//! # 仓库层封装（Android UI 层 - Data 层）
+//!
+//! 对 NativeCoreBridge 的高层封装，将 NativeResult 转换为异常。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! ViewModel → WorkspaceRepository → NativeCoreBridge → JNI → Rust Core
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：统一错误处理（NativeResult → RepositoryException）、简化 API 调用
+//! - **不做**：业务逻辑（只做类型转换和错误传播）
+//!
+//! ## 设计原则
+//!
+//! - 所有方法在失败时抛出 RepositoryException，由 ViewModel 捕获
+//! - 不吞掉错误，不伪造成功状态
+//! - 不添加任何业务逻辑，只做 NativeResult ↔ Exception 转换
+
 import android.content.Context
 import com.xiwei.writerapp.model.*
 

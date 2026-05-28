@@ -1,3 +1,26 @@
+//! # Facade 层 - 客户端统一 API 入口（Core 层）
+//!
+//! 这是所有客户端（Android、Linux）调用 Core 的**唯一入口**。
+//!
+//! ## 设计原则
+//!
+//! - **薄 Facade**：只做参数转发和类型转换，不包含业务逻辑
+//! - **统一错误处理**：所有操作返回 `Result<T>`，客户端必须处理错误
+//! - **无状态**：每个方法都是独立的，不依赖内部状态（除了 workspace_path）
+//!
+//! ## 调用链示例
+//!
+//! ```text
+//! Android: NativeCoreBridge → WriterCore::create_chapter() → chapter::create_chapter()
+//! Linux:   AppBackend → WriterCore::create_chapter() → chapter::create_chapter()
+//! ```
+//!
+//! ## 禁止事项
+//!
+//! - 客户端不允许绕过 Facade 直接调用子模块
+//! - Facade 不允许添加 UI 逻辑（动画、窗口管理等）
+//! - Facade 不允许吞掉错误（必须返回 Result）
+
 use crate::action_registry::{ActionDescriptor, ActionRegistry, ActionResult};
 use crate::backup;
 use crate::chapter::{self, Chapter, ChapterContent};
@@ -15,8 +38,10 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// The main entry point for client applications (Android, Linux).
-/// This struct holds the workspace root and provides high-level methods.
+/// Core 层对外暴露的主结构体。
+///
+/// 持有工作区根路径，提供所有高层业务方法。
+/// 客户端通过 `WriterCore::new(workspace_path)` 创建实例。
 pub struct WriterCore {
     workspace_path: PathBuf,
     stats_api: OnceLock<StatsApi>,

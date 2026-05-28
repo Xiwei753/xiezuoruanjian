@@ -1,5 +1,14 @@
+//! # 统一错误类型
+//!
+//! 所有 Core 模块共享此错误类型。
+//! 客户端通过 `Result<T>` 统一处理错误，不允许吞掉 Core 错误。
+
 use thiserror::Error;
 
+/// Core 层统一错误枚举。
+///
+/// 所有错误变体都携带足够上下文，便于客户端决定如何展示给用户。
+/// `EmptyOverwriteBlocked` 是核心安全机制：防止空内容覆盖非空章节。
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("IO error: {0}")]

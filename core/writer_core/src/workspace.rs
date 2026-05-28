@@ -1,7 +1,35 @@
+//! # 工作区管理（Core 层）
+//!
+//! 负责工作区的创建、验证、最近编辑记录。
+//! 工作区是整个应用的根目录，包含所有项目和配置。
+//!
+//! ## 职责边界
+//!
+//! - **做**：创建目录结构、验证工作区有效性、记录最近编辑
+//! - **不做**：项目内容管理、同步逻辑、设置管理（由其他模块负责）
+//!
+//! ## 目录结构
+//!
+//! ```text
+//! workspace/
+//!   workspace_manifest.json    # 工作区元数据
+//!   projects/                  # 所有项目
+//!   backups/                   # 备份文件
+//!   trash/                     # 回收站
+//!   app-meta/
+//!     settings/                # 设置文件
+//!     logs/                    # 日志
+//!     sync/                    # 同步状态
+//! ```
+
 use crate::error::Result;
 use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+
+/// 创建工作区目录结构和 manifest 文件。
+///
+/// 幂等操作：如果目录已存在则跳过。
 pub fn create_workspace(path: &Path) -> Result<()> {
     fs::create_dir_all(path.join("app-meta/settings"))?;
     fs::create_dir_all(path.join("app-meta/logs"))?;
@@ -17,6 +45,7 @@ pub fn create_workspace(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 验证工作区是否有效（存在 manifest 和 projects 目录）。
 pub fn validate_workspace(path: &Path) -> Result<bool> {
     if path.join("workspace_manifest.json").exists() && path.join("projects").exists() {
         Ok(true)
@@ -27,6 +56,7 @@ pub fn validate_workspace(path: &Path) -> Result<bool> {
 
 use serde::{Deserialize, Serialize};
 
+/// 最近编辑记录，用于首页展示"继续写作"入口。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RecentEdit {
     pub project_id: String,
@@ -37,8 +67,11 @@ pub struct RecentEdit {
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+/// 进程内缓存：避免频繁磁盘读取。
+/// Key = workspace_path，Value = 最近编辑列表。
 static RECENT_EDITS_CACHE: OnceLock<Mutex<HashMap<PathBuf, Vec<RecentEdit>>>> = OnceLock::new();
 
+/// 获取最近编辑列表（优先从缓存读取，否则从磁盘加载）。
 pub fn get_recent_edits(workspace_path: &Path) -> Result<Vec<RecentEdit>> {
     let mutex = RECENT_EDITS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
@@ -59,6 +92,9 @@ pub fn get_recent_edits(workspace_path: &Path) -> Result<Vec<RecentEdit>> {
     Ok(edits)
 }
 
+/// 记录一次章节编辑（去重 + 插入头部 + 截断到 20 条 + 防抖落盘）。
+///
+/// 防抖策略：最多每 5 秒落盘一次，减少高频编辑时的 I/O 开销。
 pub fn record_recent_edit(
     workspace_path: &Path,
     project_id: &str,

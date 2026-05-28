@@ -1,5 +1,26 @@
 package com.xiwei.writerapp.data
 
+//! # JNI 调用桥接（Android UI 层 - Data 层）
+//!
+//! 负责将 Kotlin 方法调用转发到 Rust Core 的 JNI 函数。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! Android UI (Activity/ViewModel) → NativeCoreBridge → JNI → Rust Core
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：加载 native 库、调用 JNI 函数、将 JSON 结果反序列化为 Kotlin 模型
+//! - **不做**：业务逻辑（全部委托给 Rust Core）
+//! - **不做**：错误处理（错误通过 NativeResult 传递给上层）
+//!
+//! ## 注意事项
+//!
+//! - `isLoaded` 标记 native 库是否加载成功，所有方法在调用前检查此标记
+//! - JSON 协议与 Rust Binding 层一致：`{ "success": true/false, "data": ..., "error": ... }`
+
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
@@ -9,7 +30,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.Manifest
 
-// Represents the result of a Native JNI call.
+/// JNI 调用结果密封类，用于统一错误处理。
 sealed class NativeResult<out T> {
     data class Success<out T>(val data: T) : NativeResult<T>()
     data class Error(val message: String) : NativeResult<Nothing>()

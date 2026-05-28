@@ -1,3 +1,32 @@
+//! # QTextDocument 排版操作（Linux UI 层 - Backend Adapter）
+//!
+//! 负责纯文本的视觉排版（行距、首行缩进），不改变正文内容。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! QML EditorPage → DocumentHandler (QObject) → QTextDocument (Qt)
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：应用行距、首行缩进、设置纯文本、获取纯文本、清空撤销栈
+//! - **不做**：正文内容管理（由 WriterCore 负责）
+//! - **不做**：业务逻辑（只做视觉排版）
+//!
+//! ## 设计原则
+//!
+//! - 只做视觉排版，不改变正文文件内容
+//! - 字号、行距、首行缩进只影响显示，不改变正文文件
+//! - 正文文件永远是纯文本
+//!
+//! ## 关键方法
+//!
+//! - `apply_format()`：将行距和首行缩进应用到 QTextDocument
+//! - `set_plain_text()`：按行插入纯文本（不接受 HTML）
+//! - `get_plain_text()`：获取纯文本（替换 `\u2029` 为 `\n`）
+//! - `clear_undo_stack()`：清空撤销栈（章节切换时调用）
+
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
 use cpp::cpp;

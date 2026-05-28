@@ -1,3 +1,30 @@
+//! # 章节管理（Core 层 - 最核心模块）
+//!
+//! 负责章节（Chapter）的 CRUD、内容读写、备份、验证保存。
+//!
+//! ## 职责边界
+//!
+//! - **做**：章节创建/列表/重命名/删除/排序/内容读写/备份/验证保存
+//! - **不做**：排版格式化（由客户端 `DocumentHandler` 负责）
+//! - **正文永远是纯文本**：`chapter.md` 文件内容是纯文本，不接受 HTML
+//! - **删除安全**：所有删除操作经过 `delete_guard` 验证，删除后移入 trash 目录并记录 tombstone
+//!
+//! ## 核心安全机制
+//!
+//! 1. **空内容覆盖保护**：`save_chapter_verified` 默认拒绝用空内容覆盖非空章节
+//! 2. **写入后验证**：写入后重新读取文件并计算 hash，确保数据完整性
+//! 3. **备份机制**：每次保存前自动备份旧版本（保留最近 20 个版本）
+//! 4. **原子写入**：所有文件写入通过 `storage::atomic_write_string` 完成
+//!
+//! ## 目录结构
+//!
+//! ```text
+//! projects/{project_id}/volumes/{volume_id}/chapters/
+//!   {chapter_id}/
+//!     chapter.meta.json     # 章节元数据（id、title、order、word_count、hash）
+//!     chapter.md            # 正文内容（纯文本）
+//! ```
+
 use crate::error::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -5,8 +32,10 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+/// 单个章节最多保留的备份数量。
 const CHAPTER_BACKUP_KEEP: usize = 20;
 
+/// 章节元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Chapter {
     pub id: String,
@@ -21,12 +50,14 @@ pub struct Chapter {
     pub note: Option<String>,
 }
 
+/// 章节内容（元数据 + 正文）。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChapterContent {
     pub meta: Chapter,
     pub content: String,
 }
 
+/// 章节保存回执（用于客户端确认保存成功）。
 #[derive(Debug, Clone)]
 pub struct ChapterSaveReceipt {
     pub chapter_relative_path: String,

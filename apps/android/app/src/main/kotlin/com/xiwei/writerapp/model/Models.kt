@@ -1,5 +1,20 @@
 package com.xiwei.writerapp.model
 
+//! # 核心数据模型（Android UI 层 - Model 层）
+//!
+//! 定义所有 Kotlin 侧的数据类，与 Rust Core 的数据结构一一对应。
+//!
+//! ## 架构定位
+//!
+//! 这些模型是 Rust Core JSON 响应的 Kotlin 映射，**不是业务实体**。
+//! 业务实体的定义和操作都在 Rust Core 中。
+//!
+//! ## 设计原则
+//!
+//! - 所有字段名使用 `@SerializedName` 映射 Rust 的 snake_case
+//! - 这些类只做数据承载，不包含业务逻辑
+//! - 修改 Rust Core 数据结构时，必须同步更新这里的模型
+
 import com.google.gson.annotations.SerializedName
 import com.google.gson.JsonDeserializationContext
 import com.google.gson.JsonDeserializer

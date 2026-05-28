@@ -1,4 +1,36 @@
 #![recursion_limit = "256"]
+//! # Linux 客户端入口（Linux UI 层 - Backend Adapter）
+//!
+//! 这是 Linux 桌面客户端的入口文件，包含 AppBackend QObject。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! QML UI → AppBackend (QObject) → WriterCore (Rust Core) → 文件系统
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：将 WriterCore API 暴露为 QML 可调用的 QObject 方法
+//! - **不做**：业务逻辑（全部委托给 WriterCore）
+//! - **不做**：文件 I/O（由 WriterCore 负责）
+//! - **不做**：排版格式化（由 DocumentHandler 负责）
+//!
+//! ## 设计原则
+//!
+//! - AppBackend 是薄适配层，只做 QML ↔ Rust 类型转换
+//! - 所有业务逻辑都在 Core 层
+//! - QML 只绑定 AppBackend 暴露的属性和方法
+//!
+//! ## 调用链示例
+//!
+//! ```text
+//! QML: AppBackend.create_project("My Book")
+//!   → Rust: WriterCore::create_project("My Book")
+//!     → Core: project::create_project()
+//!       → storage::atomic_write_string()
+//! ```
+
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
 

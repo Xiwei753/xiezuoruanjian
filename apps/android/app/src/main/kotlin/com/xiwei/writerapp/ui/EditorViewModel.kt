@@ -1,5 +1,34 @@
 package com.xiwei.writerapp.ui
 
+//! # 编辑器 ViewModel（Android UI 层 - ViewModel）
+//!
+//! 管理编辑器的 UI 状态、自动保存、设置同步、写作统计。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! EditorActivity → EditorViewModel → WorkspaceRepository → NativeCoreBridge → Rust Core
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：UI 状态管理、自动保存调度、设置加载/应用、写作统计上报
+//! - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 WriterEditText 负责）
+//! - **不直接调用 NativeCoreBridge**：通过 WorkspaceRepository 间接调用
+//!
+//! ## 关键流程
+//!
+//! 1. **章节加载**：`initChapter()` → `loadChapter()` → `WorkspaceRepository.getChapterContentWithMeta()`
+//! 2. **自动保存**：`onContentChanged()` → `scheduleAutoSave()` → `performSave()`
+//! 3. **设置同步**：`onSettingsChanged()` → `reloadSettings()` → 更新 `EditorSettingsState`
+//! 4. **写作统计**：`onContentChanged()` → `reportWritingEvent()` → `WorkspaceRepository.processWritingEvent()`
+//!
+//! ## 线程模型
+//!
+//! - UI 操作在 `Dispatchers.Main`
+//! - 文件 I/O 在 `Dispatchers.IO`
+//! - 保存互斥锁 `saveMutex` 防止并发保存冲突
+
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope

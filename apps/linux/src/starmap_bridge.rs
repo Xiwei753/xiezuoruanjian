@@ -1,3 +1,27 @@
+//! # 星图桥接函数（Linux UI 层 - Backend Adapter）
+//!
+//! 将 WriterCore 的星图 API 包装为 JSON 格式，供 QML 调用。
+//!
+//! ## 架构定位
+//!
+//! ```text
+//! QML StarMapGraphController → starmap_bridge::list_starmaps()
+//!   → WriterCore::list_starmaps()
+//!     → starmap::list_starmaps()
+//! ```
+//!
+//! ## 职责边界
+//!
+//! - **做**：类型转换（Rust 结构体 ↔ JSON 字符串）、错误格式化
+//! - **不做**：业务逻辑（全部委托给 WriterCore）
+//! - **不做**：文件 I/O（由 WriterCore 负责）
+//!
+## JSON 协议
+//!
+//! 所有函数返回 JSON 字符串：
+//! - 成功：`{ "success": true, "data": ... }`
+//! - 失败：`{ "success": false, "message": "..." }`
+
 use writer_core::facade::WriterCore;
 use writer_core::starmap::types::{StarMapEdge, StarMapEdgeKind, StarMapLayout, StarMapNode, StarMapNodeKind, StarMapNodePatch, StarMapEdgePatch};
 
