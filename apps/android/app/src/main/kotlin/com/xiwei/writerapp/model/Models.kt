@@ -416,3 +416,14 @@ data class InputSchemaProperty(
         }
     }
 }
+
+data class WritingStatsSummary(
+    val totalWordCount: Long,
+    val totalTimeSeconds: Long,
+    val activeDays: Int
+)
+
+data class ProjectStatsSummary(
+    val projectId: String,
+    val wordCount: Long
+)
