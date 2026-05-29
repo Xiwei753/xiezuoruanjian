@@ -57,6 +57,10 @@
 //! - 支持JSON格式的数据交换
 //! - 为前端提供类型安全的接口
 
+use crate::starmap::semantic::{
+    StarMapAnchor, StarMapDisplayPolicy, StarMapNodeContent, StarMapOpenBehavior, StarMapPortal,
+    StarMapProvenance,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,6 +123,19 @@ pub struct StarMapNode {
     pub payload: Option<serde_json::Value>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub content: StarMapNodeContent,
+    #[serde(default)]
+    pub anchors: Vec<StarMapAnchor>,
+    #[serde(default)]
+    pub portal: Option<StarMapPortal>,
+    #[serde(default)]
+    pub display_policy: StarMapDisplayPolicy,
+    #[serde(default)]
+    pub open_behavior: StarMapOpenBehavior,
+    #[serde(default)]
+    pub provenance: StarMapProvenance,
+
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -163,6 +180,19 @@ pub struct StarMapLayoutNode {
     pub radius: f32,
     pub collapsed: bool,
     pub z_index: i32,
+
+    #[serde(default = "default_scale")]
+    pub scale: f32,
+    #[serde(default)]
+    pub depth: f32,
+    #[serde(default)]
+    pub focus_weight: f32,
+    #[serde(default)]
+    pub orbit_group: Option<String>,
+}
+
+fn default_scale() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +202,12 @@ pub struct StarMapNodePatch {
     pub kind: Option<StarMapNodeKind>,
     pub payload: Option<Option<serde_json::Value>>,
     pub tags: Option<Vec<String>>,
+    pub content: Option<StarMapNodeContent>,
+    pub anchors: Option<Vec<StarMapAnchor>>,
+    pub portal: Option<Option<StarMapPortal>>,
+    pub display_policy: Option<StarMapDisplayPolicy>,
+    pub open_behavior: Option<StarMapOpenBehavior>,
+    pub provenance: Option<StarMapProvenance>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

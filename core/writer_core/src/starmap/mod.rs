@@ -24,6 +24,7 @@
 //! - 支持多层级的创作要素分类
 
 pub mod graph;
+pub mod semantic;
 pub mod types;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};

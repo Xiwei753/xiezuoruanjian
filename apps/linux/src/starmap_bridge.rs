@@ -106,6 +106,12 @@ pub fn create_starmap_node(core: &WriterCore, starmap_id: &str, title: &str, kin
         kind: node_kind,
         payload: None,
         tags: vec![],
+        content: Default::default(),
+        anchors: vec![],
+        portal: None,
+        display_policy: Default::default(),
+        open_behavior: Default::default(),
+        provenance: Default::default(),
         created_at: now,
         updated_at: now,
     };

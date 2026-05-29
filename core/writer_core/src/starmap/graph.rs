@@ -65,6 +65,8 @@ pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGr
 }
 
 pub fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &StarMapGraph) -> Result<()> {
+    validate_graph(workspace, graph)?;
+
     let starmap_dir = starmaps_dir(workspace).join(starmap_id);
     fs::create_dir_all(&starmap_dir)?;
 
@@ -107,6 +109,8 @@ pub fn save_starmap_layout(
     starmap_id: &str,
     layout: &StarMapLayout,
 ) -> Result<()> {
+    validate_layout(layout)?;
+
     let starmap_dir = starmaps_dir(workspace).join(starmap_id);
     fs::create_dir_all(&starmap_dir)?;
 
@@ -138,6 +142,10 @@ pub fn add_starmap_node(
             radius: 30.0,
             collapsed: false,
             z_index: 0,
+            scale: 1.0,
+            depth: 0.0,
+            focus_weight: 0.0,
+            orbit_group: None,
         });
         let _ = save_starmap_layout(workspace, starmap_id, &layout);
     }
@@ -164,6 +172,24 @@ pub fn update_starmap_node(
         }
         if let Some(t) = patch.tags {
             node.tags = t;
+        }
+        if let Some(c) = patch.content {
+            node.content = c;
+        }
+        if let Some(a) = patch.anchors {
+            node.anchors = a;
+        }
+        if let Some(p) = patch.portal {
+            node.portal = p;
+        }
+        if let Some(dp) = patch.display_policy {
+            node.display_policy = dp;
+        }
+        if let Some(ob) = patch.open_behavior {
+            node.open_behavior = ob;
+        }
+        if let Some(p) = patch.provenance {
+            node.provenance = p;
         }
         node.updated_at = now_epoch();
         let updated_node = node.clone();
@@ -269,6 +295,90 @@ pub fn delete_starmap_edge(workspace: &Path, starmap_id: &str, edge_id: &str) ->
     Ok(())
 }
 
+fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
+    let mut node_ids = std::collections::HashSet::new();
+    for node in &graph.nodes {
+        if !node_ids.insert(&node.id) {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Duplicate node ID",
+            )));
+        }
+
+        let mut anchor_ids = std::collections::HashSet::new();
+        for anchor in &node.anchors {
+            if !anchor_ids.insert(&anchor.anchor_id) {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Duplicate anchor ID in node",
+                )));
+            }
+        }
+
+        if let Some(portal) = &node.portal {
+            if portal.mode == crate::starmap::semantic::StarMapPortalMode::EnterChild {
+                // To avoid recursive locking or parsing, just check existence of the starmap dir
+                let target_dir = starmaps_dir(workspace).join(&portal.target_starmap_id);
+                if !target_dir.exists() {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Portal target starmap does not exist",
+                    )));
+                }
+            }
+        }
+
+        let dp = &node.display_policy;
+        if dp.importance.is_nan()
+            || dp.importance < 0.0
+            || dp.min_visible_scale.is_nan()
+            || dp.min_visible_scale < 0.0
+            || dp.title_scale.is_nan()
+            || dp.title_scale < 0.0
+            || dp.summary_scale.is_nan()
+            || dp.summary_scale < 0.0
+            || dp.detail_scale.is_nan()
+            || dp.detail_scale < 0.0
+            || dp.min_readable_px.is_nan()
+            || dp.min_readable_px < 0.0
+        {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid display policy values",
+            )));
+        }
+    }
+
+    for edge in &graph.edges {
+        if !node_ids.contains(&edge.from) || !node_ids.contains(&edge.to) {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Edge references non-existent node",
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_layout(layout: &StarMapLayout) -> Result<()> {
+    for node in &layout.nodes {
+        if node.scale <= 0.0 || node.scale.is_nan() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Layout scale must be > 0",
+            )));
+        }
+        if node.depth.is_nan() || node.focus_weight.is_nan() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Layout depth or focus_weight cannot be NaN",
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +408,12 @@ mod tests {
             kind: StarMapNodeKind::Note,
             payload: None,
             tags: vec![],
+            content: Default::default(),
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -309,6 +425,12 @@ mod tests {
             kind: StarMapNodeKind::Concept,
             payload: None,
             tags: vec![],
+            content: Default::default(),
+            anchors: vec![],
+            portal: None,
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            provenance: Default::default(),
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -329,6 +451,12 @@ mod tests {
                 kind: Some(StarMapNodeKind::Chapter),
                 payload: None,
                 tags: None,
+                content: None,
+                anchors: None,
+                portal: None,
+                display_policy: None,
+                open_behavior: None,
+                provenance: None,
             },
         )
         .unwrap();
@@ -399,6 +527,10 @@ mod tests {
             radius: 25.0,
             collapsed: false,
             z_index: 0,
+            scale: 1.0,
+            depth: 0.0,
+            focus_weight: 0.0,
+            orbit_group: None,
         });
 
         save_starmap_layout(dir.path(), &meta.starmap_id, &layout).unwrap();
