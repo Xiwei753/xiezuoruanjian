@@ -34,15 +34,17 @@
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
 
+use cpp::cpp;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
 use std::cell::RefCell;
 use std::ffi::CStr;
 use std::io::Write;
+use std::os::raw::c_char;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -53,6 +55,10 @@ mod document_handler;
 mod starmap_bridge;
 mod writing_bridge;
 mod sync_bridge;
+
+cpp! {{
+    #include <QtGlobal>
+}}
 
 fn serde_value_to_qjson(value: serde_json::Value) -> QJsonValue {
     match value {
@@ -2904,7 +2910,7 @@ impl AppBackend {
         state.to_string().into()
     }
 
-    fn create_project_json(&mut self, title: QString, action_id: QString) -> QString {
+    fn create_project_json(&mut self, title: QString, _action_id: QString) -> QString {
         let title_str = title.to_string();
         let build_err = |msg: &str| -> String {
             serde_json::json!({
@@ -4043,6 +4049,44 @@ impl AppBackend {
 
 static QML_LOAD_FAILED: AtomicBool = AtomicBool::new(false);
 static QML_HUB_HEADER_MISSING: AtomicBool = AtomicBool::new(false);
+static QML_LAST_LOAD_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn qt_runtime_version() -> String {
+    let version_ptr = cpp!(unsafe [] -> *const c_char as "const char *" {
+        return qVersion();
+    });
+    if version_ptr.is_null() {
+        return "unknown".to_string();
+    }
+    unsafe { CStr::from_ptr(version_ptr).to_string_lossy().into_owned() }
+}
+
+fn fail_if_not_qt6() {
+    let version = qt_runtime_version();
+    eprintln!("[QtDiagnostics] linked Qt runtime version: {}", version);
+    if version.starts_with("5.") {
+        eprintln!("Linux binary is still linked against Qt5; Qt6 migration incomplete.");
+        std::process::exit(1);
+    }
+    if !version.starts_with("6.") {
+        eprintln!("[QtDiagnostics] WARNING: expected Qt6 runtime, got {}", version);
+    }
+}
+
+fn remember_qml_load_error(message: &str) {
+    let lock = QML_LAST_LOAD_ERROR.get_or_init(|| Mutex::new(String::new()));
+    if let Ok(mut last) = lock.lock() {
+        *last = message.to_string();
+    }
+}
+
+fn last_qml_load_error() -> String {
+    QML_LAST_LOAD_ERROR
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+        .map(|last| last.clone())
+        .unwrap_or_default()
+}
 
 extern "C" fn qml_load_error_handler(
     msg_type: QtMsgType,
@@ -4057,7 +4101,13 @@ extern "C" fn qml_load_error_handler(
             _ => "INFO",
         }, s);
         debug_warn_static("app", "qml_warning_critical", &s);
-        if s.contains("qrc:/main.qml") {
+        if s.contains("qrc:/main.qml")
+            || s.contains("QQmlApplicationEngine failed")
+            || s.contains("failed to load component")
+            || s.contains("is not installed")
+            || s.contains("import requires")
+        {
+            remember_qml_load_error(&s);
             QML_LOAD_FAILED.store(true, Ordering::SeqCst);
         }
         if s.contains("qrc:/HubPageHeader.qml") && s.contains("No such file") {
@@ -4085,6 +4135,7 @@ fn probe_hub_header_resource() {
 
 fn main() {
     debug_log_static("app", "app_startup", "Writer application starting...");
+    fail_if_not_qt6();
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     probe_hub_header_resource();
@@ -4104,13 +4155,21 @@ fn main() {
     let qml_path = "qrc:/main.qml";
     debug_log_static("app", "qml_loading", &format!("Loading QML entry: {}", qml_path));
 
+    QML_LOAD_FAILED.store(false, Ordering::SeqCst);
+    remember_qml_load_error("");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
     engine.load_file(qml_path.into());
     install_message_handler(prev_handler);
 
     if QML_LOAD_FAILED.load(Ordering::SeqCst) {
-        debug_error_static("app", "qml_load_failed", &format!("QQmlApplicationEngine failed to load {}", qml_path));
+        let last_error = last_qml_load_error();
+        eprintln!("QML load failed for {}", qml_path);
+        if !last_error.is_empty() {
+            eprintln!("Last QML error: {}", last_error);
+        }
+        eprintln!("Check that QML2_IMPORT_PATH points to Qt6 only, for example /usr/lib64/qt6/qml, and does not include Qt5 paths.");
+        debug_error_static("app", "qml_load_failed", &format!("QML load failed for {}: {}", qml_path, last_error));
         std::process::exit(1);
     }
 

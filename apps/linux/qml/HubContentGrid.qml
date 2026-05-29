@@ -9,7 +9,7 @@
 //   - 使用 DesignTokens 统一间距
 // =============================================================================
 
-import QtQuick 2.15
+import QtQuick
 
 Item {
     id: root

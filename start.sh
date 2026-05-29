@@ -24,6 +24,81 @@ export QT_QUICK_CONTROLS_STYLE=Basic
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+prepend_path_var() {
+    local var_name="$1"
+    local path_value="$2"
+    local current_value="${!var_name:-}"
+    case ":$current_value:" in
+        *":$path_value:"*) ;;
+        "::") export "$var_name=$path_value" ;;
+        *) export "$var_name=$path_value:$current_value" ;;
+    esac
+}
+
+detect_qt6_header_version() {
+    local header="/usr/include/qt6/QtCore/qtcoreversion.h"
+    local line version
+    [ -f "$header" ] || return 1
+    while IFS= read -r line; do
+        case "$line" in
+            *QTCORE_VERSION_STR*)
+                version="${line#*\"}"
+                version="${version%%\"*}"
+                [[ "$version" == 6.* ]] || return 1
+                printf '%s\n' "$version"
+                return 0
+                ;;
+        esac
+    done < "$header"
+    return 1
+}
+
+detect_qt6_qmake() {
+    local candidates=(
+        "${QMAKE:-}"
+        "/usr/lib64/qt6/bin/qmake"
+        "/usr/lib64/qt6/bin/qmake6"
+        "/usr/bin/qmake6"
+        "/usr/bin/qmake-qt6"
+        "qmake6"
+        "qmake-qt6"
+    )
+    local candidate version
+    for candidate in "${candidates[@]}"; do
+        [ -n "$candidate" ] || continue
+        if version="$($candidate -query QT_VERSION 2>/dev/null)" && [[ "$version" == 6.* ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if QMAKE_DETECTED="$(detect_qt6_qmake)"; then
+    export QMAKE="$QMAKE_DETECTED"
+    export QT_VERSION_MAJOR=6
+    QT_VERSION_DETECTED="$($QMAKE -query QT_VERSION 2>/dev/null || true)"
+elif QT_VERSION_DETECTED="$(detect_qt6_header_version)"; then
+    export QT_INCLUDE_PATH="${QT_INCLUDE_PATH:-/usr/include/qt6}"
+    export QT_LIBRARY_PATH="${QT_LIBRARY_PATH:-/usr/lib64}"
+    export QT_VERSION_MAJOR=6
+else
+    QT_VERSION_DETECTED="unknown"
+fi
+
+prepend_path_var QML2_IMPORT_PATH "/usr/lib64/qt6/qml"
+prepend_path_var QML_IMPORT_PATH "/usr/lib64/qt6/qml"
+prepend_path_var QT_PLUGIN_PATH "/usr/lib64/qt6/plugins"
+
+echo "[start] Qt version detected: $QT_VERSION_DETECTED"
+echo "[start] QMAKE: ${QMAKE:-not found}"
+echo "[start] QT_INCLUDE_PATH: ${QT_INCLUDE_PATH:-}"
+echo "[start] QT_LIBRARY_PATH: ${QT_LIBRARY_PATH:-}"
+echo "[start] QML2_IMPORT_PATH: ${QML2_IMPORT_PATH:-}"
+echo "[start] QT_PLUGIN_PATH: ${QT_PLUGIN_PATH:-}"
+echo "[start] QtQuick.Window qmldir: $( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing )"
+echo "[start] QtQuick Controls qmldir: $( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing )"
+
 echo "[start] Building linux package..."
 cargo build -p linux
 

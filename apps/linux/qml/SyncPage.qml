@@ -10,10 +10,10 @@
 //   - 不直接操作 Git 或文件系统
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Window 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import QtQuick.Window
 
 Rectangle {
     id: root

@@ -22,7 +22,7 @@ cpp = "0.5.11"
 cpp_build = "0.5.11"
 pkg-config = "0.3.33"
 qmetaobject = "0.2.10"
-qt-build-utils = "0.8.1"
+semver = "1"
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -12,7 +12,7 @@
 // 数据流：backendRef (DTO) → controller (graphData/layoutData) → Canvas (nodesModel/edgesModel)
 // =============================================================================
 
-import QtQuick 2.15
+import QtQuick
 
 QtObject {
     id: controller

@@ -18,8 +18,8 @@
 //   isLoadingChapter 标记防止 chapter_path_changed 信号重入
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Controls 2.15
+import QtQuick
+import QtQuick.Controls
 import Writer 1.0
 
 QtObject {

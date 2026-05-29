@@ -12,7 +12,7 @@
 // 状态流：backendRef → appState → 各页面绑定
 // =============================================================================
 
-import QtQuick 2.15
+import QtQuick
 
 QtObject {
     id: controller

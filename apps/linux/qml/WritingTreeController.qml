@@ -10,7 +10,7 @@
 //   - 输出 items 数组供 WorkspaceTree 绑定
 // =============================================================================
 
-import QtQuick 2.15
+import QtQuick
 
 QtObject {
     id: controller

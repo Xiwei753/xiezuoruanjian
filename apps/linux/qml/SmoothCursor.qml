@@ -9,7 +9,7 @@
 //   - 动画参数通过 property 传入
 // =============================================================================
 
-import QtQuick 2.15
+import QtQuick
 
 Rectangle {
     id: root

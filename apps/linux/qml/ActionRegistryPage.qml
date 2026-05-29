@@ -9,9 +9,9 @@
 //   - 通过 backendRef 调用 AppBackend (Rust QObject) 执行 Action
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 
 ScrollView {
     id: root

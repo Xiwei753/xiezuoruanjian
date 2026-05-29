@@ -9,8 +9,8 @@
 //   - 使用 DesignTokens 统一间距
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Layouts
 
 ColumnLayout {
     id: root

@@ -13,9 +13,9 @@
 //   WorkspaceTree (侧栏) + EditorPage (编辑区) + TopWritingToolbar (工具栏)
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
 
 Rectangle {
     id: root

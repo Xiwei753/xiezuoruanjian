@@ -9,8 +9,8 @@
 //   - 使用 DesignTokens 统一样式
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Controls 2.15
+import QtQuick
+import QtQuick.Controls
 
 Button {
     id: control

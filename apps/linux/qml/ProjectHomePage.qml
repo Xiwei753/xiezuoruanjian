@@ -9,8 +9,8 @@
 //   - 不直接操作文件系统或 Core 层
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Controls 2.15
+import QtQuick
+import QtQuick.Controls
 
 Rectangle {
     id: root

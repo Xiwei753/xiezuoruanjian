@@ -8,7 +8,7 @@
 //   - 纯展示组件，颜色通过 pillColor property 传入
 // =============================================================================
 
-import QtQuick 2.15
+import QtQuick
 
 Rectangle {
     id: control

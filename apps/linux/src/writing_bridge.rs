@@ -5,7 +5,6 @@
 use writer_core::api::WriterCoreApi;
 use writer_core::facade::WriterCore;
 use writer_core::error::Error;
-use writer_core::chapter::{Chapter, ChapterSaveReceipt};
 use writer_core::api::types::ChapterSaveReceiptDto;
 use serde::Serialize;
 

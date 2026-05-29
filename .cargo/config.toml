@@ -1,0 +1,4 @@
+[env]
+QT_INCLUDE_PATH = { value = "/usr/include/qt6", force = false }
+QT_LIBRARY_PATH = { value = "/usr/lib64", force = false }
+QT_VERSION_MAJOR = { value = "6", force = false }

@@ -1454,8 +1454,8 @@ dependencies = [
  "cpp_build",
  "pkg-config",
  "qmetaobject",
- "qt-build-utils",
  "rfd",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -1936,18 +1936,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "qt-build-utils"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d074750fd3baba12fdb47388d591ad9ed043e23864a79d129dcf3a1ef6fc8d9"
-dependencies = [
- "anyhow",
- "cc",
- "semver",
- "thiserror",
 ]
 
 [[package]]

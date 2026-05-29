@@ -9,8 +9,8 @@
 //   - 使用 DesignTokens 统一样式
 // =============================================================================
 
-import QtQuick 2.15
-import QtQuick.Layouts 1.15
+import QtQuick
+import QtQuick.Layouts
 
 Rectangle {
     id: root
