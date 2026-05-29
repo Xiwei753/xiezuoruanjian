@@ -63,3 +63,8 @@ Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来�
 ### Android Bridge 入口
 
 Android 主业务入口是 `AppServiceBridge + UniFFI`，UniFFI 暴露的 `WriterAppService` 只适配到 `WriterCoreApi`。上层必须使用领域 Bridge：`WorkspaceBridge`、`WritingBridge`、`StatsBridge`、`StarMapBridge`、`MindMapBridge`、`SettingsBridge`、`SyncBridge`。`NativeCoreBridge` 仅作为 legacy JSON/JNI fallback 和 native 状态/旧动作路径；Repository/UI/ViewModel/Controller 不应直接处理 `NativeResult` 或 `NativeCoreBridge`。
+
+
+## 平台边界原则
+
+Android 和 Linux backend 都必须通过 `WriterCoreApi` 作为主入口，不能直接以 `facade::WriterCore` 作为平台稳定边界。

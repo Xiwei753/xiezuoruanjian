@@ -1,6 +1,9 @@
 //! # Facade 层 - 客户端统一 API 入口（Core 层）
 //!
-//! 这是所有客户端（Android、Linux）调用 Core 的**唯一入口**。
+//! 这是 Core 内部统一入口。
+//! **注意：**它不是平台稳定 API 边界。
+//! Android / Linux / 未来平台不得把 Facade 当主暴露层。
+//! 平台应走 `api::WriterCoreApi` 或其绑定适配层。
 //!
 //! ## 设计原则
 //!
@@ -11,8 +14,8 @@
 //! ## 调用链示例
 //!
 //! ```text
-//! Android: NativeCoreBridge → WriterCore::create_chapter() → chapter::create_chapter()
-//! Linux:   AppBackend → WriterCore::create_chapter() → chapter::create_chapter()
+//! Linux (Legacy): AppBackend/Linux adapter → facade::WriterCore::create_chapter() → chapter::create_chapter()
+//! Linux (New):    AppBackend/Linux adapter → api::WriterCoreApi::create_chapter() → facade::WriterCore::create_chapter() → chapter::create_chapter()
 //! ```
 //!
 //! ## 禁止事项

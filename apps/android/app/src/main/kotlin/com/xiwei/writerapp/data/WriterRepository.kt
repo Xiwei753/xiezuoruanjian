@@ -14,7 +14,6 @@ class WriterRepository private constructor(context: Context) {
     val mindMap = MindMapBridge(appService)
     val starMap = StarMapBridge(appService)
 
-    private val legacyNativeBridge = NativeCoreBridge(context.applicationContext) // Legacy fallback/status path only
 
     companion object {
         @Volatile

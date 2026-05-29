@@ -80,6 +80,7 @@ dictionary LocalSettingsDto {
     string? locale;
     boolean auto_save_enabled;
     f32 editor_font_size;
+    f32 editor_line_spacing_multiplier;
     f32 window_width;
     f32 window_height;
     u64 auto_save_delay_ms;

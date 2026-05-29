@@ -1,6 +1,6 @@
 use crate::facade::ChapterOpenResult;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProjectDto {
     pub id: String,
     pub title: String,
@@ -19,7 +19,7 @@ impl From<crate::project::Project> for ProjectDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProjectStatsDto {
     pub total_word_count: u32,
     pub volume_count: u32,
@@ -36,7 +36,7 @@ impl From<crate::project::ProjectStats> for ProjectStatsDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VolumeDto {
     pub id: String,
     pub title: String,
@@ -57,7 +57,7 @@ impl From<crate::volume::Volume> for VolumeDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChapterMetaDto {
     pub id: String,
     pub title: String,
@@ -84,7 +84,7 @@ impl From<crate::chapter::Chapter> for ChapterMetaDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChapterContentDto {
     pub meta: ChapterMetaDto,
     pub content: String,
@@ -108,7 +108,7 @@ impl From<ChapterOpenResult> for ChapterContentDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChapterSaveReceiptDto {
     pub chapter_relative_path: String,
     pub content_len: u32,
@@ -131,7 +131,7 @@ impl From<crate::chapter::ChapterSaveReceipt> for ChapterSaveReceiptDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RecentEditDto {
     pub project_id: String,
     pub volume_id: String,
@@ -150,12 +150,13 @@ impl From<crate::workspace::RecentEdit> for RecentEditDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LocalSettingsDto {
     pub theme_mode: Option<String>,
     pub locale: Option<String>,
     pub auto_save_enabled: bool,
     pub editor_font_size: f32,
+    pub editor_line_spacing_multiplier: f32,
     pub window_width: f32,
     pub window_height: f32,
     pub auto_save_delay_ms: u64,
@@ -176,6 +177,7 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
             locale: s.locale,
             auto_save_enabled: s.auto_save_enabled,
             editor_font_size: s.editor_font_size,
+            editor_line_spacing_multiplier: s.editor_line_spacing_multiplier,
             window_width: s.window_width as f32,
             window_height: s.window_height as f32,
             auto_save_delay_ms: s.auto_save_delay_ms,
@@ -198,6 +200,7 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             locale: s.locale,
             auto_save_enabled: s.auto_save_enabled,
             editor_font_size: s.editor_font_size,
+            editor_line_spacing_multiplier: s.editor_line_spacing_multiplier,
             window_width: s.window_width as f64,
             window_height: s.window_height as f64,
             auto_save_delay_ms: s.auto_save_delay_ms,
@@ -209,12 +212,12 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             editor_smooth_cursor_duration_ms: s.editor_smooth_cursor_duration_ms,
             ai_enabled: s.ai_enabled,
             stats_device_id: s.stats_device_id,
-            editor_line_spacing_multiplier: 1.5,
+            
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncableSettingsDto {
     pub font_size: f64,
     pub theme_mode: String,
@@ -241,7 +244,7 @@ impl From<SyncableSettingsDto> for crate::settings::SyncableSettings {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncConfigDto {
     pub enabled: bool,
     pub backend_type: String,
@@ -316,7 +319,7 @@ impl From<SyncConfigDto> for crate::sync_service::SyncConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncSecretsDto {
     pub token: Option<String>,
 }
@@ -336,7 +339,7 @@ impl From<SyncSecretsDto> for crate::sync_service::SyncSecrets {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncStateDto {
     pub status: String,
     pub remote_url: Option<String>,
@@ -349,7 +352,7 @@ pub struct SyncStateDto {
     pub conflicts: Option<Vec<SyncConflictDto>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncConflictDto {
     pub local_path: String,
     pub remote_path: String,
@@ -390,7 +393,7 @@ impl From<crate::sync_service::SyncState> for SyncStateDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetworkProbeResultDto {
     pub mode: String,
     pub success: bool,
@@ -411,7 +414,7 @@ impl From<crate::sync_service::NetworkProbeResult> for NetworkProbeResultDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncDiagnosticsResultDto {
     pub success: bool,
     pub backend_type: String,
@@ -476,7 +479,7 @@ impl From<crate::sync_service::SyncDiagnosticsResult> for SyncDiagnosticsResultD
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncPlanDto {
     pub files_to_upload: Vec<String>,
     pub files_to_download: Vec<String>,
@@ -499,7 +502,7 @@ impl From<crate::sync_service::SyncPlan> for SyncPlanDto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncResultDto {
     pub status: String,
     pub uploaded_files: Vec<String>,
