@@ -7,8 +7,8 @@ import android.view.View
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.StatsBridge
 import com.xiwei.writerapp.data.BridgeResult
-import com.xiwei.writerapp.data.StatsSummary
-import com.xiwei.writerapp.data.ProjectStatsSummary
+import com.xiwei.writerapp.model.WritingWritingStatsSummary
+import com.xiwei.writerapp.model.ProjectWritingStatsSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -72,8 +72,8 @@ class StatsController(
         val weekStartStr = dateFormat.format(cal.time)
 
         CoroutineScope(Dispatchers.IO).launch {
-            val todayStatsResult = bridge.getWritingStatsSummary(todayStr, todayStr)
-            val weekStatsResult = bridge.getWritingStatsSummary(weekStartStr, todayStr)
+            val todayStatsResult = bridge.getWritingWritingStatsSummary(todayStr, todayStr)
+            val weekStatsResult = bridge.getWritingWritingStatsSummary(weekStartStr, todayStr)
             val projectStatsResult = bridge.getWritingStatsByProject(weekStartStr, todayStr)
 
             withContext(Dispatchers.Main) {
@@ -84,7 +84,7 @@ class StatsController(
         }
     }
 
-    private fun formatSummary(result: BridgeResult<StatsSummary>): String {
+    private fun formatSummary(result: BridgeResult<WritingStatsSummary>): String {
         return when (result) {
             is BridgeResult.Success -> {
                 val stats = result.data
@@ -102,7 +102,7 @@ class StatsController(
         }
     }
 
-    private fun formatProjectStats(result: BridgeResult<ProjectStatsSummary>): String {
+    private fun formatProjectStats(result: BridgeResult<ProjectWritingStatsSummary>): String {
         return when (result) {
             is BridgeResult.Success -> {
                 val statsMap = result.data.projects

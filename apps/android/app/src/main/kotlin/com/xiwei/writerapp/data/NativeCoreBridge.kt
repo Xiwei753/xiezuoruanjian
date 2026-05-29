@@ -139,7 +139,7 @@ internal class NativeCoreBridge(context: Context) {
 
     private external fun flushWritingStatsNative(workspacePath: String)
 
-    private external fun getWritingStatsSummaryNative(
+    private external fun getWritingWritingStatsSummaryNative(
         workspacePath: String,
         startDate: String,
         endDate: String
@@ -531,17 +531,17 @@ internal class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun getWritingStatsSummary(startDate: String, endDate: String): NativeResult<StatsSummary> {
+    fun getWritingWritingStatsSummary(startDate: String, endDate: String): NativeResult<WritingStatsSummary> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
-            val json = getWritingStatsSummaryNative(workspaceDir, startDate, endDate)
+            val json = getWritingWritingStatsSummaryNative(workspaceDir, startDate, endDate)
             if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
 
-            // StatsSummary was previously parsed directly from JSON string (not wrapped in RustResponse in StatsBridge)
+            // WritingStatsSummary was previously parsed directly from JSON string (not wrapped in RustResponse in StatsBridge)
             // But let's try RustResponse first or fallback to direct.
-            // Based on previous StatsBridge code: val summary = Gson().fromJson(json, StatsSummary::class.java)
+            // Based on previous StatsBridge code: val summary = Gson().fromJson(json, WritingStatsSummary::class.java)
             // We will do direct parsing as per legacy behavior.
-            val summary = gson.fromJson(json, StatsSummary::class.java)
+            val summary = gson.fromJson(json, WritingStatsSummary::class.java)
             NativeResult.Success(summary)
         } catch (e: Throwable) {
             e.printStackTrace()
@@ -1596,13 +1596,13 @@ internal class NativeCoreBridge(context: Context) {
 
     // --- Writing Stats: extended ---
 
-    fun getWritingStatsByProject(startDate: String, endDate: String): NativeResult<ProjectStatsSummary> {
+    fun getWritingStatsByProject(startDate: String, endDate: String): NativeResult<ProjectWritingStatsSummary> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = getWritingStatsByProjectNative(workspaceDir, startDate, endDate)
             if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<ProjectStatsSummary>>() {}.type
-            val response: RustResponse<ProjectStatsSummary> = gson.fromJson(json, type)
+            val type = object : TypeToken<RustResponse<ProjectWritingStatsSummary>>() {}.type
+            val response: RustResponse<ProjectWritingStatsSummary> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {

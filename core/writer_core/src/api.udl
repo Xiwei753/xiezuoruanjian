@@ -21,3 +21,343 @@ enum AiActionType {
     "RunCommand",
     "Custom",
 };
+
+dictionary ProjectDto {
+    string id;
+    string title;
+    string created_at;
+    string updated_at;
+};
+
+dictionary VolumeDto {
+    string id;
+    string title;
+    string created_at;
+    string updated_at;
+    i32 order;
+};
+
+dictionary ChapterMetaDto {
+    string id;
+    string title;
+    string created_at;
+    string updated_at;
+    i32 order;
+    u32 word_count;
+    string hash;
+    string? note;
+};
+
+dictionary ChapterContentDto {
+    ChapterMetaDto meta;
+    string content;
+};
+
+dictionary ChapterSaveReceiptDto {
+    string chapter_relative_path;
+    u32 content_len;
+    string content_hash;
+    string meta_hash;
+    string updated_at;
+    u32 word_count;
+};
+
+dictionary RecentEditDto {
+    string project_id;
+    string volume_id;
+    string chapter_id;
+    string timestamp;
+};
+
+dictionary LocalSettingsDto {
+    string? theme_mode;
+    string? locale;
+    boolean auto_save_enabled;
+    f32 editor_font_size;
+    f32 window_width;
+    f32 window_height;
+    u64 auto_save_delay_ms;
+    boolean auto_indent_enabled;
+    f32 auto_indent_width;
+    boolean editor_typing_animation_enabled;
+    boolean editor_smooth_cursor_enabled;
+    u64 editor_typing_animation_duration_ms;
+    u64 editor_smooth_cursor_duration_ms;
+    boolean ai_enabled;
+    string? stats_device_id;
+};
+
+dictionary SyncableSettingsDto {
+    f64 font_size;
+    string theme_mode;
+    string monet_color;
+};
+
+dictionary SyncConfigDto {
+    boolean enabled;
+    string backend_type;
+    string remote_url;
+    string transport;
+    string branch;
+    boolean auto_sync;
+    u32 sync_interval_seconds;
+    boolean proxy_enabled;
+    string proxy_type;
+    string proxy_host;
+    u16 proxy_port;
+    string username;
+};
+
+dictionary SyncSecretsDto {
+    string? token;
+};
+
+dictionary SyncConflictDto {
+    string local_path;
+    string remote_path;
+    string local_hash;
+    string remote_hash;
+    string base_hash;
+    i64 created_at;
+    string description;
+};
+
+dictionary SyncStateDto {
+    string status;
+    string? backend_type;
+    string? transport;
+    string? last_synced_commit;
+    i64? last_sync_time;
+    string? last_error;
+    string? last_successful_network_mode;
+    sequence<SyncConflictDto>? conflicts;
+};
+
+dictionary NetworkProbeResultDto {
+    string mode;
+    boolean success;
+    string status;
+    string message;
+    string? raw_error;
+};
+
+dictionary SyncDiagnosticsResultDto {
+    boolean success;
+    string backend_type;
+    boolean android_has_internet_permission;
+    boolean android_has_access_network_state_permission;
+    string android_network_state;
+    boolean tcp_probe_ok;
+    string tcp_probe_status;
+    boolean http_connect_probe_ok;
+    string http_connect_probe_status;
+    boolean libgit2_probe_ok;
+    string libgit2_probe_status;
+    boolean network_ok;
+    boolean auth_ok;
+    boolean repo_ok;
+    boolean branch_ok;
+    string network_status;
+    string auth_status;
+    string repo_status;
+    string branch_status;
+    string remote_url_sanitized;
+    string transport;
+    string error_category;
+    string user_message;
+    string? raw_error;
+    string? chosen_network_mode;
+    sequence<NetworkProbeResultDto>? network_probe_summary;
+};
+
+dictionary SyncPlanDto {
+    sequence<string> files_to_upload;
+    sequence<string> files_to_download;
+    sequence<string> files_to_delete_local;
+    sequence<string> files_to_delete_remote;
+    sequence<string> ignored_files;
+    sequence<string> conflicts;
+};
+
+dictionary SyncResultDto {
+    string status;
+    sequence<string> uploaded_files;
+    sequence<string> downloaded_files;
+    sequence<string> local_deletes;
+    sequence<string> remote_deletes;
+    sequence<string> overwritten_files;
+    sequence<string> ignored_files;
+    sequence<SyncConflictDto> conflicts;
+    string? commit_hash;
+    string? error;
+    string first_sync_mode;
+    string? user_message;
+    string? chosen_network_mode;
+    sequence<NetworkProbeResultDto>? network_probe_summary;
+};
+
+[Error]
+enum WriterError {
+    "Io",
+    "Json",
+    "InvalidWorkspace",
+    "ProjectNotFound",
+    "VolumeNotFound",
+    "ChapterNotFound",
+    "EmptyOverwriteBlocked",
+    "NotImplemented",
+    "RefuseToDeleteWorkspaceRoot",
+    "InvalidDeleteTarget",
+    "Other"
+};
+
+interface WriterAppService {
+    constructor(string workspace_path);
+
+    [Throws=WriterError]
+    sequence<ProjectDto> list_projects();
+
+    [Throws=WriterError]
+    boolean create_workspace_if_needed();
+
+    [Throws=WriterError]
+    boolean validate_workspace();
+
+    [Throws=WriterError]
+    sequence<RecentEditDto> get_recent_edits();
+
+    [Throws=WriterError]
+    boolean record_recent_edit(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    ProjectDto create_project(string title);
+
+    [Throws=WriterError]
+    boolean rename_project(string project_id, string new_title);
+
+    [Throws=WriterError]
+    boolean delete_project(string project_id);
+
+    [Throws=WriterError]
+    boolean reorder_projects(sequence<string> ordered_project_ids);
+
+    [Throws=WriterError]
+    sequence<VolumeDto> list_volumes(string project_id);
+
+    [Throws=WriterError]
+    VolumeDto create_volume(string project_id, string title);
+
+    [Throws=WriterError]
+    boolean rename_volume(string project_id, string volume_id, string new_title);
+
+    [Throws=WriterError]
+    boolean delete_volume(string project_id, string volume_id);
+
+    [Throws=WriterError]
+    boolean reorder_volumes(string project_id, sequence<string> ordered_volume_ids);
+
+    [Throws=WriterError]
+    sequence<ChapterMetaDto> list_chapters(string project_id, string volume_id);
+
+    [Throws=WriterError]
+    ChapterMetaDto create_chapter(string project_id, string volume_id, string title);
+
+    [Throws=WriterError]
+    boolean rename_chapter(string project_id, string volume_id, string chapter_id, string new_title);
+
+    [Throws=WriterError]
+    boolean delete_chapter(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    boolean reorder_chapters(string project_id, string volume_id, sequence<string> ordered_chapter_ids);
+
+    [Throws=WriterError]
+    ChapterContentDto open_chapter(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    ChapterSaveReceiptDto save_chapter_content(string project_id, string volume_id, string chapter_id, string content);
+
+    [Throws=WriterError]
+    ChapterSaveReceiptDto clear_chapter_content(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);
+
+    [Throws=WriterError]
+    LocalSettingsDto load_local_settings();
+
+    [Throws=WriterError]
+    boolean save_local_settings(LocalSettingsDto settings);
+
+    [Throws=WriterError]
+    SyncableSettingsDto load_syncable_settings();
+
+    [Throws=WriterError]
+    boolean save_syncable_settings(SyncableSettingsDto settings);
+
+    [Throws=WriterError]
+    SyncConfigDto load_sync_config();
+
+    [Throws=WriterError]
+    boolean save_sync_config(SyncConfigDto config);
+
+    [Throws=WriterError]
+    SyncSecretsDto load_sync_secrets();
+
+    [Throws=WriterError]
+    boolean save_sync_secrets(SyncSecretsDto secrets);
+
+    [Throws=WriterError]
+    SyncStateDto load_sync_state();
+
+    [Throws=WriterError]
+    SyncDiagnosticsResultDto perform_sync_diagnostics(SyncConfigDto config);
+
+    [Throws=WriterError]
+    SyncPlanDto perform_sync_dry_run(SyncConfigDto config);
+
+    [Throws=WriterError]
+    SyncResultDto perform_sync(SyncConfigDto config);
+
+    [Throws=WriterError]
+    string get_writing_stats_summary(string start_date, string end_date);
+
+    [Throws=WriterError]
+    string get_writing_stats_by_project(string start_date, string end_date);
+
+    [Throws=WriterError]
+    string get_writing_stats_by_chapter(string start_date, string end_date);
+
+    [Throws=WriterError]
+    string get_writing_stats_by_device(string start_date, string end_date);
+
+    [Throws=WriterError]
+    string get_writing_speed_curve(string start_date, string end_date, u32 bucket_minutes);
+
+    u32 calculate_word_count(string text);
+
+    boolean process_writing_event(string device_id, string platform, string project_id, string volume_id, string chapter_id, string old_text, string new_text, string session_id);
+
+    boolean record_writing_event(string device_id, string project_id, string volume_id, string chapter_id, string source, i32 inserted_chars, i32 deleted_chars, i32 pasted_chars, i32 ai_inserted_chars, string session_id);
+
+    [Throws=WriterError]
+    string get_mindmap_snapshot_json(string project_id);
+
+    [Throws=WriterError]
+    boolean save_mindmap_graph_json(string project_id, string graph_json);
+
+    [Throws=WriterError]
+    string list_starmaps();
+
+    [Throws=WriterError]
+    string create_starmap(string title, string desc);
+
+    [Throws=WriterError]
+    string get_starmap_graph(string starmap_id);
+
+    [Throws=WriterError]
+    string add_starmap_node(string starmap_id, string node_json);
+
+    [Throws=WriterError]
+    boolean save_starmap_layout(string starmap_id, string layout_json);
+};

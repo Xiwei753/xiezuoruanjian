@@ -91,3 +91,4 @@ pub fn perform_dummy_action() -> String {
 
 uniffi::include_scaffolding!("api");
 pub mod app_service;
+pub use app_service::*;

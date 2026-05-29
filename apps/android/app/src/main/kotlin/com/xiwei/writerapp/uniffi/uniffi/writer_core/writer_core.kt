@@ -30,6 +30,7 @@ import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 // This is a helper for safely working with byte buffers returned from the Rust code.
 // A rust-owned buffer is represented by its capacity, its current length, and a
@@ -713,6 +714,110 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -726,8 +831,118 @@ internal interface UniffiLib : Library {
                 }
         }
 
+        // The Cleaner for the whole library
+        internal val CLEANER: UniffiCleaner by lazy {
+            UniffiCleaner.create()
+        }
     }
 
+    fun uniffi_writer_core_fn_clone_writerappservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Pointer
+    fun uniffi_writer_core_fn_free_writerappservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
+    fun uniffi_writer_core_fn_constructor_writerappservice_new(`workspacePath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Pointer
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_node(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`nodeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_calculate_word_count(`ptr`: Pointer,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Int
+    fun uniffi_writer_core_fn_method_writerappservice_clear_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_create_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_create_project(`ptr`: Pointer,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_create_starmap(`ptr`: Pointer,`title`: RustBuffer.ByValue,`desc`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_create_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_create_workspace_if_needed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_delete_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_delete_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_delete_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,`bucketMinutes`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_list_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_list_projects(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_list_starmaps(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_list_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_load_local_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_load_sync_config(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_load_sync_secrets(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_load_sync_state(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_load_syncable_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_open_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_perform_sync(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_diagnostics(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_process_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`oldText`: RustBuffer.ByValue,`newText`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_record_recent_edit(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_record_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`insertedChars`: Int,`deletedChars`: Int,`pastedChars`: Int,`aiInsertedChars`: Int,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_rename_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_rename_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_rename_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_reorder_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`orderedChapterIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_reorder_projects(`ptr`: Pointer,`orderedProjectIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_save_local_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graphJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layoutJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_sync_config(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_sync_secrets(`ptr`: Pointer,`secrets`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_syncable_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_update_chapter_note(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`note`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_validate_workspace(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
     fun uniffi_writer_core_fn_func_perform_dummy_action(uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun ffi_writer_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
@@ -844,6 +1059,108 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_writer_core_checksum_func_perform_dummy_action(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_node(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_calculate_word_count(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_create_chapter(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_create_project(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_create_starmap(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_create_volume(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_create_workspace_if_needed(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_delete_chapter(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_delete_project(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_delete_volume(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot_json(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_recent_edits(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_list_chapters(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_list_projects(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_list_starmaps(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_list_volumes(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_load_local_settings(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_load_sync_config(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_load_sync_secrets(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_load_sync_state(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_load_syncable_settings(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_open_chapter(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_perform_sync(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_perform_sync_diagnostics(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_process_writing_event(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_record_recent_edit(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_record_writing_event(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_rename_chapter(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_rename_project(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_rename_volume(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_reorder_chapters(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_reorder_projects(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_reorder_volumes(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_chapter_content(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph_json(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_sync_config(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_sync_secrets(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_update_chapter_note(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_validate_workspace(
+    ): Short
+    fun uniffi_writer_core_checksum_constructor_writerappservice_new(
+    ): Short
     fun ffi_writer_core_uniffi_contract_version(
     ): Int
 
@@ -862,6 +1179,159 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_func_perform_dummy_action() != 23039.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_node() != 57867.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_calculate_word_count() != 56121.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content() != 36280.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_chapter() != 27761.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_project() != 52962.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_starmap() != 22304.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_volume() != 57493.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_workspace_if_needed() != 34073.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_chapter() != 39585.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_project() != 13182.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume() != 5254.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot_json() != 44398.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_recent_edits() != 14757.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph() != 37094.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve() != 14872.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter() != 42279.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device() != 24113.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project() != 41393.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary() != 32199.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_chapters() != 34372.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_projects() != 38395.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_starmaps() != 26187.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_volumes() != 10599.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_load_local_settings() != 26183.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_load_sync_config() != 63890.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_load_sync_secrets() != 22117.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_load_sync_state() != 51664.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_load_syncable_settings() != 8494.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_open_chapter() != 34607.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync() != 9600.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_diagnostics() != 3447.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run() != 3610.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_process_writing_event() != 49968.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_record_recent_edit() != 60183.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_record_writing_event() != 40729.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_chapter() != 2312.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_project() != 65428.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_volume() != 64258.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_chapters() != 30010.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_projects() != 46469.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_volumes() != 7484.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_chapter_content() != 9144.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_local_settings() != 60350.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph_json() != 21493.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout() != 35811.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_config() != 43143.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_secrets() != 50294.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings() != 28364.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_chapter_note() != 23190.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_validate_workspace() != 63349.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_constructor_writerappservice_new() != 45188.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -910,6 +1380,190 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+
+/**
+ * @suppress
+ */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterInt: FfiConverter<Int, Int> {
+    override fun lift(value: Int): Int {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Int {
+        return buf.getInt()
+    }
+
+    override fun lower(value: Int): Int {
+        return value
+    }
+
+    override fun allocationSize(value: Int) = 4UL
+
+    override fun write(value: Int, buf: ByteBuffer) {
+        buf.putInt(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterLong: FfiConverter<Long, Long> {
+    override fun lift(value: Long): Long {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Long {
+        return buf.getLong()
+    }
+
+    override fun lower(value: Long): Long {
+        return value
+    }
+
+    override fun allocationSize(value: Long) = 8UL
+
+    override fun write(value: Long, buf: ByteBuffer) {
+        buf.putLong(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterFloat: FfiConverter<Float, Float> {
+    override fun lift(value: Float): Float {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Float {
+        return buf.getFloat()
+    }
+
+    override fun lower(value: Float): Float {
+        return value
+    }
+
+    override fun allocationSize(value: Float) = 4UL
+
+    override fun write(value: Float, buf: ByteBuffer) {
+        buf.putFloat(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterDouble: FfiConverter<Double, Double> {
+    override fun lift(value: Double): Double {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Double {
+        return buf.getDouble()
+    }
+
+    override fun lower(value: Double): Double {
+        return value
+    }
+
+    override fun allocationSize(value: Double) = 8UL
+
+    override fun write(value: Double, buf: ByteBuffer) {
+        buf.putDouble(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
+    }
+}
 
 /**
  * @suppress
@@ -965,6 +1619,1044 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
         val byteBuf = toUtf8(value)
         buf.putInt(byteBuf.limit())
         buf.put(byteBuf)
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * The cleaner interface for Object finalization code to run.
+ * This is the entry point to any implementation that we're using.
+ *
+ * The cleaner registers objects and returns cleanables, so now we are
+ * defining a `UniffiCleaner` with a `UniffiClenaer.Cleanable` to abstract the
+ * different implmentations available at compile time.
+ *
+ * @suppress
+ */
+interface UniffiCleaner {
+    interface Cleanable {
+        fun clean()
+    }
+
+    fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable
+
+    companion object
+}
+
+// The fallback Jna cleaner, which is available for both Android, and the JVM.
+private class UniffiJnaCleaner : UniffiCleaner {
+    private val cleaner = com.sun.jna.internal.Cleaner.getCleaner()
+
+    override fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable =
+        UniffiJnaCleanable(cleaner.register(value, cleanUpTask))
+}
+
+private class UniffiJnaCleanable(
+    private val cleanable: com.sun.jna.internal.Cleaner.Cleanable,
+) : UniffiCleaner.Cleanable {
+    override fun clean() = cleanable.clean()
+}
+
+// We decide at uniffi binding generation time whether we were
+// using Android or not.
+// There are further runtime checks to chose the correct implementation
+// of the cleaner.
+private fun UniffiCleaner.Companion.create(): UniffiCleaner =
+    try {
+        // For safety's sake: if the library hasn't been run in android_cleaner = true
+        // mode, but is being run on Android, then we still need to think about
+        // Android API versions.
+        // So we check if java.lang.ref.Cleaner is there, and use that…
+        java.lang.Class.forName("java.lang.ref.Cleaner")
+        JavaLangRefCleaner()
+    } catch (e: ClassNotFoundException) {
+        // … otherwise, fallback to the JNA cleaner.
+        UniffiJnaCleaner()
+    }
+
+private class JavaLangRefCleaner : UniffiCleaner {
+    val cleaner = java.lang.ref.Cleaner.create()
+
+    override fun register(value: Any, cleanUpTask: Runnable): UniffiCleaner.Cleanable =
+        JavaLangRefCleanable(cleaner.register(value, cleanUpTask))
+}
+
+private class JavaLangRefCleanable(
+    val cleanable: java.lang.ref.Cleaner.Cleanable
+) : UniffiCleaner.Cleanable {
+    override fun clean() = cleanable.clean()
+}
+public interface WriterAppServiceInterface {
+
+    fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String
+
+    fun `calculateWordCount`(`text`: kotlin.String): kotlin.UInt
+
+    fun `clearChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterSaveReceiptDto
+
+    fun `createChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): ChapterMetaDto
+
+    fun `createProject`(`title`: kotlin.String): ProjectDto
+
+    fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String
+
+    fun `createVolume`(`projectId`: kotlin.String, `title`: kotlin.String): VolumeDto
+
+    fun `createWorkspaceIfNeeded`(): kotlin.Boolean
+
+    fun `deleteChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean
+
+    fun `deleteProject`(`projectId`: kotlin.String): kotlin.Boolean
+
+    fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean
+
+    fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String
+
+    fun `getRecentEdits`(): List<RecentEditDto>
+
+    fun `getStarmapGraph`(`starmapId`: kotlin.String): kotlin.String
+
+    fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String
+
+    fun `getWritingStatsByChapter`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
+    fun `getWritingStatsByDevice`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
+    fun `getWritingStatsByProject`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
+    fun `getWritingStatsSummary`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
+    fun `listChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String): List<ChapterMetaDto>
+
+    fun `listProjects`(): List<ProjectDto>
+
+    fun `listStarmaps`(): kotlin.String
+
+    fun `listVolumes`(`projectId`: kotlin.String): List<VolumeDto>
+
+    fun `loadLocalSettings`(): LocalSettingsDto
+
+    fun `loadSyncConfig`(): SyncConfigDto
+
+    fun `loadSyncSecrets`(): SyncSecretsDto
+
+    fun `loadSyncState`(): SyncStateDto
+
+    fun `loadSyncableSettings`(): SyncableSettingsDto
+
+    fun `openChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterContentDto
+
+    fun `performSync`(`config`: SyncConfigDto): SyncResultDto
+
+    fun `performSyncDiagnostics`(`config`: SyncConfigDto): SyncDiagnosticsResultDto
+
+    fun `performSyncDryRun`(`config`: SyncConfigDto): SyncPlanDto
+
+    fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean
+
+    fun `recordRecentEdit`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean
+
+    fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean
+
+    fun `renameChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
+
+    fun `renameProject`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
+
+    fun `renameVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
+
+    fun `reorderChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.Boolean
+
+    fun `reorderProjects`(`orderedProjectIds`: List<kotlin.String>): kotlin.Boolean
+
+    fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean
+
+    fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto
+
+    fun `saveLocalSettings`(`settings`: LocalSettingsDto): kotlin.Boolean
+
+    fun `saveMindmapGraphJson`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean
+
+    fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean
+
+    fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean
+
+    fun `saveSyncSecrets`(`secrets`: SyncSecretsDto): kotlin.Boolean
+
+    fun `saveSyncableSettings`(`settings`: SyncableSettingsDto): kotlin.Boolean
+
+    fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean
+
+    fun `validateWorkspace`(): kotlin.Boolean
+
+    companion object
+}
+
+open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    constructor(`workspacePath`: kotlin.String) :
+        this(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_constructor_writerappservice_new(
+        FfiConverterString.lower(`workspacePath`),_status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_writer_core_fn_free_writerappservice(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_writer_core_fn_clone_writerappservice(pointer!!, status)
+        }
+    }
+
+
+    @Throws(WriterException::class)override fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_node(
+        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`nodeJson`),_status)
+}
+    }
+    )
+    }
+
+
+    override fun `calculateWordCount`(`text`: kotlin.String): kotlin.UInt {
+            return FfiConverterUInt.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_calculate_word_count(
+        it, FfiConverterString.lower(`text`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `clearChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterSaveReceiptDto {
+            return FfiConverterTypeChapterSaveReceiptDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_clear_chapter_content(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `createChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): ChapterMetaDto {
+            return FfiConverterTypeChapterMetaDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_chapter(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`title`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `createProject`(`title`: kotlin.String): ProjectDto {
+            return FfiConverterTypeProjectDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_project(
+        it, FfiConverterString.lower(`title`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_starmap(
+        it, FfiConverterString.lower(`title`),FfiConverterString.lower(`desc`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `createVolume`(`projectId`: kotlin.String, `title`: kotlin.String): VolumeDto {
+            return FfiConverterTypeVolumeDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_volume(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`title`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `createWorkspaceIfNeeded`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_workspace_if_needed(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `deleteChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_delete_chapter(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `deleteProject`(`projectId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_delete_project(
+        it, FfiConverterString.lower(`projectId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_delete_volume(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(
+        it, FfiConverterString.lower(`projectId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getRecentEdits`(): List<RecentEditDto> {
+            return FfiConverterSequenceTypeRecentEditDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_recent_edits(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getStarmapGraph`(`starmapId`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(
+        it, FfiConverterString.lower(`starmapId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(
+        it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),FfiConverterUInt.lower(`bucketMinutes`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsByChapter`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter(
+        it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsByDevice`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device(
+        it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsByProject`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project(
+        it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsSummary`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(
+        it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `listChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String): List<ChapterMetaDto> {
+            return FfiConverterSequenceTypeChapterMetaDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_chapters(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `listProjects`(): List<ProjectDto> {
+            return FfiConverterSequenceTypeProjectDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_projects(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `listStarmaps`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_starmaps(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `listVolumes`(`projectId`: kotlin.String): List<VolumeDto> {
+            return FfiConverterSequenceTypeVolumeDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_volumes(
+        it, FfiConverterString.lower(`projectId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `loadLocalSettings`(): LocalSettingsDto {
+            return FfiConverterTypeLocalSettingsDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_load_local_settings(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `loadSyncConfig`(): SyncConfigDto {
+            return FfiConverterTypeSyncConfigDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_load_sync_config(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `loadSyncSecrets`(): SyncSecretsDto {
+            return FfiConverterTypeSyncSecretsDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_load_sync_secrets(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `loadSyncState`(): SyncStateDto {
+            return FfiConverterTypeSyncStateDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_load_sync_state(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `loadSyncableSettings`(): SyncableSettingsDto {
+            return FfiConverterTypeSyncableSettingsDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_load_syncable_settings(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `openChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterContentDto {
+            return FfiConverterTypeChapterContentDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_open_chapter(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `performSync`(`config`: SyncConfigDto): SyncResultDto {
+            return FfiConverterTypeSyncResultDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_perform_sync(
+        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `performSyncDiagnostics`(`config`: SyncConfigDto): SyncDiagnosticsResultDto {
+            return FfiConverterTypeSyncDiagnosticsResultDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_perform_sync_diagnostics(
+        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `performSyncDryRun`(`config`: SyncConfigDto): SyncPlanDto {
+            return FfiConverterTypeSyncPlanDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run(
+        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
+}
+    }
+    )
+    }
+
+
+    override fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_process_writing_event(
+        it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`platform`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`oldText`),FfiConverterString.lower(`newText`),FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `recordRecentEdit`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_record_recent_edit(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),_status)
+}
+    }
+    )
+    }
+
+
+    override fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_record_writing_event(
+        it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`source`),FfiConverterInt.lower(`insertedChars`),FfiConverterInt.lower(`deletedChars`),FfiConverterInt.lower(`pastedChars`),FfiConverterInt.lower(`aiInsertedChars`),FfiConverterString.lower(`sessionId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `renameChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_rename_chapter(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`newTitle`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `renameProject`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_rename_project(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`newTitle`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `renameVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_rename_volume(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`newTitle`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `reorderChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_chapters(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterSequenceString.lower(`orderedChapterIds`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `reorderProjects`(`orderedProjectIds`: List<kotlin.String>): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_projects(
+        it, FfiConverterSequenceString.lower(`orderedProjectIds`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_volumes(
+        it, FfiConverterString.lower(`projectId`),FfiConverterSequenceString.lower(`orderedVolumeIds`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto {
+            return FfiConverterTypeChapterSaveReceiptDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_chapter_content(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`content`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveLocalSettings`(`settings`: LocalSettingsDto): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_local_settings(
+        it, FfiConverterTypeLocalSettingsDto.lower(`settings`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveMindmapGraphJson`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph_json(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`graphJson`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(
+        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`layoutJson`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_sync_config(
+        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveSyncSecrets`(`secrets`: SyncSecretsDto): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_sync_secrets(
+        it, FfiConverterTypeSyncSecretsDto.lower(`secrets`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveSyncableSettings`(`settings`: SyncableSettingsDto): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_syncable_settings(
+        it, FfiConverterTypeSyncableSettingsDto.lower(`settings`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_chapter_note(
+        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`note`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `validateWorkspace`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_validate_workspace(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
+
+
+
+    companion object
+
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWriterAppService: FfiConverter<WriterAppService, Pointer> {
+
+    override fun lower(value: WriterAppService): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): WriterAppService {
+        return WriterAppService(value)
+    }
+
+    override fun read(buf: ByteBuffer): WriterAppService {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: WriterAppService) = 8UL
+
+    override fun write(value: WriterAppService, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
     }
 }
 
@@ -1038,6 +2730,894 @@ public object FfiConverterTypeAiActionResponse: FfiConverterRustBuffer<AiActionR
 
 
 
+data class ChapterContentDto (
+    var `meta`: ChapterMetaDto,
+    var `content`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChapterContentDto: FfiConverterRustBuffer<ChapterContentDto> {
+    override fun read(buf: ByteBuffer): ChapterContentDto {
+        return ChapterContentDto(
+            FfiConverterTypeChapterMetaDto.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChapterContentDto) = (
+            FfiConverterTypeChapterMetaDto.allocationSize(value.`meta`) +
+            FfiConverterString.allocationSize(value.`content`)
+    )
+
+    override fun write(value: ChapterContentDto, buf: ByteBuffer) {
+            FfiConverterTypeChapterMetaDto.write(value.`meta`, buf)
+            FfiConverterString.write(value.`content`, buf)
+    }
+}
+
+
+
+data class ChapterMetaDto (
+    var `id`: kotlin.String,
+    var `title`: kotlin.String,
+    var `createdAt`: kotlin.String,
+    var `updatedAt`: kotlin.String,
+    var `order`: kotlin.Int,
+    var `wordCount`: kotlin.UInt,
+    var `hash`: kotlin.String,
+    var `note`: kotlin.String?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChapterMetaDto: FfiConverterRustBuffer<ChapterMetaDto> {
+    override fun read(buf: ByteBuffer): ChapterMetaDto {
+        return ChapterMetaDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChapterMetaDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`createdAt`) +
+            FfiConverterString.allocationSize(value.`updatedAt`) +
+            FfiConverterInt.allocationSize(value.`order`) +
+            FfiConverterUInt.allocationSize(value.`wordCount`) +
+            FfiConverterString.allocationSize(value.`hash`) +
+            FfiConverterOptionalString.allocationSize(value.`note`)
+    )
+
+    override fun write(value: ChapterMetaDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`createdAt`, buf)
+            FfiConverterString.write(value.`updatedAt`, buf)
+            FfiConverterInt.write(value.`order`, buf)
+            FfiConverterUInt.write(value.`wordCount`, buf)
+            FfiConverterString.write(value.`hash`, buf)
+            FfiConverterOptionalString.write(value.`note`, buf)
+    }
+}
+
+
+
+data class ChapterSaveReceiptDto (
+    var `chapterRelativePath`: kotlin.String,
+    var `contentLen`: kotlin.UInt,
+    var `contentHash`: kotlin.String,
+    var `metaHash`: kotlin.String,
+    var `updatedAt`: kotlin.String,
+    var `wordCount`: kotlin.UInt
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChapterSaveReceiptDto: FfiConverterRustBuffer<ChapterSaveReceiptDto> {
+    override fun read(buf: ByteBuffer): ChapterSaveReceiptDto {
+        return ChapterSaveReceiptDto(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChapterSaveReceiptDto) = (
+            FfiConverterString.allocationSize(value.`chapterRelativePath`) +
+            FfiConverterUInt.allocationSize(value.`contentLen`) +
+            FfiConverterString.allocationSize(value.`contentHash`) +
+            FfiConverterString.allocationSize(value.`metaHash`) +
+            FfiConverterString.allocationSize(value.`updatedAt`) +
+            FfiConverterUInt.allocationSize(value.`wordCount`)
+    )
+
+    override fun write(value: ChapterSaveReceiptDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`chapterRelativePath`, buf)
+            FfiConverterUInt.write(value.`contentLen`, buf)
+            FfiConverterString.write(value.`contentHash`, buf)
+            FfiConverterString.write(value.`metaHash`, buf)
+            FfiConverterString.write(value.`updatedAt`, buf)
+            FfiConverterUInt.write(value.`wordCount`, buf)
+    }
+}
+
+
+
+data class LocalSettingsDto (
+    var `themeMode`: kotlin.String?,
+    var `locale`: kotlin.String?,
+    var `autoSaveEnabled`: kotlin.Boolean,
+    var `editorFontSize`: kotlin.Float,
+    var `windowWidth`: kotlin.Float,
+    var `windowHeight`: kotlin.Float,
+    var `autoSaveDelayMs`: kotlin.ULong,
+    var `autoIndentEnabled`: kotlin.Boolean,
+    var `autoIndentWidth`: kotlin.Float,
+    var `editorTypingAnimationEnabled`: kotlin.Boolean,
+    var `editorSmoothCursorEnabled`: kotlin.Boolean,
+    var `editorTypingAnimationDurationMs`: kotlin.ULong,
+    var `editorSmoothCursorDurationMs`: kotlin.ULong,
+    var `aiEnabled`: kotlin.Boolean,
+    var `statsDeviceId`: kotlin.String?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalSettingsDto: FfiConverterRustBuffer<LocalSettingsDto> {
+    override fun read(buf: ByteBuffer): LocalSettingsDto {
+        return LocalSettingsDto(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalSettingsDto) = (
+            FfiConverterOptionalString.allocationSize(value.`themeMode`) +
+            FfiConverterOptionalString.allocationSize(value.`locale`) +
+            FfiConverterBoolean.allocationSize(value.`autoSaveEnabled`) +
+            FfiConverterFloat.allocationSize(value.`editorFontSize`) +
+            FfiConverterFloat.allocationSize(value.`windowWidth`) +
+            FfiConverterFloat.allocationSize(value.`windowHeight`) +
+            FfiConverterULong.allocationSize(value.`autoSaveDelayMs`) +
+            FfiConverterBoolean.allocationSize(value.`autoIndentEnabled`) +
+            FfiConverterFloat.allocationSize(value.`autoIndentWidth`) +
+            FfiConverterBoolean.allocationSize(value.`editorTypingAnimationEnabled`) +
+            FfiConverterBoolean.allocationSize(value.`editorSmoothCursorEnabled`) +
+            FfiConverterULong.allocationSize(value.`editorTypingAnimationDurationMs`) +
+            FfiConverterULong.allocationSize(value.`editorSmoothCursorDurationMs`) +
+            FfiConverterBoolean.allocationSize(value.`aiEnabled`) +
+            FfiConverterOptionalString.allocationSize(value.`statsDeviceId`)
+    )
+
+    override fun write(value: LocalSettingsDto, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`themeMode`, buf)
+            FfiConverterOptionalString.write(value.`locale`, buf)
+            FfiConverterBoolean.write(value.`autoSaveEnabled`, buf)
+            FfiConverterFloat.write(value.`editorFontSize`, buf)
+            FfiConverterFloat.write(value.`windowWidth`, buf)
+            FfiConverterFloat.write(value.`windowHeight`, buf)
+            FfiConverterULong.write(value.`autoSaveDelayMs`, buf)
+            FfiConverterBoolean.write(value.`autoIndentEnabled`, buf)
+            FfiConverterFloat.write(value.`autoIndentWidth`, buf)
+            FfiConverterBoolean.write(value.`editorTypingAnimationEnabled`, buf)
+            FfiConverterBoolean.write(value.`editorSmoothCursorEnabled`, buf)
+            FfiConverterULong.write(value.`editorTypingAnimationDurationMs`, buf)
+            FfiConverterULong.write(value.`editorSmoothCursorDurationMs`, buf)
+            FfiConverterBoolean.write(value.`aiEnabled`, buf)
+            FfiConverterOptionalString.write(value.`statsDeviceId`, buf)
+    }
+}
+
+
+
+data class NetworkProbeResultDto (
+    var `mode`: kotlin.String,
+    var `success`: kotlin.Boolean,
+    var `status`: kotlin.String,
+    var `message`: kotlin.String,
+    var `rawError`: kotlin.String?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNetworkProbeResultDto: FfiConverterRustBuffer<NetworkProbeResultDto> {
+    override fun read(buf: ByteBuffer): NetworkProbeResultDto {
+        return NetworkProbeResultDto(
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NetworkProbeResultDto) = (
+            FfiConverterString.allocationSize(value.`mode`) +
+            FfiConverterBoolean.allocationSize(value.`success`) +
+            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterString.allocationSize(value.`message`) +
+            FfiConverterOptionalString.allocationSize(value.`rawError`)
+    )
+
+    override fun write(value: NetworkProbeResultDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`mode`, buf)
+            FfiConverterBoolean.write(value.`success`, buf)
+            FfiConverterString.write(value.`status`, buf)
+            FfiConverterString.write(value.`message`, buf)
+            FfiConverterOptionalString.write(value.`rawError`, buf)
+    }
+}
+
+
+
+data class ProjectDto (
+    var `id`: kotlin.String,
+    var `title`: kotlin.String,
+    var `createdAt`: kotlin.String,
+    var `updatedAt`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProjectDto: FfiConverterRustBuffer<ProjectDto> {
+    override fun read(buf: ByteBuffer): ProjectDto {
+        return ProjectDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProjectDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`createdAt`) +
+            FfiConverterString.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: ProjectDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`createdAt`, buf)
+            FfiConverterString.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class RecentEditDto (
+    var `projectId`: kotlin.String,
+    var `volumeId`: kotlin.String,
+    var `chapterId`: kotlin.String,
+    var `timestamp`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRecentEditDto: FfiConverterRustBuffer<RecentEditDto> {
+    override fun read(buf: ByteBuffer): RecentEditDto {
+        return RecentEditDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RecentEditDto) = (
+            FfiConverterString.allocationSize(value.`projectId`) +
+            FfiConverterString.allocationSize(value.`volumeId`) +
+            FfiConverterString.allocationSize(value.`chapterId`) +
+            FfiConverterString.allocationSize(value.`timestamp`)
+    )
+
+    override fun write(value: RecentEditDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`projectId`, buf)
+            FfiConverterString.write(value.`volumeId`, buf)
+            FfiConverterString.write(value.`chapterId`, buf)
+            FfiConverterString.write(value.`timestamp`, buf)
+    }
+}
+
+
+
+data class SyncConfigDto (
+    var `enabled`: kotlin.Boolean,
+    var `backendType`: kotlin.String,
+    var `remoteUrl`: kotlin.String,
+    var `transport`: kotlin.String,
+    var `branch`: kotlin.String,
+    var `autoSync`: kotlin.Boolean,
+    var `syncIntervalSeconds`: kotlin.UInt,
+    var `proxyEnabled`: kotlin.Boolean,
+    var `proxyType`: kotlin.String,
+    var `proxyHost`: kotlin.String,
+    var `proxyPort`: kotlin.UShort,
+    var `username`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncConfigDto: FfiConverterRustBuffer<SyncConfigDto> {
+    override fun read(buf: ByteBuffer): SyncConfigDto {
+        return SyncConfigDto(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncConfigDto) = (
+            FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterString.allocationSize(value.`backendType`) +
+            FfiConverterString.allocationSize(value.`remoteUrl`) +
+            FfiConverterString.allocationSize(value.`transport`) +
+            FfiConverterString.allocationSize(value.`branch`) +
+            FfiConverterBoolean.allocationSize(value.`autoSync`) +
+            FfiConverterUInt.allocationSize(value.`syncIntervalSeconds`) +
+            FfiConverterBoolean.allocationSize(value.`proxyEnabled`) +
+            FfiConverterString.allocationSize(value.`proxyType`) +
+            FfiConverterString.allocationSize(value.`proxyHost`) +
+            FfiConverterUShort.allocationSize(value.`proxyPort`) +
+            FfiConverterString.allocationSize(value.`username`)
+    )
+
+    override fun write(value: SyncConfigDto, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterString.write(value.`backendType`, buf)
+            FfiConverterString.write(value.`remoteUrl`, buf)
+            FfiConverterString.write(value.`transport`, buf)
+            FfiConverterString.write(value.`branch`, buf)
+            FfiConverterBoolean.write(value.`autoSync`, buf)
+            FfiConverterUInt.write(value.`syncIntervalSeconds`, buf)
+            FfiConverterBoolean.write(value.`proxyEnabled`, buf)
+            FfiConverterString.write(value.`proxyType`, buf)
+            FfiConverterString.write(value.`proxyHost`, buf)
+            FfiConverterUShort.write(value.`proxyPort`, buf)
+            FfiConverterString.write(value.`username`, buf)
+    }
+}
+
+
+
+data class SyncConflictDto (
+    var `localPath`: kotlin.String,
+    var `remotePath`: kotlin.String,
+    var `localHash`: kotlin.String,
+    var `remoteHash`: kotlin.String,
+    var `baseHash`: kotlin.String,
+    var `createdAt`: kotlin.Long,
+    var `description`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncConflictDto: FfiConverterRustBuffer<SyncConflictDto> {
+    override fun read(buf: ByteBuffer): SyncConflictDto {
+        return SyncConflictDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncConflictDto) = (
+            FfiConverterString.allocationSize(value.`localPath`) +
+            FfiConverterString.allocationSize(value.`remotePath`) +
+            FfiConverterString.allocationSize(value.`localHash`) +
+            FfiConverterString.allocationSize(value.`remoteHash`) +
+            FfiConverterString.allocationSize(value.`baseHash`) +
+            FfiConverterLong.allocationSize(value.`createdAt`) +
+            FfiConverterString.allocationSize(value.`description`)
+    )
+
+    override fun write(value: SyncConflictDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`localPath`, buf)
+            FfiConverterString.write(value.`remotePath`, buf)
+            FfiConverterString.write(value.`localHash`, buf)
+            FfiConverterString.write(value.`remoteHash`, buf)
+            FfiConverterString.write(value.`baseHash`, buf)
+            FfiConverterLong.write(value.`createdAt`, buf)
+            FfiConverterString.write(value.`description`, buf)
+    }
+}
+
+
+
+data class SyncDiagnosticsResultDto (
+    var `success`: kotlin.Boolean,
+    var `backendType`: kotlin.String,
+    var `androidHasInternetPermission`: kotlin.Boolean,
+    var `androidHasAccessNetworkStatePermission`: kotlin.Boolean,
+    var `androidNetworkState`: kotlin.String,
+    var `tcpProbeOk`: kotlin.Boolean,
+    var `tcpProbeStatus`: kotlin.String,
+    var `httpConnectProbeOk`: kotlin.Boolean,
+    var `httpConnectProbeStatus`: kotlin.String,
+    var `libgit2ProbeOk`: kotlin.Boolean,
+    var `libgit2ProbeStatus`: kotlin.String,
+    var `networkOk`: kotlin.Boolean,
+    var `authOk`: kotlin.Boolean,
+    var `repoOk`: kotlin.Boolean,
+    var `branchOk`: kotlin.Boolean,
+    var `networkStatus`: kotlin.String,
+    var `authStatus`: kotlin.String,
+    var `repoStatus`: kotlin.String,
+    var `branchStatus`: kotlin.String,
+    var `remoteUrlSanitized`: kotlin.String,
+    var `transport`: kotlin.String,
+    var `errorCategory`: kotlin.String,
+    var `userMessage`: kotlin.String,
+    var `rawError`: kotlin.String?,
+    var `chosenNetworkMode`: kotlin.String?,
+    var `networkProbeSummary`: List<NetworkProbeResultDto>?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<SyncDiagnosticsResultDto> {
+    override fun read(buf: ByteBuffer): SyncDiagnosticsResultDto {
+        return SyncDiagnosticsResultDto(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalSequenceTypeNetworkProbeResultDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncDiagnosticsResultDto) = (
+            FfiConverterBoolean.allocationSize(value.`success`) +
+            FfiConverterString.allocationSize(value.`backendType`) +
+            FfiConverterBoolean.allocationSize(value.`androidHasInternetPermission`) +
+            FfiConverterBoolean.allocationSize(value.`androidHasAccessNetworkStatePermission`) +
+            FfiConverterString.allocationSize(value.`androidNetworkState`) +
+            FfiConverterBoolean.allocationSize(value.`tcpProbeOk`) +
+            FfiConverterString.allocationSize(value.`tcpProbeStatus`) +
+            FfiConverterBoolean.allocationSize(value.`httpConnectProbeOk`) +
+            FfiConverterString.allocationSize(value.`httpConnectProbeStatus`) +
+            FfiConverterBoolean.allocationSize(value.`libgit2ProbeOk`) +
+            FfiConverterString.allocationSize(value.`libgit2ProbeStatus`) +
+            FfiConverterBoolean.allocationSize(value.`networkOk`) +
+            FfiConverterBoolean.allocationSize(value.`authOk`) +
+            FfiConverterBoolean.allocationSize(value.`repoOk`) +
+            FfiConverterBoolean.allocationSize(value.`branchOk`) +
+            FfiConverterString.allocationSize(value.`networkStatus`) +
+            FfiConverterString.allocationSize(value.`authStatus`) +
+            FfiConverterString.allocationSize(value.`repoStatus`) +
+            FfiConverterString.allocationSize(value.`branchStatus`) +
+            FfiConverterString.allocationSize(value.`remoteUrlSanitized`) +
+            FfiConverterString.allocationSize(value.`transport`) +
+            FfiConverterString.allocationSize(value.`errorCategory`) +
+            FfiConverterString.allocationSize(value.`userMessage`) +
+            FfiConverterOptionalString.allocationSize(value.`rawError`) +
+            FfiConverterOptionalString.allocationSize(value.`chosenNetworkMode`) +
+            FfiConverterOptionalSequenceTypeNetworkProbeResultDto.allocationSize(value.`networkProbeSummary`)
+    )
+
+    override fun write(value: SyncDiagnosticsResultDto, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`success`, buf)
+            FfiConverterString.write(value.`backendType`, buf)
+            FfiConverterBoolean.write(value.`androidHasInternetPermission`, buf)
+            FfiConverterBoolean.write(value.`androidHasAccessNetworkStatePermission`, buf)
+            FfiConverterString.write(value.`androidNetworkState`, buf)
+            FfiConverterBoolean.write(value.`tcpProbeOk`, buf)
+            FfiConverterString.write(value.`tcpProbeStatus`, buf)
+            FfiConverterBoolean.write(value.`httpConnectProbeOk`, buf)
+            FfiConverterString.write(value.`httpConnectProbeStatus`, buf)
+            FfiConverterBoolean.write(value.`libgit2ProbeOk`, buf)
+            FfiConverterString.write(value.`libgit2ProbeStatus`, buf)
+            FfiConverterBoolean.write(value.`networkOk`, buf)
+            FfiConverterBoolean.write(value.`authOk`, buf)
+            FfiConverterBoolean.write(value.`repoOk`, buf)
+            FfiConverterBoolean.write(value.`branchOk`, buf)
+            FfiConverterString.write(value.`networkStatus`, buf)
+            FfiConverterString.write(value.`authStatus`, buf)
+            FfiConverterString.write(value.`repoStatus`, buf)
+            FfiConverterString.write(value.`branchStatus`, buf)
+            FfiConverterString.write(value.`remoteUrlSanitized`, buf)
+            FfiConverterString.write(value.`transport`, buf)
+            FfiConverterString.write(value.`errorCategory`, buf)
+            FfiConverterString.write(value.`userMessage`, buf)
+            FfiConverterOptionalString.write(value.`rawError`, buf)
+            FfiConverterOptionalString.write(value.`chosenNetworkMode`, buf)
+            FfiConverterOptionalSequenceTypeNetworkProbeResultDto.write(value.`networkProbeSummary`, buf)
+    }
+}
+
+
+
+data class SyncPlanDto (
+    var `filesToUpload`: List<kotlin.String>,
+    var `filesToDownload`: List<kotlin.String>,
+    var `filesToDeleteLocal`: List<kotlin.String>,
+    var `filesToDeleteRemote`: List<kotlin.String>,
+    var `ignoredFiles`: List<kotlin.String>,
+    var `conflicts`: List<kotlin.String>
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncPlanDto: FfiConverterRustBuffer<SyncPlanDto> {
+    override fun read(buf: ByteBuffer): SyncPlanDto {
+        return SyncPlanDto(
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncPlanDto) = (
+            FfiConverterSequenceString.allocationSize(value.`filesToUpload`) +
+            FfiConverterSequenceString.allocationSize(value.`filesToDownload`) +
+            FfiConverterSequenceString.allocationSize(value.`filesToDeleteLocal`) +
+            FfiConverterSequenceString.allocationSize(value.`filesToDeleteRemote`) +
+            FfiConverterSequenceString.allocationSize(value.`ignoredFiles`) +
+            FfiConverterSequenceString.allocationSize(value.`conflicts`)
+    )
+
+    override fun write(value: SyncPlanDto, buf: ByteBuffer) {
+            FfiConverterSequenceString.write(value.`filesToUpload`, buf)
+            FfiConverterSequenceString.write(value.`filesToDownload`, buf)
+            FfiConverterSequenceString.write(value.`filesToDeleteLocal`, buf)
+            FfiConverterSequenceString.write(value.`filesToDeleteRemote`, buf)
+            FfiConverterSequenceString.write(value.`ignoredFiles`, buf)
+            FfiConverterSequenceString.write(value.`conflicts`, buf)
+    }
+}
+
+
+
+data class SyncResultDto (
+    var `status`: kotlin.String,
+    var `uploadedFiles`: List<kotlin.String>,
+    var `downloadedFiles`: List<kotlin.String>,
+    var `localDeletes`: List<kotlin.String>,
+    var `remoteDeletes`: List<kotlin.String>,
+    var `overwrittenFiles`: List<kotlin.String>,
+    var `ignoredFiles`: List<kotlin.String>,
+    var `conflicts`: List<SyncConflictDto>,
+    var `commitHash`: kotlin.String?,
+    var `error`: kotlin.String?,
+    var `firstSyncMode`: kotlin.String,
+    var `userMessage`: kotlin.String?,
+    var `chosenNetworkMode`: kotlin.String?,
+    var `networkProbeSummary`: List<NetworkProbeResultDto>?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncResultDto: FfiConverterRustBuffer<SyncResultDto> {
+    override fun read(buf: ByteBuffer): SyncResultDto {
+        return SyncResultDto(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceTypeSyncConflictDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalSequenceTypeNetworkProbeResultDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncResultDto) = (
+            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterSequenceString.allocationSize(value.`uploadedFiles`) +
+            FfiConverterSequenceString.allocationSize(value.`downloadedFiles`) +
+            FfiConverterSequenceString.allocationSize(value.`localDeletes`) +
+            FfiConverterSequenceString.allocationSize(value.`remoteDeletes`) +
+            FfiConverterSequenceString.allocationSize(value.`overwrittenFiles`) +
+            FfiConverterSequenceString.allocationSize(value.`ignoredFiles`) +
+            FfiConverterSequenceTypeSyncConflictDto.allocationSize(value.`conflicts`) +
+            FfiConverterOptionalString.allocationSize(value.`commitHash`) +
+            FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterString.allocationSize(value.`firstSyncMode`) +
+            FfiConverterOptionalString.allocationSize(value.`userMessage`) +
+            FfiConverterOptionalString.allocationSize(value.`chosenNetworkMode`) +
+            FfiConverterOptionalSequenceTypeNetworkProbeResultDto.allocationSize(value.`networkProbeSummary`)
+    )
+
+    override fun write(value: SyncResultDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`status`, buf)
+            FfiConverterSequenceString.write(value.`uploadedFiles`, buf)
+            FfiConverterSequenceString.write(value.`downloadedFiles`, buf)
+            FfiConverterSequenceString.write(value.`localDeletes`, buf)
+            FfiConverterSequenceString.write(value.`remoteDeletes`, buf)
+            FfiConverterSequenceString.write(value.`overwrittenFiles`, buf)
+            FfiConverterSequenceString.write(value.`ignoredFiles`, buf)
+            FfiConverterSequenceTypeSyncConflictDto.write(value.`conflicts`, buf)
+            FfiConverterOptionalString.write(value.`commitHash`, buf)
+            FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterString.write(value.`firstSyncMode`, buf)
+            FfiConverterOptionalString.write(value.`userMessage`, buf)
+            FfiConverterOptionalString.write(value.`chosenNetworkMode`, buf)
+            FfiConverterOptionalSequenceTypeNetworkProbeResultDto.write(value.`networkProbeSummary`, buf)
+    }
+}
+
+
+
+data class SyncSecretsDto (
+    var `token`: kotlin.String?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncSecretsDto: FfiConverterRustBuffer<SyncSecretsDto> {
+    override fun read(buf: ByteBuffer): SyncSecretsDto {
+        return SyncSecretsDto(
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncSecretsDto) = (
+            FfiConverterOptionalString.allocationSize(value.`token`)
+    )
+
+    override fun write(value: SyncSecretsDto, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`token`, buf)
+    }
+}
+
+
+
+data class SyncStateDto (
+    var `status`: kotlin.String,
+    var `backendType`: kotlin.String?,
+    var `transport`: kotlin.String?,
+    var `lastSyncedCommit`: kotlin.String?,
+    var `lastSyncTime`: kotlin.Long?,
+    var `lastError`: kotlin.String?,
+    var `lastSuccessfulNetworkMode`: kotlin.String?,
+    var `conflicts`: List<SyncConflictDto>?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncStateDto: FfiConverterRustBuffer<SyncStateDto> {
+    override fun read(buf: ByteBuffer): SyncStateDto {
+        return SyncStateDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalLong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalSequenceTypeSyncConflictDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncStateDto) = (
+            FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterOptionalString.allocationSize(value.`backendType`) +
+            FfiConverterOptionalString.allocationSize(value.`transport`) +
+            FfiConverterOptionalString.allocationSize(value.`lastSyncedCommit`) +
+            FfiConverterOptionalLong.allocationSize(value.`lastSyncTime`) +
+            FfiConverterOptionalString.allocationSize(value.`lastError`) +
+            FfiConverterOptionalString.allocationSize(value.`lastSuccessfulNetworkMode`) +
+            FfiConverterOptionalSequenceTypeSyncConflictDto.allocationSize(value.`conflicts`)
+    )
+
+    override fun write(value: SyncStateDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`status`, buf)
+            FfiConverterOptionalString.write(value.`backendType`, buf)
+            FfiConverterOptionalString.write(value.`transport`, buf)
+            FfiConverterOptionalString.write(value.`lastSyncedCommit`, buf)
+            FfiConverterOptionalLong.write(value.`lastSyncTime`, buf)
+            FfiConverterOptionalString.write(value.`lastError`, buf)
+            FfiConverterOptionalString.write(value.`lastSuccessfulNetworkMode`, buf)
+            FfiConverterOptionalSequenceTypeSyncConflictDto.write(value.`conflicts`, buf)
+    }
+}
+
+
+
+data class SyncableSettingsDto (
+    var `fontSize`: kotlin.Double,
+    var `themeMode`: kotlin.String,
+    var `monetColor`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSyncableSettingsDto: FfiConverterRustBuffer<SyncableSettingsDto> {
+    override fun read(buf: ByteBuffer): SyncableSettingsDto {
+        return SyncableSettingsDto(
+            FfiConverterDouble.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SyncableSettingsDto) = (
+            FfiConverterDouble.allocationSize(value.`fontSize`) +
+            FfiConverterString.allocationSize(value.`themeMode`) +
+            FfiConverterString.allocationSize(value.`monetColor`)
+    )
+
+    override fun write(value: SyncableSettingsDto, buf: ByteBuffer) {
+            FfiConverterDouble.write(value.`fontSize`, buf)
+            FfiConverterString.write(value.`themeMode`, buf)
+            FfiConverterString.write(value.`monetColor`, buf)
+    }
+}
+
+
+
+data class VolumeDto (
+    var `id`: kotlin.String,
+    var `title`: kotlin.String,
+    var `createdAt`: kotlin.String,
+    var `updatedAt`: kotlin.String,
+    var `order`: kotlin.Int
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeVolumeDto: FfiConverterRustBuffer<VolumeDto> {
+    override fun read(buf: ByteBuffer): VolumeDto {
+        return VolumeDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: VolumeDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`createdAt`) +
+            FfiConverterString.allocationSize(value.`updatedAt`) +
+            FfiConverterInt.allocationSize(value.`order`)
+    )
+
+    override fun write(value: VolumeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`createdAt`, buf)
+            FfiConverterString.write(value.`updatedAt`, buf)
+            FfiConverterInt.write(value.`order`, buf)
+    }
+}
+
+
+
 
 enum class AiActionType {
 
@@ -1073,6 +3653,274 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
 
 
 
+
+sealed class WriterException(message: String): kotlin.Exception(message) {
+
+        class Io(message: String) : WriterException(message)
+
+        class Json(message: String) : WriterException(message)
+
+        class InvalidWorkspace(message: String) : WriterException(message)
+
+        class ProjectNotFound(message: String) : WriterException(message)
+
+        class VolumeNotFound(message: String) : WriterException(message)
+
+        class ChapterNotFound(message: String) : WriterException(message)
+
+        class EmptyOverwriteBlocked(message: String) : WriterException(message)
+
+        class NotImplemented(message: String) : WriterException(message)
+
+        class RefuseToDeleteWorkspaceRoot(message: String) : WriterException(message)
+
+        class InvalidDeleteTarget(message: String) : WriterException(message)
+
+        class Other(message: String) : WriterException(message)
+
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<WriterException> {
+        override fun lift(error_buf: RustBuffer.ByValue): WriterException = FfiConverterTypeWriterError.lift(error_buf)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWriterError : FfiConverterRustBuffer<WriterException> {
+    override fun read(buf: ByteBuffer): WriterException {
+
+            return when(buf.getInt()) {
+            1 -> WriterException.Io(FfiConverterString.read(buf))
+            2 -> WriterException.Json(FfiConverterString.read(buf))
+            3 -> WriterException.InvalidWorkspace(FfiConverterString.read(buf))
+            4 -> WriterException.ProjectNotFound(FfiConverterString.read(buf))
+            5 -> WriterException.VolumeNotFound(FfiConverterString.read(buf))
+            6 -> WriterException.ChapterNotFound(FfiConverterString.read(buf))
+            7 -> WriterException.EmptyOverwriteBlocked(FfiConverterString.read(buf))
+            8 -> WriterException.NotImplemented(FfiConverterString.read(buf))
+            9 -> WriterException.RefuseToDeleteWorkspaceRoot(FfiConverterString.read(buf))
+            10 -> WriterException.InvalidDeleteTarget(FfiConverterString.read(buf))
+            11 -> WriterException.Other(FfiConverterString.read(buf))
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+
+    }
+
+    override fun allocationSize(value: WriterException): ULong {
+        return 4UL
+    }
+
+    override fun write(value: WriterException, buf: ByteBuffer) {
+        when(value) {
+            is WriterException.Io -> {
+                buf.putInt(1)
+                Unit
+            }
+            is WriterException.Json -> {
+                buf.putInt(2)
+                Unit
+            }
+            is WriterException.InvalidWorkspace -> {
+                buf.putInt(3)
+                Unit
+            }
+            is WriterException.ProjectNotFound -> {
+                buf.putInt(4)
+                Unit
+            }
+            is WriterException.VolumeNotFound -> {
+                buf.putInt(5)
+                Unit
+            }
+            is WriterException.ChapterNotFound -> {
+                buf.putInt(6)
+                Unit
+            }
+            is WriterException.EmptyOverwriteBlocked -> {
+                buf.putInt(7)
+                Unit
+            }
+            is WriterException.NotImplemented -> {
+                buf.putInt(8)
+                Unit
+            }
+            is WriterException.RefuseToDeleteWorkspaceRoot -> {
+                buf.putInt(9)
+                Unit
+            }
+            is WriterException.InvalidDeleteTarget -> {
+                buf.putInt(10)
+                Unit
+            }
+            is WriterException.Other -> {
+                buf.putInt(11)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
+    override fun read(buf: ByteBuffer): kotlin.Long? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterLong.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Long?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterLong.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Long?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterLong.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
+    override fun read(buf: ByteBuffer): kotlin.String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.String?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalSequenceTypeNetworkProbeResultDto: FfiConverterRustBuffer<List<NetworkProbeResultDto>?> {
+    override fun read(buf: ByteBuffer): List<NetworkProbeResultDto>? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterSequenceTypeNetworkProbeResultDto.read(buf)
+    }
+
+    override fun allocationSize(value: List<NetworkProbeResultDto>?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterSequenceTypeNetworkProbeResultDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: List<NetworkProbeResultDto>?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterSequenceTypeNetworkProbeResultDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalSequenceTypeSyncConflictDto: FfiConverterRustBuffer<List<SyncConflictDto>?> {
+    override fun read(buf: ByteBuffer): List<SyncConflictDto>? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterSequenceTypeSyncConflictDto.read(buf)
+    }
+
+    override fun allocationSize(value: List<SyncConflictDto>?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterSequenceTypeSyncConflictDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: List<SyncConflictDto>?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterSequenceTypeSyncConflictDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
 /**
  * @suppress
  */
@@ -1094,6 +3942,174 @@ public object FfiConverterSequenceTypeAiAction: FfiConverterRustBuffer<List<AiAc
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeAiAction.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChapterMetaDto: FfiConverterRustBuffer<List<ChapterMetaDto>> {
+    override fun read(buf: ByteBuffer): List<ChapterMetaDto> {
+        val len = buf.getInt()
+        return List<ChapterMetaDto>(len) {
+            FfiConverterTypeChapterMetaDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChapterMetaDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChapterMetaDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChapterMetaDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChapterMetaDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeNetworkProbeResultDto: FfiConverterRustBuffer<List<NetworkProbeResultDto>> {
+    override fun read(buf: ByteBuffer): List<NetworkProbeResultDto> {
+        val len = buf.getInt()
+        return List<NetworkProbeResultDto>(len) {
+            FfiConverterTypeNetworkProbeResultDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<NetworkProbeResultDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeNetworkProbeResultDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<NetworkProbeResultDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeNetworkProbeResultDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeProjectDto: FfiConverterRustBuffer<List<ProjectDto>> {
+    override fun read(buf: ByteBuffer): List<ProjectDto> {
+        val len = buf.getInt()
+        return List<ProjectDto>(len) {
+            FfiConverterTypeProjectDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ProjectDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeProjectDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ProjectDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeProjectDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeRecentEditDto: FfiConverterRustBuffer<List<RecentEditDto>> {
+    override fun read(buf: ByteBuffer): List<RecentEditDto> {
+        val len = buf.getInt()
+        return List<RecentEditDto>(len) {
+            FfiConverterTypeRecentEditDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<RecentEditDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeRecentEditDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<RecentEditDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeRecentEditDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSyncConflictDto: FfiConverterRustBuffer<List<SyncConflictDto>> {
+    override fun read(buf: ByteBuffer): List<SyncConflictDto> {
+        val len = buf.getInt()
+        return List<SyncConflictDto>(len) {
+            FfiConverterTypeSyncConflictDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SyncConflictDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSyncConflictDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SyncConflictDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSyncConflictDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeVolumeDto: FfiConverterRustBuffer<List<VolumeDto>> {
+    override fun read(buf: ByteBuffer): List<VolumeDto> {
+        val len = buf.getInt()
+        return List<VolumeDto>(len) {
+            FfiConverterTypeVolumeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<VolumeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeVolumeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<VolumeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeVolumeDto.write(it, buf)
         }
     }
 } fun `performDummyAction`(): kotlin.String {

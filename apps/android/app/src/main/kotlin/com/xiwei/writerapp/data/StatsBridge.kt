@@ -1,32 +1,30 @@
 package com.xiwei.writerapp.data
 
-import com.xiwei.writerapp.model.ProjectStats
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.xiwei.writerapp.model.WritingStatsSummary
 
-data class StatsSummary(
-    @com.google.gson.annotations.SerializedName("total_human_typed_chars")
-    val totalHumanTypedChars: Int? = 0,
-    @com.google.gson.annotations.SerializedName("total_active_seconds")
-    val totalActiveSeconds: Int? = 0
-)
+class StatsBridge(private val appService: AppServiceBridge) {
+    private val gson = Gson()
 
-data class ProjectStatsDetail(
-    @com.google.gson.annotations.SerializedName("project_title")
-    val projectTitle: String?,
-    @com.google.gson.annotations.SerializedName("human_typed_chars")
-    val humanTypedChars: Int? = 0
-)
+    fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<WritingStatsSummary> {
+        val res = appService.getWritingStatsSummary(startDate, endDate)
+        if (res is BridgeResult.Success) {
+            val s = gson.fromJson(res.data, WritingStatsSummary::class.java)
+            return BridgeResult.Success(s)
+        }
+        return res as BridgeResult.Error
+    }
 
-data class ProjectStatsSummary(
-    val projects: List<ProjectStatsDetail>? = emptyList()
-)
+    fun getWritingSpeedCurve(startDate: String, endDate: String, bucketMinutes: Int): BridgeResult<String> {
+        return appService.getWritingSpeedCurve(startDate, endDate, bucketMinutes)
+    }
 
-class StatsBridge internal constructor(private val nativeBridge: NativeCoreBridge) {
-    fun getProjectStats(projectId: String): BridgeResult<ProjectStats> = nativeBridge.getProjectStats(projectId).toBridgeResult()
-    fun flushWritingStats() = nativeBridge.flushWritingStats()
+    fun recordWritingEvent(deviceId: String, projectId: String, volumeId: String, chapterId: String, source: String, insertedChars: Int, deletedChars: Int, pastedChars: Int, aiInsertedChars: Int, sessionId: String): BridgeResult<Boolean> {
+        return appService.recordWritingEvent(deviceId, projectId, volumeId, chapterId, source, insertedChars, deletedChars, pastedChars, aiInsertedChars, sessionId)
+    }
 
-    fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<StatsSummary> =
-        nativeBridge.getWritingStatsSummary(startDate, endDate).toBridgeResult()
-
-    fun getWritingStatsByProject(startDate: String, endDate: String): BridgeResult<ProjectStatsSummary> =
-        nativeBridge.getWritingStatsByProject(startDate, endDate).toBridgeResult()
+    fun processWritingEvent(deviceId: String, platform: String, projectId: String, volumeId: String, chapterId: String, oldText: String, newText: String, sessionId: String): BridgeResult<Boolean> {
+        return appService.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, sessionId)
+    }
 }
