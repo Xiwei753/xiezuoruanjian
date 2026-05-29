@@ -189,11 +189,10 @@ pub fn create_starmap(
     Ok(meta)
 }
 
-/// 创建子星图（Legacy/兼容 API）
-/// 注意：`parent_starmap_id` 不再是表示星图嵌套和所有权的主模型。
-/// 新的架构中，星图作为独立的图存在，并可以通过 Embed/Import 进行实例嵌套。
-/// 该接口保留用于历史兼容性。
-pub fn create_child_starmap(
+/// **LEGACY API**: 创建子星图。
+/// 新架构下，新建星图应作为独立对象创建，如需放入其他画布，请使用 `StarMapEmbed`。
+/// 保留此方法仅为向下兼容，新功能禁止使用此方法创建层级强绑定的子星图。
+pub fn create_child_starmap_legacy(
     workspace: &Path,
     parent_id: &str,
     title: &str,
@@ -250,12 +249,13 @@ pub fn rename_starmap(workspace: &Path, starmap_id: &str, new_title: &str) -> Re
 }
 
 pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
-    // Before deleting, check if it's referenced by any other StarMap.
+    // Before deleting, check if it's referenced by any EXTERNAL StarMap.
     let refs = find_starmap_references(workspace, starmap_id)?;
-    if !refs.is_empty() {
+    let external_refs: Vec<_> = refs.into_iter().filter(|r| r.host_starmap_id != starmap_id).collect();
+    if !external_refs.is_empty() {
         return Err(crate::error::Error::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!("Cannot delete StarMap because it is referenced by {} other places.", refs.len()),
+            format!("Cannot delete StarMap because it is referenced by {} external places.", external_refs.len()),
         )));
     }
 
@@ -561,11 +561,11 @@ mod tests {
     }
 
     #[test]
-    fn test_create_child_starmap() {
+    fn test_create_child_starmap_legacy() {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let child =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
 
         assert_eq!(
             child.parent_starmap_id.as_deref(),
@@ -595,9 +595,9 @@ mod tests {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let _child1 =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
         let _child2 =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
 
         delete_starmap_cascade_legacy(dir.path(), &parent.starmap_id).unwrap();
 
@@ -610,9 +610,9 @@ mod tests {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let child1 =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
         let child2 =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
 
         delete_starmap(dir.path(), &parent.starmap_id).unwrap();
 

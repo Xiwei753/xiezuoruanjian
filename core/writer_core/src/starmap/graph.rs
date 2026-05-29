@@ -217,7 +217,49 @@ pub fn delete_starmap_node(workspace: &Path, starmap_id: &str, node_id: &str) ->
         )));
     }
 
-    graph.edges.retain(|e| e.from != node_id && e.to != node_id);
+    graph.edges.retain(|e| {
+        let mut keep = true;
+        if let Some(id) = &e.from { if id == node_id { keep = false; } }
+        if let Some(id) = &e.to { if id == node_id { keep = false; } }
+        if let Some(ep) = &e.from_endpoint {
+            match ep {
+                crate::starmap::types::StarMapEdgeEndpoint::Node { node_id: id } => if id == node_id { keep = false; },
+                crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id: id, .. } => if id == node_id { keep = false; },
+                _ => {}
+            }
+        }
+        if let Some(ep) = &e.to_endpoint {
+            match ep {
+                crate::starmap::types::StarMapEdgeEndpoint::Node { node_id: id } => if id == node_id { keep = false; },
+                crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id: id, .. } => if id == node_id { keep = false; },
+                _ => {}
+            }
+        }
+        keep
+    });
+
+    graph.embeds.retain(|e| {
+        let mut keep = true;
+        if let Some(id) = &e.source_node_id { if id == node_id { keep = false; } }
+        if let Some(ep) = &e.host_endpoint {
+            match ep {
+                crate::starmap::types::StarMapEndpoint::Node { node_id: id } => if id == node_id { keep = false; },
+                crate::starmap::types::StarMapEndpoint::Anchor { node_id: id, .. } => if id == node_id { keep = false; },
+                _ => {}
+            }
+        }
+        keep
+    });
+
+    graph.links.retain(|l| {
+        let mut keep = true;
+        match &l.source {
+            crate::starmap::types::StarMapEndpoint::Node { node_id: id } => if id == node_id { keep = false; },
+            crate::starmap::types::StarMapEndpoint::Anchor { node_id: id, .. } => if id == node_id { keep = false; },
+            _ => {}
+        }
+        keep
+    });
 
     if let Ok(mut layout) = get_starmap_layout(workspace, starmap_id) {
         layout.nodes.retain(|n| n.node_id != node_id);
@@ -236,8 +278,8 @@ pub fn add_starmap_edge(
 ) -> Result<StarMapEdge> {
     let mut graph = get_starmap_graph(workspace, starmap_id)?;
 
-    let from_valid = edge.from_target.is_some() || graph.nodes.iter().any(|n| n.id == edge.from);
-    let to_valid = edge.to_target.is_some() || graph.nodes.iter().any(|n| n.id == edge.to);
+    let from_valid = edge.from_target.is_some() || edge.from_endpoint.is_some() || edge.from.as_ref().map(|id| graph.nodes.iter().any(|n| &n.id == id)).unwrap_or(false);
+    let to_valid = edge.to_target.is_some() || edge.to_endpoint.is_some() || edge.to.as_ref().map(|id| graph.nodes.iter().any(|n| &n.id == id)).unwrap_or(false);
 
     if !from_valid || !to_valid {
         return Err(Error::Io(std::io::Error::new(
@@ -333,9 +375,33 @@ pub fn update_starmap_embed(
         if let Some(l) = patch.label { embed.label = l; }
         if let Some(dp) = patch.display_policy { embed.display_policy = dp; }
         if let Some(ob) = patch.open_behavior { embed.open_behavior = ob; }
-        if let Some(vp) = patch.viewport { embed.viewport = vp; }
+        if let Some(p) = patch.placement {
+            if let Some(pl) = p { embed.placement = pl; }
+        }
+        if let Some(tv) = patch.target_viewport {
+            if let Some(vp) = tv { embed.target_viewport = vp; }
+        }
+        if let Some(vp) = patch.viewport {
+            if let Some(vp) = vp {
+                embed.placement.width = vp.width;
+                embed.placement.height = vp.height;
+                embed.target_viewport.scale = vp.scale;
+                embed.target_viewport.offset_x = vp.offset_x;
+                embed.target_viewport.offset_y = vp.offset_y;
+            }
+        }
         if let Some(sni) = patch.source_node_id { embed.source_node_id = sni; }
-        if let Some(ha) = patch.host_anchor { embed.host_anchor = ha; }
+        if let Some(ep) = patch.host_endpoint { embed.host_endpoint = ep; }
+        if let Some(ha) = patch.host_anchor {
+            if let Some(anchor_id) = ha {
+                if let Some(node_id) = &embed.source_node_id {
+                    embed.host_endpoint = Some(crate::starmap::types::StarMapEndpoint::Anchor {
+                        node_id: node_id.clone(),
+                        anchor_id,
+                    });
+                }
+            }
+        }
         embed.updated_at = now_epoch();
         let updated = embed.clone();
         graph.updated_at = now_epoch();
@@ -495,47 +561,71 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
     }
 
     for edge in &graph.edges {
-        if let Some(ft) = &edge.from_target {
-            let status = resolve_deep_target(workspace, ft);
-            use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-            match status {
-                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor | InvalidRange => {
+        let validate_edge_endpoint = |ep: &Option<crate::starmap::types::StarMapEdgeEndpoint>, legacy_id: &Option<String>, legacy_target: &Option<crate::starmap::semantic::StarMapDeepTarget>, endpoint_name: &str| -> Result<()> {
+            if let Some(endpoint) = ep {
+                match endpoint {
+                    crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => {
+                        if !node_ids.contains(node_id) {
+                            return Err(Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("Edge {} endpoint references non-existent node", endpoint_name),
+                            )));
+                        }
+                    }
+                    crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, anchor_id } => {
+                        let mut anchor_found = false;
+                        if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
+                            if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                                anchor_found = true;
+                            }
+                        }
+                        if !anchor_found {
+                            return Err(Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("Edge {} endpoint references non-existent anchor", endpoint_name),
+                            )));
+                        }
+                    }
+                    crate::starmap::types::StarMapEdgeEndpoint::Starmap => {}
+                    crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target } => {
+                        let status = resolve_deep_target(workspace, target);
+                        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+                        match status {
+                            CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor | InvalidRange => {
+                                return Err(Error::Io(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!("Edge deep target resolve failed: {:?}", status),
+                                )));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            } else if let Some(target) = legacy_target {
+                let status = resolve_deep_target(workspace, target);
+                use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+                match status {
+                    CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor | InvalidRange => {
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Edge deep target resolve failed: {:?}", status),
+                        )));
+                    }
+                    _ => {}
+                }
+            } else if let Some(id) = legacy_id {
+                if !node_ids.contains(id) {
                     return Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("Deep target resolve failed: {:?}", status),
+                        format!("Edge {} references non-existent node", endpoint_name),
                     )));
                 }
-                _ => {}
             }
-        } else {
-            if !node_ids.contains(&edge.from) {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Edge references non-existent from node",
-                )));
-            }
-        }
+            Ok(())
+        };
 
-        if let Some(tt) = &edge.to_target {
-            let status = resolve_deep_target(workspace, tt);
-            use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-            match status {
-                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor | InvalidRange => {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("Deep target resolve failed: {:?}", status),
-                    )));
-                }
-                _ => {}
-            }
-        } else {
-            if !node_ids.contains(&edge.to) {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Edge references non-existent to node",
-                )));
-            }
-        }
+        validate_edge_endpoint(&edge.from_endpoint, &edge.from, &edge.from_target, "from")?;
+        validate_edge_endpoint(&edge.to_endpoint, &edge.to, &edge.to_target, "to")?;
     }
 
     let mut instance_ids = std::collections::HashSet::new();
@@ -546,20 +636,36 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
                 "Duplicate embed instance_id",
             )));
         }
+        if embed.target_starmap_id == graph.starmap_id {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Self-embed is prohibited",
+            )));
+        }
+
         if crate::starmap::load_starmap_meta(workspace, &embed.target_starmap_id).is_err() {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Embed target starmap does not exist",
             )));
         }
-        if let Some(vp) = &embed.viewport {
-            if vp.scale <= 0.0 || vp.scale.is_nan() || vp.width.is_nan() || vp.height.is_nan() || vp.offset_x.is_nan() || vp.offset_y.is_nan() {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Invalid viewport values",
-                )));
-            }
+
+        let p = &embed.placement;
+        if p.width < 0.0 || p.height < 0.0 || p.scale <= 0.0 || p.width.is_nan() || p.height.is_nan() || p.scale.is_nan() || p.x.is_nan() || p.y.is_nan() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid embed placement values",
+            )));
         }
+
+        let tvp = &embed.target_viewport;
+        if tvp.scale <= 0.0 || tvp.scale.is_nan() || tvp.offset_x.is_nan() || tvp.offset_y.is_nan() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid embed target_viewport values",
+            )));
+        }
+
         if let Some(sni) = &embed.source_node_id {
             if !node_ids.contains(sni) {
                 return Err(Error::Io(std::io::Error::new(
@@ -568,19 +674,32 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
                 )));
             }
         }
-        if let Some(ha) = &embed.host_anchor {
-            let mut anchor_found = false;
-            for node in &graph.nodes {
-                if node.anchors.iter().any(|a| &a.anchor_id == ha) {
-                    anchor_found = true;
-                    break;
+
+        if let Some(ep) = &embed.host_endpoint {
+            match ep {
+                crate::starmap::types::StarMapEndpoint::Node { node_id } => {
+                    if !node_ids.contains(node_id) {
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Embed host_endpoint references non-existent node",
+                        )));
+                    }
                 }
-            }
-            if !anchor_found {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Embed host_anchor does not exist",
-                )));
+                crate::starmap::types::StarMapEndpoint::Anchor { node_id, anchor_id } => {
+                    let mut anchor_found = false;
+                    if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
+                        if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                            anchor_found = true;
+                        }
+                    }
+                    if !anchor_found {
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Embed host_endpoint references non-existent anchor",
+                        )));
+                    }
+                }
+                crate::starmap::types::StarMapEndpoint::Starmap => {}
             }
         }
         
@@ -849,13 +968,15 @@ mod tests {
 
         let edge = StarMapEdge {
             id: "e1".to_string(),
-            from: "n1".to_string(),
-            to: "n2".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n2".to_string()),
             kind: StarMapEdgeKind::RelatedTo,
             label: Some("relates".to_string()),
             payload: None,
             from_target: None,
             to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -874,6 +995,8 @@ mod tests {
                 payload: None,
                 from_target: None,
                 to_target: None,
+                from_endpoint: None,
+                to_endpoint: None,
             },
         )
         .unwrap();
@@ -932,12 +1055,13 @@ mod tests {
         let embed = crate::starmap::types::StarMapEmbed {
             instance_id: "inst1".to_string(),
             target_starmap_id: meta_b.starmap_id.clone(),
-            label: None,
+            label: Some("embed".to_string()),
             display_policy: Default::default(),
             open_behavior: Default::default(),
-            viewport: None,
+            placement: Default::default(),
+            target_viewport: Default::default(),
             source_node_id: None,
-            host_anchor: None,
+            host_endpoint: None,
             provenance: Default::default(),
             created_at: now_epoch(),
             updated_at: now_epoch(),
@@ -951,8 +1075,11 @@ mod tests {
             label: Some(Some("updated".to_string())),
             display_policy: None,
             open_behavior: None,
-            viewport: None,
+            placement: Default::default(),
+            target_viewport: Default::default(),
             source_node_id: None,
+            host_endpoint: None,
+            viewport: None,
             host_anchor: None,
         }).is_ok());
 
@@ -966,9 +1093,10 @@ mod tests {
             label: None,
             display_policy: Default::default(),
             open_behavior: Default::default(),
-            viewport: None,
+            placement: Default::default(),
+            target_viewport: Default::default(),
             source_node_id: None,
-            host_anchor: None,
+            host_endpoint: None,
             provenance: Default::default(),
             created_at: now_epoch(),
             updated_at: now_epoch(),
@@ -984,9 +1112,10 @@ mod tests {
             label: None,
             display_policy: Default::default(),
             open_behavior: Default::default(),
-            viewport: None,
+            placement: Default::default(),
+            target_viewport: Default::default(),
             source_node_id: Some("missing_node".to_string()),
-            host_anchor: None,
+            host_endpoint: None,
             provenance: Default::default(),
             created_at: now_epoch(),
             updated_at: now_epoch(),
@@ -1064,8 +1193,8 @@ mod tests {
 
         let edge = StarMapEdge {
             id: "e_semantic".to_string(),
-            from: "n1".to_string(),
-            to: "dummy_missing".to_string(), // node does not exist
+            from: Some("n1".to_string()),
+            to: Some("dummy_missing".to_string()), // node does not exist
             kind: StarMapEdgeKind::RelatedTo,
             label: None,
             payload: None,
@@ -1075,6 +1204,8 @@ mod tests {
                 path: vec![],
                 target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
             }),
+            from_endpoint: None,
+            to_endpoint: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -1147,9 +1278,9 @@ mod tests {
 
         // 2. Edge from current to another StarMap
         let edge_to_b = StarMapEdge {
-            id: "e1".to_string(),
-            from: "a1".to_string(),
-            to: "dummy".to_string(),
+            id: "e_to_b".to_string(),
+            from: Some("a1".to_string()),
+            to: Some("dummy".to_string()),
             kind: StarMapEdgeKind::RelatedTo,
             label: None,
             payload: None,
@@ -1159,6 +1290,8 @@ mod tests {
                 path: vec![],
                 target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
             }),
+            from_endpoint: None,
+            to_endpoint: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -1175,14 +1308,16 @@ mod tests {
             target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
         };
         let edge_cycle = StarMapEdge {
-            id: "e2".to_string(),
-            from: "a1".to_string(),
-            to: "dummy".to_string(),
+            id: "e_cycle".to_string(),
+            from: Some("a1".to_string()),
+            to: Some("dummy".to_string()),
             kind: StarMapEdgeKind::RelatedTo,
             label: None,
             payload: None,
             from_target: None,
             to_target: Some(dt_cycle),
+            from_endpoint: None,
+            to_endpoint: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -1239,9 +1374,10 @@ mod tests {
             label: Some("B in A".to_string()),
             display_policy: Default::default(),
             open_behavior: Default::default(),
-            viewport: None,
+            placement: Default::default(),
+            target_viewport: Default::default(),
             source_node_id: None,
-            host_anchor: None,
+            host_endpoint: None,
             provenance: Default::default(),
             created_at: now_epoch(),
             updated_at: now_epoch(),
@@ -1257,9 +1393,10 @@ mod tests {
             label: Some("B in C".to_string()),
             display_policy: Default::default(),
             open_behavior: Default::default(),
-            viewport: None,
+            placement: Default::default(),
+            target_viewport: Default::default(),
             source_node_id: None,
-            host_anchor: None,
+            host_endpoint: None,
             provenance: Default::default(),
             created_at: now_epoch(),
             updated_at: now_epoch(),
@@ -1315,13 +1452,15 @@ mod tests {
         // add edge
         let edge = add_starmap_edge(dir.path(), &meta_a.starmap_id, StarMapEdge {
             id: "e1".to_string(),
-            from: "n1".to_string(),
-            to: "n2".to_string(),
+            from: Some("n1".to_string()),
+            to: Some("n2".to_string()),
             kind: StarMapEdgeKind::RelatedTo,
             label: None,
             payload: None,
             from_target: None,
             to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         }).unwrap();
@@ -1334,7 +1473,8 @@ mod tests {
         };
         update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
             kind: None, label: None, payload: None, from_target: None,
-            to_target: Some(Some(dt.clone()))
+            to_target: Some(Some(dt.clone())),
+            from_endpoint: None, to_endpoint: None,
         }).unwrap();
         let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
         assert!(g.edges[0].to_target.is_some());
@@ -1342,7 +1482,8 @@ mod tests {
         // 2. 清空 to_target (Some(None))
         update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
             kind: None, label: None, payload: None, from_target: None,
-            to_target: Some(None)
+            to_target: Some(None),
+            from_endpoint: None, to_endpoint: None,
         }).unwrap();
         let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
         assert!(g.edges[0].to_target.is_none());
@@ -1350,7 +1491,8 @@ mod tests {
         // 3. 不改 to_target (None)
         update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
             kind: None, label: None, payload: None, from_target: None,
-            to_target: None
+            to_target: None,
+            from_endpoint: None, to_endpoint: None,
         }).unwrap();
         let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
         assert!(g.edges[0].to_target.is_none());

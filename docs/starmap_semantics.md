@@ -47,7 +47,9 @@ StarMap 不再是一个强依赖父子拥有权的嵌套树。它是一个**语�
 ## 严格图校验 (validate_graph)
 由于引入了第一公民级别的 Embed 和 Link，图保存时会进行以下严格校验：
 * **重复性**：同图不能有重复的 `instance_id` 或 `link_id`。
-* **目标存活**：Embed 指向的星图必须存在。
-* **坐标安全**：Embed `viewport` 内的缩放与坐标不能出现 NaN，且 scale 必须大于 0。
-* **源端点合法**：Link 如果从节点或锚点出发，该节点/锚点必须真实存在于当前图中。
+* **目标存活**：Embed 指向的星图必须存在。不允许 Self-Embed。
+* **端点安全**：`StarMapEndpoint` 取代了旧的单纯字符串引用。Link、Embed (host) 以及 Edge 都使用端点（Node、Anchor、Starmap）。如果端点是 Node/Anchor，则它们必须存在于当前的 Host StarMap 中。
+* **显示策略校验**：`max_preview_chars` 限制最大字符数（如 10000），各种缩放级别必须满足单调性：`min_visible <= title <= summary <= detail`。
 * **深层可达性**：Link 的目标深层路径不仅不能指向虚无，而且不能发生环路（CycleDetected）或者层级太深（TooDeep）。
+* **级联清理**：调用 `delete_starmap_node` 删除节点时，会自动级联清理连接到该节点的 Edge `from_endpoint/to_endpoint`，以及以该节点为宿主的 Embed `host_endpoint` 和 Link `source`。
+* **删除保护**：调用 `delete_starmap` 时，仅当存在**外部引用**（被其他星图引用）时才阻止删除。自身发出的内部 Link 不会阻碍自身的删除。

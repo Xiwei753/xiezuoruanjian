@@ -192,6 +192,12 @@ pub fn validate_display_policy(dp: &StarMapDisplayPolicy) -> crate::error::Resul
             "Display policy scales must be ordered: min_visible <= title <= summary <= detail",
         )));
     }
+    if dp.max_preview_chars > 10000 {
+        return Err(crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "max_preview_chars cannot exceed 10000",
+        )));
+    }
     
     Ok(())
 }

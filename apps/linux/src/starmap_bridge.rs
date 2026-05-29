@@ -54,8 +54,8 @@ pub fn create_starmap(core: &WriterCore, title: &str, description: &str, accent_
     }
 }
 
-pub fn create_child_starmap(core: &WriterCore, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> String {
-    match core.create_child_starmap(parent_id, title, description, accent_color) {
+pub fn create_child_starmap_legacy(core: &WriterCore, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> String {
+    match core.create_child_starmap_legacy(parent_id, title, description, accent_color) {
         Ok(meta) => serde_json::json!({"success": true, "data": meta}).to_string(),
         Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
@@ -148,13 +148,15 @@ pub fn create_starmap_edge(core: &WriterCore, starmap_id: &str, from_node_id: &s
 
     let edge = StarMapEdge {
         id,
-        from: from_node_id.to_string(),
-        to: to_node_id.to_string(),
+        from: Some(from_node_id.to_string()),
+        to: Some(to_node_id.to_string()),
         kind: edge_kind,
         label: if label.is_empty() { None } else { Some(label.to_string()) },
         payload: None,
         from_target: None,
         to_target: None,
+        from_endpoint: None,
+        to_endpoint: None,
         created_at: now,
         updated_at: now,
     };

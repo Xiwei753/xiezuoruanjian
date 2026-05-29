@@ -517,7 +517,7 @@ struct AppBackend {
     get_starmap_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
     create_starmap_json: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QString),
     create_starmap: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject),
-    create_child_starmap_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
+    create_child_starmap_legacy_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
     rename_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
     delete_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
     bind_starmap_to_project_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
@@ -3845,14 +3845,14 @@ impl AppBackend {
         qjson_object_from_json(&raw)
     }
 
-    fn create_child_starmap_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
+    fn create_child_starmap_legacy_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
         let pid = parent_id.to_string();
         let t = title.to_string();
         let d = description.to_string();
         let ac = accent_color.to_string();
         let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
         if let Some(core) = self.core_facade() {
-            starmap_bridge::create_child_starmap(&core, &pid, &t, &d, color_ref).into()
+            starmap_bridge::create_child_starmap_legacy(&core, &pid, &t, &d, color_ref).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
         }

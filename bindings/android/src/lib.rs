@@ -1817,7 +1817,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createChil
     let title = match jstring_to_string(&mut env, &title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let desc = match jstring_to_string(&mut env, &desc_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let core = WriterCore::new(&workspace_path);
-    result_to_jstring(&mut env, core.create_child_starmap(&parent_id, &title, &desc, None))
+    result_to_jstring(&mut env, core.create_child_starmap_legacy(&parent_id, &title, &desc, None))
 }
 
 // --- StarMap: Node CRUD ---

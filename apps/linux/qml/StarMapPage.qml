@@ -239,7 +239,7 @@ Rectangle {
             spacing: 8
             padding: 16
             TextField { id: childTitleField; width: parent.width - 32; placeholderText: "子星图名称" }
-            Button { text: "创建"; anchors.right: parent.right; anchors.rightMargin: 16; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; backendRef.create_child_starmap_json(createChildStarmapDialog.parentId, t, "", ""); createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } }
+            Button { text: "创建"; anchors.right: parent.right; anchors.rightMargin: 16; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; backendRef.create_child_starmap_legacy_json(createChildStarmapDialog.parentId, t, "", ""); createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } }
         }
     }
 }
