@@ -189,6 +189,10 @@ pub fn create_starmap(
     Ok(meta)
 }
 
+/// 创建子星图（Legacy/兼容 API）
+/// 注意：`parent_starmap_id` 不再是表示星图嵌套和所有权的主模型。
+/// 新的架构中，星图作为独立的图存在，并可以通过 Embed/Import 进行实例嵌套。
+/// 该接口保留用于历史兼容性。
 pub fn create_child_starmap(
     workspace: &Path,
     parent_id: &str,
@@ -389,6 +393,59 @@ pub fn update_starmap_stats(
     idx.updated_at = meta.updated_at;
     save_index(workspace, &idx)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StarMapReference {
+    pub starmap_id: String,
+    pub title: String,
+    pub ref_type: String, // "embed", "link", "portal", "edge"
+}
+
+pub fn find_starmap_references(workspace: &Path, target_starmap_id: &str) -> Result<Vec<StarMapReference>> {
+    let mut refs = Vec::new();
+    let idx = load_index(workspace)?;
+
+    for m in &idx.starmaps {
+        // Skip self
+        if m.starmap_id == target_starmap_id {
+            continue;
+        }
+
+        if let Ok(graph) = crate::starmap::graph::get_starmap_graph(workspace, &m.starmap_id) {
+            let mut found = false;
+            let mut ref_type = String::new();
+
+            if graph.embeds.iter().any(|e| e.target_starmap_id == target_starmap_id) {
+                found = true;
+                ref_type = "embed".to_string();
+            } else if graph.links.iter().any(|l| l.target.starmap_id == target_starmap_id) {
+                found = true;
+                ref_type = "link".to_string();
+            } else if graph.edges.iter().any(|e| {
+                e.from_target.as_ref().map_or(false, |t| t.starmap_id == target_starmap_id) ||
+                e.to_target.as_ref().map_or(false, |t| t.starmap_id == target_starmap_id)
+            }) {
+                found = true;
+                ref_type = "edge".to_string();
+            } else if graph.nodes.iter().any(|n| {
+                n.portal.as_ref().map_or(false, |p| p.target_starmap_id == target_starmap_id || p.deep_target.as_ref().map_or(false, |dt| dt.starmap_id == target_starmap_id))
+            }) {
+                found = true;
+                ref_type = "portal".to_string();
+            }
+
+            if found {
+                refs.push(StarMapReference {
+                    starmap_id: m.starmap_id.clone(),
+                    title: m.title.clone(),
+                    ref_type,
+                });
+            }
+        }
+    }
+    
+    Ok(refs)
 }
 
 #[cfg(test)]

@@ -54,6 +54,8 @@ pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGr
             title: meta.title.clone(),
             nodes: vec![],
             edges: vec![],
+            embeds: vec![],
+            links: vec![],
             created_at: now_epoch(),
             updated_at: now_epoch(),
         });
@@ -368,11 +370,10 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
                 }
 
                 if let Some(dt) = &portal.deep_target {
-                    validate_deep_target_range(dt)?;
                     let status = resolve_deep_target(workspace, dt);
                     use crate::starmap::semantic::StarMapTargetResolveStatus::*;
                     match status {
-                        CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor => {
+                        CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor | InvalidRange => {
                             return Err(Error::Io(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
                                 format!("Deep target resolve failed: {:?}", status),
@@ -418,11 +419,10 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
 
     for edge in &graph.edges {
         if let Some(ft) = &edge.from_target {
-            validate_deep_target_range(ft)?;
             let status = resolve_deep_target(workspace, ft);
             use crate::starmap::semantic::StarMapTargetResolveStatus::*;
             match status {
-                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor => {
+                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor | InvalidRange => {
                     return Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!("Deep target resolve failed: {:?}", status),
@@ -440,11 +440,10 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
         }
 
         if let Some(tt) = &edge.to_target {
-            validate_deep_target_range(tt)?;
             let status = resolve_deep_target(workspace, tt);
             use crate::starmap::semantic::StarMapTargetResolveStatus::*;
             match status {
-                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor => {
+                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor | InvalidRange => {
                     return Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!("Deep target resolve failed: {:?}", status),
@@ -465,24 +464,6 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
     Ok(())
 }
 
-fn validate_deep_target_range(dt: &crate::starmap::semantic::StarMapDeepTarget) -> Result<()> {
-    if let crate::starmap::semantic::StarMapTargetDetail::ChapterRange {
-        range_start,
-        range_end,
-        ..
-    } = &dt.target
-    {
-        if let (Some(s), Some(e)) = (range_start, range_end) {
-            if s > e {
-                return Err(Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Target range_start cannot be greater than range_end",
-                )));
-            }
-        }
-    }
-    Ok(())
-}
 
 pub fn resolve_deep_target(
     workspace: &Path,
@@ -528,7 +509,7 @@ pub fn resolve_deep_target(
                         return Unresolved;
                     }
                 } else {
-                    return Unresolved;
+                    return MissingNode;
                 }
             }
         }
@@ -546,7 +527,7 @@ pub fn resolve_deep_target(
                     }
                 }
             } else {
-                return Unresolved;
+                return MissingNode;
             }
         }
         crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
@@ -564,7 +545,18 @@ pub fn resolve_deep_target(
                     }
                 }
             } else {
-                return Unresolved;
+                return MissingNode;
+            }
+        }
+        crate::starmap::semantic::StarMapTargetDetail::ChapterRange {
+            range_start,
+            range_end,
+            ..
+        } => {
+            if let (Some(s), Some(e)) = (range_start, range_end) {
+                if s > e {
+                    return InvalidRange;
+                }
             }
         }
         _ => {}
@@ -867,4 +859,210 @@ mod tests {
         g5.nodes[0] = node_anchor;
         assert!(save_starmap_graph(dir.path(), &meta_a.starmap_id, &g5).is_err());
     }
+
+    #[test]
+    fn test_starmap_embed_and_link_semantics() {
+        let dir = setup_workspace();
+        // 新建 A/B/C 三个独立 StarMap
+        let meta_a = create_starmap(dir.path(), "Map A", "", None).unwrap();
+        let meta_b = create_starmap(dir.path(), "Map B", "", None).unwrap();
+        let meta_c = create_starmap(dir.path(), "Map C", "", None).unwrap();
+        
+        let mut graph_a = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
+        let mut graph_b = get_starmap_graph(dir.path(), &meta_b.starmap_id).unwrap();
+        let mut graph_c = get_starmap_graph(dir.path(), &meta_c.starmap_id).unwrap();
+
+        // B 是空 StarMap，也可以被 embed
+        // A embed B
+        graph_a.embeds.push(crate::starmap::types::StarMapEmbed {
+            instance_id: "inst1".to_string(),
+            target_starmap_id: meta_b.starmap_id.clone(),
+            label: Some("B in A".to_string()),
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            viewport: None,
+            source_node_id: None,
+            host_anchor: None,
+            provenance: Default::default(),
+            created_at: now_epoch(),
+            updated_at: now_epoch(),
+        });
+
+        // 一个 StarMap 只有 embed，没有普通 node，合法
+        assert!(save_starmap_graph(dir.path(), &meta_a.starmap_id, &graph_a).is_ok());
+
+        // C 也能 embed B
+        graph_c.embeds.push(crate::starmap::types::StarMapEmbed {
+            instance_id: "inst2".to_string(),
+            target_starmap_id: meta_b.starmap_id.clone(),
+            label: Some("B in C".to_string()),
+            display_policy: Default::default(),
+            open_behavior: Default::default(),
+            viewport: None,
+            source_node_id: None,
+            host_anchor: None,
+            provenance: Default::default(),
+            created_at: now_epoch(),
+            updated_at: now_epoch(),
+        });
+        assert!(save_starmap_graph(dir.path(), &meta_c.starmap_id, &graph_c).is_ok());
+
+        // A link 到 B，不会创建 embed instance
+        graph_a.links.push(crate::starmap::types::StarMapLink {
+            link_id: "link1".to_string(),
+            source: crate::starmap::types::StarMapEndpoint::Starmap,
+            target: crate::starmap::semantic::StarMapDeepTarget {
+                starmap_id: meta_b.starmap_id.clone(),
+                path: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            label: None,
+            created_at: now_epoch(),
+            updated_at: now_epoch(),
+        });
+        assert!(save_starmap_graph(dir.path(), &meta_a.starmap_id, &graph_a).is_ok());
+
+        // B 本体仍然独立存在
+        assert!(crate::starmap::load_starmap_meta(dir.path(), &meta_b.starmap_id).is_ok());
+        
+        // 测试 find_starmap_references
+        let refs = crate::starmap::find_starmap_references(dir.path(), &meta_b.starmap_id).unwrap();
+        assert_eq!(refs.len(), 2);
+        let has_a = refs.iter().any(|r| r.starmap_id == meta_a.starmap_id && r.ref_type == "embed");
+        let has_c = refs.iter().any(|r| r.starmap_id == meta_c.starmap_id && r.ref_type == "embed");
+        assert!(has_a);
+        assert!(has_c);
+
+        // 删除 A 中的 B embed，不删除 B
+        graph_a.embeds.clear();
+        assert!(save_starmap_graph(dir.path(), &meta_a.starmap_id, &graph_a).is_ok());
+        assert!(crate::starmap::load_starmap_meta(dir.path(), &meta_b.starmap_id).is_ok());
+    }
+
+    #[test]
+    fn test_starmap_edge_patching() {
+        let dir = setup_workspace();
+        let meta_a = create_starmap(dir.path(), "Map A", "", None).unwrap();
+        let mut graph_a = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
+
+        // Add 2 nodes
+        let n1 = StarMapNode { id: "n1".to_string(), title: "n1".to_string(), kind: StarMapNodeKind::Note, payload: None, tags: vec![], content: Default::default(), anchors: vec![], portal: None, display_policy: Default::default(), open_behavior: Default::default(), provenance: Default::default(), created_at: now_epoch(), updated_at: now_epoch() };
+        let n2 = StarMapNode { id: "n2".to_string(), title: "n2".to_string(), kind: StarMapNodeKind::Note, payload: None, tags: vec![], content: Default::default(), anchors: vec![], portal: None, display_policy: Default::default(), open_behavior: Default::default(), provenance: Default::default(), created_at: now_epoch(), updated_at: now_epoch() };
+        
+        graph_a.nodes.push(n1);
+        graph_a.nodes.push(n2);
+        save_starmap_graph(dir.path(), &meta_a.starmap_id, &graph_a).unwrap();
+
+        // add edge
+        let edge = add_starmap_edge(dir.path(), &meta_a.starmap_id, StarMapEdge {
+            id: "e1".to_string(),
+            from: "n1".to_string(),
+            to: "n2".to_string(),
+            kind: StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
+            created_at: now_epoch(),
+            updated_at: now_epoch(),
+        }).unwrap();
+
+        // 1. 设置 to_target (Some(Some(target)))
+        let dt = crate::starmap::semantic::StarMapDeepTarget {
+            starmap_id: meta_a.starmap_id.clone(),
+            path: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Node { node_id: "n2".to_string() },
+        };
+        update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
+            kind: None, label: None, payload: None, from_target: None,
+            to_target: Some(Some(dt.clone()))
+        }).unwrap();
+        let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
+        assert!(g.edges[0].to_target.is_some());
+
+        // 2. 清空 to_target (Some(None))
+        update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
+            kind: None, label: None, payload: None, from_target: None,
+            to_target: Some(None)
+        }).unwrap();
+        let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
+        assert!(g.edges[0].to_target.is_none());
+
+        // 3. 不改 to_target (None)
+        update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
+            kind: None, label: None, payload: None, from_target: None,
+            to_target: None
+        }).unwrap();
+        let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
+        assert!(g.edges[0].to_target.is_none());
+    }
+
+    #[test]
+    fn test_deep_target_resolution() {
+        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+        let dir = setup_workspace();
+        let meta_a = create_starmap(dir.path(), "Map A", "", None).unwrap();
+        
+        // MissingStarmap
+        let dt_missing_sm = crate::starmap::semantic::StarMapDeepTarget {
+            starmap_id: "missing".to_string(),
+            path: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+        };
+        assert_eq!(resolve_deep_target(dir.path(), &dt_missing_sm), MissingStarmap);
+
+        // MissingNode
+        let dt_missing_node = crate::starmap::semantic::StarMapDeepTarget {
+            starmap_id: meta_a.starmap_id.clone(),
+            path: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Node { node_id: "non-existent".to_string() },
+        };
+        assert_eq!(resolve_deep_target(dir.path(), &dt_missing_node), MissingNode);
+        
+        let mut g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
+        g.nodes.push(StarMapNode { 
+            id: "n1".to_string(), title: "n1".to_string(), kind: StarMapNodeKind::Note, payload: None, tags: vec![], content: Default::default(), 
+            anchors: vec![crate::starmap::semantic::StarMapAnchor {
+                anchor_id: "a1".to_string(),
+                target: crate::starmap::semantic::StarMapAnchorTarget::Project { project_id: "p".to_string() },
+                label: None,
+                role: Default::default(),
+            }], 
+            portal: None, display_policy: Default::default(), open_behavior: Default::default(), provenance: Default::default(), created_at: now_epoch(), updated_at: now_epoch() 
+        });
+        save_starmap_graph(dir.path(), &meta_a.starmap_id, &g).unwrap();
+
+        // Node Exists
+        let dt_node_exists = crate::starmap::semantic::StarMapDeepTarget {
+            starmap_id: meta_a.starmap_id.clone(),
+            path: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Node { node_id: "n1".to_string() },
+        };
+        assert_eq!(resolve_deep_target(dir.path(), &dt_node_exists), Resolved);
+
+        // MissingAnchor
+        let dt_missing_anchor = crate::starmap::semantic::StarMapDeepTarget {
+            starmap_id: meta_a.starmap_id.clone(),
+            path: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id: "n1".to_string(), anchor_id: "missing".to_string() },
+        };
+        assert_eq!(resolve_deep_target(dir.path(), &dt_missing_anchor), MissingAnchor);
+
+        // Anchor Exists
+        let dt_anchor_exists = crate::starmap::semantic::StarMapDeepTarget {
+            starmap_id: meta_a.starmap_id.clone(),
+            path: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id: "n1".to_string(), anchor_id: "a1".to_string() },
+        };
+        assert_eq!(resolve_deep_target(dir.path(), &dt_anchor_exists), Resolved);
+
+        // Path > 32 => TooDeep
+        let dt_too_deep = crate::starmap::semantic::StarMapDeepTarget {
+            starmap_id: meta_a.starmap_id.clone(),
+            path: vec![crate::starmap::semantic::StarMapPathSegment::EnterNode { node_id: "n1".to_string() }; 33],
+            target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+        };
+        assert_eq!(resolve_deep_target(dir.path(), &dt_too_deep), TooDeep);
+    }
 }
+

@@ -110,6 +110,10 @@ pub struct StarMapGraph {
     pub title: String,
     pub nodes: Vec<StarMapNode>,
     pub edges: Vec<StarMapEdge>,
+    #[serde(default)]
+    pub embeds: Vec<StarMapEmbed>,
+    #[serde(default)]
+    pub links: Vec<StarMapLink>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -233,6 +237,8 @@ impl Default for StarMapGraph {
             title: String::new(),
             nodes: vec![],
             edges: vec![],
+            embeds: vec![],
+            links: vec![],
             created_at: 0,
             updated_at: 0,
         }
@@ -246,4 +252,57 @@ impl Default for StarMapLayout {
             nodes: vec![],
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapViewport {
+    #[serde(default = "default_scale")]
+    pub scale: f32,
+    #[serde(default)]
+    pub offset_x: f32,
+    #[serde(default)]
+    pub offset_y: f32,
+    #[serde(default)]
+    pub width: f32,
+    #[serde(default)]
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEmbed {
+    pub instance_id: String,
+    pub target_starmap_id: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub display_policy: crate::starmap::semantic::StarMapDisplayPolicy,
+    #[serde(default)]
+    pub open_behavior: crate::starmap::semantic::StarMapOpenBehavior,
+    pub viewport: Option<StarMapViewport>,
+    pub source_node_id: Option<String>,
+    pub host_anchor: Option<String>,
+    #[serde(default)]
+    pub provenance: crate::starmap::semantic::StarMapProvenance,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StarMapEndpoint {
+    Node { node_id: String },
+    Anchor { node_id: String, anchor_id: String },
+    Starmap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapLink {
+    pub link_id: String,
+    pub source: StarMapEndpoint,
+    pub target: crate::starmap::semantic::StarMapDeepTarget,
+    pub label: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
 }

@@ -292,6 +292,7 @@ pub enum StarMapTargetResolveStatus {
     MissingAnchor,
     TooDeep,
     CycleDetected,
+    InvalidRange,
 }
 
 /// 计算目标展示状态，只提供底层计算语义。
