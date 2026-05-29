@@ -91,7 +91,7 @@ class WorkspaceRepository(private val context: Context) {
         pastedChars: Int,
         aiInsertedChars: Int,
         sessionId: String
-    ): Boolean {
+    ): BridgeResult<Boolean> {
         return writingBridge.recordWritingEvent(
             deviceId, projectId, volumeId, chapterId,
             source, insertedChars, deletedChars, pastedChars, aiInsertedChars, sessionId
@@ -221,7 +221,7 @@ class WorkspaceRepository(private val context: Context) {
         oldText: String,
         newText: String,
         sessionId: String
-    ): Boolean {
+    ): BridgeResult<Boolean> {
         return writingBridge.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, sessionId)
     }
 

@@ -38,7 +38,9 @@
 - `save_syncable_settings(workspace_path: &Path, settings: &SyncableSettings) -> Result<()>`
 - `backup_project(path: &Path, project_id: &str) -> Result<()>`
 - `move_chapter_to_trash(path: &Path, chapter_id: &str) -> Result<()>`
-- `flush_writing_stats() -> Result<()>`
+- `process_writing_event(...) -> Result<bool, WriterError>`
+- `record_writing_event(...) -> Result<bool, WriterError>`
+- `flush_writing_stats() -> Result<bool, WriterError>`
 
 ### 文件操作
 所有写操作（`save_chapter`、`save_*_settings`）必须使用原子写入（写入临时文件、`fsync/flush`，然后原子 `rename`）。
@@ -49,6 +51,8 @@
 
 ### 错误处理
 Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来处理内部失败模式。跨平台 `api::error::WriterError` 是平台暴露层稳定错误类型，由 `api/error.rs` 集中映射。跨端 Bridge 必须传播稳定错误码和错误语义，不得吞错或只依赖字符串匹配。当前稳定错误码包括 `IO_ERROR`、`JSON_ERROR`、`INVALID_WORKSPACE`、`PROJECT_NOT_FOUND`、`VOLUME_NOT_FOUND`、`CHAPTER_NOT_FOUND`、`EMPTY_OVERWRITE_BLOCKED`、`NOT_IMPLEMENTED`、`REFUSE_DELETE_WORKSPACE_ROOT`、`INVALID_DELETE_TARGET`、`OTHER`。
+
+写入、保存、同步和写作统计事件类 API 不允许用裸 `false` 代替错误。`bool` 只能表示业务成功值；Core API 失败必须返回 `WriterError`，Android Bridge 必须转换为 `BridgeResult.Error`。
 
 ### 跨端 DTO
 

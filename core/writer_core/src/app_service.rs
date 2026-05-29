@@ -294,7 +294,7 @@ impl WriterAppService {
         old_text: String,
         new_text: String,
         session_id: String,
-    ) -> bool {
+    ) -> Result<bool, WriterError> {
         self.api.process_writing_event(
             &device_id,
             &platform,
@@ -319,7 +319,7 @@ impl WriterAppService {
         pasted_chars: i32,
         ai_inserted_chars: i32,
         session_id: String,
-    ) -> bool {
+    ) -> Result<bool, WriterError> {
         self.api.record_writing_event(
             &device_id,
             &project_id,
@@ -334,7 +334,7 @@ impl WriterAppService {
         )
     }
 
-    pub fn flush_writing_stats(&self) -> bool {
+    pub fn flush_writing_stats(&self) -> Result<bool, WriterError> {
         self.api.flush_writing_stats()
     }
 

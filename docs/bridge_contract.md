@@ -9,6 +9,7 @@
 - 新调用必须进入既有或新增领域 Bridge，不得把裸 JSON `String`、`Boolean`、`null` 当作正常上层接口继续扩散。
 - Stats / StarMap / MindMap 仍有 JSON 字符串残留时，解析必须封闭在对应领域 Bridge 内，向上返回 `BridgeResult<T>`；`Error` 和 `NotLoaded` 必须原样传播。
 - Bridge 错误必须包含稳定 `code` 和可展示 `message`，不能只依赖字符串匹配。
+- 写入、写作统计、保存和同步类 API 的 `Boolean` 只能表示业务成功值，不能表示错误状态；失败必须通过 typed error / `BridgeResult.Error` 向上传递。
 
 ## 领域 Bridge 架构
 
@@ -19,7 +20,7 @@
   - `main.rs` 只是 QObject 适配层，仅做 QJsonObject 转换，不处理具体业务逻辑或控制流。
   - QML 只读取 QJsonObject 字段（`success`, `data`, `code` 等），不处理 JSON 字符串解析（`JSON.parse`）。
   - Legacy `JSON over JNI` 目前只在 Android legacy fallback 内保留，并通过 `BridgeProvider` 与主 UniFFI 领域 Bridge 隔离。
-在关键业务路径（如保存章节），错误必须向上传递为明确的类型（如 Android 中的 `BridgeResult`，Linux 中的 `QJsonObject`），不允许退化成无上下文的 `bool`。
+在关键业务路径（如保存章节、写作统计事件记录），错误必须向上传递为明确的类型（如 Android 中的 `BridgeResult`，Linux 中的 `QJsonObject`），不允许退化成无上下文的 `bool`。
 
 ## 关键领域接口：
 

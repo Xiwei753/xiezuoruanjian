@@ -1226,7 +1226,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume() != 5254.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats() != 14666.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats() != 56971.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot_json() != 44398.toShort()) {
@@ -1295,13 +1295,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run() != 3610.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_process_writing_event() != 49968.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_process_writing_event() != 21664.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_record_recent_edit() != 60183.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_record_writing_event() != 40729.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_record_writing_event() != 47281.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_chapter() != 2312.toShort()) {
@@ -2141,10 +2141,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
 
 
-    override fun `flushWritingStats`(): kotlin.Boolean {
+
+    @Throws(WriterException::class)override fun `flushWritingStats`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(
         it, _status)
 }
@@ -2439,10 +2440,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
 
 
-    override fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean {
+
+    @Throws(WriterException::class)override fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_process_writing_event(
         it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`platform`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`oldText`),FfiConverterString.lower(`newText`),FfiConverterString.lower(`sessionId`),_status)
 }
@@ -2464,10 +2466,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
 
 
-    override fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean {
+
+    @Throws(WriterException::class)override fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_record_writing_event(
         it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`source`),FfiConverterInt.lower(`insertedChars`),FfiConverterInt.lower(`deletedChars`),FfiConverterInt.lower(`pastedChars`),FfiConverterInt.lower(`aiInsertedChars`),FfiConverterString.lower(`sessionId`),_status)
 }

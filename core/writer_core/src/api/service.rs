@@ -28,6 +28,16 @@ impl WriterCoreApi {
         serde_json::to_string(value).map_err(Into::into)
     }
 
+    fn non_negative_counter(name: &str, value: i32) -> ApiResult<u32> {
+        if value < 0 {
+            return Err(WriterError::Other(format!(
+                "negative writing event counter: {}={}",
+                name, value
+            )));
+        }
+        Ok(value as u32)
+    }
+
     pub fn list_projects(&self) -> ApiResult<Vec<ProjectDto>> {
         self.core()
             .list_projects()
@@ -375,13 +385,14 @@ impl WriterCoreApi {
         old_text: &str,
         new_text: &str,
         session_id: &str,
-    ) -> bool {
+    ) -> ApiResult<bool> {
         self.core()
             .process_writing_event(
                 device_id, platform, project_id, volume_id, chapter_id, old_text, new_text,
                 session_id,
             )
-            .is_ok()
+            .map(|_| true)
+            .map_err(WriterError::from)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -397,7 +408,13 @@ impl WriterCoreApi {
         pasted_chars: i32,
         ai_inserted_chars: i32,
         session_id: &str,
-    ) -> bool {
+    ) -> ApiResult<bool> {
+        let inserted_chars = Self::non_negative_counter("inserted_chars", inserted_chars)?;
+        let deleted_chars = Self::non_negative_counter("deleted_chars", deleted_chars)?;
+        let pasted_chars = Self::non_negative_counter("pasted_chars", pasted_chars)?;
+        let ai_inserted_chars =
+            Self::non_negative_counter("ai_inserted_chars", ai_inserted_chars)?;
+
         self.core()
             .record_writing_event(
                 device_id,
@@ -406,17 +423,21 @@ impl WriterCoreApi {
                 volume_id,
                 chapter_id,
                 source,
-                inserted_chars as u32,
-                deleted_chars as u32,
-                pasted_chars as u32,
-                ai_inserted_chars as u32,
+                inserted_chars,
+                deleted_chars,
+                pasted_chars,
+                ai_inserted_chars,
                 session_id,
             )
-            .is_ok()
+            .map(|_| true)
+            .map_err(WriterError::from)
     }
 
-    pub fn flush_writing_stats(&self) -> bool {
-        self.core().flush_writing_stats().is_ok()
+    pub fn flush_writing_stats(&self) -> ApiResult<bool> {
+        self.core()
+            .flush_writing_stats()
+            .map(|_| true)
+            .map_err(WriterError::from)
     }
 
     pub fn get_mindmap_snapshot_json(&self, project_id: &str) -> ApiResult<String> {
@@ -486,6 +507,7 @@ impl WriterCoreApi {
 mod tests {
     use super::*;
     use crate::mind_map::graph::{MindMapGraph, MindMapGraphNode, MindMapNodeKind};
+    use std::fs::File;
     use tempfile::tempdir;
 
     fn valid_graph(project_id: &str) -> MindMapGraph {
@@ -509,6 +531,113 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         }
+    }
+
+    #[test]
+    fn record_writing_event_returns_true_on_success() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let result = api
+            .record_writing_event(
+                "dev-1",
+                "proj1",
+                "vol1",
+                "chap1",
+                "human_typed",
+                10,
+                0,
+                0,
+                0,
+                "session-1",
+            )
+            .unwrap();
+
+        assert!(result);
+    }
+
+    #[test]
+    fn process_writing_event_returns_true_on_success() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let result = api
+            .process_writing_event(
+                "dev-1",
+                "android",
+                "proj1",
+                "vol1",
+                "chap1",
+                "old",
+                "old text",
+                "session-1",
+            )
+            .unwrap();
+
+        assert!(result);
+    }
+
+    #[test]
+    fn flush_writing_stats_returns_true_on_success() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        assert!(api.flush_writing_stats().unwrap());
+    }
+
+    #[test]
+    fn record_writing_event_rejects_negative_counter() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let err = api
+            .record_writing_event(
+                "dev-1",
+                "proj1",
+                "vol1",
+                "chap1",
+                "human_typed",
+                0,
+                -1,
+                0,
+                0,
+                "session-1",
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            WriterError::Other(message)
+                if message.contains("negative writing event counter")
+                    && message.contains("deleted_chars=-1")
+        ));
+    }
+
+    #[test]
+    fn process_writing_event_propagates_core_error() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_file = temp_dir.path().join("not_a_directory");
+        File::create(&workspace_file).unwrap();
+        let api = WriterCoreApi::new(&workspace_file);
+
+        let err = api
+            .process_writing_event(
+                "dev-1",
+                "android",
+                "proj1",
+                "vol1",
+                "chap1",
+                "old",
+                "old text",
+                "session-1",
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, WriterError::Io(_)));
     }
 
     #[test]
