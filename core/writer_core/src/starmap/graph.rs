@@ -318,6 +318,12 @@ pub fn update_starmap_edge(
         if let Some(tt) = patch.to_target {
             edge.to_target = tt;
         }
+        if let Some(fe) = patch.from_endpoint {
+            edge.from_endpoint = fe;
+        }
+        if let Some(te) = patch.to_endpoint {
+            edge.to_endpoint = te;
+        }
         edge.updated_at = now_epoch();
         let updated_edge = edge.clone();
         graph.updated_at = now_epoch();
@@ -1465,37 +1471,38 @@ mod tests {
             updated_at: now_epoch(),
         }).unwrap();
 
-        // 1. 设置 to_target (Some(Some(target)))
+        // 1. 设置 to_endpoint (Some(Some(endpoint)))
         let dt = crate::starmap::semantic::StarMapDeepTarget {
             starmap_id: meta_a.starmap_id.clone(),
             path: vec![],
             target: crate::starmap::semantic::StarMapTargetDetail::Node { node_id: "n2".to_string() },
         };
         update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
-            kind: None, label: None, payload: None, from_target: None,
-            to_target: Some(Some(dt.clone())),
-            from_endpoint: None, to_endpoint: None,
+            kind: None, label: None, payload: None, from_target: None, to_target: None,
+            from_endpoint: None,
+            to_endpoint: Some(Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target: dt.clone() })),
         }).unwrap();
         let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
-        assert!(g.edges[0].to_target.is_some());
+        assert!(matches!(g.edges[0].to_endpoint, Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { .. })));
 
-        // 2. 清空 to_target (Some(None))
+        // 2. 清空 to_endpoint (Some(None))
         update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
-            kind: None, label: None, payload: None, from_target: None,
-            to_target: Some(None),
-            from_endpoint: None, to_endpoint: None,
+            kind: None, label: None, payload: None, from_target: None, to_target: None,
+            from_endpoint: None,
+            to_endpoint: Some(None),
         }).unwrap();
         let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
-        assert!(g.edges[0].to_target.is_none());
+        assert!(g.edges[0].to_endpoint.is_none());
 
-        // 3. 不改 to_target (None)
+        // 3. 不改 to_endpoint (None) 但是设置 from_endpoint = Node
         update_starmap_edge(dir.path(), &meta_a.starmap_id, "e1", StarMapEdgePatch {
-            kind: None, label: None, payload: None, from_target: None,
-            to_target: None,
-            from_endpoint: None, to_endpoint: None,
+            kind: None, label: None, payload: None, from_target: None, to_target: None,
+            from_endpoint: Some(Some(crate::starmap::types::StarMapEdgeEndpoint::Node { node_id: "n1".to_string() })),
+            to_endpoint: None,
         }).unwrap();
         let g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
-        assert!(g.edges[0].to_target.is_none());
+        assert!(g.edges[0].to_endpoint.is_none());
+        assert!(matches!(g.edges[0].from_endpoint, Some(crate::starmap::types::StarMapEdgeEndpoint::Node { .. })));
     }
 
     #[test]
