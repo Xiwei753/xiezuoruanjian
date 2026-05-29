@@ -25,10 +25,10 @@
 //! ## 调用链示例
 //!
 //! ```text
-//! QML: AppBackend.create_project("My Book")
-//!   → Rust: WriterCore::create_project("My Book")
-//!     → Core: project::create_project()
-//!       → storage::atomic_write_string()
+//! QML: AppBackend.create_project_json("My Book")
+//!   → Rust: WriterCoreApi::create_project("My Book")
+//!     → Core facade: WriterCore::create_project()
+//!       → Core domain: project::create_project()
 //! ```
 
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
