@@ -531,13 +531,22 @@ internal class NativeCoreBridge(context: Context) {
         }
     }
 
-    fun getWritingStatsSummary(startDate: String, endDate: String): String? {
-        if (!isLoaded) return null
+    fun getWritingStatsSummary(startDate: String, endDate: String): NativeResult<StatsSummary> {
+        if (!isLoaded) return NativeResult.NotLoaded
         return try {
-            getWritingStatsSummaryNative(workspaceDir, startDate, endDate)
+            val json = getWritingStatsSummaryNative(workspaceDir, startDate, endDate)
+            if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
+
+            // StatsSummary was previously parsed directly from JSON string (not wrapped in RustResponse in StatsBridge)
+            // But let's try RustResponse first or fallback to direct.
+            // Based on previous StatsBridge code: val summary = Gson().fromJson(json, StatsSummary::class.java)
+            // We will do direct parsing as per legacy behavior.
+            val summary = gson.fromJson(json, StatsSummary::class.java)
+            NativeResult.Success(summary)
         } catch (e: Throwable) {
             e.printStackTrace()
-            null
+            if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
+            NativeResult.Error(e.message ?: "Exception occurred")
         }
     }
 
@@ -1587,13 +1596,13 @@ internal class NativeCoreBridge(context: Context) {
 
     // --- Writing Stats: extended ---
 
-    fun getWritingStatsByProject(startDate: String, endDate: String): NativeResult<Any> {
+    fun getWritingStatsByProject(startDate: String, endDate: String): NativeResult<ProjectStatsSummary> {
         if (!isLoaded) return NativeResult.NotLoaded
         return try {
             val json = getWritingStatsByProjectNative(workspaceDir, startDate, endDate)
             if (json.isNullOrEmpty()) return NativeResult.Error("Empty or null response from native bridge")
-            val type = object : TypeToken<RustResponse<Any>>() {}.type
-            val response: RustResponse<Any> = gson.fromJson(json, type)
+            val type = object : TypeToken<RustResponse<ProjectStatsSummary>>() {}.type
+            val response: RustResponse<ProjectStatsSummary> = gson.fromJson(json, type)
             if (response.success && response.data != null) {
                 NativeResult.Success(response.data)
             } else {

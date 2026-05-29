@@ -1029,13 +1029,13 @@ fn result_to_jstring_unified<T: Serialize>(
     result: Result<T, writer_core::Error>,
 ) -> jstring {
     let json_str = match result {
-        Ok(data) => json!({
+        Ok(data) => serde_json::json!({
             "success": true,
             "data": data,
             "error": serde_json::Value::Null
         })
         .to_string(),
-        Err(e) => json!({
+        Err(e) => serde_json::json!({
             "success": false,
             "data": serde_json::Value::Null,
             "error": e.to_string()
