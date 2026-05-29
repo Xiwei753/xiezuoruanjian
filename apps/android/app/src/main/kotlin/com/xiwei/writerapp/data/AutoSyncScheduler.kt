@@ -12,7 +12,7 @@ import com.xiwei.writerapp.model.SyncSecrets
  * 根据用户设置的同步间隔，自动触发后台同步任务。
  *
  * ## 架构定位
- * - WriterApp → AutoSyncScheduler → SettingsRepository → NativeCoreBridge → Rust Core
+ * - WriterApp → AutoSyncScheduler → SettingsRepository → SyncBridge → Rust Core
  *
  * ## 职责边界
  * - **做**：定时检查同步配置、触发自动同步、网络状态检测
@@ -87,23 +87,21 @@ class AutoSyncScheduler(context: Context) {
                 val result = settingsRepository.performSync(config)
                 if (SyncSession.currentTaskId.get() == taskId) {
                     when (result) {
-                        is NativeResult.Error -> {
+                        is BridgeResult.Error -> {
                             System.err.println("AutoSync failed: ${result.message}")
                         }
-                        NativeResult.NotLoaded -> {
+                        BridgeResult.NotLoaded -> {
                             System.err.println("AutoSync: native core not loaded")
                         }
-                        is NativeResult.Success -> {
+                        is BridgeResult.Success -> {
                             val syncResult = result.data
-                            if (syncResult != null) {
-                                val ok = syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success ||
-                                    syncResult.status == com.xiwei.writerapp.model.SyncStatus.NoChanges ||
-                                    syncResult.status == com.xiwei.writerapp.model.SyncStatus.LatestWinsApplied ||
-                                    syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered
-                                if (ok) {
-                                    SyncChangeBus.notifyChanged()
-                                    System.out.println("AutoSync success: reason=$reason")
-                                }
+                            val ok = syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success ||
+                                syncResult.status == com.xiwei.writerapp.model.SyncStatus.NoChanges ||
+                                syncResult.status == com.xiwei.writerapp.model.SyncStatus.LatestWinsApplied ||
+                                syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered
+                            if (ok) {
+                                SyncChangeBus.notifyChanged()
+                                System.out.println("AutoSync success: reason=$reason")
                             }
                         }
                     }

@@ -8,10 +8,10 @@ import com.xiwei.writerapp.model.SyncableSettings
 /**
  * SettingsRepository — 设置仓库层
  *
- * 对 NativeCoreBridge 设置相关 API 的封装，提供统一的设置读写接口。
+ * 对设置、同步、native 状态领域 Bridge 的封装，提供统一的设置读写接口。
  *
  * ## 架构定位
- * - ViewModel → SettingsRepository → NativeCoreBridge → JNI → Rust Core
+ * - ViewModel/Activity → SettingsRepository → SettingsBridge/SyncBridge → legacy internal adapter → JNI → Rust Core
  *
  * ## 职责边界
  * - **做**：加载/保存本地设置、可同步设置、同步配置和密钥
@@ -23,56 +23,58 @@ import com.xiwei.writerapp.model.SyncableSettings
  * - SyncPage 加载/保存同步配置
  */
 class SettingsRepository(context: Context) {
-    private val bridge = BridgeProvider.getNativeStatusBridge(context)
+    private val settingsBridge = BridgeProvider.getSettingsBridge(context)
+    private val syncBridge = BridgeProvider.getSyncBridge(context)
+    private val nativeStatusBridge = BridgeProvider.getNativeStatusBridge(context)
 
     fun getLocalSettings(): LocalSettings {
-        return when (val result = bridge.getLocalSettings()) {
-            is NativeResult.Success -> result.data ?: LocalSettings()
-            is NativeResult.Error -> {
+        return when (val result = settingsBridge.getLocalSettings()) {
+            is BridgeResult.Success -> result.data ?: LocalSettings()
+            is BridgeResult.Error -> {
                 System.err.println("加载本地设置失败: ${result.message}")
                 LocalSettings()
             }
-            NativeResult.NotLoaded -> LocalSettings()
+            BridgeResult.NotLoaded -> LocalSettings()
         }
     }
 
     fun saveLocalSettings(settings: LocalSettings): Boolean {
-        return when (val result = bridge.saveLocalSettings(settings)) {
-            is NativeResult.Success -> {
+        return when (val result = settingsBridge.saveLocalSettings(settings)) {
+            is BridgeResult.Success -> {
                 SettingsChangeBus.notifyChanged()
                 result.data
             }
-            is NativeResult.Error -> {
+            is BridgeResult.Error -> {
                 System.err.println("保存本地设置失败: ${result.message}")
                 false
             }
-            NativeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> false
         }
     }
 
     fun getSyncableSettings(): SyncableSettings {
-        return when (val result = bridge.getSyncableSettings()) {
-            is NativeResult.Success -> result.data ?: SyncableSettings()
-            is NativeResult.Error -> {
+        return when (val result = settingsBridge.getSyncableSettings()) {
+            is BridgeResult.Success -> result.data ?: SyncableSettings()
+            is BridgeResult.Error -> {
                 System.err.println("加载同步设置失败: ${result.message}")
                 val defaultSettings = SyncableSettings()
                 defaultSettings
             }
-            NativeResult.NotLoaded -> SyncableSettings()
+            BridgeResult.NotLoaded -> SyncableSettings()
         }
     }
 
     fun saveSyncableSettings(settings: SyncableSettings): Boolean {
-        return when (val result = bridge.saveSyncableSettings(settings)) {
-            is NativeResult.Success -> {
+        return when (val result = settingsBridge.saveSyncableSettings(settings)) {
+            is BridgeResult.Success -> {
                 SettingsChangeBus.notifyChanged()
                 result.data
             }
-            is NativeResult.Error -> {
+            is BridgeResult.Error -> {
                 System.err.println("保存同步设置失败: ${result.message}")
                 false
             }
-            NativeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> false
         }
     }
 
@@ -94,74 +96,78 @@ class SettingsRepository(context: Context) {
     }
 
     fun loadSyncState(): SyncState {
-        return when (val result = bridge.loadSyncState()) {
-            is NativeResult.Success -> result.data
-            is NativeResult.Error -> {
+        return when (val result = syncBridge.loadSyncState()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
                 System.err.println("加载同步状态失败: ${result.message}")
                 SyncState()
             }
-            NativeResult.NotLoaded -> SyncState()
+            BridgeResult.NotLoaded -> SyncState()
         }
     }
 
     fun loadSyncConfig(): SyncConfig {
-        return when (val result = bridge.loadSyncConfig()) {
-            is NativeResult.Success -> result.data.normalize()
-            is NativeResult.Error -> {
+        return when (val result = syncBridge.loadSyncConfig()) {
+            is BridgeResult.Success -> result.data.normalize()
+            is BridgeResult.Error -> {
                 System.err.println("加载同步配置失败: ${result.message}")
                 SyncConfig().normalize()
             }
-            NativeResult.NotLoaded -> SyncConfig().normalize()
+            BridgeResult.NotLoaded -> SyncConfig().normalize()
         }
     }
 
     fun saveSyncConfig(config: SyncConfig): Boolean {
-        return when (val result = bridge.saveSyncConfig(config)) {
-            is NativeResult.Success -> result.data
-            is NativeResult.Error -> {
+        return when (val result = syncBridge.saveSyncConfig(config)) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
                 System.err.println("保存同步配置失败: ${result.message}")
                 false
             }
-            NativeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> false
         }
     }
 
     fun loadSyncSecrets(): SyncSecrets {
-        return when (val result = bridge.loadSyncSecrets()) {
-            is NativeResult.Success -> result.data ?: SyncSecrets()
-            is NativeResult.Error -> {
+        return when (val result = syncBridge.loadSyncSecrets()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
                 System.err.println("加载同步密钥失败: ${result.message}")
                 SyncSecrets()
             }
-            NativeResult.NotLoaded -> SyncSecrets()
+            BridgeResult.NotLoaded -> SyncSecrets()
         }
     }
 
     fun saveSyncSecrets(secrets: SyncSecrets): Boolean {
-        return when (val result = bridge.saveSyncSecrets(secrets)) {
-            is NativeResult.Success -> result.data
-            is NativeResult.Error -> {
+        return when (val result = syncBridge.saveSyncSecrets(secrets)) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
                 System.err.println("保存同步密钥失败: ${result.message}")
                 false
             }
-            NativeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> false
         }
     }
 
     fun aiAvailable(): Boolean {
-        return bridge.aiAvailable()
+        return nativeStatusBridge.aiAvailable()
     }
 
-    fun performSyncDiagnostics(config: SyncConfig): NativeResult<SyncDiagnosticsResult> {
-        return bridge.performSyncDiagnostics(config)
+    fun workspaceDir(): String {
+        return nativeStatusBridge.workspaceDir
     }
 
-    fun performSyncDryRun(config: SyncConfig): NativeResult<SyncPlan> {
-        return bridge.performSyncDryRun(config)
+    fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> {
+        return syncBridge.performSyncDiagnostics(config)
     }
 
-    fun performSync(config: SyncConfig): NativeResult<SyncResult> {
-        return bridge.performSync(config)
+    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> {
+        return syncBridge.performSyncDryRun(config)
+    }
+
+    fun performSync(config: SyncConfig): BridgeResult<SyncResult> {
+        return syncBridge.performSync(config)
     }
 
 }

@@ -3,7 +3,7 @@ package com.xiwei.writerapp.data
 import com.xiwei.writerapp.model.ChapterOpenResult
 import com.xiwei.writerapp.model.ChapterSaveReceipt
 
-class WritingBridge(private val nativeBridge: NativeCoreBridge) {
+class WritingBridge internal constructor(private val nativeBridge: NativeCoreBridge) {
     fun openChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterOpenResult> =
         nativeBridge.openChapter(projectId, volumeId, chapterId).toBridgeResult()
     fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> =

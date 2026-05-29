@@ -17,6 +17,8 @@ object BridgeProvider {
     fun getStatsBridge(context: Context): StatsBridge = StatsBridge(getNativeBridge(context))
     fun getStarmapBridge(context: Context): StarMapBridge = StarMapBridge(getNativeBridge(context))
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getNativeBridge(context))
+    fun getSettingsBridge(context: Context): SettingsBridge = SettingsBridge(getNativeBridge(context))
+    fun getSyncBridge(context: Context): SyncBridge = SyncBridge(getNativeBridge(context))
 
-    fun getNativeStatusBridge(context: Context): NativeCoreBridge = getNativeBridge(context)
+    fun getNativeStatusBridge(context: Context): NativeStatusBridge = NativeStatusBridge(getNativeBridge(context))
 }

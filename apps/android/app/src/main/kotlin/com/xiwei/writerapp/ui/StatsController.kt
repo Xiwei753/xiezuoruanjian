@@ -25,7 +25,7 @@ import org.json.JSONObject
  * 加载并展示今日、本周、本月的写作统计数据。
  *
  * ## 架构定位
- * - MainActivity → StatsController → StatsBridge → NativeCoreBridge → JNI → Rust Core
+ * - MainActivity → StatsController → StatsBridge → legacy internal adapter → JNI → Rust Core
  *
  * ## 职责边界
  * - **做**：加载统计数据、格式化展示、计算字数/时长/速度

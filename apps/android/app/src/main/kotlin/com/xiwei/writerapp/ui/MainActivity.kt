@@ -6,18 +6,10 @@ import android.widget.Toast
 import android.widget.FrameLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
-import com.xiwei.writerapp.data.NativeCoreBridge
-import com.xiwei.writerapp.data.StarMapBridge
-import com.xiwei.writerapp.model.StarMapData
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import com.xiwei.writerapp.data.NativeResult
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.TextView
@@ -49,7 +41,7 @@ import android.os.Build
  * - **不做**：具体业务逻辑（由各 Controller 负责）
  *
  * ## 依赖关系
- * - 领域 Bridge：Rust Core JNI 桥接
+ * - 领域 Bridge：Rust Core JNI 桥接（legacy adapter 仅在 data 层内部）
  * - StarMapController：星图标签页控制器
  * - StatsController：统计标签页控制器
  *

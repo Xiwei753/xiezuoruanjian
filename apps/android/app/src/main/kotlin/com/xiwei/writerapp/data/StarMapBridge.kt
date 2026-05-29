@@ -5,7 +5,7 @@ import com.xiwei.writerapp.model.StarMapData
 import com.xiwei.writerapp.model.StarMapGraphNode
 import com.xiwei.writerapp.model.StarMapLayoutData
 
-class StarMapBridge(private val nativeBridge: NativeCoreBridge) {
+class StarMapBridge internal constructor(private val nativeBridge: NativeCoreBridge) {
     fun listStarmaps(): BridgeResult<List<StarMapMeta>> = nativeBridge.listStarmaps().toBridgeResult()
     fun createStarmap(title: String, desc: String): BridgeResult<StarMapMeta> = nativeBridge.createStarmap(title, desc).toBridgeResult()
     fun getStarmapGraph(starmapId: String): BridgeResult<StarMapData> = nativeBridge.getStarmapGraph(starmapId).toBridgeResult()

@@ -11,9 +11,10 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.xiwei.writerapp.R
+import com.xiwei.writerapp.data.BridgeResult
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.SettingsChangeBus
-import com.xiwei.writerapp.data.WorkspaceManager
+import com.xiwei.writerapp.model.BridgeError
 import com.xiwei.writerapp.model.LocalSettings
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -22,7 +23,6 @@ import com.google.android.material.textfield.TextInputEditText
 import com.xiwei.writerapp.model.SyncConfig
 import com.xiwei.writerapp.model.SyncTransport
 import com.xiwei.writerapp.model.SyncSecrets
-import com.xiwei.writerapp.data.NativeResult
 import com.xiwei.writerapp.model.FirstSyncMode
 import com.xiwei.writerapp.data.SyncSession
 
@@ -305,7 +305,11 @@ class SettingsActivity : AppCompatActivity() {
 
 
 
-        tvWorkspacePath.text = WorkspaceManager.getWorkspaceDir(this).absolutePath
+        tvWorkspacePath.text = if (::settingsRepository.isInitialized) {
+            settingsRepository.workspaceDir()
+        } else {
+            ""
+        }
 
         try {
             val packageInfo = packageManager.getPackageInfo(packageName, 0)
@@ -394,7 +398,7 @@ class SettingsActivity : AppCompatActivity() {
         saveCurrentState()
 
         Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during dry run")) {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(BridgeError(message = "Exception during dry run"))) {
                 settingsRepository.performSyncDryRun(currentSyncConfig)
             }
             if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
@@ -412,17 +416,15 @@ class SettingsActivity : AppCompatActivity() {
                 btnPerformSync.isEnabled = true
                 btnTestConnection.isEnabled = true
                 when (result) {
-                    is NativeResult.Success -> {
+                    is BridgeResult.Success -> {
                         val plan = result.data
-                        if (plan != null) {
-                            val msg = "同步计划检查完成: " + getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.filesToDeleteRemote.size, plan.filesToDeleteLocal.size, plan.ignoredFiles.size)
-                            Toast.makeText(this@SettingsActivity, msg, Toast.LENGTH_LONG).show()
-                        }
+                        val msg = "同步计划检查完成: " + getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.filesToDeleteRemote.size, plan.filesToDeleteLocal.size, plan.ignoredFiles.size)
+                        Toast.makeText(this@SettingsActivity, msg, Toast.LENGTH_LONG).show()
                     }
-                    is NativeResult.Error -> {
+                    is BridgeResult.Error -> {
                         Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
                     }
-                    NativeResult.NotLoaded -> {
+                    BridgeResult.NotLoaded -> {
                         Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -441,7 +443,7 @@ class SettingsActivity : AppCompatActivity() {
         saveCurrentState()
 
         Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during diagnostic run")) {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(BridgeError(message = "Exception during diagnostic run"))) {
                 settingsRepository.performSyncDiagnostics(currentSyncConfig)
             }
             if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
@@ -459,10 +461,9 @@ class SettingsActivity : AppCompatActivity() {
                 btnDryRun.isEnabled = true
                 btnPerformSync.isEnabled = true
                 when (result) {
-                    is NativeResult.Success -> {
+                    is BridgeResult.Success -> {
                         val diag = result.data
-                        if (diag != null) {
-                            val msgBuilder = StringBuilder()
+                        val msgBuilder = StringBuilder()
                             val mapStatus = { s: String ->
                                 when (s) {
                                     "ok" -> "正常"
@@ -515,17 +516,16 @@ class SettingsActivity : AppCompatActivity() {
                                 msgBuilder.append("\n\n原始错误:\n${diag.rawError}")
                             }
 
-                            AlertDialog.Builder(this@SettingsActivity)
-                                .setTitle(if (diag.success) "诊断成功" else "诊断失败")
-                                .setMessage(msgBuilder.toString())
-                                .setPositiveButton(getString(R.string.action_ok), null)
-                                .show()
-                        }
+                        AlertDialog.Builder(this@SettingsActivity)
+                            .setTitle(if (diag.success) "诊断成功" else "诊断失败")
+                            .setMessage(msgBuilder.toString())
+                            .setPositiveButton(getString(R.string.action_ok), null)
+                            .show()
                     }
-                    is NativeResult.Error -> {
+                    is BridgeResult.Error -> {
                         Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
                     }
-                    NativeResult.NotLoaded -> {
+                    BridgeResult.NotLoaded -> {
                         Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -553,7 +553,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, NativeResult.Error("Exception during sync")) {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(BridgeError(message = "Exception during sync"))) {
                 settingsRepository.performSync(currentSyncConfig)
             }
             if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
@@ -571,10 +571,9 @@ class SettingsActivity : AppCompatActivity() {
                 btnDryRun.isEnabled = true
                 btnTestConnection.isEnabled = true
                 when (result) {
-                    is NativeResult.Success -> {
+                    is BridgeResult.Success -> {
                         val syncResult = result.data
-                        if (syncResult != null) {
-                            if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Conflict) {
+                        if (syncResult.status == com.xiwei.writerapp.model.SyncStatus.Conflict) {
                                 val summary = syncResult.conflictSummary
                                 val settingConflicts = syncResult.settingsConflicts
                                 val msgBuilder = StringBuilder()
@@ -669,13 +668,12 @@ class SettingsActivity : AppCompatActivity() {
                                     .setMessage(syncResult.error)
                                     .setPositiveButton(getString(R.string.action_ok), null)
                                     .show()
-                            }
                         }
                     }
-                    is NativeResult.Error -> {
+                    is BridgeResult.Error -> {
                         Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
                     }
-                    NativeResult.NotLoaded -> {
+                    BridgeResult.NotLoaded -> {
                         Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }

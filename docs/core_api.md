@@ -37,3 +37,7 @@
 
 - `ChapterOpenResult { meta, content }`：打开章节的唯一权威返回，客户端不应再自行用列表结果拼接标题、备注或正文。
 - `ChapterSaveReceipt { chapter_relative_path, content_len, content_hash, meta_hash, updated_at, word_count }`：保存或明确清空后的回执，供客户端确认 Core 已完成写入和校验。
+
+### Android Bridge 入口
+
+Android 底层仍通过 `NativeCoreBridge` 兼容旧 JSON over JNI 包装，但该类已被限制为内部 legacy adapter。上层入口必须使用领域 Bridge：`WorkspaceBridge`、`WritingBridge`、`StatsBridge`、`StarMapBridge`、`ActionBridge`、`SettingsBridge`、`SyncBridge`、`NativeStatusBridge`。Repository/UI/ViewModel/Controller 不应直接处理 `NativeResult` 或 `NativeCoreBridge`。

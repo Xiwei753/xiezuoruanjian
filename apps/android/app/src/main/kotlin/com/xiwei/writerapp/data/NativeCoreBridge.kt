@@ -7,13 +7,13 @@ package com.xiwei.writerapp.data
 //! ## 架构定位
 //!
 /**
- * `NativeCoreBridge` 是负责与 Rust JNI 层通信的核心适配器类。
+ * `NativeCoreBridge` 是负责与 Rust JNI 层通信的 legacy/internal 适配器。
  *
  * 【架构边界警告 - 桥接第四阶段最终收口】
  * - `NativeCoreBridge` 是遗留的 JSON over JNI 兼容中心。
- * - 只有 `WorkspaceBridge`, `WritingBridge` 等专用领域 Bridge 允许直接调用它。
- * - Repository, ViewModel, Activity 严禁直接 `new NativeCoreBridge()`，必须使用 `BridgeProvider`。
- * - 新业务功能不应在此处继续堆砌纯 JSON 解析逻辑，而应利用领域 Bridge。
+ * - 只有 `BridgeProvider` 和 `WorkspaceBridge`, `WritingBridge` 等专用领域 Bridge 允许直接调用它。
+ * - Repository, ViewModel, Activity, Controller 严禁直接依赖此类。
+ * - 新业务功能禁止继续向上暴露裸 JSON String / Boolean / null，必须新增或复用领域 Bridge。
  *
  * 该类目前主要维护旧有功能的序列化/反序列化逻辑，并将 JNI 返回的 JSON 字符串映射为 `NativeResult<T>`。
  */
@@ -39,8 +39,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.Manifest
 
-/// JNI 调用结果密封类，用于统一错误处理。
-sealed class NativeResult<out T> {
+/// JNI 调用结果密封类，仅限 legacy adapter 和领域 Bridge 内部使用。
+internal sealed class NativeResult<out T> {
     data class Success<out T>(val data: T) : NativeResult<T>()
     data class Error(val bridgeError: BridgeError) : NativeResult<Nothing>() {
         constructor(message: String) : this(BridgeError(BridgeErrorCode.Unknown, message))
@@ -51,7 +51,7 @@ sealed class NativeResult<out T> {
     object NotLoaded : NativeResult<Nothing>()
 }
 
-class NativeCoreBridge(context: Context) {
+internal class NativeCoreBridge(context: Context) {
     private val workspaceDir = WorkspaceManager.getWorkspaceDir(context).absolutePath
     private val appContext = context.applicationContext
     private val gson = GsonBuilder()
@@ -176,6 +176,8 @@ class NativeCoreBridge(context: Context) {
             e.printStackTrace()
         }
     }
+
+    fun workspaceDirPath(): String = workspaceDir
 
     fun validateWorkspace(): Boolean {
         if (!isLoaded) return false
@@ -418,7 +420,7 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
-    // Compatibility helper for old repository call sites.
+    @Deprecated("Legacy compatibility helper. Use WritingBridge.openChapter instead.")
     fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): NativeResult<Pair<String, ChapterMeta>> {
         return when (val result = openChapter(projectId, volumeId, chapterId)) {
             is NativeResult.Success -> NativeResult.Success(Pair(result.data.content, result.data.meta))
@@ -427,6 +429,7 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
+    @Deprecated("Legacy compatibility helper. Use WritingBridge.openChapter instead.")
     fun getChapterContent(projectId: String, volumeId: String, chapterId: String): NativeResult<String> {
         return when (val result = getChapterContentWithMeta(projectId, volumeId, chapterId)) {
             is NativeResult.Success -> NativeResult.Success(result.data.first)
@@ -456,6 +459,7 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
+    @Deprecated("Legacy Boolean entrypoint. Use WritingBridge.saveChapterContent for ChapterSaveReceipt and BridgeResult errors.")
     fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): NativeResult<Boolean> {
         return when (val result = saveChapterContentReceipt(projectId, volumeId, chapterId, content)) {
             is NativeResult.Success -> NativeResult.Success(true)
@@ -485,6 +489,7 @@ class NativeCoreBridge(context: Context) {
         }
     }
 
+    @Deprecated("Legacy Boolean entrypoint. Use WritingBridge.clearChapterContent for ChapterSaveReceipt and BridgeResult errors.")
     fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): NativeResult<Boolean> {
         return when (val result = clearChapterContentReceipt(projectId, volumeId, chapterId)) {
             is NativeResult.Success -> NativeResult.Success(true)

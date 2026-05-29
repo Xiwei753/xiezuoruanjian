@@ -20,7 +20,7 @@ data class ProjectStatsSummary(
     val projects: List<ProjectStatsDetail>? = emptyList()
 )
 
-class StatsBridge(private val nativeBridge: NativeCoreBridge) {
+class StatsBridge internal constructor(private val nativeBridge: NativeCoreBridge) {
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> = nativeBridge.getProjectStats(projectId).toBridgeResult()
     fun flushWritingStats() = nativeBridge.flushWritingStats()
 

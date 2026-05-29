@@ -5,7 +5,7 @@ import com.xiwei.writerapp.model.RecentEdit
 import com.xiwei.writerapp.model.Volume
 import com.xiwei.writerapp.model.ChapterMeta
 
-class WorkspaceBridge(private val nativeBridge: NativeCoreBridge) {
+class WorkspaceBridge internal constructor(private val nativeBridge: NativeCoreBridge) {
     fun createWorkspaceIfNeeded() = nativeBridge.createWorkspaceIfNeeded()
     fun validateWorkspace(): Boolean = nativeBridge.validateWorkspace()
     fun getProjects(): BridgeResult<List<Project>> = nativeBridge.getProjects().toBridgeResult()

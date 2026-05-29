@@ -7,14 +7,14 @@ package com.xiwei.writerapp.ui
 //! ## 架构定位
 //!
 //! ```text
-//! EditorActivity → EditorViewModel → WorkspaceRepository → NativeCoreBridge → Rust Core
+//! EditorActivity → EditorViewModel → WorkspaceRepository → WritingBridge/WorkspaceBridge → Rust Core
 //! ```
 //!
 //! ## 职责边界
 //!
 //! - **做**：UI 状态管理、自动保存调度、设置加载/应用、写作统计上报
 //! - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 WriterEditText 负责）
-//! - **不直接调用 NativeCoreBridge**：通过 WorkspaceRepository 间接调用
+//! - **不直接调用 legacy JNI adapter**：只通过 Repository 和领域 Bridge 间接调用
 //!
 //! ## 关键流程
 //!

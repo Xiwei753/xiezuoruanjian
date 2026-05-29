@@ -15,15 +15,15 @@ import com.google.android.material.slider.Slider
 import com.google.android.material.divider.MaterialDivider
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.ActionBridge
+import com.xiwei.writerapp.data.BridgeResult
 import com.xiwei.writerapp.data.BridgeProvider
-import com.xiwei.writerapp.data.NativeCoreBridge
-import com.xiwei.writerapp.data.NativeResult
 import com.xiwei.writerapp.data.SettingsChangeBus
+import com.xiwei.writerapp.model.ActionResult
 import com.xiwei.writerapp.model.ActionDescriptor
 import com.xiwei.writerapp.model.UiSchemaDescriptor
 import com.xiwei.writerapp.model.InputSchemaProperty
-import com.google.gson.Gson
 import com.google.gson.JsonElement
+import com.google.gson.JsonObject
 
 /**
  * ActionRegistryActivity — Action 注册表调试页面
@@ -47,7 +47,6 @@ class ActionRegistryActivity : AppCompatActivity() {
     private lateinit var bridge: ActionBridge
     private lateinit var actionContainer: LinearLayout
     private lateinit var tvLoading: TextView
-    private val gson = Gson()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,21 +68,16 @@ class ActionRegistryActivity : AppCompatActivity() {
         tvLoading.visibility = View.VISIBLE
         actionContainer.removeViews(1, actionContainer.childCount - 1)
 
-        // bridge.isLoaded check is no longer available directly on ActionBridge
-        // It should be fine, as we don't strictly need it or we can pass loaded state.
-        // Let's just catch exceptions or handle results.
-        // Wait, listRegisteredActions returns NativeResult.NotLoaded if not loaded.
-
         val result = bridge.listRegisteredActions()
         when (result) {
-            is NativeResult.Success -> {
+            is BridgeResult.Success -> {
                 tvLoading.visibility = View.GONE
                 renderActions(result.data)
             }
-            is NativeResult.Error -> {
+            is BridgeResult.Error -> {
                 tvLoading.text = "加载失败: ${result.message}"
             }
-            NativeResult.NotLoaded -> {
+            BridgeResult.NotLoaded -> {
                 tvLoading.text = getString(R.string.action_not_loaded)
             }
         }
@@ -228,7 +222,7 @@ class ActionRegistryActivity : AppCompatActivity() {
         Thread {
             val result = bridge.executeAction(getActionId)
             runOnUiThread {
-                if (result is NativeResult.Success) {
+                if (result is BridgeResult.Success) {
                     val data = result.data.data
                     if (data != null) {
                         populateUiFromData(action, data, uiContainer)
@@ -369,9 +363,9 @@ class ActionRegistryActivity : AppCompatActivity() {
                 val prop = inputProps.find { it.type == "number" }
                 val value = slider?.value?.toDouble() ?: 0.0
                 if (prop != null) {
-                    gson.toJson(mapOf(prop.name to value))
+                    JsonObject().apply { addProperty(prop.name, value) }.toString()
                 } else {
-                    gson.toJson(mapOf("value" to value))
+                    JsonObject().apply { addProperty("value", value) }.toString()
                 }
             }
             "switch" -> {
@@ -379,9 +373,9 @@ class ActionRegistryActivity : AppCompatActivity() {
                 val prop = inputProps.find { it.type == "boolean" }
                 val checked = switch?.isChecked ?: false
                 if (prop != null) {
-                    gson.toJson(mapOf(prop.name to checked))
+                    JsonObject().apply { addProperty(prop.name, checked) }.toString()
                 } else {
-                    gson.toJson(mapOf("enabled" to checked))
+                    JsonObject().apply { addProperty("enabled", checked) }.toString()
                 }
             }
             else -> {
@@ -402,14 +396,14 @@ class ActionRegistryActivity : AppCompatActivity() {
     }
 
     private fun showActionResult(
-        result: NativeResult<com.xiwei.writerapp.model.ActionResult>,
+        result: BridgeResult<ActionResult>,
         action: ActionDescriptor,
         resultContainer: LinearLayout
     ) {
         resultContainer.removeAllViews()
 
         when (result) {
-            is NativeResult.Success -> {
+            is BridgeResult.Success -> {
                 val actionResult = result.data
                 val msg = actionResult.message ?: if (actionResult.success) "执行成功" else "执行失败"
 
@@ -428,7 +422,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                 })
 
                 if (actionResult.data != null) {
-                    val dataStr = gson.toJson(actionResult.data)
+                    val dataStr = actionResult.data.toString()
                     resultContainer.addView(TextView(this).apply {
                         text = "返回数据:\n$dataStr"
                         textSize = 12f
@@ -437,7 +431,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                     })
                 }
             }
-            is NativeResult.Error -> {
+            is BridgeResult.Error -> {
                 resultContainer.addView(TextView(this).apply {
                     text = "错误: ${result.message}"
                     textSize = 14f
@@ -445,7 +439,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                     setPadding(0, 8, 0, 0)
                 })
             }
-            NativeResult.NotLoaded -> {
+            BridgeResult.NotLoaded -> {
                 resultContainer.addView(TextView(this).apply {
                     text = getString(R.string.action_not_loaded)
                     textSize = 14f

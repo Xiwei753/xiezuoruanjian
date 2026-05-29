@@ -19,7 +19,7 @@ import java.io.IOException
  * - **不做**：业务逻辑（由 Rust Core 负责）
  *
  * ## 使用场景
- * - NativeCoreBridge 获取工作区路径
+ * - data 层 legacy adapter 获取工作区路径
  * - 首次启动应用时初始化工作区
  */
 object WorkspaceManager {
