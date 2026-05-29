@@ -2,9 +2,11 @@
 //!
 //! 将 WriterCore 的写作 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。
 
+use writer_core::api::WriterCoreApi;
 use writer_core::facade::WriterCore;
 use writer_core::error::Error;
 use writer_core::chapter::{Chapter, ChapterSaveReceipt};
+use writer_core::api::types::ChapterSaveReceiptDto;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -15,15 +17,15 @@ pub struct LinuxChapterOpenData {
     pub project_id: String,
     pub volume_id: String,
     pub chapter_id: String,
-    pub meta: Chapter,
+    pub meta: writer_core::api::types::ChapterMetaDto,
 }
 
-pub fn open_chapter(core: &WriterCore, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<LinuxChapterOpenData, Error> {
-    let chapters = core.list_chapters(project_id, volume_id).unwrap_or_default();
+pub fn open_chapter(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<LinuxChapterOpenData, writer_core::api::error::WriterError> {
+    let chapters = api.list_chapters(project_id, volume_id).unwrap_or_default();
     let chapter_meta = chapters.into_iter().find(|ch| ch.id == chapter_id);
 
     if let Some(meta) = chapter_meta {
-        let content = core.open_chapter(project_id, volume_id, chapter_id)?;
+        let content = api.open_chapter(project_id, volume_id, chapter_id)?;
         Ok(LinuxChapterOpenData {
             content: content.content,
             title: meta.title.clone(),
@@ -33,22 +35,22 @@ pub fn open_chapter(core: &WriterCore, project_id: &str, volume_id: &str, chapte
             meta,
         })
     } else {
-        Err(Error::ChapterNotFound)
+        Err(writer_core::api::error::WriterError::ChapterNotFound)
     }
 }
 
-pub fn save_chapter(core: &WriterCore, project_id: &str, volume_id: &str, chapter_id: &str, text_str: &str) -> Result<ChapterSaveReceipt, Error> {
-    let chapters = core.list_chapters(project_id, volume_id).unwrap_or_default();
+pub fn save_chapter(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str, text_str: &str) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
+    let chapters = api.list_chapters(project_id, volume_id).unwrap_or_default();
     if chapters.iter().any(|ch| ch.id == chapter_id) {
-        let receipt = core.write_chapter_verified(project_id, volume_id, chapter_id, text_str)?;
+        let receipt = api.save_chapter_content(project_id, volume_id, chapter_id, text_str)?;
         Ok(receipt)
     } else {
-        Err(Error::ChapterNotFound)
+        Err(writer_core::api::error::WriterError::ChapterNotFound)
     }
 }
 
-pub fn clear_chapter_content(core: &WriterCore, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<ChapterSaveReceipt, Error> {
-    let receipt = core.clear_chapter_content_verified(project_id, volume_id, chapter_id)?;
+pub fn clear_chapter_content(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
+    let receipt = api.clear_chapter_content(project_id, volume_id, chapter_id)?;
     Ok(receipt)
 }
 

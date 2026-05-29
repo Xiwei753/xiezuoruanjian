@@ -196,8 +196,8 @@ fn get_debug_config() -> &'static DebugConfig {
     })
 }
 
-fn is_empty_overwrite_blocked(error: &writer_core::Error) -> bool {
-    matches!(error, writer_core::Error::EmptyOverwriteBlocked { .. })
+fn is_empty_overwrite_blocked(error: &writer_core::api::error::WriterError) -> bool {
+    matches!(error, writer_core::api::error::WriterError::EmptyOverwriteBlocked { .. })
 }
 
 fn blocked_empty_overwrite_user_message() -> &'static str {
@@ -1334,11 +1334,7 @@ impl AppBackend {
             return;
         }
 
-        // Ensure necessary directories exist even for valid workspaces
-        let _ = std::fs::create_dir_all(path_obj.join("projects"));
-        let _ = std::fs::create_dir_all(path_obj.join("app-meta/settings"));
-        let _ = std::fs::create_dir_all(path_obj.join("app-meta/sync"));
-
+        
         self.core = Some(Rc::new(RefCell::new(core)));
         self.current_workspace = path.to_string();
         self.current_has_workspace = true;
@@ -2910,23 +2906,6 @@ impl AppBackend {
 
     fn create_project_json(&mut self, title: QString, action_id: QString) -> QString {
         let title_str = title.to_string();
-        let action_id_str = action_id.to_string();
-        let trimmed_empty = title_str.trim().is_empty();
-        let core_exists = self.core.is_some();
-        self.debug_log(
-            "project",
-            "create_project_start",
-            &format!(
-                "[actionId={}] title_raw={:?}, is_title_trimmed_empty={}, current_workspace={:?}, current_has_workspace={}, core_exists={}",
-                action_id_str,
-                title_str,
-                trimmed_empty,
-                self.current_workspace,
-                self.current_has_workspace,
-                core_exists
-            )
-        );
-
         let build_err = |msg: &str| -> String {
             serde_json::json!({
                 "success": false,
@@ -2940,64 +2919,17 @@ impl AppBackend {
         if title_str.trim().is_empty() {
             let msg = "作品名不能为空";
             self.set_error(msg);
-            self.debug_error("project", "create_project_failed", &format!("[actionId={}] error: {}", action_id_str, msg));
             return build_err(msg).into();
         }
 
         if !self.current_has_workspace || self.current_workspace.is_empty() {
             let msg = "未打开工作区，无法创建作品。请先新建或打开一个工作区。";
             self.set_error(msg);
-            self.debug_error("project", "create_project_failed", &format!("[actionId={}] error: {}", action_id_str, msg));
             return build_err(msg).into();
         }
 
-        if self.core.is_none() {
-            let new_core = WriterCore::new(&self.current_workspace);
-            let val_res = new_core.validate_workspace();
-            match val_res {
-                Ok(true) => {
-                    self.core = Some(Rc::new(RefCell::new(new_core)));
-                }
-                other => {
-                    use std::path::Path;
-                    let ws_path = Path::new(&self.current_workspace);
-                    let manifest_exists = ws_path.join("workspace_manifest.json").exists();
-                    let projects_exists = ws_path.join("projects").exists();
-                    self.debug_warn(
-                        "project",
-                        "create_project_validate_workspace_failed",
-                        &format!(
-                            "[actionId={}] workspace={:?}, manifest_exists={}, projects_exists={}, validate_workspace_result={:?}",
-                            action_id_str,
-                            self.current_workspace,
-                            manifest_exists,
-                            projects_exists,
-                            other
-                        )
-                    );
-                    let msg = format!("无法重新打开工作区: {}", self.current_workspace);
-                    self.set_error(&msg);
-                    return build_err(&msg).into();
-                }
-            }
-        }
-
-        if let Some(core_ref) = &self.core {
-            self.debug_log(
-                "project",
-                "create_project_calling_core",
-                &format!(
-                    "[actionId={}] title={:?}, workspace={:?}",
-                    action_id_str,
-                    title_str,
-                    self.current_workspace
-                )
-            );
-            let result = {
-                let core = core_ref.borrow();
-                core.create_project(&title_str)
-            };
-            match result {
+        if let Some(api) = self.core_api() {
+            match api.create_project(&title_str) {
                 Ok(proj) => {
                     self.selected_project_id = Some(proj.id.clone());
                     self.selected_item_changed();
@@ -3005,8 +2937,7 @@ impl AppBackend {
                     self.selected_chapter_id = None;
 
                     let default_volume_id = {
-                        let core = core_ref.borrow();
-                        if let Ok(volumes) = core.list_volumes(&proj.id) {
+                        if let Ok(volumes) = api.list_volumes(&proj.id) {
                             volumes.first().map(|v| v.id.clone())
                         } else {
                             None
@@ -3016,34 +2947,7 @@ impl AppBackend {
                         self.selected_volume_id = Some(vol_id.clone());
                     }
 
-                    let readback_proj = {
-                        let core = core_ref.borrow();
-                        core.list_projects().map(|list| list.iter().any(|p| p.id == proj.id)).unwrap_or(false)
-                    };
-                    let readback_vol = {
-                        let core = core_ref.borrow();
-                        core.list_volumes(&proj.id).map(|list| !list.is_empty()).unwrap_or(false)
-                    };
-
-                    let tree_len_before = self.cached_tree.len();
                     self.reload_tree();
-                    let tree_len_after = self.cached_tree.len();
-
-                    self.debug_log(
-                        "project",
-                        "create_project_success",
-                        &format!(
-                            "[actionId={}] project_id={:?}, project_title={:?}, list_projects_readback={}, list_volumes_readback={}, cached_tree_before={}, cached_tree_after={}",
-                            action_id_str,
-                            proj.id,
-                            proj.title,
-                            readback_proj,
-                            readback_vol,
-                            tree_len_before,
-                            tree_len_after
-                        )
-                    );
-
                     self.trigger_projects_reloaded();
 
                     let state_val: serde_json::Value = serde_json::from_str(&self.refresh_app_state_json().to_string()).unwrap_or_default();
@@ -3060,28 +2964,18 @@ impl AppBackend {
                 Err(e) => {
                     let err_display = format!("{}", e);
                     let msg = format!("创建作品失败: {}", e);
-                    self.debug_error(
-                        "project",
-                        "create_project_failed",
-                        &format!(
-                            "[actionId={}] error_type_or_display={:?}, raw_error={:?}, userMessage={:?}",
-                            action_id_str,
-                            err_display,
-                            err_display,
-                            msg
-                        )
-                    );
                     self.set_error(&msg);
-                    build_err(&msg).into()
+                    serde_json::json!({
+                        "success": false,
+                        "errorCode": "CORE_ERROR",
+                        "userMessage": msg,
+                        "rawError": err_display,
+                        "changedEntities": []
+                    }).to_string().into()
                 }
             }
         } else {
-            let msg = "Core 未初始化";
-            self.debug_error(
-                "project",
-                "create_project_failed",
-                &format!("[actionId={}] core_initialized is false", action_id_str)
-            );
+            let msg = "核心模块未初始化";
             self.set_error(msg);
             build_err(msg).into()
         }
@@ -3579,7 +3473,7 @@ impl AppBackend {
         let c = chapter_id.to_string();
         self.debug_log("chapter", "open_chapter_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
         
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             match writing_bridge::open_chapter(&core, &p, &v, &c) {
                 Ok(data) => {
                     self.selected_project_id = Some(p.clone());
@@ -3596,7 +3490,7 @@ impl AppBackend {
                 }
                 Err(e) => {
                     self.debug_error("chapter", "open_chapter_failed", &e.to_string());
-                    return bridge_error_object(&format!("读取章节失败: {}", e), e.code());
+                    return bridge_error_object(&format!("读取章节失败: {}", e), "CORE_ERROR");
                 }
             }
         }
@@ -3612,7 +3506,7 @@ impl AppBackend {
         let len = text_str.len();
         self.debug_log("chapter", "save_chapter_start", &format!("len={}", len));
         
-        let save_result = if let Some(core) = self.core_facade() {
+        let save_result = if let Some(core) = self.core_api() {
             Some(writing_bridge::save_chapter(&core, &p, &v, &c, &text_str))
         } else {
             None
@@ -3635,7 +3529,7 @@ impl AppBackend {
                 } else {
                     self.current_save_status = "保存失败".to_string();
                 }
-                bridge_error_object(&format!("保存失败: {}", e), e.code())
+                bridge_error_object(&format!("保存失败: {}", e), "CORE_ERROR")
             }
             None => {
                 self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
@@ -3653,7 +3547,7 @@ impl AppBackend {
         let c = chapter_id.to_string();
         self.debug_log("chapter", "clear_chapter_content_start", &format!("chapter_id={}", c));
 
-        let clear_result = if let Some(core) = self.core_facade() {
+        let clear_result = if let Some(core) = self.core_api() {
             Some(writing_bridge::clear_chapter_content(&core, &p, &v, &c))
         } else {
             None
@@ -3673,7 +3567,7 @@ impl AppBackend {
                 self.current_save_status = "清空失败".to_string();
                 self.save_status_changed();
                 self.set_error(&err_msg);
-                bridge_error_object(&err_msg, e.code())
+                bridge_error_object(&err_msg, "CORE_ERROR")
             }
             None => {
                 self.debug_error("chapter", "clear_chapter_content_failed", "core_not_initialized");

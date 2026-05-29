@@ -1,6 +1,7 @@
 //! # 星图桥接函数（Linux UI 层 - Backend Adapter）
 //!
 //! 将 WriterCore 的星图 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。
+//! TODO(api): migrate when WriterCoreApi exposes this capability
 //!
 //! ## 架构定位
 //!
