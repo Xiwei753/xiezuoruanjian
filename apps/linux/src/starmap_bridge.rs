@@ -153,6 +153,8 @@ pub fn create_starmap_edge(core: &WriterCore, starmap_id: &str, from_node_id: &s
         kind: edge_kind,
         label: if label.is_empty() { None } else { Some(label.to_string()) },
         payload: None,
+        from_target: None,
+        to_target: None,
         created_at: now,
         updated_at: now,
     };

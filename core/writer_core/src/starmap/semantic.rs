@@ -102,6 +102,8 @@ impl Default for StarMapAnchorRole {
 pub struct StarMapPortal {
     pub target_starmap_id: String,
     #[serde(default)]
+    pub deep_target: Option<StarMapDeepTarget>,
+    #[serde(default)]
     pub mode: StarMapPortalMode,
     #[serde(default)]
     pub preview_policy: StarMapPortalPreviewPolicy,
@@ -223,4 +225,87 @@ pub enum StarMapReviewStatus {
     Rejected,
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapDeepTarget {
+    pub starmap_id: String,
+    #[serde(default)]
+    pub path: Vec<StarMapPathSegment>,
+    pub target: StarMapTargetDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StarMapPathSegment {
+    EnterChild { starmap_id: String },
+    EnterNode { node_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StarMapTargetDetail {
+    Starmap,
+    Node {
+        node_id: String,
+    },
+    Anchor {
+        node_id: String,
+        anchor_id: String,
+    },
+    ChapterRange {
+        project_id: Option<String>,
+        volume_id: Option<String>,
+        chapter_id: String,
+        range_start: Option<u32>,
+        range_end: Option<u32>,
+    },
+    Entity {
+        entity_type: String,
+        entity_id: String,
+    },
+    External {
+        uri: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapTargetDisplayStatus {
+    #[default]
+    Unresolved,
+    TitleOnly,
+    TitleSummary,
+    MiniMap,
+    ExpandedGraph,
+}
+
+/// 计算目标展示状态，只提供底层计算语义。
+pub fn resolve_target_display_status(
+    _deep_target: &StarMapDeepTarget,
+    current_scale: f32,
+    display_policy: Option<&StarMapDisplayPolicy>,
+    is_resolved: bool,
+) -> StarMapTargetDisplayStatus {
+    if !is_resolved {
+        return StarMapTargetDisplayStatus::Unresolved;
+    }
+
+    let default_policy = StarMapDisplayPolicy::default();
+    let dp = display_policy.unwrap_or(&default_policy);
+
+    if current_scale < dp.min_visible_scale {
+        return StarMapTargetDisplayStatus::TitleOnly;
+    }
+
+    if current_scale >= dp.detail_scale {
+        return StarMapTargetDisplayStatus::ExpandedGraph;
+    } else if current_scale >= dp.summary_scale {
+        return StarMapTargetDisplayStatus::MiniMap;
+    } else if current_scale >= dp.title_scale {
+        return StarMapTargetDisplayStatus::TitleSummary;
+    }
+
+    StarMapTargetDisplayStatus::TitleOnly
 }

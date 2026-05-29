@@ -25,7 +25,32 @@ StarMap 不再仅仅是一个简单的“点和边”的通用图结构，而是
 * `Starmap`：指向另一个星图。
 * `role`：区分是 `Source`、`Destination` 还是 `Reference`。
 
-### 3. `portal` (StarMapPortal)
+### 3. 深层指向 (Deep Target & Path)
+为了实现“从宇宙深处一层层放大直到看见微小节点”的能力，我们引入了深层目标（`StarMapDeepTarget`）。
+这是 StarMap 语义中最核心的基础，允许一个实体（例如节点或连线）稳定指向跨层级目标。
+
+**深层目标包含：**
+* `starmap_id`：起点的目标星图。
+* `path`：一条可选的路径片段（`StarMapPathSegment`），例如连续多次 `EnterChild`，以表达从父星图逐步进入多个子星图的过程。
+* `target`：最终的目标实体（`StarMapTargetDetail`），支持：
+  * 指向整个星图 (`Starmap`)
+  * 指向具体节点 (`Node`)
+  * 指向特定锚点 (`Anchor`)
+  * 指向特定作品章节范围 (`ChapterRange`)
+  * 指向角色等实体 (`Entity`)
+
+**为什么连线不能只存 UI 坐标？**
+星图是一张包含无限层级的活图，随着用户的缩放，深层节点可能会从“只显示父星图”渐变成“展开展示其内部细节”。如果连线只依赖 x/y 坐标或当前屏幕位置，当图形因为层级展开或布局重新计算而变形时，连线就会断裂。有了深层语义路径，底层可以随时从 `starmap_id` 和 `path` 解析出真实的物理终端，在 UI 渲染时保证连线精确锁定到目标实体。
+
+### 4. 目标展示状态 (Target Display Status)
+深层目标在不同的缩放层级（Scale）下会有不同的展开细节，Core 提供纯函数 `resolve_target_display_status` 根据 `StarMapDisplayPolicy` 返回当前的展示状态，让 UI 知道如何渲染它：
+* `Unresolved`：目标不存在、路径死循环或暂时不可解析。
+* `TitleOnly`：最小比例，远处只看到一个小圆点和名称。
+* `TitleSummary`：稍近处，显示大标题和一段文字摘要。
+* `MiniMap`：再近一点，可以预览子星图的缩略图结构。
+* `ExpandedGraph`：足够近或通过 Portal 进入后，展示真实的完整子图。
+
+### 5. portal (StarMapPortal)
 星图支持嵌套（类似于宇宙 -> 星系 -> 行星 -> 城市）。
 通过 Portal 机制，当前节点本身可以是另一个星图的入口：
 * `EnterChild`：双击或操作后，进入子星图。

@@ -149,6 +149,10 @@ pub struct StarMapEdge {
     pub kind: StarMapEdgeKind,
     pub label: Option<String>,
     pub payload: Option<serde_json::Value>,
+    #[serde(default)]
+    pub from_target: Option<crate::starmap::semantic::StarMapDeepTarget>,
+    #[serde(default)]
+    pub to_target: Option<crate::starmap::semantic::StarMapDeepTarget>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -216,6 +220,8 @@ pub struct StarMapEdgePatch {
     pub kind: Option<StarMapEdgeKind>,
     pub label: Option<Option<String>>,
     pub payload: Option<Option<serde_json::Value>>,
+    pub from_target: Option<Option<crate::starmap::semantic::StarMapDeepTarget>>,
+    pub to_target: Option<Option<crate::starmap::semantic::StarMapDeepTarget>>,
 }
 
 impl Default for StarMapGraph {
