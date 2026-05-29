@@ -27,3 +27,7 @@ features = ["cli"]
 
 [build-dependencies]
 uniffi = { version = "0.28.0", features = ["build"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
