@@ -491,36 +491,7 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
             }
         }
 
-        let dp = &node.display_policy;
-        if dp.importance.is_nan()
-            || dp.importance < 0.0
-            || dp.min_visible_scale.is_nan()
-            || dp.min_visible_scale < 0.0
-            || dp.title_scale.is_nan()
-            || dp.title_scale < 0.0
-            || dp.summary_scale.is_nan()
-            || dp.summary_scale < 0.0
-            || dp.detail_scale.is_nan()
-            || dp.detail_scale < 0.0
-            || dp.min_readable_px.is_nan()
-            || dp.min_readable_px < 0.0
-        {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid display policy values",
-            )));
-        }
-
-        // min_visible_scale <= title_scale <= summary_scale <= detail_scale
-        if !(dp.min_visible_scale <= dp.title_scale
-            && dp.title_scale <= dp.summary_scale
-            && dp.summary_scale <= dp.detail_scale)
-        {
-            return Err(Error::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Display policy scales must be ordered: min_visible <= title <= summary <= detail",
-            )));
-        }
+        crate::starmap::semantic::validate_display_policy(&node.display_policy)?;
     }
 
     for edge in &graph.edges {
@@ -612,6 +583,8 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
                 )));
             }
         }
+        
+        crate::starmap::semantic::validate_display_policy(&embed.display_policy)?;
     }
 
     let mut link_ids = std::collections::HashSet::new();

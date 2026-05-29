@@ -501,6 +501,74 @@ impl WriterCoreApi {
             .map(|_| true)
             .map_err(Into::into)
     }
+
+    pub fn add_starmap_embed(&self, starmap_id: &str, embed_json: &str) -> ApiResult<String> {
+        let embed: crate::starmap::types::StarMapEmbed = serde_json::from_str(embed_json)?;
+        let value = self
+            .core()
+            .add_starmap_embed(starmap_id, embed)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
+    }
+
+    pub fn update_starmap_embed(
+        &self,
+        starmap_id: &str,
+        instance_id: &str,
+        patch_json: &str,
+    ) -> ApiResult<String> {
+        let patch: crate::starmap::types::StarMapEmbedPatch = serde_json::from_str(patch_json)?;
+        let value = self
+            .core()
+            .update_starmap_embed(starmap_id, instance_id, patch)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
+    }
+
+    pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> ApiResult<bool> {
+        self.core()
+            .delete_starmap_embed(starmap_id, instance_id)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    pub fn add_starmap_link(&self, starmap_id: &str, link_json: &str) -> ApiResult<String> {
+        let link: crate::starmap::types::StarMapLink = serde_json::from_str(link_json)?;
+        let value = self
+            .core()
+            .add_starmap_link(starmap_id, link)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
+    }
+
+    pub fn update_starmap_link(
+        &self,
+        starmap_id: &str,
+        link_id: &str,
+        patch_json: &str,
+    ) -> ApiResult<String> {
+        let patch: crate::starmap::types::StarMapLinkPatch = serde_json::from_str(patch_json)?;
+        let value = self
+            .core()
+            .update_starmap_link(starmap_id, link_id, patch)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
+    }
+
+    pub fn delete_starmap_link(&self, starmap_id: &str, link_id: &str) -> ApiResult<bool> {
+        self.core()
+            .delete_starmap_link(starmap_id, link_id)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    pub fn find_starmap_references(&self, target_starmap_id: &str) -> ApiResult<String> {
+        let value = self
+            .core()
+            .find_starmap_references(target_starmap_id)
+            .map_err(WriterError::from)?;
+        Self::json_string(&value)
+    }
 }
 
 #[cfg(test)]

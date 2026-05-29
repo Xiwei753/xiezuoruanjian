@@ -41,6 +41,13 @@
 - `process_writing_event(...) -> Result<bool, WriterError>`
 - `record_writing_event(...) -> Result<bool, WriterError>`
 - `flush_writing_stats() -> Result<bool, WriterError>`
+- `add_starmap_embed(...) -> Result<StarMapEmbed, ...>`
+- `update_starmap_embed(...) -> Result<StarMapEmbed, ...>`
+- `delete_starmap_embed(...) -> Result<()>`
+- `add_starmap_link(...) -> Result<StarMapLink, ...>`
+- `update_starmap_link(...) -> Result<StarMapLink, ...>`
+- `delete_starmap_link(...) -> Result<()>`
+- `find_starmap_references(...) -> Result<Vec<StarMapReference>>`
 
 ### 文件操作
 所有写操作（`save_chapter`、`save_*_settings`）必须使用原子写入（写入临时文件、`fsync/flush`，然后原子 `rename`）。

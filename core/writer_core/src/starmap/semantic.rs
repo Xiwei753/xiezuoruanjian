@@ -163,6 +163,39 @@ impl Default for StarMapDisplayPolicy {
     }
 }
 
+pub fn validate_display_policy(dp: &StarMapDisplayPolicy) -> crate::error::Result<()> {
+    if dp.importance.is_nan()
+        || dp.importance < 0.0
+        || dp.min_visible_scale.is_nan()
+        || dp.min_visible_scale < 0.0
+        || dp.title_scale.is_nan()
+        || dp.title_scale < 0.0
+        || dp.summary_scale.is_nan()
+        || dp.summary_scale < 0.0
+        || dp.detail_scale.is_nan()
+        || dp.detail_scale < 0.0
+        || dp.min_readable_px.is_nan()
+        || dp.min_readable_px < 0.0
+    {
+        return Err(crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Invalid display policy values",
+        )));
+    }
+
+    if !(dp.min_visible_scale <= dp.title_scale
+        && dp.title_scale <= dp.summary_scale
+        && dp.summary_scale <= dp.detail_scale)
+    {
+        return Err(crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Display policy scales must be ordered: min_visible <= title <= summary <= detail",
+        )));
+    }
+    
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapOpenBehavior {

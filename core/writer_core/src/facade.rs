@@ -1265,6 +1265,55 @@ impl WriterCore {
         crate::starmap::graph::save_starmap_layout(&self.workspace_path, starmap_id, layout)
     }
 
+    pub fn add_starmap_embed(
+        &self,
+        starmap_id: &str,
+        embed: crate::starmap::types::StarMapEmbed,
+    ) -> Result<crate::starmap::types::StarMapEmbed> {
+        crate::starmap::graph::add_starmap_embed(&self.workspace_path, starmap_id, embed)
+    }
+
+    pub fn update_starmap_embed(
+        &self,
+        starmap_id: &str,
+        instance_id: &str,
+        patch: crate::starmap::types::StarMapEmbedPatch,
+    ) -> Result<crate::starmap::types::StarMapEmbed> {
+        crate::starmap::graph::update_starmap_embed(&self.workspace_path, starmap_id, instance_id, patch)
+    }
+
+    pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> Result<()> {
+        crate::starmap::graph::delete_starmap_embed(&self.workspace_path, starmap_id, instance_id)
+    }
+
+    pub fn add_starmap_link(
+        &self,
+        starmap_id: &str,
+        link: crate::starmap::types::StarMapLink,
+    ) -> Result<crate::starmap::types::StarMapLink> {
+        crate::starmap::graph::add_starmap_link(&self.workspace_path, starmap_id, link)
+    }
+
+    pub fn update_starmap_link(
+        &self,
+        starmap_id: &str,
+        link_id: &str,
+        patch: crate::starmap::types::StarMapLinkPatch,
+    ) -> Result<crate::starmap::types::StarMapLink> {
+        crate::starmap::graph::update_starmap_link(&self.workspace_path, starmap_id, link_id, patch)
+    }
+
+    pub fn delete_starmap_link(&self, starmap_id: &str, link_id: &str) -> Result<()> {
+        crate::starmap::graph::delete_starmap_link(&self.workspace_path, starmap_id, link_id)
+    }
+
+    pub fn find_starmap_references(
+        &self,
+        target_starmap_id: &str,
+    ) -> Result<Vec<crate::starmap::StarMapReference>> {
+        crate::starmap::find_starmap_references(&self.workspace_path, target_starmap_id)
+    }
+
     // --- Writing Stats ---
 
     pub fn record_writing_event(

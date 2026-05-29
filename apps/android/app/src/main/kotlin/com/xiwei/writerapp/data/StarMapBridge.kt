@@ -34,4 +34,14 @@ class StarMapBridge(private val appService: AppServiceBridge) {
     fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
         return saveStarMapLayout(starmapId, gson.toJson(layout))
     }
+
+    fun addStarmapEmbed(starmapId: String, embedJson: String): BridgeResult<String> = appService.addStarmapEmbed(starmapId, embedJson)
+    fun updateStarmapEmbed(starmapId: String, instanceId: String, patchJson: String): BridgeResult<String> = appService.updateStarmapEmbed(starmapId, instanceId, patchJson)
+    fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = appService.deleteStarmapEmbed(starmapId, instanceId)
+    
+    fun addStarmapLink(starmapId: String, linkJson: String): BridgeResult<String> = appService.addStarmapLink(starmapId, linkJson)
+    fun updateStarmapLink(starmapId: String, linkId: String, patchJson: String): BridgeResult<String> = appService.updateStarmapLink(starmapId, linkId, patchJson)
+    fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = appService.deleteStarmapLink(starmapId, linkId)
+
+    fun findStarmapReferences(targetStarmapId: String): BridgeResult<String> = appService.findStarmapReferences(targetStarmapId)
 }

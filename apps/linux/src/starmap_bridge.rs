@@ -224,3 +224,68 @@ pub fn unbind_starmap(core: &WriterCore, starmap_id: &str) -> String {
         Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
     }
 }
+
+pub fn add_starmap_embed(core: &WriterCore, starmap_id: &str, embed_json: &str) -> String {
+    let embed: writer_core::starmap::types::StarMapEmbed = match serde_json::from_str(embed_json) {
+        Ok(e) => e,
+        Err(_) => return serde_json::json!({"success": false, "message": "Invalid embed JSON"}).to_string(),
+    };
+    match core.add_starmap_embed(starmap_id, embed) {
+        Ok(saved_embed) => serde_json::json!({"success": true, "data": saved_embed}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
+    }
+}
+
+pub fn update_starmap_embed(core: &WriterCore, starmap_id: &str, instance_id: &str, patch_json: &str) -> String {
+    let patch: writer_core::starmap::types::StarMapEmbedPatch = match serde_json::from_str(patch_json) {
+        Ok(p) => p,
+        Err(_) => return serde_json::json!({"success": false, "message": "Invalid patch JSON"}).to_string(),
+    };
+    match core.update_starmap_embed(starmap_id, instance_id, patch) {
+        Ok(embed) => serde_json::json!({"success": true, "data": embed}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
+    }
+}
+
+pub fn delete_starmap_embed(core: &WriterCore, starmap_id: &str, instance_id: &str) -> String {
+    match core.delete_starmap_embed(starmap_id, instance_id) {
+        Ok(_) => serde_json::json!({"success": true}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
+    }
+}
+
+pub fn add_starmap_link(core: &WriterCore, starmap_id: &str, link_json: &str) -> String {
+    let link: writer_core::starmap::types::StarMapLink = match serde_json::from_str(link_json) {
+        Ok(l) => l,
+        Err(_) => return serde_json::json!({"success": false, "message": "Invalid link JSON"}).to_string(),
+    };
+    match core.add_starmap_link(starmap_id, link) {
+        Ok(saved_link) => serde_json::json!({"success": true, "data": saved_link}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
+    }
+}
+
+pub fn update_starmap_link(core: &WriterCore, starmap_id: &str, link_id: &str, patch_json: &str) -> String {
+    let patch: writer_core::starmap::types::StarMapLinkPatch = match serde_json::from_str(patch_json) {
+        Ok(p) => p,
+        Err(_) => return serde_json::json!({"success": false, "message": "Invalid patch JSON"}).to_string(),
+    };
+    match core.update_starmap_link(starmap_id, link_id, patch) {
+        Ok(link) => serde_json::json!({"success": true, "data": link}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
+    }
+}
+
+pub fn delete_starmap_link(core: &WriterCore, starmap_id: &str, link_id: &str) -> String {
+    match core.delete_starmap_link(starmap_id, link_id) {
+        Ok(_) => serde_json::json!({"success": true}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
+    }
+}
+
+pub fn find_starmap_references(core: &WriterCore, target_starmap_id: &str) -> String {
+    match core.find_starmap_references(target_starmap_id) {
+        Ok(refs) => serde_json::json!({"success": true, "data": refs}).to_string(),
+        Err(e) => serde_json::json!({"success": false, "message": format!("{}", e)}).to_string(),
+    }
+}

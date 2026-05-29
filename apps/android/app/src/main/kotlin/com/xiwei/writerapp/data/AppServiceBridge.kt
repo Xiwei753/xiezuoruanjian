@@ -262,6 +262,34 @@ class AppServiceBridge(workspacePath: String) {
     fun saveStarMapLayout(starmapId: String, layoutJson: String): BridgeResult<Boolean> = wrapResult {
         service.saveStarmapLayout(starmapId, layoutJson)
     }
+
+    fun addStarmapEmbed(starmapId: String, embedJson: String): BridgeResult<String> = wrapResult {
+        service.addStarmapEmbed(starmapId, embedJson)
+    }
+
+    fun updateStarmapEmbed(starmapId: String, instanceId: String, patchJson: String): BridgeResult<String> = wrapResult {
+        service.updateStarmapEmbed(starmapId, instanceId, patchJson)
+    }
+
+    fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = wrapResult {
+        service.deleteStarmapEmbed(starmapId, instanceId)
+    }
+
+    fun addStarmapLink(starmapId: String, linkJson: String): BridgeResult<String> = wrapResult {
+        service.addStarmapLink(starmapId, linkJson)
+    }
+
+    fun updateStarmapLink(starmapId: String, linkId: String, patchJson: String): BridgeResult<String> = wrapResult {
+        service.updateStarmapLink(starmapId, linkId, patchJson)
+    }
+
+    fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = wrapResult {
+        service.deleteStarmapLink(starmapId, linkId)
+    }
+
+    fun findStarmapReferences(targetStarmapId: String): BridgeResult<String> = wrapResult {
+        service.findStarmapReferences(targetStarmapId)
+    }
 }
 
 private fun WriterException.toBridgeErrorCode(): BridgeErrorCode = when (this) {
@@ -350,7 +378,8 @@ private fun LocalSettings.toDto() = LocalSettingsDto(
     editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toULong(),
     editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toULong(),
     aiEnabled = aiEnabled,
-    statsDeviceId = statsDeviceId
+    statsDeviceId = statsDeviceId,
+    editorLineSpacingMultiplier = editorLineSpacingMultiplier
 )
 
 private fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode, monetColor)
