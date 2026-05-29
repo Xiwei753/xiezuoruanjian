@@ -306,3 +306,22 @@ pub struct StarMapLink {
     pub created_at: u64,
     pub updated_at: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEmbedPatch {
+    pub label: Option<Option<String>>,
+    pub display_policy: Option<crate::starmap::semantic::StarMapDisplayPolicy>,
+    pub open_behavior: Option<crate::starmap::semantic::StarMapOpenBehavior>,
+    pub viewport: Option<Option<StarMapViewport>>,
+    pub source_node_id: Option<Option<String>>,
+    pub host_anchor: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapLinkPatch {
+    pub source: Option<StarMapEndpoint>,
+    pub target: Option<crate::starmap::semantic::StarMapDeepTarget>,
+    pub label: Option<Option<String>>,
+}

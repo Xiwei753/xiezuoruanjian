@@ -250,17 +250,18 @@ pub fn rename_starmap(workspace: &Path, starmap_id: &str, new_title: &str) -> Re
 }
 
 pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
-    let meta = load_starmap_meta(workspace, starmap_id)?;
-
-    // Delete children first
-    let idx = load_index(workspace)?;
-    for child in &idx.starmaps {
-        if child.parent_starmap_id.as_deref() == Some(starmap_id) {
-            let _ = delete_starmap(workspace, &child.starmap_id);
-        }
+    // Before deleting, check if it's referenced by any other StarMap.
+    let refs = find_starmap_references(workspace, starmap_id)?;
+    if !refs.is_empty() {
+        return Err(crate::error::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Cannot delete StarMap because it is referenced by {} other places.", refs.len()),
+        )));
     }
 
-    // Remove from parent's child count
+    let meta = load_starmap_meta(workspace, starmap_id)?;
+
+    // Remove from parent's child count (if parent exists)
     if let Some(ref parent_id) = meta.parent_starmap_id {
         if let Ok(mut parent_meta) = load_starmap_meta(workspace, parent_id) {
             if parent_meta.child_starmap_count > 0 {
@@ -268,6 +269,30 @@ pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
                 parent_meta.updated_at = now_epoch();
                 let _ = save_starmap_meta(workspace, &parent_meta);
             }
+        }
+    }
+
+    delete_starmap_meta(workspace, starmap_id)?;
+
+    let mut idx = load_index(workspace)?;
+    idx.starmaps.retain(|m| m.starmap_id != starmap_id);
+    idx.updated_at = now_epoch();
+    save_index(workspace, &idx)?;
+
+    let graph_dir = starmaps_dir(workspace).join(starmap_id);
+    if graph_dir.exists() {
+        let _ = fs::remove_dir_all(&graph_dir);
+    }
+
+    Ok(())
+}
+
+pub fn delete_starmap_cascade_legacy(workspace: &Path, starmap_id: &str) -> Result<()> {
+    // Delete children first
+    let idx = load_index(workspace)?;
+    for child in &idx.starmaps {
+        if child.parent_starmap_id.as_deref() == Some(starmap_id) {
+            let _ = delete_starmap_cascade_legacy(workspace, &child.starmap_id);
         }
     }
 
@@ -397,9 +422,11 @@ pub fn update_starmap_stats(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StarMapReference {
-    pub starmap_id: String,
-    pub title: String,
+    pub host_starmap_id: String,
+    pub host_title: String,
     pub ref_type: String, // "embed", "link", "portal", "edge"
+    pub ref_id: String,
+    pub target_starmap_id: String,
 }
 
 pub fn find_starmap_references(workspace: &Path, target_starmap_id: &str) -> Result<Vec<StarMapReference>> {
@@ -407,40 +434,101 @@ pub fn find_starmap_references(workspace: &Path, target_starmap_id: &str) -> Res
     let idx = load_index(workspace)?;
 
     for m in &idx.starmaps {
-        // Skip self
-        if m.starmap_id == target_starmap_id {
-            continue;
-        }
-
         if let Ok(graph) = crate::starmap::graph::get_starmap_graph(workspace, &m.starmap_id) {
-            let mut found = false;
-            let mut ref_type = String::new();
-
-            if graph.embeds.iter().any(|e| e.target_starmap_id == target_starmap_id) {
-                found = true;
-                ref_type = "embed".to_string();
-            } else if graph.links.iter().any(|l| l.target.starmap_id == target_starmap_id) {
-                found = true;
-                ref_type = "link".to_string();
-            } else if graph.edges.iter().any(|e| {
-                e.from_target.as_ref().map_or(false, |t| t.starmap_id == target_starmap_id) ||
-                e.to_target.as_ref().map_or(false, |t| t.starmap_id == target_starmap_id)
-            }) {
-                found = true;
-                ref_type = "edge".to_string();
-            } else if graph.nodes.iter().any(|n| {
-                n.portal.as_ref().map_or(false, |p| p.target_starmap_id == target_starmap_id || p.deep_target.as_ref().map_or(false, |dt| dt.starmap_id == target_starmap_id))
-            }) {
-                found = true;
-                ref_type = "portal".to_string();
+            
+            // 1. Check embeds
+            for embed in &graph.embeds {
+                if embed.target_starmap_id == target_starmap_id {
+                    refs.push(StarMapReference {
+                        host_starmap_id: m.starmap_id.clone(),
+                        host_title: m.title.clone(),
+                        ref_type: "embed".to_string(),
+                        ref_id: embed.instance_id.clone(),
+                        target_starmap_id: target_starmap_id.to_string(),
+                    });
+                }
             }
 
-            if found {
-                refs.push(StarMapReference {
-                    starmap_id: m.starmap_id.clone(),
-                    title: m.title.clone(),
-                    ref_type,
-                });
+            // 2. Check links
+            for link in &graph.links {
+                let mut matches = false;
+                if link.target.starmap_id == target_starmap_id {
+                    matches = true;
+                } else if link.target.path.iter().any(|p| match p {
+                    crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => s == target_starmap_id,
+                    _ => false,
+                }) {
+                    matches = true;
+                }
+
+                if matches {
+                    refs.push(StarMapReference {
+                        host_starmap_id: m.starmap_id.clone(),
+                        host_title: m.title.clone(),
+                        ref_type: "link".to_string(),
+                        ref_id: link.link_id.clone(),
+                        target_starmap_id: target_starmap_id.to_string(),
+                    });
+                }
+            }
+
+            // 3. Check edges
+            for edge in &graph.edges {
+                let mut matches = false;
+                if let Some(ft) = &edge.from_target {
+                    if ft.starmap_id == target_starmap_id || ft.path.iter().any(|p| match p {
+                        crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => s == target_starmap_id,
+                        _ => false,
+                    }) {
+                        matches = true;
+                    }
+                }
+                if let Some(tt) = &edge.to_target {
+                    if tt.starmap_id == target_starmap_id || tt.path.iter().any(|p| match p {
+                        crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => s == target_starmap_id,
+                        _ => false,
+                    }) {
+                        matches = true;
+                    }
+                }
+
+                if matches {
+                    refs.push(StarMapReference {
+                        host_starmap_id: m.starmap_id.clone(),
+                        host_title: m.title.clone(),
+                        ref_type: "edge".to_string(),
+                        ref_id: edge.id.clone(),
+                        target_starmap_id: target_starmap_id.to_string(),
+                    });
+                }
+            }
+
+            // 4. Check portals
+            for node in &graph.nodes {
+                if let Some(portal) = &node.portal {
+                    let mut matches = false;
+                    if portal.target_starmap_id == target_starmap_id {
+                        matches = true;
+                    }
+                    if let Some(dt) = &portal.deep_target {
+                        if dt.starmap_id == target_starmap_id || dt.path.iter().any(|p| match p {
+                            crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => s == target_starmap_id,
+                            _ => false,
+                        }) {
+                            matches = true;
+                        }
+                    }
+
+                    if matches {
+                        refs.push(StarMapReference {
+                            host_starmap_id: m.starmap_id.clone(),
+                            host_title: m.title.clone(),
+                            ref_type: "portal".to_string(),
+                            ref_id: node.id.clone(),
+                            target_starmap_id: target_starmap_id.to_string(),
+                        });
+                    }
+                }
             }
         }
     }
@@ -503,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_cascades_children() {
+    fn test_delete_cascades_children_legacy() {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let _child1 =
@@ -511,10 +599,27 @@ mod tests {
         let _child2 =
             create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
 
-        delete_starmap(dir.path(), &parent.starmap_id).unwrap();
+        delete_starmap_cascade_legacy(dir.path(), &parent.starmap_id).unwrap();
 
         let all = list_starmaps(dir.path()).unwrap();
         assert_eq!(all.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_starmap_no_cascade() {
+        let dir = setup_workspace();
+        let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
+        let child1 =
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+        let child2 =
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
+
+        delete_starmap(dir.path(), &parent.starmap_id).unwrap();
+
+        let all = list_starmaps(dir.path()).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|m| m.starmap_id == child1.starmap_id));
+        assert!(all.iter().any(|m| m.starmap_id == child2.starmap_id));
     }
 
     #[test]
