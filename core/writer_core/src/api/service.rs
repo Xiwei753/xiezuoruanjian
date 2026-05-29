@@ -427,9 +427,22 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn save_mindmap_graph_json(&self, _project_id: &str, graph_json: &str) -> ApiResult<bool> {
-        let _value: serde_json::Value = serde_json::from_str(graph_json)?;
-        Ok(false)
+    pub fn save_mindmap_graph_json(
+        &self,
+        project_id: &str,
+        graph_json: &str,
+    ) -> ApiResult<bool> {
+        let graph: crate::mind_map::graph::MindMapGraph = serde_json::from_str(graph_json)?;
+        if graph.project_id != project_id {
+            return Err(WriterError::Other(format!(
+                "project_id mismatch: request project_id={}, graph.project_id={}",
+                project_id, graph.project_id
+            )));
+        }
+
+        let core = self.core();
+        crate::mind_map::storage::save_mind_map_graph(&core, &graph).map_err(WriterError::from)?;
+        Ok(true)
     }
 
     pub fn list_starmaps(&self) -> ApiResult<String> {
@@ -466,5 +479,116 @@ impl WriterCoreApi {
             .execute_action("starmap.layout.save", starmap_id, layout_json)
             .map(|_| true)
             .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mind_map::graph::{MindMapGraph, MindMapGraphNode, MindMapNodeKind};
+    use tempfile::tempdir;
+
+    fn valid_graph(project_id: &str) -> MindMapGraph {
+        MindMapGraph {
+            schema_version: 2,
+            id: "api_graph".to_string(),
+            project_id: project_id.to_string(),
+            title: "API Saved Graph".to_string(),
+            nodes: vec![MindMapGraphNode {
+                id: "custom_node".to_string(),
+                title: "API Saved Node".to_string(),
+                kind: MindMapNodeKind::Character,
+                payload: None,
+                tags: vec!["api".to_string()],
+                created_at: 1,
+                updated_at: 1,
+            }],
+            edges: vec![],
+            anchors: vec![],
+            links: vec![],
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn save_mindmap_graph_json_persists_graph_and_snapshot_reads_it() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test Project").unwrap();
+        let graph = valid_graph(&project.id);
+        let graph_json = serde_json::to_string(&graph).unwrap();
+
+        assert_eq!(
+            api.save_mindmap_graph_json(&project.id, &graph_json).unwrap(),
+            true
+        );
+
+        let snapshot_json = api.get_mindmap_snapshot_json(&project.id).unwrap();
+        let snapshot: crate::mind_map::MindMapSnapshot =
+            serde_json::from_str(&snapshot_json).unwrap();
+
+        assert_eq!(snapshot.project_id, project.id);
+        assert_eq!(snapshot.layout_kind, "Freeform");
+        assert_eq!(snapshot.nodes.len(), 1);
+        assert_eq!(snapshot.nodes[0].id, "custom_node");
+        assert_eq!(snapshot.nodes[0].title, "API Saved Node");
+    }
+
+    #[test]
+    fn save_mindmap_graph_json_rejects_project_id_mismatch() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test Project").unwrap();
+        let graph = valid_graph("another_project");
+        let graph_json = serde_json::to_string(&graph).unwrap();
+
+        let err = api
+            .save_mindmap_graph_json(&project.id, &graph_json)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            WriterError::Other(message)
+                if message.contains("project_id mismatch")
+                    && message.contains(&project.id)
+                    && message.contains("another_project")
+        ));
+    }
+
+    #[test]
+    fn save_mindmap_graph_json_rejects_invalid_json() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test Project").unwrap();
+
+        let err = api
+            .save_mindmap_graph_json(&project.id, "{not-json")
+            .unwrap_err();
+
+        assert!(matches!(err, WriterError::Json(_)));
+    }
+
+    #[test]
+    fn save_mindmap_graph_json_propagates_validation_error() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test Project").unwrap();
+        let mut graph = valid_graph(&project.id);
+        graph.schema_version = 1;
+        let graph_json = serde_json::to_string(&graph).unwrap();
+
+        let err = api
+            .save_mindmap_graph_json(&project.id, &graph_json)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            WriterError::Io(message) if message.contains("UnsupportedSchemaVersion")
+        ));
     }
 }
