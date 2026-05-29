@@ -64,7 +64,8 @@
   - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap/MindMap Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
 - **legacy JSON 使用边界：**
   - `NativeCoreBridge` / `writer_core_jni` 仅保留给尚未迁完的 fallback、native 加载状态和少量 legacy 动作路径。
-  - 导图、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内；不得把裸 JSON 扩散到 UI 作为新契约。
+  - 统计、导图、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内并转换为 `BridgeResult<T>`；不得把裸 JSON 扩散到 UI 作为新契约。
+  - 当前收口目标不是把所有 Core 接口一次性 API-ification / typed DTO 化，而是先确保残留 JSON 不越过领域 Bridge 边界。
 - **禁止事项：**
   - 禁止把 `NativeCoreBridge + JSON over JNI` 写成当前主路线。
   - 禁止用 JSON 字符串伪装 UniFFI typed API。
@@ -101,7 +102,7 @@
   - 支持节点与正文片段（MindMapAnchor）的双向绑定，便于后续 AI 扩写及跳转。
 - Android Bridge：
   - 主链路通过 `AppServiceBridge + UniFFI` 暴露 typed DTO / typed error。
-  - 少量高复杂度图谱快照可暂时返回 JSON 字符串，但必须封闭在领域 Bridge 内。
+  - 少量高复杂度统计/图谱快照可暂时返回 JSON 字符串，但必须封闭在领域 Bridge 内。
   - 后续可新增 typed snapshot 或 buffer 传输，但不能把 JSON/JNI fallback 恢复成主路线。
   - 不泄露 token。
   - 不崩溃。

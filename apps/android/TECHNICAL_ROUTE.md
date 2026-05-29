@@ -19,6 +19,7 @@
 - **纯适配器桥梁：** `AppServiceBridge` 是 Android 主业务桥接入口，只做 UniFFI typed DTO/error 与 Kotlin model 的转换；`NativeCoreBridge` 只能作为 legacy fallback。两者都绝对不能包含自身业务规则、规则校验或持久化决策，更不能成为业务真相来源。
 - Activity 只负责页面生命周期、入口、权限、错误展示。
 - ViewModel / Repository / 领域 Bridge 承担状态映射和底层调用；领域 Bridge 默认依赖 `AppServiceBridge`。
+- Stats / MindMap / StarMap 若仍接收 Core 返回的 JSON 字符串，只能在领域 Bridge 内解析为 typed model + `BridgeResult<T>`；UI/ViewModel 不接收裸 JSON。
 - UI 不保存长期业务真相。
 - 长期数据必须走 Rust Core / workspace。
 - 不用 SharedPreferences 保存长期业务数据。

@@ -6,6 +6,7 @@
 - UI/ViewModel/QML 不直接解析内部业务 JSON，不自行判断工作区、章节保存、写作事件分类或字数规则。
 - 旧 `*_json` / `NativeCoreBridge` JSON 包装仍然存在，但只能作为 Android legacy fallback；Repository/UI/ViewModel/Controller 不允许直接依赖它。
 - 新调用必须进入既有或新增领域 Bridge，不得把裸 JSON `String`、`Boolean`、`null` 当作正常上层接口继续扩散。
+- Stats / StarMap / MindMap 仍有 JSON 字符串残留时，解析必须封闭在对应领域 Bridge 内，向上返回 `BridgeResult<T>`；`Error` 和 `NotLoaded` 必须原样传播。
 - Bridge 错误必须包含稳定 `code` 和可展示 `message`，不能只依赖字符串匹配。
 
 ## 领域 Bridge 架构
@@ -23,8 +24,8 @@
 
 - Workspace：作品、卷、章节列表与创建、删除、重排序等。
 - Writing：`openChapter`、`saveChapterContent`、`clearChapterContent`、`calculateWordCount`、`processWritingEvent`。
-- Stats：项目统计和写作统计刷新/查询。
-- StarMap：星图列表、创建、读取图、基础节点/边和布局操作。
+- Stats：项目统计和写作统计刷新/查询；残留 JSON 只允许在 `StatsBridge` 内解析。
+- StarMap / MindMap：星图/导图列表、快照、读取图、基础节点/边和布局操作；残留 JSON 只允许在对应领域 Bridge 内解析。
 - Settings：`getLocalSettings`、`saveLocalSettings`、`getSyncableSettings`、`saveSyncableSettings`。
 - Sync：`loadSyncState`、`loadSyncConfig`、`saveSyncConfig`、`loadSyncSecrets`、`saveSyncSecrets`、`performSyncDiagnostics`、`performSyncDryRun`、`performSync`。
 - NativeStatus：只暴露 native 加载状态、工作区路径、工作区校验、AI 可用性等最小状态；不得透传设置、同步、写作、星图业务方法。

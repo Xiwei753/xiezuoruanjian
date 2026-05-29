@@ -5,7 +5,7 @@
 ## 架构
 
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
-- `apps/android`: 原生 Kotlin Android 客户端。作为当前的主客户端。主业务入口为 `AppServiceBridge + UniFFI`，领域 Bridge/Repository/ViewModel/UI 只做平台适配；`NativeCoreBridge` 仅保留为 legacy JSON/JNI 兼容 fallback。
+- `apps/android`: 原生 Kotlin Android 客户端。作为当前的主客户端。主业务入口为 `AppServiceBridge + UniFFI`，领域 Bridge/Repository/ViewModel/UI 只做平台适配；`NativeCoreBridge` 仅保留为 legacy JSON/JNI 兼容 fallback。Stats/MindMap/StarMap 的残留 JSON 只能封闭在领域 Bridge 内，不是 UI 契约。
 - `apps/linux`: 原生 Linux 客户端站位（骨架），未来使用 Qt/C++。同样必须通过 bindings 调用 Rust 核心。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 

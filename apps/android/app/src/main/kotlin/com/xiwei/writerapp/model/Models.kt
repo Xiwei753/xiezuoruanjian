@@ -433,6 +433,7 @@ data class InputSchemaProperty(
 }
 
 data class WritingStatsSummary(
+    val range: WritingStatsRange? = null,
     val totalWordCount: Long = 0,
     val totalTimeSeconds: Long = 0,
     val activeDays: Int = 0,
@@ -444,7 +445,13 @@ data class WritingStatsSummary(
 
 typealias WritingWritingStatsSummary = WritingStatsSummary
 
+data class WritingStatsRange(
+    @SerializedName("start_date") val startDate: String? = null,
+    @SerializedName("end_date") val endDate: String? = null
+)
+
 data class ProjectWritingStatsSummary(
+    val range: WritingStatsRange? = null,
     val projects: List<ProjectWritingStatsItem>? = emptyList()
 )
 
@@ -452,7 +459,56 @@ data class ProjectWritingStatsItem(
     @SerializedName("project_id") val projectId: String? = null,
     val projectTitle: String? = null,
     @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
+    @SerializedName("pasted_chars") val pastedChars: Long? = null,
+    @SerializedName("deleted_chars") val deletedChars: Long? = null,
+    @SerializedName("ai_inserted_chars") val aiInsertedChars: Long? = null,
+    @SerializedName("net_delta_chars") val netDeltaChars: Long? = null,
     @SerializedName("active_seconds") val activeSeconds: Long? = null
+)
+
+data class ChapterWritingStatsSummary(
+    val range: WritingStatsRange? = null,
+    val chapters: List<ChapterWritingStatsItem>? = emptyList()
+)
+
+data class ChapterWritingStatsItem(
+    @SerializedName("chapter_id") val chapterId: String? = null,
+    @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
+    @SerializedName("pasted_chars") val pastedChars: Long? = null,
+    @SerializedName("deleted_chars") val deletedChars: Long? = null,
+    @SerializedName("ai_inserted_chars") val aiInsertedChars: Long? = null,
+    @SerializedName("net_delta_chars") val netDeltaChars: Long? = null,
+    @SerializedName("active_seconds") val activeSeconds: Long? = null
+)
+
+data class DeviceWritingStatsSummary(
+    val range: WritingStatsRange? = null,
+    val devices: List<DeviceWritingStatsItem>? = emptyList()
+)
+
+data class DeviceWritingStatsItem(
+    @SerializedName("device_id") val deviceId: String? = null,
+    val platform: String? = null,
+    @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
+    @SerializedName("pasted_chars") val pastedChars: Long? = null,
+    @SerializedName("deleted_chars") val deletedChars: Long? = null,
+    @SerializedName("ai_inserted_chars") val aiInsertedChars: Long? = null,
+    @SerializedName("net_delta_chars") val netDeltaChars: Long? = null,
+    @SerializedName("active_seconds") val activeSeconds: Long? = null,
+    @SerializedName("sessions_count") val sessionsCount: Int? = null
+)
+
+data class WritingSpeedCurve(
+    val range: WritingStatsRange? = null,
+    @SerializedName("bucket_minutes") val bucketMinutes: Int = 0,
+    val buckets: List<WritingSpeedBucket>? = emptyList()
+)
+
+data class WritingSpeedBucket(
+    @SerializedName("start_ms") val startMs: Long = 0,
+    @SerializedName("end_ms") val endMs: Long = 0,
+    @SerializedName("chars_typed") val charsTyped: Long = 0,
+    @SerializedName("chars_per_minute") val charsPerMinute: Double = 0.0
 )
 
 data class ProjectStatsSummary(
