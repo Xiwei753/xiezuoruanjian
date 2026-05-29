@@ -13,7 +13,8 @@
 //!
 //! | 模块 | 职责 | 边界 |
 //! |------|------|------|
-//! | `facade` | 对外 API 入口，聚合所有子模块 | 客户端唯一调用点 |
+//! | `facade` | Core 内部统一入口，聚合所有子模块 | 不直接作为平台稳定边界 |
+//! | `api` | 跨平台稳定 API 层，提供 DTO / Error / Service | UniFFI、Linux binding、未来前端的底座 |
 //! | `workspace` | 工作区创建、验证、最近编辑 | 不处理项目内容 |
 //! | `project` | 作品 CRUD、统计、排序、删除 | 删除走 `delete_guard` |
 //! | `volume` | 卷 CRUD、排序、删除 | 删除走 `delete_guard` |
@@ -36,6 +37,7 @@
 //! ```
 
 pub mod action_registry;
+pub mod api;
 pub(crate) mod delete_guard;
 // Always export these for UniFFI
 pub mod ai_service;
@@ -63,6 +65,7 @@ pub mod workspace;
 pub mod writing_stats;
 
 pub use error::{Error, Result};
+pub use api::*;
 
 #[cfg(test)]
 pub mod backup_tests;
@@ -91,4 +94,4 @@ pub fn perform_dummy_action() -> String {
 
 uniffi::include_scaffolding!("api");
 pub mod app_service;
-pub use app_service::*;
+pub use app_service::WriterAppService;

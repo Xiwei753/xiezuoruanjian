@@ -11,6 +11,9 @@
 - Rust Core 是所有客户端唯一的业务真相来源。
 - Workspace / Project / Volume / Chapter / Settings / Sync / Trash / Delete Guard / Mind Map 都由 Core 统一兜底与定义。
 - Android 和 Linux 等所有端均不能绕过 Core 提供的 Capability API 读写长期业务数据，也不得在平台端自行编写重复的业务逻辑。
+- `src/api/` 是当前跨平台暴露层底座：`types.rs` 放稳定 DTO，`error.rs` 放平台稳定错误映射，`service.rs` 放 `WriterCoreApi` 服务。
+- `src/app_service.rs` 只作为 UniFFI adapter 保留 `WriterAppService` 兼容入口；不得再作为 DTO、错误映射和业务 API 的混杂事实来源。
+- `src/api.udl` 是 UniFFI 绑定声明，不是业务 API 设计的唯一事实来源。
 
 ## Core 职责
 - 数据结构。
@@ -20,6 +23,7 @@
 - 导图业务图和布局快照。
 - 错误语义。
 - 序列化兼容。
+- 跨平台稳定 API DTO、错误映射和服务入口。
 
 ## Core 禁止事项
 - 不吞错误。
@@ -27,6 +31,7 @@
 - 不允许 UI 层传错路径就删 workspace root。
 - 不允许 Android/Linux 私自写 workspace 关键业务文件。
 - 不把平台 UI 状态写入 Core 业务数据。
+- 不把业务能力直接堆进 UniFFI adapter。
 
 ## Mind Map Core 路线
 - **分层边界**：必须严格区分 Graph（业务真相）、Layout（纯位置信息）和 Snapshot（发给平台的只读渲染视图）。

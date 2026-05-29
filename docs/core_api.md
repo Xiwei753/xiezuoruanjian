@@ -1,6 +1,21 @@
 # Core API
 
-`writer_core` Rust 库为客户端提供以下高层 API 函数：
+`writer_core` Rust 库的跨平台暴露边界已经拆成四层：
+
+- Core domain：`workspace`、`project`、`volume`、`chapter`、`settings`、`sync_service`、`mind_map`、`starmap`、`writing_stats` 等模块负责真实业务和文件 I/O。
+- Facade：`facade::WriterCore` 聚合内部业务能力，是 Core 内部统一入口；它不承诺作为平台稳定 DTO 边界。
+- Core API：`api::WriterCoreApi`、`api::types`、`api::error` 是跨平台稳定暴露层，面向 UniFFI、Linux binding 和未来前端。
+- UniFFI adapter：`app_service::WriterAppService` 只保留 Android 兼容的对象名和方法签名，负责接收 UniFFI 参数并委托 `WriterCoreApi`。
+
+`api.udl` 只是 UniFFI 绑定声明，用于生成 Kotlin/外部语言桥接代码；业务 API 的事实来源是 Rust `api/` 模块及其文档边界，不是 UDL 文件本身。
+
+## Core API 模块
+
+- `core/writer_core/src/api/types.rs`：平台稳定 DTO，如 `ProjectDto`、`VolumeDto`、`ChapterMetaDto`、`ChapterContentDto`、`ChapterSaveReceiptDto`、`RecentEditDto`、`LocalSettingsDto`、`SyncConfigDto`、`SyncStateDto`、`SyncResultDto` 等。
+- `core/writer_core/src/api/error.rs`：平台稳定错误 `WriterError`，集中从 `crate::error::Error` 映射，保留 `Io`、`Json`、`InvalidWorkspace`、`ProjectNotFound`、`VolumeNotFound`、`ChapterNotFound`、`EmptyOverwriteBlocked`、`NotImplemented`、`RefuseToDeleteWorkspaceRoot`、`InvalidDeleteTarget`、`Other` 语义。
+- `core/writer_core/src/api/service.rs`：`WriterCoreApi` 持有 workspace path，统一封装 `facade::WriterCore` 调用，返回 API DTO / `WriterError`，不依赖 Android、Linux、QML 或 UniFFI。
+
+`writer_core` 当前稳定能力包括：
 
 - `create_workspace(path: &Path) -> Result<()>`
 - `validate_workspace(path: &Path) -> Result<bool>`
@@ -33,7 +48,7 @@
 在用不同内容覆盖现有非空章节文本之前，Core 会在 `backups/chapters/` 下写入一个轻量级恢复副本。备份文件名包含 `project_id`、`volume_id`、`chapter_id` 和时间戳。Core 仅保留每个章节最近的备份，以避免无限增长。
 
 ### 错误处理
-核心定义了统一的 `Error` 枚举（如 `writer_core::error::Error`）来处理所有失败模式，而不是依赖基于字符串的错误。跨端 Bridge 必须使用 `Error::code()` 暴露稳定错误码，并可通过 `BridgeResult<T>` 兼容旧 JSON 包装。当前稳定错误码包括 `IO_ERROR`、`JSON_ERROR`、`INVALID_WORKSPACE`、`PROJECT_NOT_FOUND`、`VOLUME_NOT_FOUND`、`CHAPTER_NOT_FOUND`、`EMPTY_OVERWRITE_BLOCKED`、`NOT_IMPLEMENTED`、`REFUSE_DELETE_WORKSPACE_ROOT`、`INVALID_DELETE_TARGET`、`OTHER`。
+Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来处理内部失败模式。跨平台 `api::error::WriterError` 是平台暴露层稳定错误类型，由 `api/error.rs` 集中映射。跨端 Bridge 必须传播稳定错误码和错误语义，不得吞错或只依赖字符串匹配。当前稳定错误码包括 `IO_ERROR`、`JSON_ERROR`、`INVALID_WORKSPACE`、`PROJECT_NOT_FOUND`、`VOLUME_NOT_FOUND`、`CHAPTER_NOT_FOUND`、`EMPTY_OVERWRITE_BLOCKED`、`NOT_IMPLEMENTED`、`REFUSE_DELETE_WORKSPACE_ROOT`、`INVALID_DELETE_TARGET`、`OTHER`。
 
 ### 跨端 DTO
 
@@ -43,4 +58,4 @@
 
 ### Android Bridge 入口
 
-Android 主业务入口是 `AppServiceBridge + UniFFI`，`api.udl` 暴露 `WriterAppService` typed DTO/error。上层必须使用领域 Bridge：`WorkspaceBridge`、`WritingBridge`、`StatsBridge`、`StarMapBridge`、`MindMapBridge`、`SettingsBridge`、`SyncBridge`。`NativeCoreBridge` 仅作为 legacy JSON/JNI fallback 和 native 状态/旧动作路径；Repository/UI/ViewModel/Controller 不应直接处理 `NativeResult` 或 `NativeCoreBridge`。
+Android 主业务入口是 `AppServiceBridge + UniFFI`，UniFFI 暴露的 `WriterAppService` 只适配到 `WriterCoreApi`。上层必须使用领域 Bridge：`WorkspaceBridge`、`WritingBridge`、`StatsBridge`、`StarMapBridge`、`MindMapBridge`、`SettingsBridge`、`SyncBridge`。`NativeCoreBridge` 仅作为 legacy JSON/JNI fallback 和 native 状态/旧动作路径；Repository/UI/ViewModel/Controller 不应直接处理 `NativeResult` 或 `NativeCoreBridge`。

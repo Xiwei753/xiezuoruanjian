@@ -3,6 +3,7 @@
 跨端调用必须遵守以下边界：
 
 - Rust Core 是唯一业务事实来源，Android/Linux Bridge 只做类型转换和错误传播。
+- 平台 Bridge 只能调用 Rust 稳定 Core API 暴露层（当前为 `api::WriterCoreApi` 经 `WriterAppService`/平台 adapter 暴露），不得绕回 Core 内部业务模块直接读写 workspace。
 - UI/ViewModel/QML 不直接解析内部业务 JSON，不自行判断工作区、章节保存、写作事件分类或字数规则。
 - 旧 `*_json` / `NativeCoreBridge` JSON 包装仍然存在，但只能作为 Android legacy fallback；Repository/UI/ViewModel/Controller 不允许直接依赖它。
 - 新调用必须进入既有或新增领域 Bridge，不得把裸 JSON `String`、`Boolean`、`null` 当作正常上层接口继续扩散。
@@ -11,7 +12,7 @@
 
 ## 领域 Bridge 架构
 
-- **Android 三层架构**：`ViewModel/UI → Repository/Controller → 领域 Bridge (WorkspaceBridge, WritingBridge, SettingsBridge, SyncBridge, StatsBridge, StarMapBridge, MindMapBridge 等) → AppServiceBridge → UniFFI typed DTO/error → Rust Core`
+- **Android 三层架构**：`ViewModel/UI → Repository/Controller → 领域 Bridge (WorkspaceBridge, WritingBridge, SettingsBridge, SyncBridge, StatsBridge, StarMapBridge, MindMapBridge 等) → AppServiceBridge → UniFFI typed DTO/error → WriterAppService adapter → WriterCoreApi → Rust Core`
 - **Android legacy 例外**：`NativeStatusBridge` 和少量旧 `ActionBridge` 可通过 `NativeCoreBridge` 读取 native 加载状态或旧动作注册；该路径不是主业务入口。
 - **Linux 三层架构**：`QML UI → AppBackend (QObject 适配层) → 领域 Bridge (writing_bridge 等) → Rust Core`
   - Linux `writing_bridge` 已从字符串错误改为稳定 Core Error 与 DTOs（如 `LinuxChapterOpenData`, `ChapterSaveReceipt`）。
@@ -33,6 +34,7 @@
 ## Android BridgeProvider 收口
 
 - `BridgeProvider` 内部必须优先持有 `AppServiceBridge` 单例，领域 Bridge 默认依赖 `AppServiceBridge`。
+- `AppServiceBridge` 只消费 UniFFI 生成的 `WriterAppService` 稳定方法，不应绕过它直接绑定 Core 内部模块。
 - `BridgeProvider` 可以额外持有 `NativeCoreBridge` 单例，但只能给 legacy status/action 路径使用。
 - `getNativeStatusBridge` 返回 `NativeStatusBridge`，不是 `NativeCoreBridge`。
 - `NativeCoreBridge` 是 `internal` legacy adapter；新代码不得把它作为 Repository、Activity、ViewModel 或 Controller 的依赖。
