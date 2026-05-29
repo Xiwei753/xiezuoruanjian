@@ -267,6 +267,12 @@ pub fn update_starmap_edge(
         if let Some(p) = patch.payload {
             edge.payload = p;
         }
+        if let Some(ft) = patch.from_target {
+            edge.from_target = ft;
+        }
+        if let Some(tt) = patch.to_target {
+            edge.to_target = tt;
+        }
         edge.updated_at = now_epoch();
         let updated_edge = edge.clone();
         graph.updated_at = now_epoch();
@@ -353,8 +359,8 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
                     .as_ref()
                     .map(|t| t.starmap_id.clone())
                     .unwrap_or_else(|| portal.target_starmap_id.clone());
-                let target_dir = starmaps_dir(workspace).join(&target_id);
-                if !target_dir.exists() {
+                
+                if crate::starmap::load_starmap_meta(workspace, &target_id).is_err() {
                     return Err(Error::Io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "Portal target starmap does not exist",
@@ -362,7 +368,18 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
                 }
 
                 if let Some(dt) = &portal.deep_target {
-                    validate_deep_target(workspace, dt)?;
+                    validate_deep_target_range(dt)?;
+                    let status = resolve_deep_target(workspace, dt);
+                    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+                    match status {
+                        CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor => {
+                            return Err(Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("Deep target resolve failed: {:?}", status),
+                            )));
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
@@ -401,7 +418,18 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
 
     for edge in &graph.edges {
         if let Some(ft) = &edge.from_target {
-            validate_deep_target(workspace, ft)?;
+            validate_deep_target_range(ft)?;
+            let status = resolve_deep_target(workspace, ft);
+            use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+            match status {
+                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor => {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Deep target resolve failed: {:?}", status),
+                    )));
+                }
+                _ => {}
+            }
         } else {
             if !node_ids.contains(&edge.from) {
                 return Err(Error::Io(std::io::Error::new(
@@ -412,7 +440,18 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
         }
 
         if let Some(tt) = &edge.to_target {
-            validate_deep_target(workspace, tt)?;
+            validate_deep_target_range(tt)?;
+            let status = resolve_deep_target(workspace, tt);
+            use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+            match status {
+                CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor => {
+                    return Err(Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Deep target resolve failed: {:?}", status),
+                    )));
+                }
+                _ => {}
+            }
         } else {
             if !node_ids.contains(&edge.to) {
                 return Err(Error::Io(std::io::Error::new(
@@ -426,16 +465,7 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
     Ok(())
 }
 
-fn validate_deep_target(
-    workspace: &Path,
-    dt: &crate::starmap::semantic::StarMapDeepTarget,
-) -> Result<()> {
-    if dt.path.len() > 32 {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Deep target path too long (max 32)",
-        )));
-    }
+fn validate_deep_target_range(dt: &crate::starmap::semantic::StarMapDeepTarget) -> Result<()> {
     if let crate::starmap::semantic::StarMapTargetDetail::ChapterRange {
         range_start,
         range_end,
@@ -451,6 +481,22 @@ fn validate_deep_target(
             }
         }
     }
+    Ok(())
+}
+
+pub fn resolve_deep_target(
+    workspace: &Path,
+    dt: &crate::starmap::semantic::StarMapDeepTarget,
+) -> crate::starmap::semantic::StarMapTargetResolveStatus {
+    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+
+    if dt.path.len() > 32 {
+        return TooDeep;
+    }
+
+    if crate::starmap::load_starmap_meta(workspace, &dt.starmap_id).is_err() {
+        return MissingStarmap;
+    }
 
     let mut current_starmap_id = dt.starmap_id.clone();
     let mut visited = std::collections::HashSet::new();
@@ -461,39 +507,70 @@ fn validate_deep_target(
             crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id } => {
                 current_starmap_id = starmap_id.clone();
                 if !visited.insert(current_starmap_id.clone()) {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Cycle detected in deep target path",
-                    )));
+                    return CycleDetected;
+                }
+                if crate::starmap::load_starmap_meta(workspace, &current_starmap_id).is_err() {
+                    return MissingStarmap;
                 }
             }
-            crate::starmap::semantic::StarMapPathSegment::EnterNode { node_id: _ } => {}
+            crate::starmap::semantic::StarMapPathSegment::EnterNode { node_id } => {
+                let target_graph_path = crate::starmap::starmap_graph_path(workspace, &current_starmap_id);
+                if target_graph_path.exists() {
+                    if let Ok(json_str) = std::fs::read_to_string(&target_graph_path) {
+                        if let Ok(target_graph) = serde_json::from_str::<crate::starmap::types::StarMapGraph>(&json_str) {
+                            if !target_graph.nodes.iter().any(|n| &n.id == node_id) {
+                                return MissingNode;
+                            }
+                        } else {
+                            return Unresolved;
+                        }
+                    } else {
+                        return Unresolved;
+                    }
+                } else {
+                    return Unresolved;
+                }
+            }
         }
     }
 
     match &dt.target {
-        crate::starmap::semantic::StarMapTargetDetail::Node { node_id }
-        | crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, .. } => {
+        crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => {
             let target_graph_path = crate::starmap::starmap_graph_path(workspace, &current_starmap_id);
             if target_graph_path.exists() {
                 if let Ok(json_str) = std::fs::read_to_string(&target_graph_path) {
-                    if let Ok(target_graph) =
-                        serde_json::from_str::<crate::starmap::types::StarMapGraph>(&json_str)
-                    {
+                    if let Ok(target_graph) = serde_json::from_str::<crate::starmap::types::StarMapGraph>(&json_str) {
                         if !target_graph.nodes.iter().any(|n| &n.id == node_id) {
-                            return Err(Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "Deep target node_id does not exist in target graph",
-                            )));
+                            return MissingNode;
                         }
                     }
                 }
+            } else {
+                return Unresolved;
+            }
+        }
+        crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => {
+            let target_graph_path = crate::starmap::starmap_graph_path(workspace, &current_starmap_id);
+            if target_graph_path.exists() {
+                if let Ok(json_str) = std::fs::read_to_string(&target_graph_path) {
+                    if let Ok(target_graph) = serde_json::from_str::<crate::starmap::types::StarMapGraph>(&json_str) {
+                        if let Some(n) = target_graph.nodes.iter().find(|n| &n.id == node_id) {
+                            if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                                return MissingAnchor;
+                            }
+                        } else {
+                            return MissingNode;
+                        }
+                    }
+                }
+            } else {
+                return Unresolved;
             }
         }
         _ => {}
     }
 
-    Ok(())
+    Resolved
 }
 
 fn validate_layout(layout: &StarMapLayout) -> Result<()> {

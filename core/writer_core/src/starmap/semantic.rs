@@ -281,6 +281,19 @@ pub enum StarMapTargetDisplayStatus {
     ExpandedGraph,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapTargetResolveStatus {
+    #[default]
+    Unresolved,
+    Resolved,
+    MissingStarmap,
+    MissingNode,
+    MissingAnchor,
+    TooDeep,
+    CycleDetected,
+}
+
 /// 计算目标展示状态，只提供底层计算语义。
 pub fn resolve_target_display_status(
     _deep_target: &StarMapDeepTarget,
