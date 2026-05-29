@@ -707,6 +707,38 @@ mod tests {
         // Delete the external edge
         crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e").unwrap();
 
+        // 3. Add external edge with from_endpoint and EnterChild path
+        let mut parent_graph = crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
+        let external_edge_2 = crate::starmap::types::StarMapEdge {
+            id: "external_e2".to_string(),
+            from: None, to: None,
+            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo, label: None, payload: None,
+            from_target: None, to_target: None,
+            from_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget {
+                target: crate::starmap::semantic::StarMapDeepTarget {
+                    starmap_id: parent.starmap_id.clone(),
+                    path: vec![crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: child.starmap_id.clone() }],
+                    target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+                }
+            }),
+            to_endpoint: None,
+            created_at: 0, updated_at: 0,
+        };
+        parent_graph.edges.push(external_edge_2);
+        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph).unwrap();
+
+        // Check find_starmap_references discovers the EnterChild path from from_endpoint
+        let refs2 = find_starmap_references(dir.path(), &child.starmap_id).unwrap();
+        assert_eq!(refs2.len(), 1);
+        assert_eq!(refs2[0].ref_type, "edge");
+        assert_eq!(refs2[0].ref_id, "external_e2");
+
+        // Try deleting child -> should fail
+        assert!(delete_starmap(dir.path(), &child.starmap_id).is_err());
+
+        // Delete external edge 2
+        crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e2").unwrap();
+
         // Try deleting child again -> should succeed
         assert!(delete_starmap(dir.path(), &child.starmap_id).is_ok());
 
