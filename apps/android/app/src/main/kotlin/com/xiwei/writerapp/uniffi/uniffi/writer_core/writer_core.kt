@@ -818,6 +818,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -865,7 +869,11 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_delete_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_project_stats(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -1081,7 +1089,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_volume(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot_json(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_project_stats(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_recent_edits(
     ): Short
@@ -1214,7 +1226,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume() != 5254.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats() != 14666.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot_json() != 44398.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_project_stats() != 19600.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_recent_edits() != 14757.toShort()) {
@@ -1808,7 +1826,11 @@ public interface WriterAppServiceInterface {
 
     fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean
 
+    fun `flushWritingStats`(): kotlin.Boolean
+
     fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String
+
+    fun `getProjectStats`(`projectId`: kotlin.String): ProjectStatsDto
 
     fun `getRecentEdits`(): List<RecentEditDto>
 
@@ -2119,12 +2141,37 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
 
 
+    override fun `flushWritingStats`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(
+        it, _status)
+}
+    }
+    )
+    }
+
+
 
     @Throws(WriterException::class)override fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(
+        it, FfiConverterString.lower(`projectId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getProjectStats`(`projectId`: kotlin.String): ProjectStatsDto {
+            return FfiConverterTypeProjectStatsDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_project_stats(
         it, FfiConverterString.lower(`projectId`),_status)
 }
     }
@@ -3034,6 +3081,42 @@ public object FfiConverterTypeProjectDto: FfiConverterRustBuffer<ProjectDto> {
 
 
 
+data class ProjectStatsDto (
+    var `totalWordCount`: kotlin.UInt,
+    var `volumeCount`: kotlin.UInt,
+    var `chapterCount`: kotlin.UInt
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProjectStatsDto: FfiConverterRustBuffer<ProjectStatsDto> {
+    override fun read(buf: ByteBuffer): ProjectStatsDto {
+        return ProjectStatsDto(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProjectStatsDto) = (
+            FfiConverterUInt.allocationSize(value.`totalWordCount`) +
+            FfiConverterUInt.allocationSize(value.`volumeCount`) +
+            FfiConverterUInt.allocationSize(value.`chapterCount`)
+    )
+
+    override fun write(value: ProjectStatsDto, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`totalWordCount`, buf)
+            FfiConverterUInt.write(value.`volumeCount`, buf)
+            FfiConverterUInt.write(value.`chapterCount`, buf)
+    }
+}
+
+
+
 data class RecentEditDto (
     var `projectId`: kotlin.String,
     var `volumeId`: kotlin.String,
@@ -3484,6 +3567,7 @@ public object FfiConverterTypeSyncSecretsDto: FfiConverterRustBuffer<SyncSecrets
 
 data class SyncStateDto (
     var `status`: kotlin.String,
+    var `remoteUrl`: kotlin.String?,
     var `backendType`: kotlin.String?,
     var `transport`: kotlin.String?,
     var `lastSyncedCommit`: kotlin.String?,
@@ -3506,6 +3590,7 @@ public object FfiConverterTypeSyncStateDto: FfiConverterRustBuffer<SyncStateDto>
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalLong.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
@@ -3515,6 +3600,7 @@ public object FfiConverterTypeSyncStateDto: FfiConverterRustBuffer<SyncStateDto>
 
     override fun allocationSize(value: SyncStateDto) = (
             FfiConverterString.allocationSize(value.`status`) +
+            FfiConverterOptionalString.allocationSize(value.`remoteUrl`) +
             FfiConverterOptionalString.allocationSize(value.`backendType`) +
             FfiConverterOptionalString.allocationSize(value.`transport`) +
             FfiConverterOptionalString.allocationSize(value.`lastSyncedCommit`) +
@@ -3526,6 +3612,7 @@ public object FfiConverterTypeSyncStateDto: FfiConverterRustBuffer<SyncStateDto>
 
     override fun write(value: SyncStateDto, buf: ByteBuffer) {
             FfiConverterString.write(value.`status`, buf)
+            FfiConverterOptionalString.write(value.`remoteUrl`, buf)
             FfiConverterOptionalString.write(value.`backendType`, buf)
             FfiConverterOptionalString.write(value.`transport`, buf)
             FfiConverterOptionalString.write(value.`lastSyncedCommit`, buf)

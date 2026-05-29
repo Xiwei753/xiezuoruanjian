@@ -10,8 +10,8 @@
 - Android：
   - Kotlin + XML/View。
   - AppCompat / Material / ConstraintLayout / Lifecycle。
-  - NativeCoreBridge 调用 writer_core_jni。
-  - 当前 JNI 数据返回主要是 JSON。
+  - 当前主业务入口是 `AppServiceBridge + UniFFI` 自动生成的 Kotlin 绑定。
+  - `NativeCoreBridge` / `writer_core_jni` 仅作为 legacy JSON/JNI fallback，不是新业务入口。
   - 只正式支持 arm64-v8a。
   - 暂不引入 Compose 作为主 UI 技术。
 - Linux：
@@ -58,16 +58,18 @@
   - OpenGL ES / GLSurfaceView 是 Android 大画布高性能图形路线之一。
 
 ## 跨语言暴露层与传输路线 (FFI / UniFFI)
-- **当前路线（全面升级中）：**
-  - 我们正在从“纯手工编写 JNI/C++ 胶水代码 + JSON 序列化”的 V1 模式，全面迁移至 **基于 UniFFI 的自动化暴露层**。
-  - Rust Core 作为核心业务真相，通过编写 `api.udl` 或使用宏，自动生成 Android (Kotlin) 和 Linux (C++) 的原生调用接口。
-  - **核心优势**：彻底消灭中间层的 JSON 序列化/反序列化性能损耗，避免跨平台胶水代码带来的割裂感，实现“内核加字段，双端自动拥有”的极速开发体验。
-- **历史 JSON 使用边界（逐步废弃）：**
-  - 针对导图快照等超大数据，V1 曾使用 Gson/JSON 解析。
-  - 在迁移到 UniFFI 结构体直接传递前，原有的 JSON 性能瓶颈规则依然适用（如 JSON 超过 1MB，或解析超过 16ms 必须重构）。
+- **当前路线：**
+  - Rust Core 是唯一业务真相来源，Android 主业务入口固定为 `AppServiceBridge + UniFFI`。
+  - `core/writer_core/src/api.udl` 定义稳定 DTO、错误枚举和 `WriterAppService` 方法；Kotlin `writer_core.kt` 必须由 UniFFI 生成，不得手写业务逻辑。
+  - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap/MindMap Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
+- **legacy JSON 使用边界：**
+  - `NativeCoreBridge` / `writer_core_jni` 仅保留给尚未迁完的 fallback、native 加载状态和少量 legacy 动作路径。
+  - 导图、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内；不得把裸 JSON 扩散到 UI 作为新契约。
 - **禁止事项：**
-  - 禁止继续手动编写繁冗的 `Java_com_xiwei_...` JNI 函数。
-  - 禁止在 UI 层进行任何底层指针的裸操作，必须由 UniFFI 的安全封装接管。
+  - 禁止把 `NativeCoreBridge + JSON over JNI` 写成当前主路线。
+  - 禁止用 JSON 字符串伪装 UniFFI typed API。
+  - 禁止手改 UniFFI 生成文件中的业务逻辑。
+  - 禁止继续新增手写 `Java_com_xiwei_...` JNI 主业务函数。
 
 ## 网络同步路线
 - **核心原则：** 拥抱基于 Token 的标准 API，对容易失败的底层代理探测进行“断舍离”。
@@ -97,11 +99,10 @@
   - 真正作为正文并列图谱的数据由 Core 读写并生成快照。若没有自定义图谱，则退化为从作品/卷/章节自动生成的结构图。
   - 计算 radial tree / horizontal tree 布局。
   - 支持节点与正文片段（MindMapAnchor）的双向绑定，便于后续 AI 扩写及跳转。
-- JNI Bridge：
-  - 暴露 getMindMapSnapshotJson。
-  - 返回 success/data/error 结构。
-  - V1 用 JSON。
-  - 后续可新增 getMindMapSnapshotBuffer，但不能删除旧抽象。
+- Android Bridge：
+  - 主链路通过 `AppServiceBridge + UniFFI` 暴露 typed DTO / typed error。
+  - 少量高复杂度图谱快照可暂时返回 JSON 字符串，但必须封闭在领域 Bridge 内。
+  - 后续可新增 typed snapshot 或 buffer 传输，但不能把 JSON/JNI fallback 恢复成主路线。
   - 不泄露 token。
   - 不崩溃。
 - Android Model：

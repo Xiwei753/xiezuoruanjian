@@ -1,5 +1,7 @@
 # 跨平台能力矩阵
 
+> 当前 Android 主业务入口已切换为 `AppServiceBridge + UniFFI`。本矩阵中的历史 `NativeCoreBridge` / JNI 列仅用于识别 legacy fallback 和待收敛能力，不得作为新业务实现路线。
+
 本文档是迁移现有代码到 Core-first Capability Contract 的盘点表。
 本文档不定义新路线，只记录当前事实和待收敛项。
 后续每次新增业务能力，都必须更新本文档。

@@ -3,7 +3,7 @@ package com.xiwei.writerapp.data
 import android.content.Context
 
 class WriterRepository private constructor(context: Context) {
-    private val workspacePath = context.filesDir.absolutePath + "/workspace"
+    private val workspacePath = WorkspaceManager.getWorkspaceDir(context).absolutePath
     val appService = AppServiceBridge(workspacePath)
 
     val workspace = WorkspaceBridge(appService)
@@ -14,7 +14,7 @@ class WriterRepository private constructor(context: Context) {
     val mindMap = MindMapBridge(appService)
     val starMap = StarMapBridge(appService)
 
-    val legacyNativeBridge = NativeCoreBridge(workspacePath) // Deprecated, strictly for lingering unused code if any
+    private val legacyNativeBridge = NativeCoreBridge(context.applicationContext) // Legacy fallback/status path only
 
     companion object {
         @Volatile

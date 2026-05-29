@@ -9,16 +9,16 @@
 ## 当前事实
 - Android 当前是 Kotlin + XML/View。
 - 使用 AppCompat / Material / ConstraintLayout / Lifecycle。
-- 通过 NativeCoreBridge 调用 writer_core_jni。
-- 当前 JNI 返回主要是 JSON。
+- 主业务入口通过 `AppServiceBridge + UniFFI` 调用 Rust Core typed DTO/error。
+- `NativeCoreBridge` / `writer_core_jni` 仅保留 legacy JSON/JNI fallback、native 加载状态和少量旧动作路径。
 - 官方支持 ABI 以 arm64-v8a 为准。
 - 当前没有 Compose 作为主 UI 技术。
 
 ## Android 总原则与全局契约
 - **遵守跨平台契约：** 所有的业务接口与状态机表现必须完全符合 [《跨平台能力契约与 Core-first 架构约束》](../../docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md) 的规定。
-- **纯适配器桥梁：** `NativeCoreBridge` 只能作为底层 Core Capability API 的调用适配器（Adapter），只做参数封装、格式转换与线程调度。**绝对不能包含任何自身的业务规则、规则校验或持久化决策，更不能成为业务真相的来源。**
+- **纯适配器桥梁：** `AppServiceBridge` 是 Android 主业务桥接入口，只做 UniFFI typed DTO/error 与 Kotlin model 的转换；`NativeCoreBridge` 只能作为 legacy fallback。两者都绝对不能包含自身业务规则、规则校验或持久化决策，更不能成为业务真相来源。
 - Activity 只负责页面生命周期、入口、权限、错误展示。
-- ViewModel / Repository / NativeCoreBridge 承担状态映射和底层调用。
+- ViewModel / Repository / 领域 Bridge 承担状态映射和底层调用；领域 Bridge 默认依赖 `AppServiceBridge`。
 - UI 不保存长期业务真相。
 - 长期数据必须走 Rust Core / workspace。
 - 不用 SharedPreferences 保存长期业务数据。

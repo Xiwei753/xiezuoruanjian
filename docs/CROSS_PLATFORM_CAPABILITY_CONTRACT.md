@@ -21,8 +21,8 @@
 
 ### 2. One Capability, Many Bindings (单一能力，多端绑定)
 - **语义归一**：一个业务能力（例如：创建作品、修改设置）在 Core 中必须有且仅有一个业务语义定义。
-- **无歧义绑定**：Android JNI 层、Linux backend 适配器、以及未来的 Windows/macOS/iOS/Web 绑定层，都只能作为该 Capability 的 Binding。
-- **传输层格式隔离**：Binding 可以为了平台特性使用不同的传输格式（如 Android JNI 传输 JSON 字符串/DirectByteBuffer，Linux qmetaobject 传输 C++ 结构体/JSON），但传输格式绝不能修改、扩展或削弱 Core API 的原始业务语义。
+- **无歧义绑定**：Android UniFFI 主绑定、legacy JNI fallback、Linux backend 适配器、以及未来的 Windows/macOS/iOS/Web 绑定层，都只能作为该 Capability 的 Binding。
+- **传输层格式隔离**：Binding 可以为了平台特性使用不同的传输格式（如 Android UniFFI typed DTO、legacy JSON 字符串/DirectByteBuffer，Linux qmetaobject 传输 C++ 结构体/JSON），但传输格式绝不能修改、扩展或削弱 Core API 的原始业务语义。
 - **反例**：Android 端实现 `createProject` 包含自动初始化空卷的业务语义 A，而 Linux 端实现的 `createProject` 只是创建空文件夹的业务语义 B。这种情况被绝对禁止。
 
 ### 3. Shared Result Envelope (统一结果信封)
@@ -78,7 +78,7 @@
 - **消费规则**：平台端仅能作为 Event 的消费者。平台端可以把事件转换为特定平台的 UI State 或 LiveData/StateFlow 信号，但禁止自己在平台层发明和分发长周期的业务事件。
 
 ### 7. Platform Adapter Only (平台绑定层纯适配器化)
-- Android 中的 `NativeCoreBridge`/`writer_core_jni` 以及 Linux 中的 `qmetaobject/backend` 只是**适配器（Adapter）**，不是业务逻辑实现层。
+- Android 中的 `AppServiceBridge + UniFFI` 主链路、`NativeCoreBridge`/`writer_core_jni` legacy fallback，以及 Linux 中的 `qmetaobject/backend` 只是**适配器（Adapter）**，不是业务逻辑实现层。
 - **适配器允许且只允许做以下事情**：
   1. 数据格式的物理转换（如：Rust RustString -> C++ QString，Rust Vector -> Kotlin List）。
   2. 调度执行：将同步、写操作派发到非 UI 线程，或接收 Core 异步回调并派发到平台主线程。
@@ -105,19 +105,24 @@ graph TD
     end
 
     subgraph Bindings ["bindings (薄绑定层)"]
-        JNI[bindings/android (JNI Adapter)]
+        UNI[UniFFI generated binding]
+        JNI[bindings/android (legacy JNI Adapter)]
         SO[bindings/shared (C-ABI Shared)]
     end
 
     subgraph AndroidApp ["apps/android (Android 壳应用)"]
         AVM[ViewModel & LiveData] --> AUI[UI / Activity / Custom Canvas View]
-        AVM --> NCBridge[NativeCoreBridge]
+        AVM --> DomainBridge[Domain Bridges]
+        DomainBridge --> AppServiceBridge[AppServiceBridge]
+        AVM -. legacy status/action .-> NCBridge[NativeCoreBridge]
     end
 
     subgraph LinuxApp ["apps/linux (Linux 壳应用)"]
         LBACK[Backend Adapter C++] --> LUI[QML UI]
     end
 
+    AppServiceBridge --> UNI
+    UNI --> CAP
     NCBridge --> JNI
     JNI --> CAP
     LBACK --> SO
@@ -131,14 +136,15 @@ graph TD
   - 核心错误码与标准状态码。
   - 覆盖所有业务逻辑的集成/单元测试。
 
-- **`bindings/android` (Android JNI 物理桥接)**
-  - 必须足够轻薄，主要做 JNI 数据类型映射与转换。
+- **Android UniFFI / legacy JNI 物理桥接**
+  - 主业务使用 UniFFI 生成绑定；legacy JNI 只保留 fallback。
+  - 必须足够轻薄，主要做数据类型映射与转换。
   - 不引入 Kotlin/Java 的额外业务判断。
   - 不包含任何直接对本地 workspace 的文件读写操作。
 
 - **`apps/android` (Android 客户端壳层)**
   - UI 渲染、组件渲染、Activity/Fragment 生命周期的处理。
-  - 通过 `NativeCoreBridge` 调用 JNI。
+  - 通过领域 Bridge 调用 `AppServiceBridge + UniFFI`；只有 legacy 状态/动作路径可以调用 `NativeCoreBridge`。
   - 不做本地业务缓存。在设置界面编辑时，只允许在内存中修改 Draft，直到点击“保存”通过 SettingsCapability 写入，以 Core 返回的 `SettingsSaved` 事件为刷新 UI 的唯一依据。
   - 导图的拖拽缩放、手势事件、惯性计算是 UI 逻辑，但节点布局、数据和锚点更新全量来自 Core。
 

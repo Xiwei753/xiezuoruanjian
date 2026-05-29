@@ -8,6 +8,7 @@ import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.StatsBridge
 import com.xiwei.writerapp.data.BridgeResult
 import com.xiwei.writerapp.model.WritingWritingStatsSummary
+import com.xiwei.writerapp.model.WritingStatsSummary
 import com.xiwei.writerapp.model.ProjectWritingStatsSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +26,7 @@ import org.json.JSONObject
  * 加载并展示今日、本周、本月的写作统计数据。
  *
  * ## 架构定位
- * - MainActivity → StatsController → StatsBridge → legacy internal adapter → JNI → Rust Core
+ * - MainActivity → StatsController → StatsBridge → AppServiceBridge → UniFFI → Rust Core
  *
  * ## 职责边界
  * - **做**：加载统计数据、格式化展示、计算字数/时长/速度

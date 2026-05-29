@@ -9,11 +9,12 @@ package com.xiwei.writerapp.data
 /**
  * `NativeCoreBridge` 是负责与 Rust JNI 层通信的 legacy/internal 适配器。
  *
- * 【架构边界警告 - 桥接第四阶段最终收口】
+ * 【架构边界警告 - UniFFI 迁移后】
  * - `NativeCoreBridge` 是遗留的 JSON over JNI 兼容中心。
- * - 只有 `BridgeProvider` 和 `WorkspaceBridge`, `WritingBridge` 等专用领域 Bridge 允许直接调用它。
+ * - 当前主业务入口是 `AppServiceBridge + UniFFI`。
+ * - 只有 legacy 状态/动作路径允许通过 `BridgeProvider` 显式调用它。
  * - Repository, ViewModel, Activity, Controller 严禁直接依赖此类。
- * - 新业务功能禁止继续向上暴露裸 JSON String / Boolean / null，必须新增或复用领域 Bridge。
+ * - 新业务功能禁止继续接入 JSON over JNI，必须新增或复用 UniFFI 领域 Bridge。
  *
  * 该类目前主要维护旧有功能的序列化/反序列化逻辑，并将 JNI 返回的 JSON 字符串映射为 `NativeResult<T>`。
  */
@@ -51,6 +52,7 @@ internal sealed class NativeResult<out T> {
     object NotLoaded : NativeResult<Nothing>()
 }
 
+@Deprecated("Legacy JSON/JNI fallback. Main business entry must use AppServiceBridge + UniFFI.")
 internal class NativeCoreBridge(context: Context) {
     private val workspaceDir = WorkspaceManager.getWorkspaceDir(context).absolutePath
     private val appContext = context.applicationContext

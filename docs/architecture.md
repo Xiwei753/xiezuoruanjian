@@ -6,11 +6,11 @@
 
 ## 核心优先与能力契约
 
-> **能力对齐状态：** 请查看 [跨平台能力矩阵](CAPABILITY_MATRIX.md) 了解 Rust Core、Android JNI 和 Linux 后端之间的当前对齐状态，以及将分支逻辑重构回核心的路线图。
+> **能力对齐状态：** 请查看 [跨平台能力矩阵](CAPABILITY_MATRIX.md) 了解 Rust Core、Android UniFFI/legacy JNI 和 Linux 后端之间的当前对齐状态，以及将分支逻辑重构回核心的路线图。
 
 为防止不同客户端（如 Android 和 Linux）之间的平台重复和状态分叉，本仓库强制执行**核心优先架构**：
 - **单一事实来源**：`core/writer_core` 是业务逻辑、状态变更和验证规则的唯一所有者。
-- **纯适配器**：Android JNI 层和 Linux Qt/QML 后端严格作为薄适配器，将 Core 数据包转换为 UI 视图。禁止实现独立的业务规则或直接修改工作区文件。
+- **纯适配器**：Android 的 `AppServiceBridge + UniFFI` 主链路、少量 legacy JNI fallback，以及 Linux Qt/QML 后端严格作为薄适配器，将 Core 数据包转换为 UI 视图。禁止实现独立的业务规则或直接修改工作区文件。
 - **契约执行**：所有共享功能（工作区、项目、卷、章、设置、同步、思维导图、编辑器模型、AI）必须实现 [跨平台能力契约](CROSS_PLATFORM_CAPABILITY_CONTRACT.md) 中定义的标准能力 API 契约。
 
 ## 项目结构

@@ -29,6 +29,12 @@ dictionary ProjectDto {
     string updated_at;
 };
 
+dictionary ProjectStatsDto {
+    u32 total_word_count;
+    u32 volume_count;
+    u32 chapter_count;
+};
+
 dictionary VolumeDto {
     string id;
     string title;
@@ -124,6 +130,7 @@ dictionary SyncConflictDto {
 
 dictionary SyncStateDto {
     string status;
+    string? remote_url;
     string? backend_type;
     string? transport;
     string? last_synced_commit;
@@ -233,6 +240,9 @@ interface WriterAppService {
     ProjectDto create_project(string title);
 
     [Throws=WriterError]
+    ProjectStatsDto get_project_stats(string project_id);
+
+    [Throws=WriterError]
     boolean rename_project(string project_id, string new_title);
 
     [Throws=WriterError]
@@ -339,6 +349,8 @@ interface WriterAppService {
     boolean process_writing_event(string device_id, string platform, string project_id, string volume_id, string chapter_id, string old_text, string new_text, string session_id);
 
     boolean record_writing_event(string device_id, string project_id, string volume_id, string chapter_id, string source, i32 inserted_chars, i32 deleted_chars, i32 pasted_chars, i32 ai_inserted_chars, string session_id);
+
+    boolean flush_writing_stats();
 
     [Throws=WriterError]
     string get_mindmap_snapshot_json(string project_id);

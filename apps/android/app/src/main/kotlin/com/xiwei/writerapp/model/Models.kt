@@ -6,7 +6,7 @@ package com.xiwei.writerapp.model
 //!
 //! ## 架构定位
 //!
-//! 这些模型是 Rust Core JSON 响应的 Kotlin 映射，**不是业务实体**。
+//! 这些模型是 Rust Core UniFFI DTO 或 legacy JSON 响应的 Kotlin 映射，**不是业务实体**。
 //! 业务实体的定义和操作都在 Rust Core 中。
 //!
 //! ## 设计原则
@@ -40,7 +40,8 @@ data class LocalSettings(
     val editorSmoothCursorEnabled: Boolean = true,
     val editorTypingAnimationDurationMs: Int = 100,
     val editorSmoothCursorDurationMs: Int = 80,
-    val aiEnabled: Boolean = false
+    val aiEnabled: Boolean = false,
+    val statsDeviceId: String? = null
 )
 
 data class SyncableSettings(
@@ -66,7 +67,8 @@ data class Volume(
     val id: String,
     val title: String,
     @SerializedName("created_at") val createdAt: String,
-    @SerializedName("updated_at") val updatedAt: String
+    @SerializedName("updated_at") val updatedAt: String,
+    val order: Int = 0
 )
 
 data class ChapterMeta(
@@ -74,6 +76,7 @@ data class ChapterMeta(
     val title: String,
     @SerializedName("created_at") val createdAt: String,
     @SerializedName("updated_at") val updatedAt: String,
+    val order: Int = 0,
     @SerializedName("word_count") val wordCount: Int,
     val hash: String,
     val note: String? = null
@@ -109,6 +112,8 @@ data class ChapterOpenResult(
     val meta: ChapterMeta,
     val content: String
 )
+
+typealias ChapterContent = ChapterOpenResult
 
 data class ChapterSaveReceipt(
     @SerializedName("chapter_relative_path") val chapterRelativePath: String,
@@ -149,6 +154,10 @@ data class SyncConfig(
     val branch: String? = "main",
     @SerializedName("auto_sync") val autoSync: Boolean? = false,
     @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300,
+    @SerializedName("proxy_enabled") val proxyEnabled: Boolean? = false,
+    @SerializedName("proxy_type") val proxyType: String? = "auto",
+    @SerializedName("proxy_host") val proxyHost: String? = "127.0.0.1",
+    @SerializedName("proxy_port") val proxyPort: Int? = 7890,
     val username: String? = "",
     @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean? = null,
     @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean? = null
@@ -162,6 +171,10 @@ data class SyncConfig(
             branch = if (branch.isNullOrEmpty()) "main" else branch,
             autoSync = autoSync ?: false,
             syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
+            proxyEnabled = proxyEnabled ?: false,
+            proxyType = if (proxyType.isNullOrBlank()) "auto" else proxyType,
+            proxyHost = if (proxyHost.isNullOrBlank()) "127.0.0.1" else proxyHost,
+            proxyPort = if (proxyPort == null || proxyPort <= 0) 7890 else proxyPort,
             username = username ?: "",
             androidHasInternetPermission = androidHasInternetPermission ?: true,
             androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission ?: true
@@ -185,7 +198,9 @@ data class Tombstone(
 )
 
 data class SyncState(
+    val status: SyncStatus = SyncStatus.Idle,
     @SerializedName("remote_url") val remoteUrl: String? = null,
+    @SerializedName("backend_type") val backendType: String? = null,
     val transport: String? = null,
     @SerializedName("last_synced_commit") val lastSyncedCommit: String? = null,
     @SerializedName("last_sync_time") val lastSyncTime: Long? = null,
@@ -418,9 +433,26 @@ data class InputSchemaProperty(
 }
 
 data class WritingStatsSummary(
-    val totalWordCount: Long,
-    val totalTimeSeconds: Long,
-    val activeDays: Int
+    val totalWordCount: Long = 0,
+    val totalTimeSeconds: Long = 0,
+    val activeDays: Int = 0,
+    @SerializedName("total_human_typed_chars") val totalHumanTypedChars: Long? = null,
+    @SerializedName("total_active_seconds") val totalActiveSeconds: Long? = null,
+    @SerializedName("total_sessions") val totalSessions: Int? = null,
+    @SerializedName("days_count") val daysCount: Int? = null
+)
+
+typealias WritingWritingStatsSummary = WritingStatsSummary
+
+data class ProjectWritingStatsSummary(
+    val projects: List<ProjectWritingStatsItem>? = emptyList()
+)
+
+data class ProjectWritingStatsItem(
+    @SerializedName("project_id") val projectId: String? = null,
+    val projectTitle: String? = null,
+    @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
+    @SerializedName("active_seconds") val activeSeconds: Long? = null
 )
 
 data class ProjectStatsSummary(

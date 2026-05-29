@@ -6,6 +6,7 @@
 - `validate_workspace(path: &Path) -> Result<bool>`
 - `list_projects(path: &Path) -> Result<Vec<Project>>`
 - `create_project(path: &Path, title: &str) -> Result<Project>`
+- `get_project_stats(path: &Path, project_id: &str) -> Result<ProjectStats>`
 - `list_volumes(path: &Path, project_id: &str) -> Result<Vec<Volume>>`
 - `create_volume(path: &Path, project_id: &str, title: &str) -> Result<Volume>`
 - `list_chapters(path: &Path, project_id: &str, volume_id: &str) -> Result<Vec<Chapter>>`
@@ -22,6 +23,7 @@
 - `save_syncable_settings(workspace_path: &Path, settings: &SyncableSettings) -> Result<()>`
 - `backup_project(path: &Path, project_id: &str) -> Result<()>`
 - `move_chapter_to_trash(path: &Path, chapter_id: &str) -> Result<()>`
+- `flush_writing_stats() -> Result<()>`
 
 ### 文件操作
 所有写操作（`save_chapter`、`save_*_settings`）必须使用原子写入（写入临时文件、`fsync/flush`，然后原子 `rename`）。
@@ -37,7 +39,8 @@
 
 - `ChapterOpenResult { meta, content }`：打开章节的唯一权威返回，客户端不应再自行用列表结果拼接标题、备注或正文。
 - `ChapterSaveReceipt { chapter_relative_path, content_len, content_hash, meta_hash, updated_at, word_count }`：保存或明确清空后的回执，供客户端确认 Core 已完成写入和校验。
+- `ProjectStats { total_word_count, volume_count, chapter_count }`：作品统计由 Core 计算，Android 通过 UniFFI `ProjectStatsDto` 获取，不在客户端自行遍历汇总。
 
 ### Android Bridge 入口
 
-Android 底层仍通过 `NativeCoreBridge` 兼容旧 JSON over JNI 包装，但该类已被限制为内部 legacy adapter。上层入口必须使用领域 Bridge：`WorkspaceBridge`、`WritingBridge`、`StatsBridge`、`StarMapBridge`、`ActionBridge`、`SettingsBridge`、`SyncBridge`、`NativeStatusBridge`。Repository/UI/ViewModel/Controller 不应直接处理 `NativeResult` 或 `NativeCoreBridge`。
+Android 主业务入口是 `AppServiceBridge + UniFFI`，`api.udl` 暴露 `WriterAppService` typed DTO/error。上层必须使用领域 Bridge：`WorkspaceBridge`、`WritingBridge`、`StatsBridge`、`StarMapBridge`、`MindMapBridge`、`SettingsBridge`、`SyncBridge`。`NativeCoreBridge` 仅作为 legacy JSON/JNI fallback 和 native 状态/旧动作路径；Repository/UI/ViewModel/Controller 不应直接处理 `NativeResult` 或 `NativeCoreBridge`。

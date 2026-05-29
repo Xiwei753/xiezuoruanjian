@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
  * 管理星图的加载、渲染和节点操作。
  *
  * ## 架构定位
- * - MainActivity → StarMapController → StarMapBridge → JNI → Rust Core
+ * - MainActivity → StarMapController → StarMapBridge → AppServiceBridge → UniFFI → Rust Core
  *
  * ## 职责边界
  * - **做**：加载星图数据、处理节点拖拽、保存布局、新建节点

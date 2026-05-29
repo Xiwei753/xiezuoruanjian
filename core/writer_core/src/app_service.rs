@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::Arc;
 use crate::facade::WriterCore;
 use crate::error::Error;
 
@@ -18,6 +17,23 @@ impl From<crate::project::Project> for ProjectDto {
             title: p.title,
             created_at: p.created_at,
             updated_at: p.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectStatsDto {
+    pub total_word_count: u32,
+    pub volume_count: u32,
+    pub chapter_count: u32,
+}
+
+impl From<crate::project::ProjectStats> for ProjectStatsDto {
+    fn from(s: crate::project::ProjectStats) -> Self {
+        Self {
+            total_word_count: s.total_word_count,
+            volume_count: s.volume_count,
+            chapter_count: s.chapter_count,
         }
     }
 }
@@ -259,13 +275,13 @@ impl From<crate::sync_service::SyncConfig> for SyncConfigDto {
             remote_url: c.remote_url,
             transport: match c.transport {
                 crate::sync_service::SyncTransport::HttpsToken => "https_token".to_string(),
-                crate::sync_service::SyncTransport::SshDeployKey => "ssh".to_string(),
+                crate::sync_service::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
             },
             branch: c.branch,
             auto_sync: c.auto_sync,
             sync_interval_seconds: c.sync_interval_seconds,
             proxy_enabled: c.proxy_enabled,
-            proxy_type: "auto".to_string(),
+            proxy_type: c.proxy_type,
             proxy_host: c.proxy_host,
             proxy_port: c.proxy_port,
             username: c.username,
@@ -287,14 +303,14 @@ impl Into<crate::sync_service::SyncConfig> for SyncConfigDto {
             remote_url: self.remote_url,
             transport: match self.transport.as_str() {
                 "https_token" => crate::sync_service::SyncTransport::HttpsToken,
-                "ssh" => crate::sync_service::SyncTransport::SshDeployKey,
+                "ssh" | "ssh_deploy_key" => crate::sync_service::SyncTransport::SshDeployKey,
                 _ => crate::sync_service::SyncTransport::HttpsToken,
             },
             branch: self.branch,
             auto_sync: self.auto_sync,
             sync_interval_seconds: self.sync_interval_seconds,
             proxy_enabled: self.proxy_enabled,
-            proxy_type: Default::default(),
+            proxy_type: self.proxy_type,
             proxy_host: self.proxy_host,
             proxy_port: self.proxy_port,
             username: self.username,
@@ -329,6 +345,7 @@ impl Into<crate::sync_service::SyncSecrets> for SyncSecretsDto {
 #[derive(Debug, Clone)]
 pub struct SyncStateDto {
     pub status: String,
+    pub remote_url: Option<String>,
     pub backend_type: Option<String>,
     pub transport: Option<String>,
     pub last_synced_commit: Option<String>,
@@ -367,8 +384,9 @@ impl From<crate::sync_service::SyncState> for SyncStateDto {
     fn from(s: crate::sync_service::SyncState) -> Self {
         Self {
             status: "idle".to_string(), // Simplified, enum serialization handled in Kotlin wrapper later
+            remote_url: s.remote_url,
             backend_type: None,
-            transport: None,
+            transport: s.transport.map(sync_transport_to_wire),
             last_synced_commit: s.last_synced_commit,
             last_sync_time: s.last_sync_time,
             last_error: s.last_error,
@@ -433,7 +451,7 @@ impl From<crate::sync_service::SyncDiagnosticsResult> for SyncDiagnosticsResultD
     fn from(d: crate::sync_service::SyncDiagnosticsResult) -> Self {
         Self {
             success: d.success,
-            backend_type: "git".to_string(), // Simplified
+            backend_type: d.backend_type,
             android_has_internet_permission: d.android_has_internet_permission,
             android_has_access_network_state_permission: d.android_has_access_network_state_permission,
             android_network_state: d.android_network_state,
@@ -452,8 +470,8 @@ impl From<crate::sync_service::SyncDiagnosticsResult> for SyncDiagnosticsResultD
             repo_status: d.repo_status,
             branch_status: d.branch_status,
             remote_url_sanitized: d.remote_url_sanitized,
-            transport: "https_token".to_string(), // Simplified
-            error_category: "unknown".to_string(),
+            transport: d.transport,
+            error_category: d.error_category,
             user_message: d.user_message,
             raw_error: d.raw_error,
             chosen_network_mode: d.chosen_network_mode,
@@ -506,7 +524,7 @@ pub struct SyncResultDto {
 impl From<crate::sync_service::SyncResult> for SyncResultDto {
     fn from(r: crate::sync_service::SyncResult) -> Self {
         Self {
-            status: "idle".to_string(),
+            status: sync_status_to_wire(&r.status),
             uploaded_files: r.uploaded_files,
             downloaded_files: r.downloaded_files,
             local_deletes: r.local_deletes,
@@ -516,12 +534,47 @@ impl From<crate::sync_service::SyncResult> for SyncResultDto {
             conflicts: r.conflicts.into_iter().map(Into::into).collect(),
             commit_hash: r.commit_hash,
             error: r.error,
-            first_sync_mode: "none".to_string(),
+            first_sync_mode: first_sync_mode_to_wire(&r.first_sync_mode),
             user_message: r.user_message,
             chosen_network_mode: r.chosen_network_mode,
             network_probe_summary: Some(r.network_probe_summary.into_iter().map(Into::into).collect()),
         }
     }
+}
+
+fn sync_transport_to_wire(transport: crate::sync_service::SyncTransport) -> String {
+    match transport {
+        crate::sync_service::SyncTransport::HttpsToken => "https_token".to_string(),
+        crate::sync_service::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
+    }
+}
+
+fn sync_status_to_wire(status: &crate::sync_service::SyncStatus) -> String {
+    match status {
+        crate::sync_service::SyncStatus::Idle => "idle",
+        crate::sync_service::SyncStatus::Syncing => "syncing",
+        crate::sync_service::SyncStatus::Success => "success",
+        crate::sync_service::SyncStatus::ConfiguredUntested => "configured_untested",
+        crate::sync_service::SyncStatus::Conflict => "conflict",
+        crate::sync_service::SyncStatus::RecoverableError(_) => "recoverable_error",
+        crate::sync_service::SyncStatus::FatalError(_) => "fatal_error",
+        crate::sync_service::SyncStatus::DirtyRepoBlocked => "dirty_repo_blocked",
+        crate::sync_service::SyncStatus::BranchMissingRecovered => "branch_missing_recovered",
+        crate::sync_service::SyncStatus::Error(_) => "error",
+        crate::sync_service::SyncStatus::NoChanges => "no_changes",
+        crate::sync_service::SyncStatus::LatestWinsApplied => "latest_wins_applied",
+    }.to_string()
+}
+
+fn first_sync_mode_to_wire(mode: &crate::sync_service::FirstSyncMode) -> String {
+    match mode {
+        crate::sync_service::FirstSyncMode::NotAttempted => "not_attempted",
+        crate::sync_service::FirstSyncMode::CloneIntoEmptyWorkspace => "clone_into_empty_workspace",
+        crate::sync_service::FirstSyncMode::InitExistingWorkspace => "init_existing_workspace",
+        crate::sync_service::FirstSyncMode::AlreadyGitRepo => "already_git_repo",
+        crate::sync_service::FirstSyncMode::BlockedNonEmptyRemote => "blocked_non_empty_remote",
+        crate::sync_service::FirstSyncMode::UnrelatedHistories => "unrelated_histories",
+    }.to_string()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -618,6 +671,11 @@ impl WriterAppService {
     pub fn create_project(&self, title: String) -> Result<ProjectDto, WriterError> {
         let core = WriterCore::new(Path::new(&self.workspace_path));
         core.create_project(&title).map(Into::into).map_err(Into::into)
+    }
+
+    pub fn get_project_stats(&self, project_id: String) -> Result<ProjectStatsDto, WriterError> {
+        let core = WriterCore::new(Path::new(&self.workspace_path));
+        core.get_project_stats(&project_id).map(Into::into).map_err(Into::into)
     }
 
     pub fn rename_project(&self, project_id: String, new_title: String) -> Result<bool, WriterError> {
@@ -809,6 +867,11 @@ impl WriterAppService {
     pub fn record_writing_event(&self, device_id: String, project_id: String, volume_id: String, chapter_id: String, source: String, inserted_chars: i32, deleted_chars: i32, pasted_chars: i32, ai_inserted_chars: i32, session_id: String) -> bool {
         let core = WriterCore::new(Path::new(&self.workspace_path));
         core.record_writing_event(&device_id, "android", &project_id, &volume_id, &chapter_id, &source, inserted_chars as u32, deleted_chars as u32, pasted_chars as u32, ai_inserted_chars as u32, &session_id).is_ok()
+    }
+
+    pub fn flush_writing_stats(&self) -> bool {
+        let core = WriterCore::new(Path::new(&self.workspace_path));
+        core.flush_writing_stats().is_ok()
     }
 
     // MindMap & StarMap (using JSON mapping to satisfy UI backwards compat while fully migrating NativeCoreBridge to UniFFI wrapper without breaking UI)
