@@ -238,46 +238,46 @@ impl WriterAppService {
         self.api.perform_sync(config)
     }
 
-    pub fn get_writing_stats_summary(
+    pub fn get_writing_stats_summary_json(
         &self,
         start_date: String,
         end_date: String,
     ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_summary(&start_date, &end_date)
+        self.api.get_writing_stats_summary_json(&start_date, &end_date)
     }
 
-    pub fn get_writing_stats_by_project(
+    pub fn get_writing_stats_by_project_json(
         &self,
         start_date: String,
         end_date: String,
     ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_by_project(&start_date, &end_date)
+        self.api.get_writing_stats_by_project_json(&start_date, &end_date)
     }
 
-    pub fn get_writing_stats_by_chapter(
+    pub fn get_writing_stats_by_chapter_json(
         &self,
         start_date: String,
         end_date: String,
     ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_by_chapter(&start_date, &end_date)
+        self.api.get_writing_stats_by_chapter_json(&start_date, &end_date)
     }
 
-    pub fn get_writing_stats_by_device(
+    pub fn get_writing_stats_by_device_json(
         &self,
         start_date: String,
         end_date: String,
     ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_by_device(&start_date, &end_date)
+        self.api.get_writing_stats_by_device_json(&start_date, &end_date)
     }
 
-    pub fn get_writing_speed_curve(
+    pub fn get_writing_speed_curve_json(
         &self,
         start_date: String,
         end_date: String,
         bucket_minutes: u32,
     ) -> Result<String, WriterError> {
         self.api
-            .get_writing_speed_curve(&start_date, &end_date, bucket_minutes)
+            .get_writing_speed_curve_json(&start_date, &end_date, bucket_minutes)
     }
 
     pub fn calculate_word_count(&self, text: String) -> u32 {
@@ -350,32 +350,32 @@ impl WriterAppService {
         self.api.save_mindmap_graph_json(&project_id, &graph_json)
     }
 
-    pub fn list_starmaps(&self) -> Result<String, WriterError> {
-        self.api.list_starmaps()
+    pub fn list_starmaps_json(&self) -> Result<String, WriterError> {
+        self.api.list_starmaps_json()
     }
 
-    pub fn create_starmap(&self, title: String, desc: String) -> Result<String, WriterError> {
-        self.api.create_starmap(&title, &desc)
+    pub fn create_starmap_json(&self, title: String, desc: String) -> Result<String, WriterError> {
+        self.api.create_starmap_json(&title, &desc)
     }
 
-    pub fn get_starmap_graph(&self, starmap_id: String) -> Result<String, WriterError> {
-        self.api.get_starmap_graph(&starmap_id)
+    pub fn get_starmap_graph_json(&self, starmap_id: String) -> Result<String, WriterError> {
+        self.api.get_starmap_graph_json(&starmap_id)
     }
 
-    pub fn add_starmap_node(
+    pub fn add_starmap_node_json(
         &self,
         starmap_id: String,
         node_json: String,
     ) -> Result<String, WriterError> {
-        self.api.add_starmap_node(&starmap_id, &node_json)
+        self.api.add_starmap_node_json(&starmap_id, &node_json)
     }
 
-    pub fn save_starmap_layout(
+    pub fn save_starmap_layout_json(
         &self,
         starmap_id: String,
         layout_json: String,
     ) -> Result<bool, WriterError> {
-        self.api.save_starmap_layout(&starmap_id, &layout_json)
+        self.api.save_starmap_layout_json(&starmap_id, &layout_json)
     }
 
     pub fn add_starmap_embed(

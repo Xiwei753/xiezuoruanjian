@@ -1656,7 +1656,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let api = api_from_workspace(&workspace_path);
     result_to_jstring(
         &mut env,
-        api.get_writing_stats_summary_obj(&start_date, &end_date),
+        api.get_writing_stats_summary(&start_date, &end_date),
     )
 }
 
@@ -1670,7 +1670,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listStarma
 ) -> jstring {
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.list_starmaps_obj())
+    result_to_jstring(&mut env, api.list_starmaps())
 }
 
 #[no_mangle]
@@ -1685,7 +1685,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createStar
     let title = match jstring_to_string(&mut env, &title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let desc = match jstring_to_string(&mut env, &desc_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.create_starmap_obj(&title, &desc, None))
+    result_to_jstring(&mut env, api.create_starmap(&title, &desc, None))
 }
 
 #[no_mangle]
@@ -1698,7 +1698,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getStarmap
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    let graph_res = api.get_starmap_graph_obj(&starmap_id);
+    let graph_res = api.get_starmap_graph(&starmap_id);
     let layout_res = api.get_starmap_layout(&starmap_id);
     match (graph_res, layout_res) {
         (Ok(graph), Ok(layout)) => {
@@ -1725,7 +1725,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_addStarmap
     // Currently Android Canvas drops node anywhere, default it to 0,0 since canvas isn't tracking click coordinates here yet.
     // The core will default it and save to the layout.
     match serde_json::from_str(&node_json) {
-        Ok(node) => result_to_jstring(&mut env, api.add_starmap_node_obj(&starmap_id, node, 0.0, 0.0)),
+        Ok(node) => result_to_jstring(&mut env, api.add_starmap_node(&starmap_id, node, 0.0, 0.0)),
         Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Io(e.to_string())))
     }
 }
@@ -1743,7 +1743,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveStarma
     let layout_json = match jstring_to_string(&mut env, &layout_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
     match serde_json::from_str(&layout_json) {
-        Ok(layout) => result_to_jstring(&mut env, api.save_starmap_layout_obj(&starmap_id, &layout)),
+        Ok(layout) => result_to_jstring(&mut env, api.save_starmap_layout(&starmap_id, &layout)),
         Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Io(e.to_string())))
     }
 }
@@ -1966,7 +1966,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveStarma
         Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
     };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.save_starmap_graph_obj(&starmap_id, &graph))
+    result_to_jstring(&mut env, api.save_starmap_graph(&starmap_id, &graph))
 }
 
 // --- Writing Stats: By Project / Chapter / Device / Speed Curve ---
@@ -1983,7 +1983,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_project_obj(&start_date, &end_date))
+    result_to_jstring(&mut env, api.get_writing_stats_by_project(&start_date, &end_date))
 }
 
 #[no_mangle]
@@ -1998,7 +1998,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_chapter_obj(&start_date, &end_date))
+    result_to_jstring(&mut env, api.get_writing_stats_by_chapter(&start_date, &end_date))
 }
 
 #[no_mangle]
@@ -2013,7 +2013,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_device_obj(&start_date, &end_date))
+    result_to_jstring(&mut env, api.get_writing_stats_by_device(&start_date, &end_date))
 }
 
 #[no_mangle]
@@ -2029,7 +2029,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_speed_curve_obj(&start_date, &end_date, bucket_minutes as u32))
+    result_to_jstring(&mut env, api.get_writing_speed_curve(&start_date, &end_date, bucket_minutes as u32))
 }
 
 #[no_mangle]

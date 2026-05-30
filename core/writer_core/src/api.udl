@@ -331,19 +331,19 @@ interface WriterAppService {
     SyncResultDto perform_sync(SyncConfigDto config);
 
     [Throws=WriterError]
-    string get_writing_stats_summary(string start_date, string end_date);
+    string get_writing_stats_summary_json(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_stats_by_project(string start_date, string end_date);
+    string get_writing_stats_by_project_json(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_stats_by_chapter(string start_date, string end_date);
+    string get_writing_stats_by_chapter_json(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_stats_by_device(string start_date, string end_date);
+    string get_writing_stats_by_device_json(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_speed_curve(string start_date, string end_date, u32 bucket_minutes);
+    string get_writing_speed_curve_json(string start_date, string end_date, u32 bucket_minutes);
 
     u32 calculate_word_count(string text);
 
@@ -363,19 +363,19 @@ interface WriterAppService {
     boolean save_mindmap_graph_json(string project_id, string graph_json);
 
     [Throws=WriterError]
-    string list_starmaps();
+    string list_starmaps_json();
 
     [Throws=WriterError]
-    string create_starmap(string title, string desc);
+    string create_starmap_json(string title, string desc);
 
     [Throws=WriterError]
-    string get_starmap_graph(string starmap_id);
+    string get_starmap_graph_json(string starmap_id);
 
     [Throws=WriterError]
-    string add_starmap_node(string starmap_id, string node_json);
+    string add_starmap_node_json(string starmap_id, string node_json);
 
     [Throws=WriterError]
-    boolean save_starmap_layout(string starmap_id, string layout_json);
+    boolean save_starmap_layout_json(string starmap_id, string layout_json);
 
     [Throws=WriterError]
     string add_starmap_embed(string starmap_id, string embed_json);

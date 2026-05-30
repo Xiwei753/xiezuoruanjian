@@ -326,7 +326,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn get_writing_stats_summary(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_summary_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_summary(start_date, end_date)
@@ -334,7 +334,7 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_writing_stats_by_project(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_by_project_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_by_project(start_date, end_date)
@@ -342,7 +342,7 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_writing_stats_by_chapter(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_by_chapter_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_by_chapter(start_date, end_date)
@@ -350,7 +350,7 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_writing_stats_by_device(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_by_device_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_by_device(start_date, end_date)
@@ -358,7 +358,7 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_writing_speed_curve(
+    pub fn get_writing_speed_curve_json(
         &self,
         start_date: &str,
         end_date: &str,
@@ -466,12 +466,12 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    pub fn list_starmaps(&self) -> ApiResult<String> {
+    pub fn list_starmaps_json(&self) -> ApiResult<String> {
         let value = self.core().list_starmaps().map_err(WriterError::from)?;
         Self::json_string(&value)
     }
 
-    pub fn create_starmap(&self, title: &str, desc: &str) -> ApiResult<String> {
+    pub fn create_starmap_json(&self, title: &str, desc: &str) -> ApiResult<String> {
         let value = self
             .core()
             .create_starmap(title, desc, None)
@@ -479,7 +479,7 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_starmap_graph(&self, starmap_id: &str) -> ApiResult<String> {
+    pub fn get_starmap_graph_json(&self, starmap_id: &str) -> ApiResult<String> {
         let value = self
             .core()
             .get_starmap_graph(starmap_id)
@@ -487,7 +487,7 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn add_starmap_node(&self, starmap_id: &str, node_json: &str) -> ApiResult<String> {
+    pub fn add_starmap_node_json(&self, starmap_id: &str, node_json: &str) -> ApiResult<String> {
         let value = self
             .core()
             .execute_action("starmap.node.add", starmap_id, node_json)
@@ -495,7 +495,7 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn save_starmap_layout(&self, starmap_id: &str, layout_json: &str) -> ApiResult<bool> {
+    pub fn save_starmap_layout_json(&self, starmap_id: &str, layout_json: &str) -> ApiResult<bool> {
         self.core()
             .execute_action("starmap.layout.save", starmap_id, layout_json)
             .map(|_| true)
@@ -626,23 +626,23 @@ impl WriterCoreApi {
         self.core().get_starmap_layout(starmap_id).map(Into::into).map_err(Into::into)
     }
 
-    pub fn get_starmap_graph_obj(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapGraphDto> {
+    pub fn get_starmap_graph(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapGraphDto> {
         self.core().get_starmap_graph(starmap_id).map(Into::into).map_err(Into::into)
     }
 
-    pub fn list_starmaps_obj(&self) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
+    pub fn list_starmaps(&self) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
         self.core().list_starmaps().map(|v| v.into_iter().map(Into::into).collect()).map_err(Into::into)
     }
 
-    pub fn create_starmap_obj(&self, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
+    pub fn create_starmap(&self, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
         self.core().create_starmap(title, desc, template_id).map(Into::into).map_err(Into::into)
     }
 
-    pub fn add_starmap_node_obj(&self, starmap_id: &str, node: crate::api::types::StarMapNodeDto, x: f32, y: f32) -> ApiResult<crate::api::types::StarMapNodeDto> {
+    pub fn add_starmap_node(&self, starmap_id: &str, node: crate::api::types::StarMapNodeDto, x: f32, y: f32) -> ApiResult<crate::api::types::StarMapNodeDto> {
         self.core().add_starmap_node(starmap_id, node.into(), x, y).map(Into::into).map_err(Into::into)
     }
 
-    pub fn save_starmap_layout_obj(&self, starmap_id: &str, layout: &crate::api::types::StarMapLayoutDto) -> ApiResult<bool> {
+    pub fn save_starmap_layout(&self, starmap_id: &str, layout: &crate::api::types::StarMapLayoutDto) -> ApiResult<bool> {
         self.core().save_starmap_layout(starmap_id, &layout.clone().into()).map(|_| true).map_err(Into::into)
     }
 
@@ -694,43 +694,43 @@ impl WriterCoreApi {
         self.core().delete_starmap_edge(starmap_id, edge_id).map(|_| true).map_err(Into::into)
     }
 
-    pub fn save_starmap_graph_obj(&self, starmap_id: &str, graph: &crate::api::types::StarMapGraphDto) -> ApiResult<bool> {
+    pub fn save_starmap_graph(&self, starmap_id: &str, graph: &crate::api::types::StarMapGraphDto) -> ApiResult<bool> {
         self.core().save_starmap_graph(starmap_id, &graph.clone().into()).map(|_| true).map_err(Into::into)
     }
 
-    pub fn list_registered_actions(&self) -> ApiResult<Vec<crate::action_registry::ActionDescriptor>> {
-        self.core().list_registered_actions().map_err(Into::into)
+    pub fn list_registered_actions(&self) -> ApiResult<Vec<crate::api::types::ActionDescriptorDto>> {
+        self.core().list_registered_actions().map(|list| list.into_iter().map(Into::into).collect()).map_err(Into::into)
     }
 
-    pub fn execute_action_ext(&self, action_id: &str, args_json: &str, context_json: &str) -> ApiResult<crate::action_registry::ActionResult> {
-        self.core().execute_action(action_id, args_json, context_json).map_err(Into::into)
+    pub fn execute_action_ext(&self, action_id: &str, args_json: &str, context_json: &str) -> ApiResult<crate::api::types::ActionResultDto> {
+        self.core().execute_action(action_id, args_json, context_json).map(Into::into).map_err(Into::into)
     }
 
     pub fn ai_available(&self) -> bool {
         self.core().ai_available()
     }
 
-    pub fn get_writing_stats_summary_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
+    pub fn get_writing_stats_summary(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
         let value = self.core().get_writing_stats_summary(start_date, end_date).map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_stats_by_project_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ProjectStatsSummaryDto> {
+    pub fn get_writing_stats_by_project(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ProjectStatsSummaryDto> {
         let value = self.core().get_writing_stats_by_project(start_date, end_date).map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_stats_by_chapter_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ChapterStatsSummaryDto> {
+    pub fn get_writing_stats_by_chapter(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ChapterStatsSummaryDto> {
         let value = self.core().get_writing_stats_by_chapter(start_date, end_date).map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_stats_by_device_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::DeviceStatsSummaryDto> {
+    pub fn get_writing_stats_by_device(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::DeviceStatsSummaryDto> {
         let value = self.core().get_writing_stats_by_device(start_date, end_date).map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_speed_curve_obj(&self, start_date: &str, end_date: &str, bucket_minutes: u32) -> ApiResult<crate::api::types::SpeedCurveSummaryDto> {
+    pub fn get_writing_speed_curve(&self, start_date: &str, end_date: &str, bucket_minutes: u32) -> ApiResult<crate::api::types::SpeedCurveSummaryDto> {
         let value = self.core().get_writing_speed_curve(start_date, end_date, bucket_minutes).map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
