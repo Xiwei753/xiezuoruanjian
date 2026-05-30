@@ -25,20 +25,38 @@ ApplicationWindow {
     title: "Writer"
     color: designTokens.bg
 
+    function reportNullBackend(name) {
+        var message = "Required QML context property is null: " + name;
+        console.error(message);
+        if (backend !== null && backend.debug_qml_enabled) {
+            backend.log_qml("error", "app", "null_context_property", message);
+        }
+    }
+
+    function verifyBackendRuntime() {
+        if (appBackend === null) reportNullBackend("appBackend");
+        if (workspaceBackend === null) reportNullBackend("workspaceBackend");
+        if (projectBackend === null) reportNullBackend("projectBackend");
+        if (editorBackend === null) reportNullBackend("editorBackend");
+        if (settingsBackend === null) reportNullBackend("settingsBackend");
+        if (syncBackend === null) reportNullBackend("syncBackend");
+        if (starmapBackend === null) reportNullBackend("starmapBackend");
+    }
+
     function debugLog(module, event, message) {
-        if (backend.debug_qml_enabled) {
+        if (backend !== null && backend.debug_qml_enabled) {
             backend.log_qml("info", module, event, message);
         }
     }
 
     function debugWarn(module, event, message) {
-        if (backend.debug_qml_enabled) {
+        if (backend !== null && backend.debug_qml_enabled) {
             backend.log_qml("warn", module, event, message);
         }
     }
 
     function debugError(module, event, message) {
-        if (backend.debug_qml_enabled) {
+        if (backend !== null && backend.debug_qml_enabled) {
             backend.log_qml("error", module, event, message);
         }
     }
@@ -62,7 +80,7 @@ ApplicationWindow {
     }
 
     property alias appState: appController.appState
-    readonly property bool rootHasWorkspace: workspaceBackend.has_workspace === true
+    readonly property bool rootHasWorkspace: workspaceBackend !== null && workspaceBackend.has_workspace === true
 
     property string previousEditorText: ""
 
@@ -72,9 +90,9 @@ ApplicationWindow {
         isDark: {
             if (appState.settings && appState.settings.themeMode === "dark") return true;
             if (appState.settings && appState.settings.themeMode === "light") return false;
-            return backend.system_color_scheme !== "light";
+            return appBackend !== null && appBackend.system_color_scheme !== "light";
         }
-        monetColor: settingsBackend.setting_monet_color
+        monetColor: settingsBackend !== null ? settingsBackend.setting_monet_color : ""
     }
 
     AppController {
@@ -90,6 +108,7 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        window.verifyBackendRuntime();
         window.debugLog("app", "qml_completed", "QML components fully loaded");
         appController.restoreWorkspace();
     }

@@ -5,8 +5,8 @@ fn main_qml_uses_domain_backend_for_startup_workspace_bool() {
     let qml = fs::read_to_string("qml/main.qml").expect("read main.qml");
 
     assert!(
-        qml.contains("readonly property bool rootHasWorkspace: workspaceBackend.has_workspace === true"),
-        "main.qml must derive startup workspace visibility from WorkspaceBackend with a definite bool"
+        qml.contains("readonly property bool rootHasWorkspace: workspaceBackend !== null && workspaceBackend.has_workspace === true"),
+        "main.qml must derive startup workspace visibility from WorkspaceBackend with a definite bool and a diagnostic-safe null guard"
     );
 
     for old_binding in [
@@ -37,9 +37,26 @@ fn main_qml_uses_domain_backend_for_startup_workspace_bool() {
 #[test]
 fn split_backend_context_properties_are_registered_before_qml_load() {
     let main_rs = fs::read_to_string("src/main.rs").expect("read src/main.rs");
+    let backend_mod = fs::read_to_string("src/backend/mod.rs").expect("read src/backend/mod.rs");
     let load_index = main_rs.find("engine.load_file(qml_path.into())").expect("QML load call exists");
+    let runtime_index = main_rs.find("let backend_runtime = BackendRuntime::new()").expect("BackendRuntime is created in main");
+    let register_index = main_rs.find("backend_runtime.register_context_properties(&mut engine)").expect("BackendRuntime registers context properties");
+
+    assert!(
+        runtime_index < register_index && register_index < load_index,
+        "BackendRuntime must be created and registered before main.qml is loaded"
+    );
+
+    assert!(
+        backend_mod.contains("pub struct BackendRuntime"),
+        "backend module must define a long-lived BackendRuntime owner"
+    );
+    let register_fn_index = backend_mod
+        .find("pub fn register_context_properties(&self, engine: &mut QmlEngine)")
+        .expect("BackendRuntime has register_context_properties");
 
     for name in [
+        "backend",
         "appBackend",
         "workspaceBackend",
         "projectBackend",
@@ -49,11 +66,68 @@ fn split_backend_context_properties_are_registered_before_qml_load() {
         "starmapBackend",
     ] {
         let registration = format!("engine.set_object_property(\"{name}\".into()");
-        let index = main_rs.find(&registration).unwrap_or_else(|| panic!("missing context property registration for {name}"));
+        let index = backend_mod.find(&registration).unwrap_or_else(|| panic!("missing context property registration for {name}"));
         assert!(
-            index < load_index,
-            "context property {name} must be registered before main.qml is loaded"
+            register_fn_index < index,
+            "context property {name} must be registered by BackendRuntime"
         );
+    }
+}
+
+#[test]
+fn backend_runtime_owns_all_qml_qobjects_until_after_event_loop() {
+    let main_rs = fs::read_to_string("src/main.rs").expect("read src/main.rs");
+    let backend_mod = fs::read_to_string("src/backend/mod.rs").expect("read src/backend/mod.rs");
+
+    for field in [
+        "app_backend: QObjectBox<AppBackend>",
+        "workspace_backend: QObjectBox<WorkspaceBackend>",
+        "project_backend: QObjectBox<ProjectBackend>",
+        "editor_backend: QObjectBox<EditorBackend>",
+        "settings_backend: QObjectBox<SettingsBackend>",
+        "sync_backend: QObjectBox<SyncBackend>",
+        "starmap_backend: QObjectBox<StarMapBackend>",
+    ] {
+        assert!(
+            backend_mod.contains(field),
+            "BackendRuntime must own registered QObjectBox field: {field}"
+        );
+    }
+
+    let exec_index = main_rs.find("engine.exec()").expect("event loop call exists");
+    let runtime_index = main_rs.find("let backend_runtime = BackendRuntime::new()").expect("BackendRuntime is created");
+    assert!(
+        runtime_index < exec_index,
+        "BackendRuntime local must be created before engine.exec so it drops only after the event loop returns"
+    );
+
+    for forbidden in [
+        "let workspace_backend = QObjectBox::new",
+        "let project_backend = QObjectBox::new",
+        "let editor_backend = QObjectBox::new",
+        "let settings_backend = QObjectBox::new",
+        "let sync_backend = QObjectBox::new",
+        "let starmap_backend = QObjectBox::new",
+    ] {
+        assert!(
+            !main_rs.contains(forbidden),
+            "main.rs must not register function-local backend QObjectBox owners: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn main_qml_has_backend_runtime_startup_diagnostics() {
+    let qml = fs::read_to_string("qml/main.qml").expect("read main.qml");
+
+    assert!(
+        qml.contains("function verifyBackendRuntime()"),
+        "main.qml must diagnose null context properties at startup"
+    );
+
+    for name in ["workspaceBackend", "settingsBackend", "syncBackend"] {
+        let check = format!("if ({name} === null) reportNullBackend(\"{name}\")");
+        assert!(qml.contains(&check), "main.qml must report null {name}");
     }
 }
 
