@@ -12,15 +12,36 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 
 Item {
     id: root
     property var appTheme: null
     property var backendRef: null
 
-    signal createWorkspace()
-    signal openWorkspace()
+    signal createWorkspaceWithPath(string path)
+    signal openWorkspaceWithPath(string path)
     signal initFromGithub()
+
+    FolderDialog {
+        id: createWorkspaceDialog
+        title: "选择或创建空文件夹作为新工作区"
+        onAccepted: {
+            var path = String(currentFolder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
+            path = decodeURIComponent(path);
+            root.createWorkspaceWithPath(path);
+        }
+    }
+
+    FolderDialog {
+        id: openWorkspaceDialog
+        title: "选择已有工作区文件夹"
+        onAccepted: {
+            var path = String(currentFolder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
+            path = decodeURIComponent(path);
+            root.openWorkspaceWithPath(path);
+        }
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -84,7 +105,7 @@ Item {
                 text: "新建工作区"
                 theme: root.appTheme
                 variant: "primary"
-                onClicked: root.createWorkspace()
+                onClicked: createWorkspaceDialog.open()
             }
 
             AppButton {
@@ -92,7 +113,7 @@ Item {
                 text: "打开工作区"
                 theme: root.appTheme
                 variant: "secondary"
-                onClicked: root.openWorkspace()
+                onClicked: openWorkspaceDialog.open()
             }
 
             Rectangle {

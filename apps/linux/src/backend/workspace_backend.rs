@@ -14,6 +14,8 @@ pub struct WorkspaceBackend {
     try_restore_last_workspace: qt_method!(fn(&mut self)),
     create_new_workspace: qt_method!(fn(&mut self)),
     open_existing_workspace: qt_method!(fn(&mut self)),
+    create_workspace_with_path: qt_method!(fn(&mut self, path: QString)),
+    open_workspace_with_path: qt_method!(fn(&mut self, path: QString)),
     close_workspace: qt_method!(fn(&mut self)),
     clear_last_workspace: qt_method!(fn(&mut self)),
     switch_workspace: qt_method!(fn(&mut self)),
@@ -39,13 +41,37 @@ impl WorkspaceBackend {
     fn try_restore_last_workspace(&mut self) { self.with_app_mut((), |app| app.try_restore_last_workspace()); self.emit_workspace_changed(); }
     fn create_new_workspace(&mut self) { self.with_app_mut((), |app| app.create_new_workspace()); self.emit_workspace_changed(); }
     fn open_existing_workspace(&mut self) { self.with_app_mut((), |app| app.open_existing_workspace()); self.emit_workspace_changed(); }
+    fn create_workspace_with_path(&mut self, path: QString) { 
+        let path_str = path.to_string();
+        crate::backend::app_backend::debug_log_static("workspace", "qml_click_create_workspace", &format!("path={}", path_str));
+        crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_create_workspace_called", &format!("path={}", path_str));
+        self.with_app_mut((), |app| app.internal_open_workspace(&path_str, true)); 
+        let has = self.has_workspace();
+        crate::backend::app_backend::debug_log_static("workspace", "writer_core_create_workspace_result", &format!("success={}", has));
+        self.emit_workspace_changed(); 
+        crate::backend::app_backend::debug_log_static("workspace", "workspace_state_updated", &format!("has_workspace={}", has));
+    }
+    fn open_workspace_with_path(&mut self, path: QString) { 
+        let path_str = path.to_string();
+        crate::backend::app_backend::debug_log_static("workspace", "qml_click_open_workspace", &format!("path={}", path_str));
+        crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_open_workspace_called", &format!("path={}", path_str));
+        self.with_app_mut((), |app| app.internal_open_workspace(&path_str, false)); 
+        let has = self.has_workspace();
+        crate::backend::app_backend::debug_log_static("workspace", "writer_core_open_workspace_result", &format!("success={}", has));
+        self.emit_workspace_changed(); 
+        crate::backend::app_backend::debug_log_static("workspace", "workspace_state_updated", &format!("has_workspace={}", has));
+    }
     fn close_workspace(&mut self) { self.with_app_mut((), |app| app.close_workspace()); self.emit_workspace_changed(); }
     fn clear_last_workspace(&mut self) { self.with_app_mut((), |app| app.clear_last_workspace()); self.workspace_state_changed(); }
     fn switch_workspace(&mut self) { self.with_app_mut((), |app| app.switch_workspace()); self.emit_workspace_changed(); }
     fn init_workspace_from_github(&mut self) { self.with_app_mut((), |app| app.init_workspace_from_github()); self.pending_github_init_path_changed(); }
     fn execute_github_init(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16) {
+        crate::backend::app_backend::debug_log_static("workspace", "qml_click_import_workspace", &format!("path={}, url={}", path.to_string(), remote_url.to_string()));
+        crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_import_workspace_called", &format!("path={}", path.to_string()));
         self.with_app_mut((), |app| app.execute_github_init(path, remote_url, branch, token, proxy_type, proxy_host, proxy_port));
         self.emit_workspace_changed();
+        let has = self.has_workspace();
+        crate::backend::app_backend::debug_log_static("workspace", "workspace_state_updated", &format!("has_workspace={}", has));
         self.pending_github_init_path_changed();
     }
     fn get_workspace_diagnostics(&self) -> QString { self.with_app("{}".into(), |app| app.get_workspace_diagnostics()) }

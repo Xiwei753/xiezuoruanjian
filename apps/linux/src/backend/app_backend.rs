@@ -819,3 +819,35 @@ mod tests {
         assert!(backend.current_sync_action_result.contains("未配置远程仓库 URL"));
     }
 }
+
+#[cfg(test)]
+mod workspace_flow_tests {
+    use super::*;
+
+    #[test]
+    fn test_workspace_creation_flow_updates_state() {
+        use tempfile::tempdir;
+        let mut app = AppBackend::default();
+        assert!(!app.has_workspace());
+        
+        let dir = tempdir().unwrap();
+        let path_str = dir.path().to_string_lossy().to_string();
+        
+        // Test creating a new workspace
+        app.internal_open_workspace(&path_str, true);
+        
+        assert!(app.has_workspace(), "AppBackend must have workspace after creation");
+        assert_eq!(app.workspace_path().to_string(), path_str);
+        
+        let manifest_path = dir.path().join("workspace_manifest.json");
+        assert!(manifest_path.exists(), "Workspace manifest must be created");
+        
+        // Close workspace
+        app.close_workspace();
+        assert!(!app.has_workspace(), "AppBackend must not have workspace after closing");
+        
+        // Reopen existing workspace
+        app.internal_open_workspace(&path_str, false);
+        assert!(app.has_workspace(), "AppBackend must have workspace after opening existing");
+    }
+}

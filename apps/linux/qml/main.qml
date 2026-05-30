@@ -315,11 +315,14 @@ ApplicationWindow {
             visible: !rootHasWorkspace
             backendRef: workspaceBackend
             appTheme: designTokens
-            onCreateWorkspace: {
-                appController.createWorkspace(false);
+            onCreateWorkspaceWithPath: (path) => {
+                appController.createWorkspaceWithPath(path, false);
             }
-            onOpenWorkspace: {
-                appController.createWorkspace(true);
+            onOpenWorkspaceWithPath: (path) => {
+                appController.createWorkspaceWithPath(path, true);
+            }
+            onInitFromGithub: {
+                openSyncDialog();
             }
         }
     }

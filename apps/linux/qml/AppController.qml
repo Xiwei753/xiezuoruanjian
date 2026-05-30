@@ -124,6 +124,14 @@ QtObject {
         refreshState("打开工作区失败");
     }
 
+    function createWorkspaceWithPath(path, openExisting) {
+        var workspaceApi = workspaceBackendRef || backendRef;
+        if (!workspaceApi) return;
+        if (openExisting) workspaceApi.open_workspace_with_path(path);
+        else workspaceApi.create_workspace_with_path(path);
+        refreshState("打开工作区失败");
+    }
+
     function handleMutationResult(raw, fallbackMessage) {
         var res = parseJson(raw, fallbackMessage || "操作失败");
         if (!res) return false;
