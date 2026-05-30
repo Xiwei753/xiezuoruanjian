@@ -1,23 +1,22 @@
 
 #[cfg(test)]
 mod tests {
-use crate::sync_service::git_backend::GitAuth;
-use crate::sync_service::types::SyncSecrets;
-use crate::sync_service::service::SyncService;
-use crate::sync_service::types::SyncTransport;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::types::SyncConflict;
-use crate::sync_service::types::SyncState;
-use crate::sync_service::types::FirstSyncMode;
-use crate::sync_service::types::BackendType;
-use crate::sync_service::types::ManifestFileRecord;
-use crate::sync_service::types::SyncStatus;
-use crate::sync_service::types::SyncManifest;
-use crate::sync_service::git_backend::Git2Backend;
-use crate::sync_service::git_backend::GitBackend;
-    use super::*;
-    use std::path::Path;
+    use crate::sync_service::git_backend::Git2Backend;
+    use crate::sync_service::git_backend::GitAuth;
+    use crate::sync_service::git_backend::GitBackend;
+    use crate::sync_service::service::SyncService;
+    use crate::sync_service::types::BackendType;
+    use crate::sync_service::types::FirstSyncMode;
+    use crate::sync_service::types::ManifestFileRecord;
+    use crate::sync_service::types::SyncConfig;
+    use crate::sync_service::types::SyncConflict;
+    use crate::sync_service::types::SyncManifest;
+    use crate::sync_service::types::SyncSecrets;
+    use crate::sync_service::types::SyncState;
+    use crate::sync_service::types::SyncStatus;
+    use crate::sync_service::types::SyncTransport;
     use base64::Engine;
+    use std::path::Path;
     use tempfile::tempdir;
     #[test]
     fn test_sync_secrets_local_json_blacklisted() {
