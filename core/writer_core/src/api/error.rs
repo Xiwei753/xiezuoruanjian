@@ -31,6 +31,24 @@ pub enum WriterError {
     Other(String),
 }
 
+impl WriterError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            WriterError::Io(_) => "IO_ERROR",
+            WriterError::Json(_) => "JSON_ERROR",
+            WriterError::InvalidWorkspace => "INVALID_WORKSPACE",
+            WriterError::ProjectNotFound => "PROJECT_NOT_FOUND",
+            WriterError::VolumeNotFound => "VOLUME_NOT_FOUND",
+            WriterError::ChapterNotFound => "CHAPTER_NOT_FOUND",
+            WriterError::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
+            WriterError::NotImplemented => "NOT_IMPLEMENTED",
+            WriterError::RefuseToDeleteWorkspaceRoot => "REFUSE_DELETE_WORKSPACE_ROOT",
+            WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
+            WriterError::Other(_) => "OTHER",
+        }
+    }
+}
+
 impl From<crate::error::Error> for WriterError {
     fn from(e: crate::error::Error) -> Self {
         match e {
