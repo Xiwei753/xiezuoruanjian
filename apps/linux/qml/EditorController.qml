@@ -43,6 +43,7 @@ QtObject {
     property bool isLoadingChapter: false
     property bool isApplyingFormat: false
     property bool isApplyingSettings: false
+    property bool isApplyingTextColor: false
     property bool pendingAutoSaveAfterGuard: false
     property bool explicitEmptySavePending: false
     property double lastPotentialExplicitClearAtMs: 0
@@ -106,8 +107,23 @@ QtObject {
     // Connections to TextArea signals
     property var textConnections: Connections {
         target: targetTextArea
+        function onCursorPositionChanged() {
+            if (controller.saveGuardActive() || controller.isApplyingTextColor) return;
+            if (targetTextArea && docHandler) {
+                controller.isApplyingTextColor = true;
+                docHandler.apply_current_text_color(targetTextArea.cursorPosition);
+                controller.isApplyingTextColor = false;
+            }
+        }
         function onTextChanged() {
             if (controller.saveGuardActive()) return;
+
+            if (targetTextArea && docHandler && !controller.isApplyingTextColor) {
+                controller.isApplyingTextColor = true;
+                docHandler.apply_current_text_color(targetTextArea.cursorPosition);
+                controller.isApplyingTextColor = false;
+            }
+
             var read = controller.readEditorPlainText();
             if (read.suspiciousEmpty) {
                 controller.blockUnsafeEmptySave("text_changed", read);

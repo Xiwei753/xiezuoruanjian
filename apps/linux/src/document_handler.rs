@@ -61,6 +61,7 @@ pub struct DocumentHandler {
     set_plain_text: qt_method!(fn(&self, text: QString)),
     get_plain_text: qt_method!(fn(&self) -> QString),
     clear_undo_stack: qt_method!(fn(&self)),
+    apply_current_text_color: qt_method!(fn(&self, cursor_position: i32)),
 
     current_doc: QVariant,
     current_line_spacing: f32,
@@ -210,6 +211,43 @@ impl DocumentHandler {
             QTextDocument* doc = qquick_doc->textDocument();
             if (!doc) return;
             doc->clearUndoRedoStacks();
+        });
+    }
+
+    fn apply_current_text_color(&self, cursor_position: i32) {
+        let doc_variant = self.current_doc.clone();
+        let text_color = self.current_text_color.clone();
+
+        cpp!(unsafe [doc_variant as "QVariant", text_color as "QString", cursor_position as "int"] {
+            QObject* obj = doc_variant.value<QObject*>();
+            if (!obj) return;
+            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
+            if (!qquick_doc) return;
+            QTextDocument* doc = qquick_doc->textDocument();
+            if (!doc) return;
+
+            QColor color(text_color);
+            if (!color.isValid()) return;
+
+            QTextCursor cursor(doc);
+            cursor.beginEditBlock();
+            
+            if (cursor_position >= 0 && cursor_position <= doc->characterCount()) {
+                cursor.setPosition(cursor_position);
+                
+                // Select the current block (paragraph) and apply color
+                cursor.select(QTextCursor::BlockUnderCursor);
+                QTextCharFormat charFormat;
+                charFormat.setForeground(color);
+                cursor.mergeCharFormat(charFormat);
+
+                // Also set block char format for future insertions in this block
+                QTextCharFormat blockCharFormat = cursor.blockCharFormat();
+                blockCharFormat.setForeground(color);
+                cursor.setBlockCharFormat(blockCharFormat);
+            }
+
+            cursor.endEditBlock();
         });
     }
 }

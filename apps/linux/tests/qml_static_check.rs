@@ -165,6 +165,20 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                         has_errors = true;
                     }
                 }
+                
+                // Specific check for TextArea colors in WritingWorkspace.qml
+                if !content.contains("color: dt ? dt.editorText : \"#E2E2E5\"") && !content.contains("color: dt ? dt.editorText : '#E2E2E5'") {
+                    eprintln!("{}: TextArea missing proper color fallback to #E2E2E5", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("selectedTextColor: dt ? dt.selectedText : \"#CCE5FF\"") && !content.contains("selectedTextColor: dt ? dt.selectedText : '#CCE5FF'") {
+                    eprintln!("{}: TextArea missing selectedTextColor", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("selectionColor: dt ? dt.primary : \"#006497\"") && !content.contains("selectionColor: dt ? dt.primary : '#006497'") {
+                    eprintln!("{}: TextArea missing selectionColor", file_name);
+                    has_errors = true;
+                }
             }
         }
     }
