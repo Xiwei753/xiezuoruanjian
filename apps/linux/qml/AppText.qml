@@ -18,7 +18,7 @@ Label {
     property string variant: "primary"
 
     color: {
-        if (!control.theme) return control.palette.text
+        if (!control.theme) return "#E2E2E5"
         if (control.variant === "secondary") return control.theme.textSecondary
         if (control.variant === "disabled") return control.theme.textDisabled
         return control.theme.textPrimary

@@ -1,40 +1,17 @@
-// =============================================================================
-// SmoothCursor.qml — 平滑光标组件
-// =============================================================================
-//
-// 层级：Linux UI 层（QML UI 组件）
-// 职责：在 TextArea 上叠加平滑光标动画，替代系统默认光标
-// 约束：
-//   - 纯渲染组件，位置通过 TextArea.cursorRectangle 计算
-//   - 动画参数通过 property 传入
-// =============================================================================
+import re
 
-import QtQuick
+with open('apps/linux/qml/SmoothCursor.qml', 'r') as f:
+    content = f.read()
 
-Rectangle {
-    id: root
+# Replace typing pulse animation and connections
+pulse_re = r'''(    Rectangle \{
+\s*id: typingPulse
+.*?
+    Connections \{
+.*?
+    \})'''
 
-    property var targetTextArea: null
-    property var dt: null
-    property bool smoothCursorEnabled: true
-    property bool typingAnimationEnabled: true
-    property int cursorAnimationDuration: 80
-    property int typingAnimationDuration: 100
-    property int lastTextLength: targetTextArea ? targetTextArea.length : 0
-
-    width: 2
-    height: targetTextArea ? targetTextArea.cursorRectangle.height : 0
-    color: dt ? dt.accent : "#7B8CDE"
-    visible: smoothCursorEnabled && targetTextArea && targetTextArea.focus && targetTextArea.enabled && targetTextArea.cursorRectangle.height > 0
-    z: 3
-    
-    x: targetTextArea ? targetTextArea.cursorRectangle.x : 0
-    y: targetTextArea ? targetTextArea.cursorRectangle.y : 0
-
-
-    }
-
-    property bool isTyping: false
+pulse_replacement = r'''    property bool isTyping: false
 
     Behavior on x {
         id: xBehavior
@@ -119,13 +96,14 @@ Rectangle {
             }
             root.lastTextLength = len;
         }
-    }
+    }'''
 
-    // Breathing pulse animation when idle
-    SequentialAnimation on opacity {
-        loops: Animation.Infinite
-        running: root.smoothCursorEnabled && targetTextArea && targetTextArea.focus
-        NumberAnimation { from: 1.0; to: 0.2; duration: 600; easing.type: Easing.InOutQuad }
-        NumberAnimation { from: 0.2; to: 1.0; duration: 600; easing.type: Easing.InOutQuad }
-    }
-}
+# Note: In the original file there are already Behavior on x and y.
+# So I should just replace them along with the pulse.
+behavior_re = r'''(    Behavior on x \{.*?    Behavior on y \{.*?    \})'''
+content = re.sub(behavior_re, "", content, flags=re.DOTALL)
+content = re.sub(pulse_re, pulse_replacement, content, flags=re.DOTALL)
+
+with open('apps/linux/qml/SmoothCursor.qml', 'w') as f:
+    f.write(content)
+

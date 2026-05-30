@@ -1,0 +1,1 @@
+sed -i 's/let forbidden_bindings = \["dt ? dt.editorText : \\"#2C2E36\\"", "dt ? dt.editorText : \\"#2c2e36\\""\];/let forbidden_bindings = \["dt ? dt.editorText : \\"#2C2E36\\"", "dt ? dt.editorText : \\"#2c2e36\\"", "dt.onSurfaceVariant", "dt.onPrimaryContainer"\];/' apps/linux/tests/qml_static_check.rs

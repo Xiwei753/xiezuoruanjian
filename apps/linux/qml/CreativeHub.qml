@@ -94,7 +94,7 @@ Rectangle {
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
                                        (dt ? dt.onPrimaryContainer : root.palette.highlightedText) :
-                                       (dt ? dt.onSurfaceVariant : root.palette.text)
+                                       (dt ? dt.onSurfaceVariant : "#E2E2E5")
                                 font.pixelSize: dt ? dt.label : 13
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal

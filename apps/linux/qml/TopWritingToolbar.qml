@@ -54,7 +54,7 @@ Rectangle {
                 spacing: dt ? dt.sp4 : 4
                 Text {
                     text: "A"
-                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                     font.weight: Font.Bold
@@ -67,7 +67,7 @@ Rectangle {
                 }
                 Text {
                     text: "\u25BE"
-                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
                 }
             }
@@ -98,7 +98,7 @@ Rectangle {
                 spacing: dt ? dt.sp4 : 4
                 Text {
                     text: "\u2630"
-                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
@@ -110,7 +110,7 @@ Rectangle {
                 }
                 Text {
                     text: "\u25BE"
-                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
                 }
             }
@@ -142,7 +142,7 @@ Rectangle {
                 spacing: dt ? dt.sp4 : 4
                 Text {
                     text: qsTr("一键排版")
-                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
@@ -174,7 +174,7 @@ Rectangle {
                 spacing: dt ? dt.sp4 : 4
                 Text {
                     text: qsTr("星图")
-                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
@@ -204,7 +204,7 @@ Rectangle {
                 spacing: dt ? dt.sp4 : 4
                 Text {
                     text: qsTr("统计")
-                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
@@ -276,8 +276,8 @@ Rectangle {
                             anchors.centerIn: parent
                             text: modelData
                             color: Math.round(root.currentFontSize) === modelData ?
-                                   (dt ? dt.onPrimaryContainer : "#001E31") :
-                                   (dt ? dt.onSurfaceVariant : "#42474E")
+                                   (dt ? dt.selectedText : "#CCE5FF") :
+                                   (dt ? dt.textSecondary : "#8C9198")
                             font.pixelSize: dt ? dt.label : 13
                             font.family: dt ? dt.fontFamily : "sans-serif"
                             font.weight: Math.round(root.currentFontSize) === modelData ? Font.DemiBold : Font.Normal
@@ -393,8 +393,8 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ?
-                                       (dt ? dt.onPrimaryContainer : "#001E31") :
-                                       (dt ? dt.onSurfaceVariant : "#42474E")
+                                       (dt ? dt.selectedText : "#CCE5FF") :
+                                       (dt ? dt.textSecondary : "#8C9198")
                                 font.pixelSize: dt ? dt.label : 13
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ? Font.DemiBold : Font.Normal

@@ -50,7 +50,7 @@ ComboBox {
     contentItem: Text {
         text: control.displayText
         color: control.enabled
-            ? (control.theme ? control.theme.textPrimary : control.palette.text)
+            ? (control.theme ? control.theme.textPrimary : "#E2E2E5")
             : (control.theme ? control.theme.textDisabled : control.palette.placeholderText)
         font.pixelSize: control.theme ? control.theme.label : 13
         font.family: control.theme ? control.theme.fontFamily : "sans-serif"
@@ -74,7 +74,7 @@ ComboBox {
             context.lineTo(width / 2, height)
             context.closePath()
             context.fillStyle = control.enabled
-                ? (control.theme ? control.theme.textSecondary : control.palette.text)
+                ? (control.theme ? control.theme.textSecondary : "#E2E2E5")
                 : (control.theme ? control.theme.textDisabled : control.palette.placeholderText)
             context.fill()
         }
@@ -98,7 +98,7 @@ ComboBox {
             text: modelData
             color: control.highlightedIndex === index
                 ? (control.theme ? control.theme.onPrimaryContainer : control.palette.highlightedText)
-                : (control.theme ? control.theme.textPrimary : control.palette.text)
+                : (control.theme ? control.theme.textPrimary : "#E2E2E5")
             font.pixelSize: control.theme ? control.theme.fontMd : 13
             verticalAlignment: Text.AlignVCenter
         }

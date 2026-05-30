@@ -149,19 +149,38 @@ Rectangle {
         anchors.fill: parent
         orientation: Qt.Horizontal
 
+        handle: Rectangle {
+            implicitWidth: 4
+            color: SplitHandle.hovered || SplitHandle.pressed ? (dt ? dt.primary : "#006497") : (dt ? dt.border : "#2A2E36")
+            Behavior on color { ColorAnimation { duration: 120 } }
+        }
+
         // Left sidebar: volume/chapter tree
         Rectangle {
             id: sidebarRect
-            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_linux_sidebar_width > 0 ? root.backendRef.setting_linux_sidebar_width : 240
+            property real currentSidebarWidth: root.backendRef && root.backendRef.setting_linux_sidebar_width > 0 ? root.backendRef.setting_linux_sidebar_width : 240
+            SplitView.preferredWidth: currentSidebarWidth
             SplitView.minimumWidth: 180
             SplitView.maximumWidth: 420
             color: dt ? dt.sidebar : "#14161B"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
 
+            Timer {
+                id: sidebarDebounceTimer
+                interval: 300
+                repeat: false
+                onTriggered: {
+                    if (root.backendRef && sidebarRect.width > 0 && Math.abs(root.backendRef.setting_linux_sidebar_width - sidebarRect.width) >= 1.0) {
+                        root.backendRef.setting_linux_sidebar_width = sidebarRect.width;
+                    }
+                }
+            }
+
             onWidthChanged: {
-                if (root.backendRef && width > 0) {
-                    root.backendRef.setting_linux_sidebar_width = width;
+                if (width > 0 && width !== currentSidebarWidth) {
+                    currentSidebarWidth = width;
+                    sidebarDebounceTimer.restart();
                 }
             }
 
@@ -251,7 +270,7 @@ Rectangle {
                                         Rectangle {
                                             width: 6; height: 6
                                             radius: model.itemType === "volume" ? 0 : 3
-                                            color: delegateBg.isSelected ? (dt ? dt.onPrimaryContainer : "#001E31") : (dt ? dt.textSecondary : "#8C9198")
+                                            color: delegateBg.isSelected ? (dt ? dt.selectedText : "#CCE5FF") : (dt ? dt.textSecondary : "#8C9198")
                                             Layout.alignment: Qt.AlignVCenter
                                             opacity: 0.6
                                         }
@@ -259,7 +278,7 @@ Rectangle {
                                         Text {
                                             text: model.itemTitle || ""
                                             color: delegateBg.isSelected ?
-                                                   (dt ? dt.onPrimaryContainer : root.palette.highlightedText) :
+                                                   (dt ? dt.onPrimaryContainer : "#CCE5FF") :
                                                    (dt ? dt.textPrimary : "#E2E2E5")
                                             font.pixelSize: dt ? dt.label : 13
                                             font.family: dt ? dt.fontFamily : "sans-serif"
@@ -442,59 +461,109 @@ Rectangle {
                             radius: dt ? dt.radiusMd : 12
                             border.color: dt ? dt.border : "#2A2E36"
                             border.width: 1
+                            
+                            property real currentEditorWidth: root.backendRef && root.backendRef.setting_linux_editor_width > 0 ? root.backendRef.setting_linux_editor_width : baseResponsiveWidth
+                            width: currentEditorWidth
+                            
+                            Timer {
+                                id: editorWidthDebounceTimer
+                                interval: 300
+                                repeat: false
+                                onTriggered: {
+                                    if (root.backendRef && Math.abs(root.backendRef.setting_linux_editor_width - paperBg.currentEditorWidth) >= 1.0) {
+                                        root.backendRef.setting_linux_editor_width = paperBg.currentEditorWidth;
+                                    }
+                                }
+                            }
+                            
+                            function resetEditorWidth() {
+                                if (root.backendRef) {
+                                    root.backendRef.setting_linux_editor_width = 0;
+                                }
+                                currentEditorWidth = baseResponsiveWidth;
+                            }
 
                             // Left edge drag handle
-                            MouseArea {
+                            Rectangle {
                                 anchors.left: parent.left
                                 anchors.top: parent.top
                                 anchors.bottom: parent.bottom
-                                width: 12
-                                cursorShape: Qt.SizeHorCursor
-                                property real startX: 0
-                                property real startWidth: 0
-                                onPressed: function(mouse) {
-                                    startX = mouse.x;
-                                    startWidth = paperBg.width;
-                                }
-                                onPositionChanged: function(mouse) {
-                                    if (pressed) {
-                                        var dx = mouse.x - startX;
-                                        var newWidth = startWidth - dx * 2;
-                                        newWidth = Math.max(600, Math.min(newWidth, paperBg.parent.width));
-                                        if (root.backendRef) {
-                                            root.backendRef.setting_linux_editor_width = newWidth;
+                                width: 4
+                                color: leftDragArea.containsMouse || leftDragArea.pressed ? (dt ? dt.primary : "#006497") : "transparent"
+                                Behavior on color { ColorAnimation { duration: 120 } }
+
+                                MouseArea {
+                                    id: leftDragArea
+                                    anchors.fill: parent
+                                    anchors.margins: -4
+                                    hoverEnabled: true
+                                    cursorShape: Qt.SizeHorCursor
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    property real startX: 0
+                                    property real startWidth: 0
+                                    onPressed: function(mouse) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            paperBg.resetEditorWidth();
+                                            return;
+                                        }
+                                        startX = mouse.x;
+                                        startWidth = paperBg.currentEditorWidth;
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (pressed && (mouse.buttons & Qt.LeftButton)) {
+                                            var dx = mouse.x - startX;
+                                            var newWidth = startWidth - dx * 2;
+                                            var maxPossible = Math.max(1400, paperBg.parent.width - 64);
+                                            newWidth = Math.max(720, Math.min(newWidth, maxPossible));
+                                            paperBg.currentEditorWidth = newWidth;
+                                            editorWidthDebounceTimer.restart();
                                         }
                                     }
+                                    onDoubleClicked: paperBg.resetEditorWidth()
                                 }
                             }
 
                             // Right edge drag handle
-                            MouseArea {
+                            Rectangle {
                                 anchors.right: parent.right
                                 anchors.top: parent.top
                                 anchors.bottom: parent.bottom
-                                width: 12
-                                cursorShape: Qt.SizeHorCursor
-                                property real startX: 0
-                                property real startWidth: 0
-                                onPressed: function(mouse) {
-                                    startX = mouse.x;
-                                    startWidth = paperBg.width;
-                                }
-                                onPositionChanged: function(mouse) {
-                                    if (pressed) {
-                                        var dx = mouse.x - startX;
-                                        var newWidth = startWidth + dx * 2;
-                                        newWidth = Math.max(600, Math.min(newWidth, paperBg.parent.width));
-                                        if (root.backendRef) {
-                                            root.backendRef.setting_linux_editor_width = newWidth;
+                                width: 4
+                                color: rightDragArea.containsMouse || rightDragArea.pressed ? (dt ? dt.primary : "#006497") : "transparent"
+                                Behavior on color { ColorAnimation { duration: 120 } }
+
+                                MouseArea {
+                                    id: rightDragArea
+                                    anchors.fill: parent
+                                    anchors.margins: -4
+                                    hoverEnabled: true
+                                    cursorShape: Qt.SizeHorCursor
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    property real startX: 0
+                                    property real startWidth: 0
+                                    onPressed: function(mouse) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            paperBg.resetEditorWidth();
+                                            return;
+                                        }
+                                        startX = mouse.x;
+                                        startWidth = paperBg.currentEditorWidth;
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (pressed && (mouse.buttons & Qt.LeftButton)) {
+                                            var dx = mouse.x - startX;
+                                            var newWidth = startWidth + dx * 2;
+                                            var maxPossible = Math.max(1400, paperBg.parent.width - 64);
+                                            newWidth = Math.max(720, Math.min(newWidth, maxPossible));
+                                            paperBg.currentEditorWidth = newWidth;
+                                            editorWidthDebounceTimer.restart();
                                         }
                                     }
+                                    onDoubleClicked: paperBg.resetEditorWidth()
                                 }
                             }
-                        }
-
-                        ScrollView {
+                            
+                            ScrollView {
                             id: editorScroll
                             anchors.fill: paperBg
                             anchors.margins: dt ? dt.sp20 : 20
