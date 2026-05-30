@@ -570,196 +570,132 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_mind_map_snapshot_domain(&self, project_id: &str) -> ApiResult<crate::mind_map::MindMapSnapshot> {
-        self.core().get_mind_map_snapshot(project_id).map_err(Into::into)
+    pub fn get_mind_map_snapshot(&self, project_id: &str) -> ApiResult<crate::api::types::MindMapSnapshotDto> {
+        self.core().get_mind_map_snapshot(project_id).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn create_mind_map_graph_domain(&self, project_id: &str, title: &str) -> ApiResult<crate::mind_map::graph::MindMapGraph> {
-        self.core().create_mind_map_graph(project_id, title).map_err(Into::into)
+    pub fn create_mind_map_graph(&self, project_id: &str, title: &str) -> ApiResult<crate::api::types::MindMapGraphDto> {
+        self.core().create_mind_map_graph(project_id, title).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn list_mind_map_graphs_domain(&self, project_id: &str) -> ApiResult<crate::mind_map::edit::MindMapGraphsList> {
-        self.core().list_mind_map_graphs(project_id).map_err(Into::into)
+    pub fn list_mind_map_graphs(&self, project_id: &str) -> ApiResult<crate::api::types::MindMapGraphsListDto> {
+        self.core().list_mind_map_graphs(project_id).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn set_default_mind_map_graph_domain(&self, project_id: &str, graph_id: &str) -> ApiResult<bool> {
+    pub fn set_default_mind_map_graph(&self, project_id: &str, graph_id: &str) -> ApiResult<bool> {
         self.core().set_default_mind_map_graph(project_id, graph_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn create_mind_map_node_domain(&self, project_id: &str, graph_id: &str, node: crate::mind_map::graph::MindMapGraphNode) -> ApiResult<crate::mind_map::graph::MindMapGraphNode> {
-        self.core().create_mind_map_node(project_id, graph_id, node).map_err(Into::into)
+    pub fn create_mind_map_node(&self, project_id: &str, graph_id: &str, node: crate::api::types::MindMapGraphNodeDto) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
+        self.core().create_mind_map_node(project_id, graph_id, node.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn update_mind_map_node_domain(&self, project_id: &str, graph_id: &str, node_id: &str, patch: crate::mind_map::edit::MindMapGraphNodePatch) -> ApiResult<crate::mind_map::graph::MindMapGraphNode> {
-        self.core().update_mind_map_node(project_id, graph_id, node_id, patch).map_err(Into::into)
+    pub fn update_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, patch: crate::api::types::MindMapNodePatchDto) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
+        self.core().update_mind_map_node(project_id, graph_id, node_id, patch.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn delete_mind_map_node_domain(&self, project_id: &str, graph_id: &str, node_id: &str, cascade: bool) -> ApiResult<bool> {
+    pub fn delete_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, cascade: bool) -> ApiResult<bool> {
         self.core().delete_mind_map_node(project_id, graph_id, node_id, cascade).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn create_mind_map_edge_domain(&self, project_id: &str, graph_id: &str, edge: crate::mind_map::graph::MindMapGraphEdge) -> ApiResult<crate::mind_map::graph::MindMapGraphEdge> {
-        self.core().create_mind_map_edge(project_id, graph_id, edge).map_err(Into::into)
+    pub fn create_mind_map_edge(&self, project_id: &str, graph_id: &str, edge: crate::api::types::MindMapGraphEdgeDto) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
+        self.core().create_mind_map_edge(project_id, graph_id, edge.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn update_mind_map_edge_domain(&self, project_id: &str, graph_id: &str, edge_id: &str, patch: crate::mind_map::edit::MindMapGraphEdgePatch) -> ApiResult<crate::mind_map::graph::MindMapGraphEdge> {
-        self.core().update_mind_map_edge(project_id, graph_id, edge_id, patch).map_err(Into::into)
+    pub fn update_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str, patch: crate::api::types::MindMapEdgePatchDto) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
+        self.core().update_mind_map_edge(project_id, graph_id, edge_id, patch.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn delete_mind_map_edge_domain(&self, project_id: &str, graph_id: &str, edge_id: &str) -> ApiResult<bool> {
+    pub fn delete_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str) -> ApiResult<bool> {
         self.core().delete_mind_map_edge(project_id, graph_id, edge_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn create_mind_map_anchor_domain(&self, project_id: &str, graph_id: &str, anchor: crate::mind_map::anchor::MindMapAnchor) -> ApiResult<crate::mind_map::anchor::MindMapAnchor> {
-        self.core().create_mind_map_anchor(project_id, graph_id, anchor).map_err(Into::into)
+    pub fn create_mind_map_anchor(&self, project_id: &str, graph_id: &str, anchor: crate::api::types::MindMapAnchorDto) -> ApiResult<crate::api::types::MindMapAnchorDto> {
+        self.core().create_mind_map_anchor(project_id, graph_id, anchor.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn bind_mind_map_node_to_anchor_domain(&self, project_id: &str, graph_id: &str, node_id: &str, anchor_id: &str, link_kind: &str) -> ApiResult<crate::mind_map::anchor::MindMapLink> {
-        self.core().bind_mind_map_node_to_anchor(project_id, graph_id, node_id, anchor_id, link_kind).map_err(Into::into)
+    pub fn bind_mind_map_node_to_anchor(&self, project_id: &str, graph_id: &str, node_id: &str, anchor_id: &str, link_kind: &str) -> ApiResult<crate::api::types::MindMapLinkDto> {
+        self.core().bind_mind_map_node_to_anchor(project_id, graph_id, node_id, anchor_id, link_kind).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn save_mind_map_layout_domain(&self, project_id: &str, graph_id: &str, layout: crate::mind_map::layout::MindMapLayout) -> ApiResult<bool> {
-        self.core().save_mind_map_layout(project_id, graph_id, layout).map(|_| true).map_err(Into::into)
+    pub fn save_mind_map_layout(&self, project_id: &str, graph_id: &str, layout: crate::api::types::MindMapLayoutDto) -> ApiResult<bool> {
+        self.core().save_mind_map_layout(project_id, graph_id, layout.into()).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_starmap_layout_domain(&self, starmap_id: &str) -> ApiResult<crate::starmap::types::StarMapLayout> {
-        self.core().get_starmap_layout(starmap_id).map_err(Into::into)
+    pub fn get_starmap_layout(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapLayoutDto> {
+        self.core().get_starmap_layout(starmap_id).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_starmap_graph_domain(&self, starmap_id: &str) -> ApiResult<crate::starmap::types::StarMapGraph> {
-        self.core().get_starmap_graph(starmap_id).map_err(Into::into)
+    pub fn get_starmap_graph_obj(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapGraphDto> {
+        self.core().get_starmap_graph(starmap_id).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn list_starmaps_domain(&self) -> ApiResult<Vec<crate::starmap::StarMapMeta>> {
-        self.core().list_starmaps().map_err(Into::into)
+    pub fn list_starmaps_obj(&self) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
+        self.core().list_starmaps().map(|v| v.into_iter().map(Into::into).collect()).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn create_starmap_domain(&self, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::starmap::StarMapMeta> {
-        self.core().create_starmap(title, desc, template_id).map_err(Into::into)
+    pub fn create_starmap_obj(&self, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core().create_starmap(title, desc, template_id).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn add_starmap_node_domain(&self, starmap_id: &str, node: crate::starmap::types::StarMapNode, x: f32, y: f32) -> ApiResult<crate::starmap::types::StarMapNode> {
-        self.core().add_starmap_node(starmap_id, node, x, y).map_err(Into::into)
+    pub fn add_starmap_node_obj(&self, starmap_id: &str, node: crate::api::types::StarMapNodeDto, x: f32, y: f32) -> ApiResult<crate::api::types::StarMapNodeDto> {
+        self.core().add_starmap_node(starmap_id, node.into(), x, y).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn save_starmap_layout_domain(&self, starmap_id: &str, layout: &crate::starmap::types::StarMapLayout) -> ApiResult<bool> {
-        self.core().save_starmap_layout(starmap_id, layout).map(|_| true).map_err(Into::into)
+    pub fn save_starmap_layout_obj(&self, starmap_id: &str, layout: &crate::api::types::StarMapLayoutDto) -> ApiResult<bool> {
+        self.core().save_starmap_layout(starmap_id, &layout.clone().into()).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn rename_starmap_domain(&self, starmap_id: &str, new_title: &str) -> ApiResult<crate::starmap::StarMapMeta> {
-        self.core().rename_starmap(starmap_id, new_title).map_err(Into::into)
+    pub fn rename_starmap(&self, starmap_id: &str, new_title: &str) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core().rename_starmap(starmap_id, new_title).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn delete_starmap_domain(&self, starmap_id: &str) -> ApiResult<bool> {
+    pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
         self.core().delete_starmap(starmap_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn bind_starmap_to_project_domain(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
+    pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
         self.core().bind_starmap_to_project(starmap_id, project_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn unbind_starmap_from_project_domain(&self, starmap_id: &str) -> ApiResult<bool> {
+    pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
         self.core().unbind_starmap_from_project(starmap_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn set_main_starmap_for_project_domain(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
+    pub fn set_main_starmap_for_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
         self.core().set_main_starmap_for_project(starmap_id, project_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_main_starmap_for_project_domain(&self, project_id: &str) -> ApiResult<Option<crate::starmap::StarMapMeta>> {
-        self.core().get_main_starmap_for_project(project_id).map_err(Into::into)
+    pub fn get_main_starmap_for_project(&self, project_id: &str) -> ApiResult<Option<crate::api::types::StarMapMetaDto>> {
+        self.core().get_main_starmap_for_project(project_id).map(|opt| opt.map(Into::into)).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn create_child_starmap_legacy_domain(&self, parent_id: &str, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::starmap::StarMapMeta> {
-        self.core().create_child_starmap_legacy(parent_id, title, desc, template_id).map_err(Into::into)
+    pub fn create_child_starmap_legacy(&self, parent_id: &str, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core().create_child_starmap_legacy(parent_id, title, desc, template_id).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn update_starmap_node_domain(&self, starmap_id: &str, node_id: &str, patch: crate::starmap::types::StarMapNodePatch) -> ApiResult<crate::starmap::types::StarMapNode> {
-        self.core().update_starmap_node(starmap_id, node_id, patch).map_err(Into::into)
+    pub fn update_starmap_node(&self, starmap_id: &str, node_id: &str, patch: crate::api::types::StarMapNodePatchDto) -> ApiResult<crate::api::types::StarMapNodeDto> {
+        self.core().update_starmap_node(starmap_id, node_id, patch.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn delete_starmap_node_domain(&self, starmap_id: &str, node_id: &str) -> ApiResult<bool> {
+    pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> ApiResult<bool> {
         self.core().delete_starmap_node(starmap_id, node_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn add_starmap_edge_domain(&self, starmap_id: &str, edge: crate::starmap::types::StarMapEdge) -> ApiResult<crate::starmap::types::StarMapEdge> {
-        self.core().add_starmap_edge(starmap_id, edge).map_err(Into::into)
+    pub fn add_starmap_edge(&self, starmap_id: &str, edge: crate::api::types::StarMapEdgeDto) -> ApiResult<crate::api::types::StarMapEdgeDto> {
+        self.core().add_starmap_edge(starmap_id, edge.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn update_starmap_edge_domain(&self, starmap_id: &str, edge_id: &str, patch: crate::starmap::types::StarMapEdgePatch) -> ApiResult<crate::starmap::types::StarMapEdge> {
-        self.core().update_starmap_edge(starmap_id, edge_id, patch).map_err(Into::into)
+    pub fn update_starmap_edge(&self, starmap_id: &str, edge_id: &str, patch: crate::api::types::StarMapEdgePatchDto) -> ApiResult<crate::api::types::StarMapEdgeDto> {
+        self.core().update_starmap_edge(starmap_id, edge_id, patch.into()).map(Into::into).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn delete_starmap_edge_domain(&self, starmap_id: &str, edge_id: &str) -> ApiResult<bool> {
+    pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> ApiResult<bool> {
         self.core().delete_starmap_edge(starmap_id, edge_id).map(|_| true).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn save_starmap_graph_domain(&self, starmap_id: &str, graph: &crate::starmap::types::StarMapGraph) -> ApiResult<bool> {
-        self.core().save_starmap_graph(starmap_id, graph).map(|_| true).map_err(Into::into)
+    pub fn save_starmap_graph_obj(&self, starmap_id: &str, graph: &crate::api::types::StarMapGraphDto) -> ApiResult<bool> {
+        self.core().save_starmap_graph(starmap_id, &graph.clone().into()).map(|_| true).map_err(Into::into)
     }
 
     pub fn list_registered_actions(&self) -> ApiResult<Vec<crate::action_registry::ActionDescriptor>> {
@@ -774,34 +710,29 @@ impl WriterCoreApi {
         self.core().ai_available()
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_writing_stats_summary_domain(&self, start_date: &str, end_date: &str) -> ApiResult<serde_json::Value> {
-        self.core().get_writing_stats_summary(start_date, end_date).map_err(Into::into)
+    pub fn get_writing_stats_summary_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
+        let value = self.core().get_writing_stats_summary(start_date, end_date).map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_writing_stats_by_project_domain(&self, start_date: &str, end_date: &str) -> ApiResult<serde_json::Value> {
-        self.core().get_writing_stats_by_project(start_date, end_date).map_err(Into::into)
+    pub fn get_writing_stats_by_project_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ProjectStatsSummaryDto> {
+        let value = self.core().get_writing_stats_by_project(start_date, end_date).map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_writing_stats_by_chapter_domain(&self, start_date: &str, end_date: &str) -> ApiResult<serde_json::Value> {
-        self.core().get_writing_stats_by_chapter(start_date, end_date).map_err(Into::into)
+    pub fn get_writing_stats_by_chapter_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ChapterStatsSummaryDto> {
+        let value = self.core().get_writing_stats_by_chapter(start_date, end_date).map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_writing_stats_by_device_domain(&self, start_date: &str, end_date: &str) -> ApiResult<serde_json::Value> {
-        self.core().get_writing_stats_by_device(start_date, end_date).map_err(Into::into)
+    pub fn get_writing_stats_by_device_obj(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::DeviceStatsSummaryDto> {
+        let value = self.core().get_writing_stats_by_device(start_date, end_date).map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
     }
 
-    /// TODO(api-dto): Transition method exposing raw domain types. Should be migrated to use standard DTOs from api::types.
-
-    pub fn get_writing_speed_curve_domain(&self, start_date: &str, end_date: &str, bucket_minutes: u32) -> ApiResult<serde_json::Value> {
-        self.core().get_writing_speed_curve(start_date, end_date, bucket_minutes).map_err(Into::into)
+    pub fn get_writing_speed_curve_obj(&self, start_date: &str, end_date: &str, bucket_minutes: u32) -> ApiResult<crate::api::types::SpeedCurveSummaryDto> {
+        let value = self.core().get_writing_speed_curve(start_date, end_date, bucket_minutes).map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
     }
 }
 

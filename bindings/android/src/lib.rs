@@ -1052,7 +1052,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getMindMap
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.get_mind_map_snapshot_domain(&project_id);
+    let result = api.get_mind_map_snapshot(&project_id);
     result_to_jstring(&mut env, result)
 }
 
@@ -1103,7 +1103,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMind
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.create_mind_map_graph_domain(&project_id, &title);
+    let result = api.create_mind_map_graph(&project_id, &title);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1124,7 +1124,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listMindMa
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.list_mind_map_graphs_domain(&project_id);
+    let result = api.list_mind_map_graphs(&project_id);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1150,7 +1150,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_setDefault
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.set_default_mind_map_graph_domain(&project_id, &graph_id);
+    let result = api.set_default_mind_map_graph(&project_id, &graph_id);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1186,7 +1186,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMind
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.create_mind_map_node_domain(&project_id, &graph_id, node);
+    let result = api.create_mind_map_node(&project_id, &graph_id, node);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1227,7 +1227,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateMind
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.update_mind_map_node_domain(&project_id, &graph_id, &node_id, patch);
+    let result = api.update_mind_map_node(&project_id, &graph_id, &node_id, patch);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1260,7 +1260,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteMind
 
     let cascade = cascade_j != 0;
     let api = api_from_workspace(&workspace_path);
-    let result = api.delete_mind_map_node_domain(&project_id, &graph_id, &node_id, cascade);
+    let result = api.delete_mind_map_node(&project_id, &graph_id, &node_id, cascade);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1296,7 +1296,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMind
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.create_mind_map_edge_domain(&project_id, &graph_id, edge);
+    let result = api.create_mind_map_edge(&project_id, &graph_id, edge);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1337,7 +1337,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateMind
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.update_mind_map_edge_domain(&project_id, &graph_id, &edge_id, patch);
+    let result = api.update_mind_map_edge(&project_id, &graph_id, &edge_id, patch);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1368,7 +1368,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteMind
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.delete_mind_map_edge_domain(&project_id, &graph_id, &edge_id);
+    let result = api.delete_mind_map_edge(&project_id, &graph_id, &edge_id);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1404,7 +1404,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createMind
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.create_mind_map_anchor_domain(&project_id, &graph_id, anchor);
+    let result = api.create_mind_map_anchor(&project_id, &graph_id, anchor);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1445,7 +1445,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_bindMindMa
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.bind_mind_map_node_to_anchor_domain(&project_id, &graph_id, &node_id, &anchor_id, &link_kind);
+    let result = api.bind_mind_map_node_to_anchor(&project_id, &graph_id, &node_id, &anchor_id, &link_kind);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1481,7 +1481,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveMindMa
     };
 
     let api = api_from_workspace(&workspace_path);
-    let result = api.save_mind_map_layout_domain(&project_id, &graph_id, layout);
+    let result = api.save_mind_map_layout(&project_id, &graph_id, layout);
     result_to_jstring_unified(&mut env, result)
 }
 
@@ -1656,7 +1656,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let api = api_from_workspace(&workspace_path);
     result_to_jstring(
         &mut env,
-        api.get_writing_stats_summary_domain(&start_date, &end_date),
+        api.get_writing_stats_summary_obj(&start_date, &end_date),
     )
 }
 
@@ -1670,7 +1670,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listStarma
 ) -> jstring {
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.list_starmaps_domain())
+    result_to_jstring(&mut env, api.list_starmaps_obj())
 }
 
 #[no_mangle]
@@ -1685,7 +1685,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createStar
     let title = match jstring_to_string(&mut env, &title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let desc = match jstring_to_string(&mut env, &desc_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.create_starmap_domain(&title, &desc, None))
+    result_to_jstring(&mut env, api.create_starmap_obj(&title, &desc, None))
 }
 
 #[no_mangle]
@@ -1698,8 +1698,8 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getStarmap
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    let graph_res = api.get_starmap_graph_domain(&starmap_id);
-    let layout_res = api.get_starmap_layout_domain(&starmap_id);
+    let graph_res = api.get_starmap_graph_obj(&starmap_id);
+    let layout_res = api.get_starmap_layout(&starmap_id);
     match (graph_res, layout_res) {
         (Ok(graph), Ok(layout)) => {
             let data = serde_json::json!({ "graph": graph, "layout": layout });
@@ -1725,7 +1725,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_addStarmap
     // Currently Android Canvas drops node anywhere, default it to 0,0 since canvas isn't tracking click coordinates here yet.
     // The core will default it and save to the layout.
     match serde_json::from_str(&node_json) {
-        Ok(node) => result_to_jstring(&mut env, api.add_starmap_node_domain(&starmap_id, node, 0.0, 0.0)),
+        Ok(node) => result_to_jstring(&mut env, api.add_starmap_node_obj(&starmap_id, node, 0.0, 0.0)),
         Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Io(e.to_string())))
     }
 }
@@ -1743,7 +1743,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveStarma
     let layout_json = match jstring_to_string(&mut env, &layout_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
     match serde_json::from_str(&layout_json) {
-        Ok(layout) => result_to_jstring(&mut env, api.save_starmap_layout_domain(&starmap_id, &layout)),
+        Ok(layout) => result_to_jstring(&mut env, api.save_starmap_layout_obj(&starmap_id, &layout)),
         Err(e) => result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Io(e.to_string())))
     }
 }
@@ -1762,7 +1762,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_renameStar
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let new_title = match jstring_to_string(&mut env, &new_title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.rename_starmap_domain(&starmap_id, &new_title).map(|_| ()))
+    result_to_jstring(&mut env, api.rename_starmap(&starmap_id, &new_title).map(|_| ()))
 }
 
 #[no_mangle]
@@ -1775,7 +1775,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteStar
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.delete_starmap_domain(&starmap_id))
+    result_to_jstring(&mut env, api.delete_starmap(&starmap_id))
 }
 
 #[no_mangle]
@@ -1790,7 +1790,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_bindStarma
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let project_id = match jstring_to_string(&mut env, &project_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.bind_starmap_to_project_domain(&starmap_id, &project_id))
+    result_to_jstring(&mut env, api.bind_starmap_to_project(&starmap_id, &project_id))
 }
 
 #[no_mangle]
@@ -1803,7 +1803,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_unbindStar
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.unbind_starmap_from_project_domain(&starmap_id))
+    result_to_jstring(&mut env, api.unbind_starmap_from_project(&starmap_id))
 }
 
 #[no_mangle]
@@ -1818,7 +1818,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_setMainSta
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let project_id = match jstring_to_string(&mut env, &project_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.set_main_starmap_for_project_domain(&starmap_id, &project_id))
+    result_to_jstring(&mut env, api.set_main_starmap_for_project(&starmap_id, &project_id))
 }
 
 #[no_mangle]
@@ -1831,7 +1831,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getMainSta
     let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let project_id = match jstring_to_string(&mut env, &project_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_main_starmap_for_project_domain(&project_id))
+    result_to_jstring(&mut env, api.get_main_starmap_for_project(&project_id))
 }
 
 #[no_mangle]
@@ -1848,7 +1848,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_createChil
     let title = match jstring_to_string(&mut env, &title_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let desc = match jstring_to_string(&mut env, &desc_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.create_child_starmap_legacy_domain(&parent_id, &title, &desc, None))
+    result_to_jstring(&mut env, api.create_child_starmap_legacy(&parent_id, &title, &desc, None))
 }
 
 // --- StarMap: Node CRUD ---
@@ -1867,13 +1867,13 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateStar
     let node_id = match jstring_to_string(&mut env, &node_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let patch_json = match jstring_to_string(&mut env, &patch_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
 
-    let patch: writer_core::starmap::types::StarMapNodePatch = match serde_json::from_str(&patch_json) {
+    let patch: writer_core::api::types::StarMapNodePatchDto = match serde_json::from_str(&patch_json) {
         Ok(p) => p,
         Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
     };
 
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.update_starmap_node_domain(&starmap_id, &node_id, patch))
+    result_to_jstring(&mut env, api.update_starmap_node(&starmap_id, &node_id, patch))
 }
 
 #[no_mangle]
@@ -1888,7 +1888,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteStar
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let node_id = match jstring_to_string(&mut env, &node_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.delete_starmap_node_domain(&starmap_id, &node_id))
+    result_to_jstring(&mut env, api.delete_starmap_node(&starmap_id, &node_id))
 }
 
 // --- StarMap: Edge CRUD ---
@@ -1909,7 +1909,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_addStarmap
         Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
     };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.add_starmap_edge_domain(&starmap_id, edge))
+    result_to_jstring(&mut env, api.add_starmap_edge(&starmap_id, edge))
 }
 
 #[no_mangle]
@@ -1926,13 +1926,13 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_updateStar
     let edge_id = match jstring_to_string(&mut env, &edge_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let patch_json = match jstring_to_string(&mut env, &patch_json_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
 
-    let patch: writer_core::starmap::types::StarMapEdgePatch = match serde_json::from_str(&patch_json) {
+    let patch: writer_core::api::types::StarMapEdgePatchDto = match serde_json::from_str(&patch_json) {
         Ok(p) => p,
         Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
     };
 
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.update_starmap_edge_domain(&starmap_id, &edge_id, patch))
+    result_to_jstring(&mut env, api.update_starmap_edge(&starmap_id, &edge_id, patch))
 }
 
 #[no_mangle]
@@ -1947,7 +1947,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_deleteStar
     let starmap_id = match jstring_to_string(&mut env, &starmap_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let edge_id = match jstring_to_string(&mut env, &edge_id_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.delete_starmap_edge_domain(&starmap_id, &edge_id))
+    result_to_jstring(&mut env, api.delete_starmap_edge(&starmap_id, &edge_id))
 }
 
 #[no_mangle]
@@ -1966,7 +1966,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveStarma
         Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
     };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.save_starmap_graph_domain(&starmap_id, &graph))
+    result_to_jstring(&mut env, api.save_starmap_graph_obj(&starmap_id, &graph))
 }
 
 // --- Writing Stats: By Project / Chapter / Device / Speed Curve ---
@@ -1983,7 +1983,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_project_domain(&start_date, &end_date))
+    result_to_jstring(&mut env, api.get_writing_stats_by_project_obj(&start_date, &end_date))
 }
 
 #[no_mangle]
@@ -1998,7 +1998,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_chapter_domain(&start_date, &end_date))
+    result_to_jstring(&mut env, api.get_writing_stats_by_chapter_obj(&start_date, &end_date))
 }
 
 #[no_mangle]
@@ -2013,7 +2013,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_device_domain(&start_date, &end_date))
+    result_to_jstring(&mut env, api.get_writing_stats_by_device_obj(&start_date, &end_date))
 }
 
 #[no_mangle]
@@ -2029,7 +2029,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_speed_curve_domain(&start_date, &end_date, bucket_minutes as u32))
+    result_to_jstring(&mut env, api.get_writing_speed_curve_obj(&start_date, &end_date, bucket_minutes as u32))
 }
 
 #[no_mangle]
