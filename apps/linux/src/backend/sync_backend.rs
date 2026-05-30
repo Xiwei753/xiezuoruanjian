@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -33,13 +34,27 @@ pub struct SyncBackend {
     maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
     open_workspace_dir: qt_method!(fn(&mut self)),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
-    app: QPointer<AppBackend>,
+    app: SafeAppPtr,
 }
 
 impl SyncBackend {
-    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default) }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default) }
+    pub fn new(app: SafeAppPtr) -> Self { Self { app, ..Default::default() } }
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&*app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("sync", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&mut *app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("sync", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
     fn sync_enabled(&self) -> bool { self.with_app(false, |app| app.sync_enabled()) }
     fn set_sync_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_sync_enabled(val)); self.sync_config_changed(); }
     fn sync_backend_type(&self) -> QString { self.with_app("".into(), |app| app.sync_backend_type()) }

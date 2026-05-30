@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -34,13 +35,27 @@ pub struct ProjectBackend {
     select_project: qt_method!(fn(&mut self, project_id: QString)),
     select_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
     select_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
-    app: QPointer<AppBackend>,
+    app: SafeAppPtr,
 }
 
 impl ProjectBackend {
-    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default) }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default) }
+    pub fn new(app: SafeAppPtr) -> Self { Self { app, ..Default::default() } }
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&*app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("project", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&mut *app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("project", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
     fn emit_changed(&mut self) { self.projects_reloaded(); self.projectsReloaded(); self.workspace_content_changed(); self.selected_item_changed(); }
     fn refresh_app_state_json(&mut self) -> QString { self.with_app_mut("{}".into(), |app| app.refresh_app_state_json()) }
     fn refresh_tree_model_json(&mut self) -> QString { let out = self.with_app_mut("[]".into(), |app| app.refresh_tree_model_json()); self.emit_changed(); out }

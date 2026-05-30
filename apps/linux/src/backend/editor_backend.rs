@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -58,13 +59,27 @@ pub struct EditorBackend {
     log_qml: qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
     list_registered_actions: qt_method!(fn(&mut self) -> QString),
     execute_action: qt_method!(fn(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString),
-    app: QPointer<AppBackend>,
+    app: SafeAppPtr,
 }
 
 impl EditorBackend {
-    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default) }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default) }
+    pub fn new(app: SafeAppPtr) -> Self { Self { app, ..Default::default() } }
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&*app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("editor", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&mut *app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("editor", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
     fn save_status(&self) -> QString { self.with_app("".into(), |app| app.save_status()) }
     fn set_save_status(&mut self, val: QString) { self.with_app_mut((), |app| app.set_save_status(val)); self.save_status_changed(); }
     fn word_count(&self) -> i32 { self.with_app(0, |app| app.word_count()) }

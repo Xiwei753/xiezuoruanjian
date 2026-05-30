@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -23,18 +24,28 @@ pub struct SettingsBackend {
     ai_available_changed: qt_signal!(),
     load_local_settings: qt_method!(fn(&mut self)),
     save_local_settings: qt_method!(fn(&mut self) -> bool),
-    app: QPointer<AppBackend>,
+    app: SafeAppPtr,
 }
 
 impl SettingsBackend {
-    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
+    pub fn new(app: SafeAppPtr) -> Self { Self { app, ..Default::default() } }
 
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
-        self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default)
+        if let Some(app) = self.app.get() {
+            unsafe { f(&*app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("settings", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
     }
 
     fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
-        self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default)
+        if let Some(app) = self.app.get() {
+            unsafe { f(&mut *app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("settings", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
     }
 
     fn setting_font_size(&self) -> f32 { self.with_app(16.0, |app| app.setting_font_size()) }

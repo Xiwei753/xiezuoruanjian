@@ -119,17 +119,45 @@ QtObject {
     function createWorkspace(openExisting) {
         var workspaceApi = workspaceBackendRef || backendRef;
         if (!workspaceApi) return;
-        if (openExisting) workspaceApi.open_existing_workspace();
-        else workspaceApi.create_new_workspace();
-        refreshState("打开工作区失败");
+        var rawResult = "";
+        if (openExisting) {
+            rawResult = workspaceApi.open_existing_workspace();
+        } else {
+            rawResult = workspaceApi.create_new_workspace();
+        }
+        var res = parseJson(rawResult, "操作失败");
+        if (!res) { 
+            refreshState("解析结果失败"); 
+            return; 
+        }
+        if (res.success) {
+            refreshState("打开工作区成功");
+        } else {
+            emitError(res.userMessage || res.message || "打开工作区失败");
+            refreshState("打开工作区失败");
+        }
     }
 
     function createWorkspaceWithPath(path, openExisting) {
         var workspaceApi = workspaceBackendRef || backendRef;
         if (!workspaceApi) return;
-        if (openExisting) workspaceApi.open_workspace_with_path(path);
-        else workspaceApi.create_workspace_with_path(path);
-        refreshState("打开工作区失败");
+        var rawResult = "";
+        if (openExisting) {
+            rawResult = workspaceApi.open_workspace_with_path(path);
+        } else {
+            rawResult = workspaceApi.create_workspace_with_path(path);
+        }
+        var res = parseJson(rawResult, "操作失败");
+        if (!res) { 
+            refreshState("解析结果失败"); 
+            return; 
+        }
+        if (res.success) {
+            refreshState("打开工作区成功");
+        } else {
+            emitError(res.userMessage || res.message || "打开工作区失败");
+            refreshState("打开工作区失败");
+        }
     }
 
     function handleMutationResult(raw, fallbackMessage) {

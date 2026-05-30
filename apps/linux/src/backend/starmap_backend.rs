@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -46,13 +47,28 @@ pub struct StarMapBackend {
     create_mind_map_anchor_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, anchor_json: QString) -> QString),
     bind_mind_map_anchor_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_id: QString, anchor_id: QString, link_kind: QString) -> QString),
     save_mind_map_layout_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, layout_json: QString) -> QString),
-    app: QPointer<AppBackend>,
+    app: SafeAppPtr,
 }
 
 impl StarMapBackend {
-    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default) }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default) }
+    pub fn new(app: SafeAppPtr) -> Self { Self { app, ..Default::default() } }
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&*app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("starmap", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+        if let Some(app) = self.app.get() {
+            unsafe { f(&mut *app) }
+        } else {
+            crate::backend::app_backend::debug_error_static("starmap", "BACKEND_LINK_BROKEN", "app pointer is null");
+            default
+        }
+    }
+    
     fn list_starmaps_json(&self) -> QString { self.with_app("[]".into(), |app| app.list_starmaps_json()) }
     fn list_starmaps(&self) -> QJsonArray { self.with_app(QJsonArray::default(), |app| app.list_starmaps()) }
     fn list_starmaps_for_project_json(&self, project_id: QString) -> QString { self.with_app("[]".into(), |app| app.list_starmaps_for_project_json(project_id)) }

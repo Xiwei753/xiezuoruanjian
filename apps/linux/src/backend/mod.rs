@@ -8,6 +8,34 @@ pub use app_backend::{
     WorkspaceBackend,
 };
 
+/// Safely shares the heap-allocated AppBackend pointer with other domain backends.
+/// Guaranteed to be valid as long as BackendRuntime is alive.
+#[derive(Clone)]
+pub struct SafeAppPtr {
+    ptr: std::rc::Rc<std::cell::Cell<*mut AppBackend>>,
+}
+
+impl SafeAppPtr {
+    pub fn new() -> Self {
+        Self {
+            ptr: std::rc::Rc::new(std::cell::Cell::new(std::ptr::null_mut())),
+        }
+    }
+    pub fn set(&self, app: *mut AppBackend) {
+        self.ptr.set(app);
+    }
+    pub fn get(&self) -> Option<*mut AppBackend> {
+        let p = self.ptr.get();
+        if p.is_null() { None } else { Some(p) }
+    }
+}
+
+impl Default for SafeAppPtr {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Owns every QObject registered into the QML root context.
 ///
 /// Qt only receives raw QObject pointers from `set_object_property`; this
@@ -24,12 +52,16 @@ pub struct BackendRuntime {
 
 impl BackendRuntime {
     pub fn new() -> Self {
-        let app_backend = QObjectBox::new(AppBackend::default());
-        let app_ptr = {
-            let app_pinned = app_backend.pinned();
-            let app_ref = app_pinned.borrow();
-            QPointer::from(&*app_ref)
+        let mut app_backend = QObjectBox::new(AppBackend::default());
+        let app_ptr = SafeAppPtr::new();
+        // Safe because app_backend is pinned in the heap inside QObjectBox
+        // and its lifetime is identical to BackendRuntime.
+        let raw_ptr = {
+            let pinned = app_backend.pinned();
+            let r = pinned.borrow();
+            &*r as *const AppBackend as *mut AppBackend
         };
+        app_ptr.set(raw_ptr);
 
         Self {
             workspace_backend: QObjectBox::new(WorkspaceBackend::new(app_ptr.clone())),
