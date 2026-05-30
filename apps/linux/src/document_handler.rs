@@ -39,6 +39,7 @@ cpp!{{
     #include <QtGui/QTextBlockFormat>
     #include <QtGui/QTextCharFormat>
     #include <QtGui/QColor>
+    #include <QtCore/QDebug>
 }}
 
 #[allow(dead_code)]
@@ -127,6 +128,11 @@ impl DocumentHandler {
 
             QTextCharFormat charFormat;
             QColor color(text_color);
+            static bool first_log = true;
+            if (first_log) {
+                qDebug("[WriterDebug][DocumentHandler] apply_format text_color: %s, valid: %d", text_color.toUtf8().constData(), color.isValid());
+                first_log = false;
+            }
             if (color.isValid()) {
                 charFormat.setForeground(color);
                 cursor.mergeCharFormat(charFormat);

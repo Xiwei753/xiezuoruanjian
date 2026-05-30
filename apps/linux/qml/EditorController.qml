@@ -89,7 +89,7 @@ QtObject {
         document: targetTextArea ? targetTextArea.textDocument : null
         line_spacing: backendRef ? backendRef.setting_line_spacing : 1.5
         text_indent: (backendRef && backendRef.setting_auto_indent_enabled) ? Math.round((backendRef.setting_font_size || 16) * 2) : 0
-        text_color: dt ? dt.editorText : "#2C2E36"
+        text_color: dt ? dt.editorTextHex : "#E2E2E5"
     }
 
     // Autosync timer

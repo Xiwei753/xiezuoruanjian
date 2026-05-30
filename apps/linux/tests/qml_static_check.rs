@@ -13,7 +13,9 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
     // Specific emojis we want to forbid
     let forbidden_emojis = ["📁", "📄", "📝", "📦", "☁️", "⚙️", "📂", "✏️", "💡", "⚠️"];
     // Hardcoded colors we want to forbid
-    let forbidden_colors = ["#000000", "#111111", "#1a1c1e", "#1A1C1E", "black"];
+    let forbidden_colors = ["#000000", "#111111", "#1a1c1e", "#1A1C1E", "black", "#2C2E36", "#2c2e36"];
+    // Forbidden qml binding usages
+    let forbidden_bindings = ["dt ? dt.editorText : \"#2C2E36\"", "dt ? dt.editorText : \"#2c2e36\""];
 
     for entry in fs::read_dir(qml_dir).unwrap() {
         let entry = entry.unwrap();
@@ -56,8 +58,14 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     let lower = trimmed.to_lowercase();
                     for color in &forbidden_colors {
                         let c = color.to_lowercase();
-                        if lower.contains(&format!("\"{}\"", c)) || lower.contains(&format!("'{}'", c)) {
+                        if lower.contains(&format!("\"{}\"", c)) || lower.contains(&format!("'{}'", c)) || lower.contains(&c) {
                             eprintln!("{}:{}: Found hardcoded dark color '{}'", file_name, line_num, color);
+                            has_errors = true;
+                        }
+                    }
+                    for binding in &forbidden_bindings {
+                        if trimmed.contains(binding) || trimmed.contains(&binding.replace("\"", "'")) {
+                            eprintln!("{}:{}: Found forbidden text_color binding '{}'", file_name, line_num, binding);
                             has_errors = true;
                         }
                     }

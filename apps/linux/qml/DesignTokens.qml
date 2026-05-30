@@ -90,6 +90,9 @@ QtObject {
     // --- Editor ---
     property color editorBackground: isDark ? "#202326" : "#FFFFFF"
     property color editorText: onSurface
+    property string editorTextHex: isDark ? "#E2E2E5" : "#1A1C1E"
+    property string textPrimaryHex: isDark ? "#E2E2E5" : "#1A1C1E"
+    property string textSecondaryHex: isDark ? "#C3C6CF" : "#42474E"
 
     // --- Radius ---
     property int radiusXs: 4
