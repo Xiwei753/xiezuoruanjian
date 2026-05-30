@@ -16,6 +16,13 @@ ComboBox {
     id: control
     property var theme: null
 
+    implicitWidth: 180
+    implicitHeight: Math.max(control.theme ? control.theme.settingsControlHeight : 36, 40)
+    leftPadding: control.theme ? control.theme.sp12 : 12
+    rightPadding: (control.theme ? control.theme.sp12 : 12) + 20
+    topPadding: 0
+    bottomPadding: 0
+
     function indexOfText(value) {
         if (control.model === null || control.model === undefined) return -1
         if (typeof control.model === "string") return control.model === value ? 0 : -1
@@ -47,9 +54,10 @@ ComboBox {
             : (control.theme ? control.theme.textDisabled : "#94a3b8")
         font.pixelSize: control.theme ? control.theme.label : 13
         font.family: control.theme ? control.theme.fontFamily : "sans-serif"
-        leftPadding: control.theme ? control.theme.sp12 : 12
-        rightPadding: control.theme ? control.theme.sp24 : 24
+        leftPadding: control.leftPadding
+        rightPadding: control.rightPadding
         verticalAlignment: Text.AlignVCenter
+        elide: Text.ElideRight
     }
 
     indicator: Canvas {

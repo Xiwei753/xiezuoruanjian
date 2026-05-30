@@ -46,7 +46,7 @@ Rectangle {
         ColumnLayout {
             id: rows
             Layout.fillWidth: true
-            spacing: 0
+            spacing: dt ? dt.sp12 : 12
         }
     }
 }

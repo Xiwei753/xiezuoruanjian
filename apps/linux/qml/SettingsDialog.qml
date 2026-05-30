@@ -93,31 +93,27 @@ Dialog {
                 dt: root.dt
                 title: "外观"
                 Layout.fillWidth: true
-                SettingsRow {
-                    dt: root.dt
-                    title: "字体大小"
-                    description: Math.round(fontSizeSlider.value) + " px"
-                    AppSlider {
-                        id: fontSizeSlider
-                        theme: root.dt
-                        from: 12.0
-                        to: 32.0
-                        stepSize: 1.0
-                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.saveAndNotify() }
-                    }
+                AppSlider {
+                    id: fontSizeSlider
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    label: "字体大小"
+                    valueText: Math.round(value) + " px"
+                    from: 12.0
+                    to: 32.0
+                    stepSize: 1.0
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.saveAndNotify() }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: "行距倍数"
-                    description: Number(lineSpacingSlider.value).toFixed(1) + "x"
-                    AppSlider {
-                        id: lineSpacingSlider
-                        theme: root.dt
-                        from: 1.0
-                        to: 3.0
-                        stepSize: 0.1
-                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.saveAndNotify() }
-                    }
+                AppSlider {
+                    id: lineSpacingSlider
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    label: "行距倍数"
+                    valueText: Number(value).toFixed(1) + "x"
+                    from: 1.0
+                    to: 3.0
+                    stepSize: 0.1
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.saveAndNotify() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -148,18 +144,16 @@ Dialog {
                     onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
                     ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: "打字动画持续时间"
-                    description: Math.round(typingAnimDuration.value) + " ms"
-                    AppSlider {
-                        id: typingAnimDuration
-                        theme: root.dt
-                        from: 0
-                        to: 240
-                        stepSize: 10
-                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.saveAndNotify() }
-                    }
+                AppSlider {
+                    id: typingAnimDuration
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    label: "打字动画持续时间"
+                    valueText: Math.round(value) + " ms"
+                    from: 0
+                    to: 240
+                    stepSize: 10
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.saveAndNotify() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -169,18 +163,16 @@ Dialog {
                     onClicked: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", !smoothCursor.checked)
                     ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", v) } }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: "平滑光标持续时间"
-                    description: Math.round(smoothCursorDuration.value) + " ms"
-                    AppSlider {
-                        id: smoothCursorDuration
-                        theme: root.dt
-                        from: 0
-                        to: 240
-                        stepSize: 10
-                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }
-                    }
+                AppSlider {
+                    id: smoothCursorDuration
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    label: "平滑光标持续时间"
+                    valueText: Math.round(value) + " ms"
+                    from: 0
+                    to: 240
+                    stepSize: 10
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -190,18 +182,16 @@ Dialog {
                     onClicked: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", !autoIndent.checked)
                     ModernSwitch { id: autoIndent; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", v) } }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: "首行缩进宽度"
-                    description: Number(autoIndentWidth.value).toFixed(1) + " 字符"
-                    AppSlider {
-                        id: autoIndentWidth
-                        theme: root.dt
-                        from: 0.0
-                        to: 8.0
-                        stepSize: 0.5
-                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.saveAndNotify() }
-                    }
+                AppSlider {
+                    id: autoIndentWidth
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    label: "首行缩进宽度"
+                    valueText: Number(value).toFixed(1) + " 字符"
+                    from: 0.0
+                    to: 8.0
+                    stepSize: 0.5
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.saveAndNotify() }
                 }
             }
 
@@ -217,18 +207,16 @@ Dialog {
                     onClicked: root.setSwitchValue(autoSave, "setting_auto_save_enabled", !autoSave.checked)
                     ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoSave, "setting_auto_save_enabled", v) } }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: "自动保存延迟"
-                    description: Math.round(autoSaveDelay.value) + " 秒"
-                    AppSlider {
-                        id: autoSaveDelay
-                        theme: root.dt
-                        from: 1
-                        to: 10
-                        stepSize: 1
-                        onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000; root.saveAndNotify() }
-                    }
+                AppSlider {
+                    id: autoSaveDelay
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    label: "自动保存延迟"
+                    valueText: Math.round(value) + " 秒"
+                    from: 1
+                    to: 10
+                    stepSize: 1
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000; root.saveAndNotify() }
                 }
             }
 

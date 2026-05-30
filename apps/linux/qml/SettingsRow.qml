@@ -27,6 +27,7 @@ Rectangle {
     readonly property int _verticalPadding: dt ? dt.sp12 : 12
     readonly property int _controlMinHeight: dt ? dt.settingsControlHeight : 40
     implicitHeight: Math.max(_controlMinHeight, textCol.implicitHeight) + _verticalPadding * 2
+    implicitWidth: row.implicitWidth + (dt ? dt.sp16 : 16)
 
     RowLayout {
         id: row
@@ -47,8 +48,7 @@ Rectangle {
                 color: dt ? dt.textPrimary : "#E2E4E9"
                 font.pixelSize: dt ? dt.body : 14
                 font.family: dt ? dt.fontFamily : "sans-serif"
-                wrapMode: Text.NoWrap
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
             Text {
@@ -57,8 +57,7 @@ Rectangle {
                 font.pixelSize: dt ? dt.caption : 12
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 visible: text.length > 0
-                wrapMode: Text.NoWrap
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
         }
@@ -70,6 +69,22 @@ Rectangle {
             implicitWidth: Layout.preferredWidth
             Layout.preferredHeight: children.length > 0 ? Math.max(root._controlMinHeight, children[0].implicitHeight || children[0].height || 0) : root._controlMinHeight
             implicitHeight: Layout.preferredHeight
+
+            readonly property Item controlItem: children.length > 0 ? children[0] : null
+
+            Binding {
+                target: controlHost.controlItem
+                property: "width"
+                value: controlHost.width
+                when: controlHost.controlItem !== null
+            }
+
+            Binding {
+                target: controlHost.controlItem
+                property: "height"
+                value: controlHost.height
+                when: controlHost.controlItem !== null
+            }
         }
     }
 

@@ -26,8 +26,9 @@ Item {
     }
     signal activated(int index)
 
-    implicitWidth: 160
-    implicitHeight: dt ? dt.settingsControlHeight : 36
+    implicitWidth: 180
+    implicitHeight: Math.max(dt ? dt.settingsControlHeight : 36, 40)
+    clip: false
 
     Rectangle {
         anchors.fill: parent
@@ -38,8 +39,8 @@ Item {
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: dt ? dt.sp10 : 10
-            anchors.rightMargin: dt ? dt.sp10 : 10
+            anchors.leftMargin: dt ? dt.sp12 : 12
+            anchors.rightMargin: dt ? dt.sp12 : 12
             spacing: dt ? dt.sp8 : 8
 
             Text {
@@ -49,11 +50,15 @@ Item {
                 font.pixelSize: dt ? dt.label : 13
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
             Text {
                 text: "v"
                 color: dt ? dt.textMuted : "#606470"
                 font.pixelSize: dt ? dt.fontXs : 11
+                Layout.preferredWidth: 16
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
             }
         }
 
