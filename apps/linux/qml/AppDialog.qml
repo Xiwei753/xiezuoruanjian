@@ -41,7 +41,7 @@ Dialog {
                 Layout.fillWidth: true
                 text: root.heading
                 visible: text.length > 0
-                color: root.theme ? root.theme.onSurface : root.palette.text
+                color: root.theme ? root.theme.onSurface : "#E2E2E5"
                 font.pixelSize: root.theme ? root.theme.subtitle : 18
                 font.family: root.theme ? root.theme.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold

@@ -12,7 +12,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
 
-Rectangle {
+Item {
     id: root
     implicitHeight: mainCol.implicitHeight + (theme ? theme.sp32 : 32)
     property int lastSyncResultLen: -1
@@ -22,8 +22,7 @@ Rectangle {
     property var beforeSyncHook: null
     signal settingsChanged()
 
-    color: theme ? theme.background : "#FCFCFF"
-
+    // Remove color since root is now an Item
     function statusKind() {
         var s = root.backendRef ? root.backendRef.sync_status : ""
         if (s === "success") return "success"
@@ -84,14 +83,14 @@ Rectangle {
                 spacing: theme ? theme.sp4 : 4
                 Text {
                     text: qsTr("同步设置")
-                    color: theme ? theme.onBackground : root.palette.text
+                    color: theme ? theme.onBackground : "#E2E2E5"
                     font.pixelSize: theme ? theme.title : 24
                     font.family: theme ? theme.fontFamily : "sans-serif"
                     font.weight: Font.Bold
                 }
                 Text {
                     text: qsTr("配置远端仓库并查看同步状态")
-                    color: theme ? theme.onSurfaceVariant : root.palette.text
+                    color: theme ? theme.onSurfaceVariant : "#8C9198"
                     font.pixelSize: theme ? theme.body : 14
                     font.family: theme ? theme.fontFamily : "sans-serif"
                 }
@@ -217,6 +216,7 @@ Rectangle {
             border.width: (root.backendRef && root.backendRef.sync_status === "conflict") ? 2 : 1
             radius: theme ? theme.radiusLg : 16
             clip: true
+            visible: (root.backendRef && (root.backendRef.sync_action_result !== "" || root.backendRef.sync_status === "syncing" || root.backendRef.sync_status === "error" || root.backendRef.sync_status === "conflict"))
 
             ScrollView {
                 id: logScroll

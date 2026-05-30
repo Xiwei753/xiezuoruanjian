@@ -81,7 +81,7 @@ Item {
             font.pixelSize: root.appTheme ? root.appTheme.title : 24
             font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
             font.weight: Font.Bold
-            color: root.appTheme ? root.appTheme.textPrimary : root.palette.text
+            color: root.appTheme ? root.appTheme.textPrimary : "#E2E2E5"
         }
 
         // Description
@@ -90,7 +90,7 @@ Item {
             text: qsTr("选择或创建工作区后开始写作")
             font.pixelSize: root.appTheme ? root.appTheme.body : 14
             font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
-            color: root.appTheme ? root.appTheme.textSecondary : root.palette.text
+            color: root.appTheme ? root.appTheme.textSecondary : "#8C9198"
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -142,7 +142,7 @@ Item {
                 text: qsTr("点击后会进入同步页面：配置远端仓库地址、分支、Token，然后点击「选择目录并初始化/克隆」。")
                 font.pixelSize: root.appTheme ? root.appTheme.caption : 12
                 font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
-                color: root.appTheme ? root.appTheme.textSecondary : root.palette.text
+                color: root.appTheme ? root.appTheme.textSecondary : "#8C9198"
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
             }

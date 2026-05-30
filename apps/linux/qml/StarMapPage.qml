@@ -159,7 +159,7 @@ Rectangle {
 
             Text {
                 text: qsTr("新建星图")
-                color: dt ? dt.onSurface : root.palette.text
+                color: dt ? dt.onSurface : "#E2E2E5"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
@@ -236,7 +236,7 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
-            Text { text: qsTr("重命名星图"); color: dt ? dt.onSurface : root.palette.text; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            Text { text: qsTr("重命名星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
             AppTextField { id: renameField; Layout.fillWidth: true; theme: dt; text: renameStarmapDialog.currentTitle; placeholderText: qsTr("星图名称"); onAccepted: renameStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true
@@ -260,7 +260,7 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
-            Text { text: qsTr("新建子星图"); color: dt ? dt.onSurface : root.palette.text; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            Text { text: qsTr("新建子星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
             AppTextField { id: childTitleField; Layout.fillWidth: true; theme: dt; placeholderText: qsTr("子星图名称"); onAccepted: createChildStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true

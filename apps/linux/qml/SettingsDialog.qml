@@ -19,8 +19,9 @@ Dialog {
     modal: true
     width: 640
     height: Math.max(480, Math.min(720, settingsScroll.contentHeight + 120))
-    x: (parent ? (parent.width - width) / 2 : 0)
-    y: (parent ? (parent.height - height) / 2 : 0)
+    parent: Overlay.overlay
+    x: Math.round((parent.width - width) / 2)
+    y: Math.round((parent.height - height) / 2)
     property var theme: null
     property var backendRef: null
     property var dt: theme
@@ -68,7 +69,7 @@ Dialog {
             anchors.fill: parent
             anchors.leftMargin: dt ? dt.sp24 : 24
             anchors.rightMargin: dt ? dt.sp16 : 16
-            Text { text: qsTr("设置"); color: dt ? dt.textPrimary : root.palette.text; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
+            Text { text: qsTr("设置"); color: dt ? dt.textPrimary : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
             ToolbarButton { text: qsTr("关闭"); theme: root.dt; onClicked: root.close() }
         }
     }

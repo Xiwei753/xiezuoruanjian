@@ -102,7 +102,7 @@ Rectangle {
 
                     Text {
                         text: {
-                            if (model.type === "project") return "📚";
+                            if (model.type === "project") return "[P]";
                             if (model.type === "volume") return "■";
                             if (model.type === "chapter") return "●";
                             return "";

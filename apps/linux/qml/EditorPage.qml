@@ -50,7 +50,7 @@ Rectangle {
         Text {
             anchors.centerIn: parent
             text: qsTr("请在左侧选择或创建一个章节")
-            color: root.appTheme ? root.appTheme.textSecondary : root.palette.text
+            color: root.appTheme ? root.appTheme.textSecondary : "#8C9198"
             font.pixelSize: root.appTheme ? root.appTheme.fontLg : 15
             visible: !root.backendRef || !root.backendRef.has_selected_chapter_prop
         }
@@ -83,7 +83,7 @@ Rectangle {
                     TextArea {
                         id: editorArea
                         width: editorScroll.availableWidth
-                        color: root.appTheme ? root.appTheme.textPrimary : root.palette.text
+                        color: root.appTheme ? root.appTheme.textPrimary : "#E2E2E5"
                         font.pixelSize: {
                             if (root.backendRef && root.backendRef.setting_font_size > 0) {
                                 return root.backendRef.setting_font_size

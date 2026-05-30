@@ -42,7 +42,7 @@ Rectangle {
 
         Text {
             text: qsTr("星图")
-            color: dt ? dt.textPrimary : root.palette.text
+            color: dt ? dt.textPrimary : "#E2E2E5"
             font.pixelSize: dt ? dt.fontTitle : 26
             font.weight: Font.Bold
             Layout.alignment: Qt.AlignHCenter
@@ -50,7 +50,7 @@ Rectangle {
 
         Text {
             text: qsTr("构建你的创作宇宙，可视化人物关系与故事脉络")
-            color: dt ? dt.textSecondary : root.palette.text
+            color: dt ? dt.textSecondary : "#8C9198"
             font.pixelSize: dt ? dt.fontMd : 14
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
@@ -97,20 +97,20 @@ Rectangle {
                         spacing: 2
                         Text {
                             text: modelData.label
-                            color: dt ? dt.textPrimary : root.palette.text
+                            color: dt ? dt.textPrimary : "#E2E2E5"
                             font.pixelSize: dt ? dt.fontMd : 14
                             font.weight: Font.Medium
                         }
                         Text {
                             text: modelData.desc
-                            color: dt ? dt.textMuted : root.palette.text
+                            color: dt ? dt.textMuted : "#8C9198"
                             font.pixelSize: dt ? dt.fontXs : 11
                         }
                     }
 
                     Text {
                         text: "\u2192"
-                        color: dt ? dt.textMuted : root.palette.text
+                        color: dt ? dt.textMuted : "#8C9198"
                         font.pixelSize: dt ? dt.fontLg : 16
                     }
                 }
@@ -120,7 +120,7 @@ Rectangle {
         // Placeholder hint
         Text {
             text: qsTr("完整星图渲染将在后续版本实现")
-            color: dt ? dt.textMuted : root.palette.text
+            color: dt ? dt.textMuted : "#8C9198"
             font.pixelSize: dt ? dt.fontXs : 11
             Layout.alignment: Qt.AlignHCenter
             Layout.topMargin: dt ? dt.sp8 : 8

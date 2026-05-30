@@ -32,7 +32,18 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     continue;
                 }
 
-                // 1. Check for emojis
+                // 1. Check for emojis (including basic Unicode ranges for emojis)
+                let has_emoji = trimmed.chars().any(|c| {
+                    (c >= '\u{1F300}' && c <= '\u{1F9FF}') || // Misc Symbols and Pictographs
+                    (c >= '\u{2600}' && c <= '\u{26FF}') ||   // Misc Symbols
+                    (c >= '\u{2700}' && c <= '\u{27BF}') ||   // Dingbats
+                    (c >= '\u{1F600}' && c <= '\u{1F64F}') || // Emoticons
+                    (c >= '\u{1F680}' && c <= '\u{1F6FF}')    // Transport and Map
+                });
+                if has_emoji {
+                    eprintln!("{}:{}: Found forbidden emoji in line: {}", file_name, line_num, trimmed);
+                    has_errors = true;
+                }
                 for emoji in &forbidden_emojis {
                     if trimmed.contains(emoji) {
                         eprintln!("{}:{}: Found forbidden emoji '{}'", file_name, line_num, emoji);
@@ -40,8 +51,8 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     }
                 }
 
-                // 2. Check for hardcoded dark colors
-                if trimmed.contains("color:") || trimmed.contains("color :") || trimmed.contains("color=") {
+                // 2. Check for hardcoded dark colors and palette.text
+                if trimmed.contains("color:") || trimmed.contains("color :") || trimmed.contains("color=") || trimmed.contains("color :") {
                     let lower = trimmed.to_lowercase();
                     for color in &forbidden_colors {
                         let c = color.to_lowercase();
@@ -49,6 +60,20 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             eprintln!("{}:{}: Found hardcoded dark color '{}'", file_name, line_num, color);
                             has_errors = true;
                         }
+                    }
+                    if trimmed.contains("palette.text") {
+                        eprintln!("{}:{}: Found forbidden palette.text fallback: {}", file_name, line_num, trimmed);
+                        has_errors = true;
+                    }
+                }
+                
+                // Check for anchors.verticalCenter inside Layouts (simple check)
+                if trimmed.contains("anchors.verticalCenter") || trimmed.contains("anchors.centerIn") {
+                    // It's hard to know perfectly if we are in a Layout without parsing, but TopWritingToolbar and WritingWorkspace had these bugs.
+                    // Let's warn if we see it in certain files or globally. For now, we'll flag obvious bad patterns like:
+                    if trimmed.contains("anchors.verticalCenter: parent.verticalCenter") {
+                        eprintln!("{}:{}: Found potentially dangerous anchors.verticalCenter. Use Layout.alignment instead if inside Layout.", file_name, line_num);
+                        has_errors = true;
                     }
                 }
 

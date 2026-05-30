@@ -140,7 +140,7 @@ Rectangle {
                                     if (s === "error" || s === "conflict") return dt ? dt.error : "#E06060";
                                     return dt ? dt.textMuted : "#606470";
                                 }
-                                anchors.verticalCenter: parent.verticalCenter
+                                Layout.alignment: Qt.AlignVCenter
                             }
 
                             Text {
@@ -152,10 +152,10 @@ Rectangle {
                                     if (s === "conflict") return qsTr("冲突");
                                     return qsTr("已配置");
                                 }
-                                color: dt ? dt.onSurfaceVariant : root.palette.text
+                                color: dt ? dt.onSurfaceVariant : "#8C9198"
                                 font.pixelSize: dt ? dt.caption : 12
                                 font.family: dt ? dt.fontFamily : "sans-serif"
-                                anchors.verticalCenter: parent.verticalCenter
+                                Layout.alignment: Qt.AlignVCenter
                                 visible: root.width > 700
                             }
                         }
@@ -180,7 +180,7 @@ Rectangle {
                             id: settingsText
                             anchors.centerIn: parent
                             text: qsTr("设置")
-                            color: dt ? dt.onSurfaceVariant : root.palette.text
+                            color: dt ? dt.onSurfaceVariant : "#8C9198"
                             font.pixelSize: dt ? dt.caption : 12
                         }
 
@@ -206,10 +206,10 @@ Rectangle {
                             spacing: dt ? dt.sp6 : 6
                             Text {
                                 text: qsTr("切换工作区")
-                                color: dt ? dt.onSurfaceVariant : root.palette.text
+                                color: dt ? dt.onSurfaceVariant : "#8C9198"
                                 font.pixelSize: dt ? dt.caption : 12
                                 font.family: dt ? dt.fontFamily : "sans-serif"
-                                anchors.verticalCenter: parent.verticalCenter
+                                Layout.alignment: Qt.AlignVCenter
                                 visible: true
                             }
                         }

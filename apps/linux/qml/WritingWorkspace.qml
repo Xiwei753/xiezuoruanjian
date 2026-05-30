@@ -84,7 +84,7 @@ Rectangle {
             spacing: dt ? dt.sp16 : 16
             Text {
                 text: qsTr("保存被阻止")
-                color: dt ? dt.onSurface : root.palette.text
+                color: dt ? dt.textPrimary : "#E2E2E5"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
@@ -93,7 +93,7 @@ Rectangle {
                 id: emptySaveDialogText
                 Layout.fillWidth: true
                 text: qsTr("检测到异常空内容覆盖，已阻止保存。")
-                color: dt ? dt.onSurfaceVariant : root.palette.text
+                color: dt ? dt.textSecondary : "#8C9198"
                 font.pixelSize: dt ? dt.body : 14
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 wrapMode: Text.Wrap
@@ -180,7 +180,7 @@ Rectangle {
                                 Text {
                                     anchors.centerIn: parent
                                     text: "\u2190"
-                                    color: dt ? dt.onSurfaceVariant : root.palette.text
+                                    color: dt ? dt.textSecondary : "#8C9198"
                                     font.pixelSize: dt ? dt.fontLg : 16
                                 }
 
@@ -195,7 +195,7 @@ Rectangle {
 
                             Text {
                                 text: root.projectTitle || qsTr("作品")
-                                color: dt ? dt.onSurface : root.palette.text
+                                color: dt ? dt.textPrimary : "#E2E2E5"
                                 font.pixelSize: dt ? dt.fontMd : 14
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: Font.DemiBold
@@ -242,8 +242,8 @@ Rectangle {
                                         Rectangle {
                                             width: 6; height: 6
                                             radius: model.itemType === "volume" ? 0 : 3
-                                            color: delegateBg.isSelected ? (dt ? dt.onPrimaryContainer : root.palette.highlightedText) : (dt ? dt.textSecondary : root.palette.text)
-                                            anchors.verticalCenter: parent.verticalCenter
+                                            color: delegateBg.isSelected ? (dt ? dt.onPrimaryContainer : "#001E31") : (dt ? dt.textSecondary : "#8C9198")
+                                            Layout.alignment: Qt.AlignVCenter
                                             opacity: 0.6
                                         }
 
@@ -251,7 +251,7 @@ Rectangle {
                                             text: model.itemTitle || ""
                                             color: delegateBg.isSelected ?
                                                    (dt ? dt.onPrimaryContainer : root.palette.highlightedText) :
-                                                   (dt ? dt.onSurface : root.palette.text)
+                                                   (dt ? dt.textPrimary : "#E2E2E5")
                                             font.pixelSize: dt ? dt.label : 13
                                             font.family: dt ? dt.fontFamily : "sans-serif"
                                             font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
@@ -502,13 +502,13 @@ Rectangle {
                         Rectangle {
                             width: 32; height: 32
                             radius: 16
-                            color: dt ? dt.textSecondary : root.palette.text
+                            color: dt ? dt.textSecondary : "#8C9198"
                             opacity: 0.1
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Text {
                             text: qsTr("选择一个章节开始写作")
-                            color: dt ? dt.textSecondary : root.palette.text
+                            color: dt ? dt.textSecondary : "#8C9198"
                             font.pixelSize: dt ? dt.fontLg : 16
                             Layout.alignment: Qt.AlignHCenter
                         }

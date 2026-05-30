@@ -53,7 +53,7 @@ Rectangle {
             spacing: 12
             visible: selectedNode !== null
 
-            AppText { text: qsTr("标题"); color: dt ? dt.textSecondary : root.palette.text }
+            AppText { text: qsTr("标题"); color: dt ? dt.textSecondary : "#8C9198" }
             AppTextField {
                 id: titleInput
                 Layout.fillWidth: true
@@ -82,7 +82,7 @@ Rectangle {
             spacing: 12
             visible: selectedEdge !== null
 
-            AppText { text: qsTr("标签"); color: dt ? dt.textSecondary : root.palette.text }
+            AppText { text: qsTr("标签"); color: dt ? dt.textSecondary : "#8C9198" }
             AppTextField {
                 id: labelInput
                 Layout.fillWidth: true

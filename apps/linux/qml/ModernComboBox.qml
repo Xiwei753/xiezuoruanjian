@@ -99,7 +99,7 @@ Item {
                            : "transparent"
 
                     Text {
-                        anchors.verticalCenter: parent.verticalCenter
+                        Layout.alignment: Qt.AlignVCenter
                         anchors.left: parent.left
                         anchors.leftMargin: dt ? dt.sp10 : 10
                         text: (root.displayModel && root.displayModel.length > index) ? String(root.displayModel[index]) : String(modelData)

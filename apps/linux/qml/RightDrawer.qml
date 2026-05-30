@@ -206,14 +206,14 @@ Rectangle {
                                     text: "\u2699"
                                     font.pixelSize: dt ? dt.fontSm : 12
                                     color: "#FFFFFF"
-                                    anchors.verticalCenter: parent.verticalCenter
+                                    Layout.alignment: Qt.AlignVCenter
                                 }
                                 Text {
                                     text: qsTr("打开设置")
                                     color: "#FFFFFF"
                                     font.pixelSize: dt ? dt.fontSm : 12
                                     font.weight: Font.Medium
-                                    anchors.verticalCenter: parent.verticalCenter
+                                    Layout.alignment: Qt.AlignVCenter
                                 }
                             }
 

@@ -42,7 +42,7 @@ Dialog {
 
         Text {
             text: qsTr("新建作品")
-            color: theme ? theme.textPrimary : root.palette.text
+            color: theme ? theme.textPrimary : "#E2E2E5"
             font.pixelSize: theme ? theme.subtitle : 18
             font.family: theme ? theme.fontFamily : "sans-serif"
             font.weight: Font.DemiBold

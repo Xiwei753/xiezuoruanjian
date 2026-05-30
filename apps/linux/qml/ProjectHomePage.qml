@@ -118,7 +118,7 @@ Rectangle {
 
             Text {
                 text: qsTr("重命名作品")
-                color: dt ? dt.onSurface : root.palette.text
+                color: dt ? dt.onSurface : "#E2E2E5"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold

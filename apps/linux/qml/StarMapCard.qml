@@ -140,13 +140,13 @@ Rectangle {
                         text: "\u25BC"
                         color: dt ? dt.accentText : "#3D4D9E"
                         font.pixelSize: dt ? dt.fontXs : 11
-                        anchors.verticalCenter: parent.verticalCenter
+                        Layout.alignment: Qt.AlignVCenter
                     }
                     Text {
                         text: (starmapData.childStarmapCount || 0) + " " + qsTr("子星图")
                         color: dt ? dt.accentText : "#3D4D9E"
                         font.pixelSize: dt ? dt.fontXs : 11
-                        anchors.verticalCenter: parent.verticalCenter
+                        Layout.alignment: Qt.AlignVCenter
                     }
                 }
             }
@@ -166,7 +166,7 @@ Rectangle {
                 }
                 color: dt ? dt.textMuted : "#606470"
                 font.pixelSize: dt ? dt.fontXs : 11
-                anchors.verticalCenter: parent.verticalCenter
+                Layout.alignment: Qt.AlignVCenter
             }
         }
     }

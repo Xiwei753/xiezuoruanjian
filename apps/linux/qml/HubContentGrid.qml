@@ -70,14 +70,14 @@ Item {
             }
             Text {
                 text: root.emptyTitle
-                color: dt ? dt.textPrimary : root.palette.text
+                color: dt ? dt.textPrimary : "#E2E2E5"
                 font.pixelSize: dt ? dt.fontXl : 18
                 font.weight: Font.DemiBold
                 anchors.horizontalCenter: parent.horizontalCenter
             }
             Text {
                 text: root.emptySubtitle
-                color: dt ? dt.textSecondary : root.palette.text
+                color: dt ? dt.textSecondary : "#8C9198"
                 font.pixelSize: dt ? dt.fontMd : 14
                 visible: text.length > 0
                 anchors.horizontalCenter: parent.horizontalCenter

@@ -350,8 +350,9 @@ ApplicationWindow {
         modal: true
         width: 400
         height: 220
-        x: (parent ? (parent.width - width) / 2 : 0)
-        y: (parent ? (parent.height - height) / 2 : 0)
+        parent: Overlay.overlay
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
         header: null
 
@@ -405,8 +406,9 @@ ApplicationWindow {
         modal: true
         width: 340
         height: 180
-        x: (parent ? (parent.width - width) / 2 : 0)
-        y: (parent ? (parent.height - height) / 2 : 0)
+        parent: Overlay.overlay
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
         header: null
         ColumnLayout {
@@ -451,8 +453,9 @@ ApplicationWindow {
             title: qsTr("同步设置")
             width: Math.max(360, Math.min(window.width - 80, 720))
             height: Math.max(420, Math.min(window.height - 120, 560))
-            x: (parent ? (parent.width - width) / 2 : 0)
-            y: (parent ? (parent.height - height) / 2 : 0)
+            parent: Overlay.overlay
+            x: Math.round((parent.width - width) / 2)
+            y: Math.round((parent.height - height) / 2)
             background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
 
             header: null
@@ -485,8 +488,9 @@ ApplicationWindow {
         modal: true
         width: 300
         height: 200
-        x: (parent ? (parent.width - width) / 2 : 0)
-        y: (parent ? (parent.height - height) / 2 : 0)
+        parent: Overlay.overlay
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
         title: inputDialog.dialogTitle
 
         background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
