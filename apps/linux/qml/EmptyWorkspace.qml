@@ -25,7 +25,7 @@ Item {
 
     FolderDialog {
         id: createWorkspaceDialog
-        title: "选择或创建空文件夹作为新工作区"
+        title: qsTr("选择或创建空文件夹作为新工作区")
         onAccepted: {
             var path = String(currentFolder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
             path = decodeURIComponent(path);
@@ -35,7 +35,7 @@ Item {
 
     FolderDialog {
         id: openWorkspaceDialog
-        title: "选择已有工作区文件夹"
+        title: qsTr("选择已有工作区文件夹")
         onAccepted: {
             var path = String(currentFolder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
             path = decodeURIComponent(path);
@@ -64,30 +64,33 @@ Item {
             border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
             border.width: 1
 
-            Text {
+            Rectangle {
                 anchors.centerIn: parent
-                text: "\uD83D\uDCD6"
-                font.pixelSize: 28
+                width: 24; height: 24
+                radius: 4
+                color: "transparent"
+                border.color: root.appTheme ? root.appTheme.primary : "#006497"
+                border.width: 2
             }
         }
 
         // Title
         Label {
             Layout.alignment: Qt.AlignHCenter
-            text: "未打开工作区"
+            text: qsTr("未打开工作区")
             font.pixelSize: root.appTheme ? root.appTheme.title : 24
             font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
             font.weight: Font.Bold
-            color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
+            color: root.appTheme ? root.appTheme.textPrimary : root.palette.text
         }
 
         // Description
         Label {
             Layout.alignment: Qt.AlignHCenter
-            text: "选择或创建工作区后开始写作"
+            text: qsTr("选择或创建工作区后开始写作")
             font.pixelSize: root.appTheme ? root.appTheme.body : 14
             font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
-            color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+            color: root.appTheme ? root.appTheme.textSecondary : root.palette.text
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -102,7 +105,7 @@ Item {
 
             AppButton {
                 Layout.fillWidth: true
-                text: "新建工作区"
+                text: qsTr("新建工作区")
                 theme: root.appTheme
                 variant: "primary"
                 onClicked: createWorkspaceDialog.open()
@@ -110,7 +113,7 @@ Item {
 
             AppButton {
                 Layout.fillWidth: true
-                text: "打开工作区"
+                text: qsTr("打开工作区")
                 theme: root.appTheme
                 variant: "secondary"
                 onClicked: openWorkspaceDialog.open()
@@ -126,7 +129,7 @@ Item {
 
             AppButton {
                 Layout.fillWidth: true
-                text: "从 GitHub 同步仓库初始化"
+                text: qsTr("从 GitHub 同步仓库初始化")
                 theme: root.appTheme
                 variant: "text"
                 onClicked: {
@@ -136,10 +139,10 @@ Item {
 
             Label {
                 Layout.fillWidth: true
-                text: "点击后会进入同步页面：配置远端仓库地址、分支、Token，然后点击「选择目录并初始化/克隆」。"
+                text: qsTr("点击后会进入同步页面：配置远端仓库地址、分支、Token，然后点击「选择目录并初始化/克隆」。")
                 font.pixelSize: root.appTheme ? root.appTheme.caption : 12
                 font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
-                color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                color: root.appTheme ? root.appTheme.textSecondary : root.palette.text
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
             }

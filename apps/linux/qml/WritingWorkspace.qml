@@ -83,8 +83,8 @@ Rectangle {
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp16 : 16
             Text {
-                text: "保存被阻止"
-                color: dt ? dt.onSurface : "#1A1C1E"
+                text: qsTr("保存被阻止")
+                color: dt ? dt.onSurface : root.palette.text
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
@@ -92,14 +92,14 @@ Rectangle {
             Text {
                 id: emptySaveDialogText
                 Layout.fillWidth: true
-                text: "检测到异常空内容覆盖，已阻止保存。"
-                color: dt ? dt.onSurfaceVariant : "#42474E"
+                text: qsTr("检测到异常空内容覆盖，已阻止保存。")
+                color: dt ? dt.onSurfaceVariant : root.palette.text
                 font.pixelSize: dt ? dt.body : 14
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 wrapMode: Text.Wrap
             }
             AppButton {
-                text: "确定"
+                text: qsTr("确定")
                 theme: dt
                 variant: "primary"
                 Layout.alignment: Qt.AlignRight
@@ -180,7 +180,7 @@ Rectangle {
                                 Text {
                                     anchors.centerIn: parent
                                     text: "\u2190"
-                                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                                    color: dt ? dt.onSurfaceVariant : root.palette.text
                                     font.pixelSize: dt ? dt.fontLg : 16
                                 }
 
@@ -194,8 +194,8 @@ Rectangle {
                             }
 
                             Text {
-                                text: root.projectTitle || "作品"
-                                color: dt ? dt.onSurface : "#1A1C1E"
+                                text: root.projectTitle || qsTr("作品")
+                                color: dt ? dt.onSurface : root.palette.text
                                 font.pixelSize: dt ? dt.fontMd : 14
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: Font.DemiBold
@@ -239,17 +239,19 @@ Rectangle {
                                         anchors.leftMargin: model.itemType === "chapter" ? (dt ? dt.sp32 : 32) : (dt ? dt.sp12 : 12)
                                         spacing: dt ? dt.sp6 : 6
 
-                                        Text {
-                                            text: model.itemType === "volume" ? "\uD83D\uDCC1" : "\uD83D\uDCC4"
-                                            font.pixelSize: dt ? dt.fontSm : 12
+                                        Rectangle {
+                                            width: 6; height: 6
+                                            radius: model.itemType === "volume" ? 0 : 3
+                                            color: delegateBg.isSelected ? (dt ? dt.onPrimaryContainer : root.palette.highlightedText) : (dt ? dt.textSecondary : root.palette.text)
+                                            anchors.verticalCenter: parent.verticalCenter
                                             opacity: 0.6
                                         }
 
                                         Text {
                                             text: model.itemTitle || ""
                                             color: delegateBg.isSelected ?
-                                                   (dt ? dt.onPrimaryContainer : "#001E31") :
-                                                   (dt ? dt.onSurface : "#1A1C1E")
+                                                   (dt ? dt.onPrimaryContainer : root.palette.highlightedText) :
+                                                   (dt ? dt.onSurface : root.palette.text)
                                             font.pixelSize: dt ? dt.label : 13
                                             font.family: dt ? dt.fontFamily : "sans-serif"
                                             font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
@@ -327,7 +329,7 @@ Rectangle {
                                 font.weight: Font.Bold
                             }
                             Text {
-                                text: "新建卷"
+                                text: qsTr("新建卷")
                                 color: dt ? dt.primary : "#006497"
                                 font.pixelSize: dt ? dt.label : 13
                                 font.family: dt ? dt.fontFamily : "sans-serif"
@@ -353,12 +355,12 @@ Rectangle {
                         property string itemVolumeId: ""
 
                         MenuItem {
-                            text: "新建卷"
+                            text: qsTr("新建卷")
                             visible: treeContextMenu.itemType === "project"
                             onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
                         }
                         MenuItem {
-                            text: "新建章节"
+                            text: qsTr("新建章节")
                             visible: treeContextMenu.itemType === "volume"
                             onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
                         }
@@ -495,14 +497,16 @@ Rectangle {
                         spacing: dt ? dt.sp12 : 12
                         visible: !editorController.chapterId
 
-                        Text {
-                            text: "\uD83D\uDCDD"
-                            font.pixelSize: 40
+                        Rectangle {
+                            width: 32; height: 32
+                            radius: 16
+                            color: dt ? dt.textSecondary : root.palette.text
+                            opacity: 0.1
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Text {
-                            text: "选择一个章节开始写作"
-                            color: dt ? dt.textSecondary : "#9CA0AB"
+                            text: qsTr("选择一个章节开始写作")
+                            color: dt ? dt.textSecondary : root.palette.text
                             font.pixelSize: dt ? dt.fontLg : 16
                             Layout.alignment: Qt.AlignHCenter
                         }

@@ -75,9 +75,9 @@ Rectangle {
 
                     Repeater {
                         model: [
-                            { label: "作品", idx: 0 },
-                            { label: "星图", idx: 1 },
-                            { label: "统计", idx: 2 }
+                            { label: qsTr("作品"), idx: 0 },
+                            { label: qsTr("星图"), idx: 1 },
+                            { label: qsTr("统计"), idx: 2 }
                         ]
 
                         Rectangle {
@@ -93,8 +93,8 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
-                                       (dt ? dt.onPrimaryContainer : "#001E31") :
-                                       (dt ? dt.onSurfaceVariant : "#42474E")
+                                       (dt ? dt.onPrimaryContainer : root.palette.highlightedText) :
+                                       (dt ? dt.onSurfaceVariant : root.palette.text)
                                 font.pixelSize: dt ? dt.label : 13
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
@@ -146,13 +146,13 @@ Rectangle {
                             Text {
                                 text: {
                                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                                    if (s === "success") return "已同步";
-                                    if (s === "syncing") return "同步中";
-                                    if (s === "error") return "同步失败";
-                                    if (s === "conflict") return "冲突";
-                                    return "已配置";
+                                    if (s === "success") return qsTr("已同步");
+                                    if (s === "syncing") return qsTr("同步中");
+                                    if (s === "error") return qsTr("同步失败");
+                                    if (s === "conflict") return qsTr("冲突");
+                                    return qsTr("已配置");
                                 }
-                                color: dt ? dt.onSurfaceVariant : "#42474E"
+                                color: dt ? dt.onSurfaceVariant : root.palette.text
                                 font.pixelSize: dt ? dt.caption : 12
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 anchors.verticalCenter: parent.verticalCenter
@@ -171,15 +171,17 @@ Rectangle {
 
                     // Settings button
                     Rectangle {
-                        width: 40; height: 40
+                        width: settingsText.implicitWidth + 24
+                        height: 40
                         radius: dt ? dt.radiusPill : 999
                         color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                         Text {
+                            id: settingsText
                             anchors.centerIn: parent
-                            text: "\u2699"
-                            color: dt ? dt.onSurfaceVariant : "#42474E"
-                            font.pixelSize: dt ? dt.fontLg : 16
+                            text: qsTr("设置")
+                            color: dt ? dt.onSurfaceVariant : root.palette.text
+                            font.pixelSize: dt ? dt.caption : 12
                         }
 
                         MouseArea {
@@ -203,17 +205,12 @@ Rectangle {
                             anchors.centerIn: parent
                             spacing: dt ? dt.sp6 : 6
                             Text {
-                                text: "\uD83D\uDCC2"
-                                font.pixelSize: dt ? dt.fontMd : 14
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                            Text {
-                                text: "切换工作区"
-                                color: dt ? dt.onSurfaceVariant : "#42474E"
+                                text: qsTr("切换工作区")
+                                color: dt ? dt.onSurfaceVariant : root.palette.text
                                 font.pixelSize: dt ? dt.caption : 12
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 anchors.verticalCenter: parent.verticalCenter
-                                visible: root.width > 700
+                                visible: true
                             }
                         }
 

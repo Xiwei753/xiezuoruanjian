@@ -50,8 +50,8 @@ ComboBox {
     contentItem: Text {
         text: control.displayText
         color: control.enabled
-            ? (control.theme ? control.theme.textPrimary : "#0f172a")
-            : (control.theme ? control.theme.textDisabled : "#94a3b8")
+            ? (control.theme ? control.theme.textPrimary : control.palette.text)
+            : (control.theme ? control.theme.textDisabled : control.palette.placeholderText)
         font.pixelSize: control.theme ? control.theme.label : 13
         font.family: control.theme ? control.theme.fontFamily : "sans-serif"
         leftPadding: control.leftPadding
@@ -74,8 +74,8 @@ ComboBox {
             context.lineTo(width / 2, height)
             context.closePath()
             context.fillStyle = control.enabled
-                ? (control.theme ? control.theme.textSecondary : "#475569")
-                : (control.theme ? control.theme.textDisabled : "#94a3b8")
+                ? (control.theme ? control.theme.textSecondary : control.palette.text)
+                : (control.theme ? control.theme.textDisabled : control.palette.placeholderText)
             context.fill()
         }
     }
@@ -96,13 +96,15 @@ ComboBox {
         width: control.width
         contentItem: Text {
             text: modelData
-            color: control.theme ? control.theme.textPrimary : "#0f172a"
+            color: control.highlightedIndex === index
+                ? (control.theme ? control.theme.onPrimaryContainer : control.palette.highlightedText)
+                : (control.theme ? control.theme.textPrimary : control.palette.text)
             font.pixelSize: control.theme ? control.theme.fontMd : 13
             verticalAlignment: Text.AlignVCenter
         }
         background: Rectangle {
             color: control.highlightedIndex === index
-                ? (control.theme ? control.theme.primaryContainer : "#dbeafe")
+                ? (control.theme ? control.theme.primaryContainer : control.palette.highlight)
                 : "transparent"
         }
     }

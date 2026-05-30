@@ -223,7 +223,7 @@ QtObject {
                 + ", textAreaLen=" + (read ? read.textAreaLength : -1);
         logWriterWarning("empty_save_blocked", details);
         if (backendRef) {
-            backendRef.save_status = "已阻止空内容保存";
+            backendRef.save_status = qsTr("已阻止空内容保存");
         }
         autoSaveTimer.stop();
         pendingAutoSaveAfterGuard = false;
@@ -258,7 +258,7 @@ QtObject {
         } else {
             if (result && result.code === "EMPTY_OVERWRITE_BLOCKED") {
                 logWriterWarning("empty_save_blocked", "blocked by core: " + (result.message || ""));
-                controller.emptySaveBlocked(result.message || "检测到异常空内容覆盖，已阻止保存。");
+                controller.emptySaveBlocked(result.message || qsTr("检测到异常空内容覆盖，已阻止保存。"));
             }
             return false;
         }

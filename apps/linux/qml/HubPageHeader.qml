@@ -30,7 +30,7 @@ Item {
 
             Text {
                 text: root.title
-                color: dt ? dt.onBackground : "#1A1C1E"
+                color: dt ? dt.onBackground : root.palette.text
                 font.pixelSize: dt ? dt.fontTitle : 26
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.Bold

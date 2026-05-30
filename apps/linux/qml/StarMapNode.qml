@@ -132,15 +132,15 @@ Rectangle {
 
     function getKindLabel(k) {
         switch(k) {
-            case "Note": return "笔记"
-            case "Chapter": return "章节"
-            case "Character": return "角色"
-            case "Location": return "地点"
-            case "Event": return "事件"
-            case "Concept": return "概念"
-            case "Project": return "作品"
-            case "Volume": return "卷"
-            case "Custom": return "自定义"
+            case "Note": return qsTr("笔记")
+            case "Chapter": return qsTr("章节")
+            case "Character": return qsTr("角色")
+            case "Location": return qsTr("地点")
+            case "Event": return qsTr("事件")
+            case "Concept": return qsTr("概念")
+            case "Project": return qsTr("作品")
+            case "Volume": return qsTr("卷")
+            case "Custom": return qsTr("自定义")
             default: return k
         }
     }

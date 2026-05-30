@@ -82,7 +82,7 @@ Rectangle {
         Text {
             Layout.fillWidth: true
             Layout.topMargin: dt ? dt.sp12 : 12
-            text: root.title || "未命名作品"
+            text: root.title || qsTr("未命名作品")
             color: dt ? dt.textPrimary : "#E2E4E9"
             font.pixelSize: dt ? dt.subtitle : 18
             font.family: dt ? dt.fontFamily : "sans-serif"
@@ -109,7 +109,7 @@ Rectangle {
                     font.weight: Font.Medium
                 }
                 Text {
-                    text: "总字数"
+                    text: qsTr("总字数")
                     color: dt ? dt.textMuted : "#606470"
                     font.pixelSize: dt ? dt.caption : 12
                     font.family: dt ? dt.fontFamily : "sans-serif"
@@ -127,7 +127,7 @@ Rectangle {
                     font.weight: Font.Medium
                 }
                 Text {
-                    text: "今日"
+                    text: qsTr("今日")
                     color: dt ? dt.textMuted : "#606470"
                     font.pixelSize: dt ? dt.caption : 12
                     font.family: dt ? dt.fontFamily : "sans-serif"

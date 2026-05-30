@@ -15,7 +15,7 @@ import QtQuick.Layouts
 
 Dialog {
     id: root
-    title: "新建作品"
+    title: qsTr("新建作品")
     modal: true
     x: (parent ? (parent.width - width) / 2 : 0)
     y: (parent ? (parent.height - height) / 2 : 0)
@@ -41,15 +41,15 @@ Dialog {
         spacing: theme ? theme.sp16 : 16
 
         Text {
-            text: "新建作品"
-            color: theme ? theme.textPrimary : "#1A1C1E"
+            text: qsTr("新建作品")
+            color: theme ? theme.textPrimary : root.palette.text
             font.pixelSize: theme ? theme.subtitle : 18
             font.family: theme ? theme.fontFamily : "sans-serif"
             font.weight: Font.DemiBold
         }
 
         Text {
-            text: "请输入作品名称："
+            text: qsTr("请输入作品名称：")
             color: theme ? theme.onSurfaceVariant : "#42474E"
             font.pixelSize: theme ? theme.body : 14
             font.family: theme ? theme.fontFamily : "sans-serif"
@@ -59,7 +59,7 @@ Dialog {
             id: titleField
             Layout.fillWidth: true
             theme: root.theme
-            placeholderText: "作品名称"
+            placeholderText: qsTr("作品名称")
             onAccepted: {
                 if (text.trim() !== "") {
                     root.accept();
@@ -70,8 +70,8 @@ Dialog {
         RowLayout {
             Layout.fillWidth: true
             Item { Layout.fillWidth: true }
-            AppButton { text: "取消"; theme: root.theme; variant: "text"; onClicked: root.reject() }
-            AppButton { text: "创建"; theme: root.theme; variant: "primary"; onClicked: { if (titleField.text.trim() !== "") root.accept() } }
+            AppButton { text: qsTr("取消"); theme: root.theme; variant: "text"; onClicked: root.reject() }
+            AppButton { text: qsTr("创建"); theme: root.theme; variant: "primary"; onClicked: { if (titleField.text.trim() !== "") root.accept() } }
         }
     }
 

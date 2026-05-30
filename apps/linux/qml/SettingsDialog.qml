@@ -68,8 +68,8 @@ Dialog {
             anchors.fill: parent
             anchors.leftMargin: dt ? dt.sp24 : 24
             anchors.rightMargin: dt ? dt.sp16 : 16
-            Text { text: "设置"; color: dt ? dt.textPrimary : "#E2E4E9"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
-            ToolbarButton { text: "关闭"; theme: root.dt; onClicked: root.close() }
+            Text { text: qsTr("设置"); color: dt ? dt.textPrimary : root.palette.text; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
+            ToolbarButton { text: qsTr("关闭"); theme: root.dt; onClicked: root.close() }
         }
     }
 
@@ -91,13 +91,13 @@ Dialog {
 
             SettingsSection {
                 dt: root.dt
-                title: "外观"
+                title: qsTr("外观")
                 Layout.fillWidth: true
                 AppSlider {
                     id: fontSizeSlider
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: "字体大小"
+                    label: qsTr("字体大小")
                     valueText: Math.round(value) + " px"
                     from: 12.0
                     to: 32.0
@@ -108,7 +108,7 @@ Dialog {
                     id: lineSpacingSlider
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: "行距倍数"
+                    label: qsTr("行距倍数")
                     valueText: Number(value).toFixed(1) + "x"
                     from: 1.0
                     to: 3.0
@@ -117,12 +117,12 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
-                    title: "主题模式"
-                    description: "切换系统、浅色或深色"
+                    title: qsTr("主题模式")
+                    description: qsTr("切换系统、浅色或深色")
                     ModernComboBox {
                         id: themeCombo
                         dt: root.dt
-                        model: ["跟随系统", "浅色", "深色"]
+                        model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
                         onActivated: function(index) {
                             if (!backendRef || root.updatingValues) return
                             backendRef.setting_theme_mode = ["system", "light", "dark"][index]
@@ -134,12 +134,12 @@ Dialog {
 
             SettingsSection {
                 dt: root.dt
-                title: "编辑器行为"
+                title: qsTr("编辑器行为")
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
-                    title: "打字动画"
-                    description: "输入时显示动态效果"
+                    title: qsTr("打字动画")
+                    description: qsTr("输入时显示动态效果")
                     clickable: true
                     onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
                     ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }
@@ -148,7 +148,7 @@ Dialog {
                     id: typingAnimDuration
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: "打字动画持续时间"
+                    label: qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
                     from: 0
                     to: 240
@@ -157,8 +157,8 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
-                    title: "平滑光标"
-                    description: "光标移动更顺滑"
+                    title: qsTr("平滑光标")
+                    description: qsTr("光标移动更顺滑")
                     clickable: true
                     onClicked: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", !smoothCursor.checked)
                     ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", v) } }
@@ -167,7 +167,7 @@ Dialog {
                     id: smoothCursorDuration
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: "平滑光标持续时间"
+                    label: qsTr("平滑光标持续时间")
                     valueText: Math.round(value) + " ms"
                     from: 0
                     to: 240
@@ -176,8 +176,8 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
-                    title: "自动首行缩进"
-                    description: "回车时自动添加缩进"
+                    title: qsTr("自动首行缩进")
+                    description: qsTr("回车时自动添加缩进")
                     clickable: true
                     onClicked: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", !autoIndent.checked)
                     ModernSwitch { id: autoIndent; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", v) } }
@@ -186,8 +186,8 @@ Dialog {
                     id: autoIndentWidth
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: "首行缩进宽度"
-                    valueText: Number(value).toFixed(1) + " 字符"
+                    label: qsTr("首行缩进宽度")
+                    valueText: Number(value).toFixed(1) + qsTr(" 字符")
                     from: 0.0
                     to: 8.0
                     stepSize: 0.5
@@ -197,12 +197,12 @@ Dialog {
 
             SettingsSection {
                 dt: root.dt
-                title: "保存"
+                title: qsTr("保存")
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
-                    title: "自动保存"
-                    description: "编辑时自动保存到本地"
+                    title: qsTr("自动保存")
+                    description: qsTr("编辑时自动保存到本地")
                     clickable: true
                     onClicked: root.setSwitchValue(autoSave, "setting_auto_save_enabled", !autoSave.checked)
                     ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoSave, "setting_auto_save_enabled", v) } }
@@ -211,8 +211,8 @@ Dialog {
                     id: autoSaveDelay
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: "自动保存延迟"
-                    valueText: Math.round(value) + " 秒"
+                    label: qsTr("自动保存延迟")
+                    valueText: Math.round(value) + qsTr(" 秒")
                     from: 1
                     to: 10
                     stepSize: 1
@@ -222,17 +222,17 @@ Dialog {
 
             SettingsSection {
                 dt: root.dt
-                title: "同步"
+                title: qsTr("同步")
                 Layout.fillWidth: true
-                SettingsRow { dt: root.dt; title: "同步配置"; description: "在同步页面管理仓库与鉴权" }
+                SettingsRow { dt: root.dt; title: qsTr("同步配置"); description: qsTr("在同步页面管理仓库与鉴权") }
             }
 
             SettingsSection {
                 dt: root.dt
-                title: "统计"
+                title: qsTr("统计")
                 Layout.fillWidth: true
-                SettingsRow { dt: root.dt; title: "统计开关"; description: "统计功能入口（占位）" }
-                SettingsRow { dt: root.dt; title: "清理本地统计"; description: "清理入口（占位）" }
+                SettingsRow { dt: root.dt; title: qsTr("统计开关"); description: qsTr("统计功能入口（占位）") }
+                SettingsRow { dt: root.dt; title: qsTr("清理本地统计"); description: qsTr("清理入口（占位）") }
             }
 
             SettingsSection {
@@ -242,8 +242,8 @@ Dialog {
                 visible: root.backendRef ? root.backendRef.ai_available : false
                 SettingsRow {
                     dt: root.dt
-                    title: "启用 AI 功能"
-                    description: "控制 AI 功能入口显示"
+                    title: qsTr("启用 AI 功能")
+                    description: qsTr("控制 AI 功能入口显示")
                     clickable: true
                     onClicked: root.setSwitchValue(aiSwitch, "ai_enabled", !aiSwitch.checked)
                     ModernSwitch { id: aiSwitch; dt: root.dt; onToggled: function(v) { root.setSwitchValue(aiSwitch, "ai_enabled", v) } }

@@ -29,7 +29,7 @@ Rectangle {
 
     function val(obj, key) { var v = obj && obj[key] !== undefined ? Number(obj[key]) : 0; return isNaN(v) ? 0 : v }
     function formatNum(n) { return Number(n || 0).toLocaleString() }
-    function formatDuration(seconds) { var s = Math.max(0, Number(seconds || 0)); var h = Math.floor(s / 3600); var m = Math.floor((s % 3600) / 60); return h > 0 ? (h + "时" + m + "分") : (m + "分") }
+    function formatDuration(seconds) { var s = Math.max(0, Number(seconds || 0)); var h = Math.floor(s / 3600); var m = Math.floor((s % 3600) / 60); return h > 0 ? (h + qsTr("时") + m + qsTr("分")) : (m + qsTr("分")) }
 
     function loadStats() {
         if (!backendRef) return
@@ -58,7 +58,7 @@ Rectangle {
     HubPageFrame {
         anchors.fill: parent
         dt: root.dt
-        headerData: [ HubPageHeader { anchors.fill: parent; dt: root.dt; title: "统计"; subtitle: "追踪你的写作节奏与习惯" } ]
+        headerData: [ HubPageHeader { anchors.fill: parent; dt: root.dt; title: qsTr("统计"); subtitle: qsTr("追踪你的写作节奏与习惯") } ]
 
         DashboardGrid {
             id: dashboard
@@ -70,10 +70,10 @@ Rectangle {
                 columns: dashboard.wide ? 4 : (dashboard.medium ? 2 : 1)
                 columnSpacing: dashboard.gap
                 rowSpacing: dashboard.gap
-                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "今日纯输入"; value: formatNum(val(todayStats, "total_human_typed_chars")); caption: "字" }
-                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本周纯输入"; value: formatNum(val(weekStats, "total_human_typed_chars")); caption: "字" }
-                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本月纯输入"; value: formatNum(val(monthStats, "total_human_typed_chars")); caption: "字" }
-                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: "本周活跃时长"; value: formatDuration(val(weekStats, "total_active_seconds")); caption: "活跃写作" }
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("今日纯输入"); value: formatNum(val(todayStats, "total_human_typed_chars")); caption: qsTr("字") }
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("本周纯输入"); value: formatNum(val(weekStats, "total_human_typed_chars")); caption: qsTr("字") }
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("本月纯输入"); value: formatNum(val(monthStats, "total_human_typed_chars")); caption: qsTr("字") }
+                StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("本周活跃时长"); value: formatDuration(val(weekStats, "total_active_seconds")); caption: qsTr("活跃写作") }
             }
 
             GridLayout {
@@ -84,19 +84,19 @@ Rectangle {
 
                 DashboardSection {
                     dt: root.dt
-                    title: "速度曲线"
+                    title: qsTr("速度曲线")
                     Layout.fillWidth: true
                     Layout.columnSpan: dashboard.wide ? 2 : 1
-                    Text { text: speedCurve.length > 0 ? ("已记录 " + speedCurve.length + " 段") : "暂无数据"; color: dt ? dt.textPrimary : "#E2E4E9" }
+                    Text { text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: dt ? dt.textPrimary : root.palette.text }
                 }
 
                 DashboardSection {
                     dt: root.dt
-                    title: "设备统计"
+                    title: qsTr("设备统计")
                     Layout.fillWidth: true
                     Repeater {
-                        model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: "暂无数据", typed_chars: 0 }]
-                        delegate: Text { text: (modelData.device_name || "未知设备") + "  " + formatNum(modelData.typed_chars || 0); color: dt ? dt.textSecondary : "#9CA0AB" }
+                        model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: qsTr("暂无数据"), typed_chars: 0 }]
+                        delegate: Text { text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt ? dt.textSecondary : root.palette.text }
                     }
                 }
             }
@@ -109,21 +109,21 @@ Rectangle {
 
                 DashboardSection {
                     dt: root.dt
-                    title: "作品排行"
+                    title: qsTr("作品排行")
                     Layout.fillWidth: true
                     Repeater {
-                        model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: "暂无数据", human_typed_chars: 0 }]
-                        delegate: Text { text: (index + 1) + ". " + (modelData.project_title || "未命名") + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E4E9" }
+                        model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: qsTr("暂无数据"), human_typed_chars: 0 }]
+                        delegate: Text { text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : root.palette.text }
                     }
                 }
 
                 DashboardSection {
                     dt: root.dt
-                    title: "章节排行"
+                    title: qsTr("章节排行")
                     Layout.fillWidth: true
                     Repeater {
-                        model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: "暂无数据", human_typed_chars: 0 }]
-                        delegate: Text { text: (index + 1) + ". " + (modelData.chapter_title || "未命名") + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E4E9" }
+                        model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: qsTr("暂无数据"), human_typed_chars: 0 }]
+                        delegate: Text { text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : root.palette.text }
                     }
                 }
             }

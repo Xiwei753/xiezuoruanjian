@@ -41,16 +41,16 @@ Rectangle {
         }
 
         Text {
-            text: "星图"
-            color: dt ? dt.textPrimary : "#E2E4E9"
+            text: qsTr("星图")
+            color: dt ? dt.textPrimary : root.palette.text
             font.pixelSize: dt ? dt.fontTitle : 26
             font.weight: Font.Bold
             Layout.alignment: Qt.AlignHCenter
         }
 
         Text {
-            text: "构建你的创作宇宙，可视化人物关系与故事脉络"
-            color: dt ? dt.textSecondary : "#9CA0AB"
+            text: qsTr("构建你的创作宇宙，可视化人物关系与故事脉络")
+            color: dt ? dt.textSecondary : root.palette.text
             font.pixelSize: dt ? dt.fontMd : 14
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
@@ -61,13 +61,13 @@ Rectangle {
 
         // Feature cards
         Repeater {
-            model: ListModel {
-                ListElement { label: "作品宇宙"; desc: "整体世界观与核心设定"; icon: "\uD83C\uDF0F" }
-                ListElement { label: "人物关系"; desc: "角色之间的关联与冲突"; icon: "\uD83D\uDC65" }
-                ListElement { label: "地点"; desc: "故事发生的场景与空间"; icon: "\uD83D\uDDFA" }
-                ListElement { label: "事件"; desc: "推动剧情的关键事件链"; icon: "\u26A1" }
-                ListElement { label: "伏笔"; desc: "埋设与回收的叙事线索"; icon: "\uD83D\uDD0D" }
-            }
+            model: [
+                { label: qsTr("作品宇宙"), desc: qsTr("整体世界观与核心设定"), icon: "" },
+                { label: qsTr("人物关系"), desc: qsTr("角色之间的关联与冲突"), icon: "" },
+                { label: qsTr("地点"), desc: qsTr("故事发生的场景与空间"), icon: "" },
+                { label: qsTr("事件"), desc: qsTr("推动剧情的关键事件链"), icon: "" },
+                { label: qsTr("伏笔"), desc: qsTr("埋设与回收的叙事线索"), icon: "" }
+            ]
 
             Rectangle {
                 Layout.fillWidth: true
@@ -87,7 +87,7 @@ Rectangle {
 
                         Text {
                             anchors.centerIn: parent
-                            text: model.icon
+                            text: modelData.icon
                             font.pixelSize: 18
                         }
                     }
@@ -96,21 +96,21 @@ Rectangle {
                         Layout.fillWidth: true
                         spacing: 2
                         Text {
-                            text: model.label
-                            color: dt ? dt.textPrimary : "#E2E4E9"
+                            text: modelData.label
+                            color: dt ? dt.textPrimary : root.palette.text
                             font.pixelSize: dt ? dt.fontMd : 14
                             font.weight: Font.Medium
                         }
                         Text {
-                            text: model.desc
-                            color: dt ? dt.textMuted : "#606470"
+                            text: modelData.desc
+                            color: dt ? dt.textMuted : root.palette.text
                             font.pixelSize: dt ? dt.fontXs : 11
                         }
                     }
 
                     Text {
                         text: "\u2192"
-                        color: dt ? dt.textMuted : "#606470"
+                        color: dt ? dt.textMuted : root.palette.text
                         font.pixelSize: dt ? dt.fontLg : 16
                     }
                 }
@@ -119,8 +119,8 @@ Rectangle {
 
         // Placeholder hint
         Text {
-            text: "完整星图渲染将在后续版本实现"
-            color: dt ? dt.textMuted : "#606470"
+            text: qsTr("完整星图渲染将在后续版本实现")
+            color: dt ? dt.textMuted : root.palette.text
             font.pixelSize: dt ? dt.fontXs : 11
             Layout.alignment: Qt.AlignHCenter
             Layout.topMargin: dt ? dt.sp8 : 8

@@ -420,7 +420,7 @@ Item {
 
     Text {
         anchors.centerIn: parent
-        text: "还没有节点，点击新增节点开始构建星图"
+        text: qsTr("还没有节点，点击新增节点开始构建星图")
         color: dt ? dt.textSecondary : "#9CA0AB"
         font.pixelSize: 16
         visible: nodesModel.length === 0
@@ -539,7 +539,7 @@ Item {
 
         MenuItem {
             id: bgMenuItem1
-            text: "新建节点"
+            text: qsTr("新建节点")
             contentItem: Text {
                 text: bgMenuItem1.text
                 color: bgMenuItem1.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.textPrimary : "#E2E4E9")
@@ -569,7 +569,7 @@ Item {
 
         MenuItem {
             id: nodeMenuItem1
-            text: "重命名"
+            text: qsTr("重命名")
             contentItem: Text {
                 text: nodeMenuItem1.text
                 color: nodeMenuItem1.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.textPrimary : "#E2E4E9")
@@ -590,7 +590,7 @@ Item {
 
         MenuItem {
             id: nodeMenuItem2
-            text: "删除节点"
+            text: qsTr("删除节点")
             contentItem: Text {
                 text: nodeMenuItem2.text
                 color: nodeMenuItem2.hovered ? "#FF4D4D" : (dt ? dt.textPrimary : "#E2E4E9")
@@ -623,7 +623,7 @@ Item {
 
         MenuItem {
             id: edgeMenuItem1
-            text: "重命名连线"
+            text: qsTr("重命名连线")
             contentItem: Text {
                 text: edgeMenuItem1.text
                 color: edgeMenuItem1.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.textPrimary : "#E2E4E9")
@@ -644,7 +644,7 @@ Item {
 
         MenuItem {
             id: edgeMenuItem2
-            text: "删除连线"
+            text: qsTr("删除连线")
             contentItem: Text {
                 text: edgeMenuItem2.text
                 color: edgeMenuItem2.hovered ? "#FF4D4D" : (dt ? dt.textPrimary : "#E2E4E9")
@@ -694,7 +694,7 @@ Item {
                 spacing: 16
 
                 Text {
-                    text: renameDialog.targetType === "node" ? "修改节点标题" : "修改连线标签"
+                    text: renameDialog.targetType === "node" ? qsTr("修改节点标题") : qsTr("修改连线标签")
                     font.pixelSize: 16
                     font.bold: true
                     color: dt ? dt.textPrimary : "#E2E4E9"
@@ -726,7 +726,7 @@ Item {
 
                     Button {
                         id: cancelBtn
-                        text: "取消"
+                        text: qsTr("取消")
                         onClicked: renameDialog.close()
                         contentItem: Text {
                             text: cancelBtn.text
@@ -742,7 +742,7 @@ Item {
 
                     Button {
                         id: confirmBtn
-                        text: "确定"
+                        text: qsTr("确定")
                         onClicked: renameDialog.confirm()
                         contentItem: Text {
                             text: confirmBtn.text

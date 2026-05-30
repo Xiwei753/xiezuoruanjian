@@ -62,7 +62,7 @@ Rectangle {
                 }
                 Text {
                     text: Math.round(root.currentFontSize) + "px"
-                    color: dt ? dt.onSurface : "#1A1C1E"
+                    color: dt ? dt.onSurface : root.palette.text
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
@@ -107,8 +107,8 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                    text: "排版设置"
-                    color: dt ? dt.onSurface : "#1A1C1E"
+                    text: qsTr("排版设置")
+                    color: dt ? dt.onSurface : root.palette.text
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
@@ -152,7 +152,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                    text: "一键排版"
+                    text: qsTr("一键排版")
                     color: dt ? dt.onSurfaceVariant : "#42474E"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
@@ -190,7 +190,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                    text: "星图"
+                    text: qsTr("星图")
                     color: dt ? dt.onSurfaceVariant : "#42474E"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
@@ -226,7 +226,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                    text: "统计"
+                    text: qsTr("统计")
                     color: dt ? dt.onSurfaceVariant : "#42474E"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
@@ -274,7 +274,7 @@ Rectangle {
             spacing: dt ? dt.sp12 : 12
 
             Text {
-                text: "字号"
+                text: qsTr("字号")
                 color: dt ? dt.textPrimary : "#E2E4E9"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
@@ -378,7 +378,7 @@ Rectangle {
             spacing: dt ? dt.sp12 : 12
 
             Text {
-                text: "排版设置"
+                text: qsTr("排版设置")
                 color: dt ? dt.textPrimary : "#E2E4E9"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
@@ -389,7 +389,7 @@ Rectangle {
             ColumnLayout {
                 spacing: dt ? dt.sp6 : 6
                 Text {
-                    text: "行距"
+                    text: qsTr("行距")
                     color: dt ? dt.textSecondary : "#9CA0AB"
                     font.pixelSize: dt ? dt.fontSm : 12
                 }
@@ -448,13 +448,13 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 2
                     Text {
-                        text: "首行缩进"
-                        color: dt ? dt.textPrimary : "#E2E4E9"
+                        text: qsTr("首行缩进")
+                        color: dt ? dt.textPrimary : root.palette.text
                         font.pixelSize: dt ? dt.fontMd : 14
                     }
                     Text {
-                        text: "段落开头缩进两个字符"
-                        color: dt ? dt.textMuted : "#606470"
+                        text: qsTr("段落开头缩进两个字符")
+                        color: dt ? dt.textMuted : root.palette.text
                         font.pixelSize: dt ? dt.fontXs : 11
                     }
                 }

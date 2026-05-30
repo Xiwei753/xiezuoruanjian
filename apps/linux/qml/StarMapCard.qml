@@ -64,7 +64,7 @@ Rectangle {
                 spacing: 2
 
                 Text {
-                    text: starmapData.title || "未命名星图"
+                    text: starmapData.title || qsTr("未命名星图")
                     color: dt ? dt.textPrimary : "#E2E4E9"
                     font.pixelSize: dt ? (root.isChild ? dt.fontSm : dt.fontMd) : 14
                     font.weight: Font.DemiBold
@@ -75,9 +75,9 @@ Rectangle {
 
                 Text {
                     text: {
-                        if (starmapData.isMainForProject) return "主星图";
-                        if (starmapData.projectId) return "已绑定";
-                        return "独立星图";
+                        if (starmapData.isMainForProject) return qsTr("主星图");
+                        if (starmapData.projectId) return qsTr("已绑定");
+                        return qsTr("独立星图");
                     }
                     color: starmapData.isMainForProject ?
                            (dt ? dt.accent : "#7B8CDE") :
@@ -94,9 +94,9 @@ Rectangle {
 
             Repeater {
                 model: [
-                    { label: "节点", value: starmapData.nodeCount || 0 },
-                    { label: "关系", value: starmapData.edgeCount || 0 },
-                    { label: "链接", value: starmapData.linkedChapterCount || 0 }
+                    { label: qsTr("节点"), value: starmapData.nodeCount || 0 },
+                    { label: qsTr("关系"), value: starmapData.edgeCount || 0 },
+                    { label: qsTr("链接"), value: starmapData.linkedChapterCount || 0 }
                 ]
 
                 Column {
@@ -143,7 +143,7 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                     }
                     Text {
-                        text: (starmapData.childStarmapCount || 0) + " 子星图"
+                        text: (starmapData.childStarmapCount || 0) + " " + qsTr("子星图")
                         color: dt ? dt.accentText : "#3D4D9E"
                         font.pixelSize: dt ? dt.fontXs : 11
                         anchors.verticalCenter: parent.verticalCenter
@@ -159,10 +159,10 @@ Rectangle {
                     var d = new Date(starmapData.updatedAt);
                     var now = new Date();
                     var diff = now - d;
-                    if (diff < 60000) return "刚刚";
-                    if (diff < 3600000) return Math.floor(diff / 60000) + "分钟前";
-                    if (diff < 86400000) return Math.floor(diff / 3600000) + "小时前";
-                    return Math.floor(diff / 86400000) + "天前";
+                    if (diff < 60000) return qsTr("刚刚");
+                    if (diff < 3600000) return Math.floor(diff / 60000) + qsTr("分钟前");
+                    if (diff < 86400000) return Math.floor(diff / 3600000) + qsTr("小时前");
+                    return Math.floor(diff / 86400000) + qsTr("天前");
                 }
                 color: dt ? dt.textMuted : "#606470"
                 font.pixelSize: dt ? dt.fontXs : 11

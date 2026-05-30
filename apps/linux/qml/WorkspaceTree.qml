@@ -103,8 +103,8 @@ Rectangle {
                     Text {
                         text: {
                             if (model.type === "project") return "📚";
-                            if (model.type === "volume") return "📁";
-                            if (model.type === "chapter") return "📄";
+                            if (model.type === "volume") return "■";
+                            if (model.type === "chapter") return "●";
                             return "";
                         }
                         color: root.theme ? root.theme.textMain : "#E0E0E0"
@@ -147,7 +147,7 @@ Rectangle {
     Text {
         anchors.centerIn: parent
         visible: treeModel.count === 0
-        text: "暂无作品"
+        text: qsTr("暂无作品")
         color: theme ? theme.textDim : "#808080"
         font.pixelSize: 14
     }
@@ -157,7 +157,7 @@ Rectangle {
         property var itemData: null
 
         MenuItem {
-            text: "新建卷"
+            text: qsTr("新建卷")
             visible: contextMenu.itemData && contextMenu.itemData.type === "project"
             onTriggered: {
                 if (contextMenu.itemData) {
@@ -169,7 +169,7 @@ Rectangle {
             }
         }
         MenuItem {
-            text: "新建章节"
+            text: qsTr("新建章节")
             visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
             onTriggered: {
                 if (contextMenu.itemData) {
@@ -184,7 +184,7 @@ Rectangle {
             visible: contextMenu.itemData && (contextMenu.itemData.type === "project" || contextMenu.itemData.type === "volume")
         }
         MenuItem {
-            text: "重命名"
+            text: qsTr("重命名")
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
@@ -195,7 +195,7 @@ Rectangle {
                         if (typeof window !== "undefined" && typeof window.debugError === "function") {
                             window.debugError("tree", "rename_failed", "missing id");
                         }
-                        root.showError("重命名失败：缺失节点 ID");
+                        root.showError(qsTr("重命名失败：缺失节点 ID"));
                         return;
                     }
                     root.renameItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);
@@ -203,7 +203,7 @@ Rectangle {
             }
         }
         MenuItem {
-            text: "删除"
+            text: qsTr("删除")
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
@@ -215,21 +215,21 @@ Rectangle {
                         if (typeof window !== "undefined" && typeof window.debugError === "function") {
                             window.debugError("tree", "delete_failed", "missing project id");
                         }
-                        root.showError("删除失败：缺失项目 ID");
+                        root.showError(qsTr("删除失败：缺失项目 ID"));
                         return;
                     }
                     if (data.type === "volume" && (!data.projectIdForAction || !data.volumeIdForAction)) {
                         if (typeof window !== "undefined" && typeof window.debugError === "function") {
                             window.debugError("tree", "delete_failed", "missing volume ids");
                         }
-                        root.showError("删除失败：缺失卷的归属 ID");
+                        root.showError(qsTr("删除失败：缺失卷的归属 ID"));
                         return;
                     }
                     if (data.type === "chapter" && (!data.projectIdForAction || !data.volumeIdForAction || !data.chapterIdForAction)) {
                         if (typeof window !== "undefined" && typeof window.debugError === "function") {
                             window.debugError("tree", "delete_failed", "missing chapter ids");
                         }
-                        root.showError("删除失败：缺失章节的归属 ID");
+                        root.showError(qsTr("删除失败：缺失章节的归属 ID"));
                         return;
                     }
                     root.deleteItem(data.type, data.projectIdForAction, data.volumeIdForAction, data.chapterIdForAction, data.title);

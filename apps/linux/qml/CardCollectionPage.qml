@@ -22,7 +22,7 @@ Item {
     property Component delegate: null
     property int cardHeight: 220
     property int minCardWidth: 280
-    property string emptyTitle: "暂无数据"
+    property string emptyTitle: qsTr("暂无数据")
     property string emptySubtitle: ""
     property string emptyIcon: ""
     signal actionClicked()

@@ -48,7 +48,7 @@ QtObject {
     }
 
     function emitError(message) {
-        errorMessage = message || "操作失败";
+        errorMessage = message || qsTr("操作失败");
         errorRaised(errorMessage);
     }
 
@@ -56,7 +56,7 @@ QtObject {
         try {
             return JSON.parse(raw);
         } catch (e) {
-            emitError((fallbackMessage || "解析后端返回数据失败") + ": " + e);
+            emitError((fallbackMessage || qsTr("解析后端返回数据失败")) + ": " + e);
             return null;
         }
     }
@@ -70,7 +70,7 @@ QtObject {
     function refreshState(fallbackMessage) {
         var projectApi = projectBackendRef || backendRef;
         if (!projectApi) return;
-        var state = parseJson(projectApi.refresh_app_state_json(), fallbackMessage || "刷新应用状态失败");
+        var state = parseJson(projectApi.refresh_app_state_json(), fallbackMessage || qsTr("刷新应用状态失败"));
         if (state) applyState(state);
     }
 
@@ -80,12 +80,12 @@ QtObject {
         if (!workspaceApi) return;
         if (appApi) appApi.query_system_color_scheme();
         workspaceApi.try_restore_last_workspace();
-        refreshState("恢复工作区失败");
+        refreshState(qsTr("恢复工作区失败"));
     }
 
     function openWriting(projectId, projectTitle) {
         writingProjectId = projectId || "";
-        writingProjectTitle = projectTitle || "作品";
+        writingProjectTitle = projectTitle || qsTr("作品");
         starmapId = "";
         starmapTitle = "";
         route = "writing";
@@ -93,7 +93,7 @@ QtObject {
 
     function openStarmap(id, title) {
         starmapId = id || "";
-        starmapTitle = title || "星图编辑器";
+        starmapTitle = title || qsTr("星图编辑器");
         writingProjectId = "";
         writingProjectTitle = "";
         route = "starmap";
@@ -105,7 +105,7 @@ QtObject {
         writingProjectTitle = "";
         starmapId = "";
         starmapTitle = "";
-        refreshState("返回工作台失败");
+        refreshState(qsTr("返回工作台失败"));
     }
 
     function switchWorkspace() {
@@ -113,7 +113,7 @@ QtObject {
         if (!workspaceApi) return;
         workspaceApi.switch_workspace();
         route = "hub";
-        refreshState("切换工作区失败");
+        refreshState(qsTr("切换工作区失败"));
     }
 
     function createWorkspace(openExisting) {
@@ -125,16 +125,16 @@ QtObject {
         } else {
             rawResult = workspaceApi.create_new_workspace();
         }
-        var res = parseJson(rawResult, "操作失败");
+        var res = parseJson(rawResult, qsTr("操作失败"));
         if (!res) { 
-            refreshState("解析结果失败"); 
+            refreshState(qsTr("解析结果失败")); 
             return; 
         }
         if (res.success) {
-            refreshState("打开工作区成功");
+            refreshState(qsTr("打开工作区成功"));
         } else {
-            emitError(res.userMessage || res.message || "打开工作区失败");
-            refreshState("打开工作区失败");
+            emitError(res.userMessage || res.message || qsTr("打开工作区失败"));
+            refreshState(qsTr("打开工作区失败"));
         }
     }
 
@@ -147,28 +147,28 @@ QtObject {
         } else {
             rawResult = workspaceApi.create_workspace_with_path(path);
         }
-        var res = parseJson(rawResult, "操作失败");
+        var res = parseJson(rawResult, qsTr("操作失败"));
         if (!res) { 
-            refreshState("解析结果失败"); 
+            refreshState(qsTr("解析结果失败")); 
             return; 
         }
         if (res.success) {
-            refreshState("打开工作区成功");
+            refreshState(qsTr("打开工作区成功"));
         } else {
-            emitError(res.userMessage || res.message || "打开工作区失败");
-            refreshState("打开工作区失败");
+            emitError(res.userMessage || res.message || qsTr("打开工作区失败"));
+            refreshState(qsTr("打开工作区失败"));
         }
     }
 
     function handleMutationResult(raw, fallbackMessage) {
-        var res = parseJson(raw, fallbackMessage || "操作失败");
+        var res = parseJson(raw, fallbackMessage || qsTr("操作失败"));
         if (!res) return false;
         if (res.success) {
             if (res.state) applyState(res.state);
-            else refreshState("刷新操作结果失败");
+            else refreshState(qsTr("刷新操作结果失败"));
             return true;
         }
-        emitError(res.userMessage || res.message || fallbackMessage || "操作失败");
+        emitError(res.userMessage || res.message || fallbackMessage || qsTr("操作失败"));
         return false;
     }
 
@@ -177,9 +177,9 @@ QtObject {
         if (!projectApi) return false;
         var actionId = generateActionId();
         try {
-            return handleMutationResult(projectApi.create_project_json(title, actionId), "创建作品失败");
+            return handleMutationResult(projectApi.create_project_json(title, actionId), qsTr("创建作品失败"));
         } catch (e) {
-            emitError("后端调用失败: " + e);
+            emitError(qsTr("后端调用失败: ") + e);
             return false;
         }
     }
@@ -189,10 +189,10 @@ QtObject {
         if (!projectApi || !projectId || !title) return false;
         try {
             projectApi.rename_project(projectId, title);
-            refreshState("刷新重命名结果失败");
+            refreshState(qsTr("刷新重命名结果失败"));
             return true;
         } catch (e) {
-            emitError("后端调用失败: " + e);
+            emitError(qsTr("后端调用失败: ") + e);
             return false;
         }
     }
@@ -202,9 +202,9 @@ QtObject {
         if (!projectApi) return false;
         var actionId = generateActionId();
         try {
-            return handleMutationResult(projectApi.create_volume_json(projectId, title, actionId), "创建卷失败");
+            return handleMutationResult(projectApi.create_volume_json(projectId, title, actionId), qsTr("创建卷失败"));
         } catch (e) {
-            emitError("后端调用失败: " + e);
+            emitError(qsTr("后端调用失败: ") + e);
             return false;
         }
     }
@@ -214,9 +214,9 @@ QtObject {
         if (!projectApi) return false;
         var actionId = generateActionId();
         try {
-            return handleMutationResult(projectApi.create_chapter_json(projectId, volumeId, title, actionId), "创建章节失败");
+            return handleMutationResult(projectApi.create_chapter_json(projectId, volumeId, title, actionId), qsTr("创建章节失败"));
         } catch (e) {
-            emitError("后端调用失败: " + e);
+            emitError(qsTr("后端调用失败: ") + e);
             return false;
         }
     }
@@ -231,9 +231,9 @@ QtObject {
             else if (type === "delete_volume") raw = projectApi.delete_volume_json(contextData.projectId, contextData.volumeId, actionId);
             else if (type === "delete_chapter") raw = projectApi.delete_chapter_json(contextData.projectId, contextData.volumeId, contextData.chapterId, actionId);
             else return false;
-            return handleMutationResult(raw, "删除失败");
+            return handleMutationResult(raw, qsTr("删除失败"));
         } catch (e) {
-            emitError("后端调用失败: " + e);
+            emitError(qsTr("后端调用失败: ") + e);
             return false;
         }
     }

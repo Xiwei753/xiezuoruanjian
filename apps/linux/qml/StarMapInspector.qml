@@ -33,7 +33,7 @@ Rectangle {
         spacing: 16
 
         AppText {
-            text: "属性"
+            text: qsTr("属性")
             font.pixelSize: 16
             font.bold: true
             color: dt ? dt.textPrimary : "#E2E4E9"
@@ -41,7 +41,7 @@ Rectangle {
         }
 
         Text {
-            text: "请在左侧选择节点或连线"
+            text: qsTr("请在左侧选择节点或连线")
             color: dt ? dt.textSecondary : "#9CA0AB"
             visible: selectedNode === null && selectedEdge === null
             Layout.alignment: Qt.AlignHCenter
@@ -53,7 +53,7 @@ Rectangle {
             spacing: 12
             visible: selectedNode !== null
 
-            AppText { text: "标题"; color: dt ? dt.textSecondary : "#9CA0AB" }
+            AppText { text: qsTr("标题"); color: dt ? dt.textSecondary : root.palette.text }
             AppTextField {
                 id: titleInput
                 Layout.fillWidth: true
@@ -68,7 +68,7 @@ Rectangle {
             Item { Layout.fillHeight: true }
 
             AppButton {
-                text: "删除节点"
+                text: qsTr("删除节点")
                 Layout.fillWidth: true
                 onClicked: {
                     if (selectedNode) nodeDeleted(selectedNode.id)
@@ -82,7 +82,7 @@ Rectangle {
             spacing: 12
             visible: selectedEdge !== null
 
-            AppText { text: "标签"; color: dt ? dt.textSecondary : "#9CA0AB" }
+            AppText { text: qsTr("标签"); color: dt ? dt.textSecondary : root.palette.text }
             AppTextField {
                 id: labelInput
                 Layout.fillWidth: true
@@ -100,7 +100,7 @@ Rectangle {
             Item { Layout.fillHeight: true }
 
             AppButton {
-                text: "删除连线"
+                text: qsTr("删除连线")
                 Layout.fillWidth: true
                 onClicked: {
                     if (selectedEdge) edgeDeleted(selectedEdge.id)

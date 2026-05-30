@@ -19,7 +19,7 @@ Item {
     height: parent ? parent.height : 600
 
     property string starmapId: ""
-    property string starmapTitle: "星图编辑器"
+    property string starmapTitle: qsTr("星图编辑器")
     property var dt: null
     property var backendRef: null
 
@@ -41,7 +41,7 @@ Item {
     // 浮动返回按钮
     AppButton {
         id: backBtn
-        text: "← 返回"
+        text: qsTr("← 返回")
         theme: root.dt
         variant: "secondary"
         anchors.top: parent.top

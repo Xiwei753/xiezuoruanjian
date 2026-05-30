@@ -37,7 +37,7 @@ Item {
         Label {
             text: control.label
             font.pixelSize: control.theme ? control.theme.label : 13
-            color: control.theme ? control.theme.onSurfaceVariant : "#475569"
+            color: control.theme ? control.theme.textSecondary : control.palette.text
             font.weight: Font.Medium
             font.family: control.theme ? control.theme.fontFamily : "sans-serif"
             visible: control.label.length > 0
@@ -48,8 +48,10 @@ Item {
             Layout.fillWidth: true
             implicitHeight: control.theme ? control.theme.settingsControlHeight : 40
             placeholderText: control.placeholder
-            color: control.theme ? control.theme.onSurface : "#0f172a"
-            placeholderTextColor: control.theme ? control.theme.textMuted : "#64748b"
+            color: control.theme ? control.theme.textPrimary : control.palette.text
+            placeholderTextColor: control.theme ? control.theme.textMuted : control.palette.placeholderText
+            selectionColor: control.theme ? control.theme.primary : control.palette.highlight
+            selectedTextColor: control.theme ? control.theme.onPrimary : control.palette.highlightedText
             activeFocusOnTab: control.fieldTabFocus
             onAccepted: control.accepted()
             onEditingFinished: control.editingFinished()

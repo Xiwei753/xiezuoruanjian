@@ -60,15 +60,15 @@ Rectangle {
     CardCollectionPage {
         anchors.fill: parent
         dt: root.dt
-        title: "作品"
-        subtitle: projectModel.count > 0 ? (projectModel.count + " 部作品") : "开始你的创作之旅"
-        actionText: "+ 新建作品"
+        title: qsTr("作品")
+        subtitle: projectModel.count > 0 ? qsTr("%1 部作品").arg(projectModel.count) : qsTr("开始你的创作之旅")
+        actionText: qsTr("+ 新建作品")
         model: projectModel
         cardHeight: 184
         minCardWidth: 280
-        emptyIcon: "📖"
-        emptyTitle: "暂无作品"
-        emptySubtitle: "点击「新建作品」开始创作"
+        emptyIcon: ""
+        emptyTitle: qsTr("暂无作品")
+        emptySubtitle: qsTr("点击「新建作品」开始创作")
         onActionClicked: root.createProject()
 
         delegate: ProjectCard {
@@ -95,10 +95,10 @@ Rectangle {
         id: projectContextMenu
         property string projectId: ""
         property string projectTitle: ""
-        MenuItem { text: "打开"; onTriggered: root.openProject(projectContextMenu.projectId) }
+        MenuItem { text: qsTr("打开"); onTriggered: root.openProject(projectContextMenu.projectId) }
         MenuSeparator {}
-        MenuItem { text: "重命名"; onTriggered: { renameProjectDialog.projectId = projectContextMenu.projectId; renameProjectDialog.currentTitle = projectContextMenu.projectTitle; renameProjectDialog.open() } }
-        MenuItem { text: "删除"; onTriggered: root.deleteProjectRequested(projectContextMenu.projectId, projectContextMenu.projectTitle) }
+        MenuItem { text: qsTr("重命名"); onTriggered: { renameProjectDialog.projectId = projectContextMenu.projectId; renameProjectDialog.currentTitle = projectContextMenu.projectTitle; renameProjectDialog.open() } }
+        MenuItem { text: qsTr("删除"); onTriggered: root.deleteProjectRequested(projectContextMenu.projectId, projectContextMenu.projectTitle) }
     }
 
     Dialog {
@@ -117,8 +117,8 @@ Rectangle {
             spacing: dt ? dt.sp12 : 12
 
             Text {
-                text: "重命名作品"
-                color: dt ? dt.onSurface : "#1A1C1E"
+                text: qsTr("重命名作品")
+                color: dt ? dt.onSurface : root.palette.text
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
@@ -128,21 +128,21 @@ Rectangle {
                 Layout.fillWidth: true
                 theme: dt
                 text: renameProjectDialog.currentTitle
-                placeholderText: "作品名称"
+                placeholderText: qsTr("作品名称")
                 onAccepted: renameConfirmButton.clicked()
             }
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
                 AppButton {
-                    text: "取消"
+                    text: qsTr("取消")
                     theme: dt
                     variant: "text"
                     onClicked: renameProjectDialog.close()
                 }
                 AppButton {
                     id: renameConfirmButton
-                    text: "确定"
+                    text: qsTr("确定")
                     theme: dt
                     variant: "primary"
                     onClicked: {
@@ -170,7 +170,7 @@ Rectangle {
             var p = projects[i]
             projectModel.append({
                 projectId: p.id,
-                projectTitle: p.title || "未命名作品",
+                projectTitle: p.title || qsTr("未命名作品"),
                 projectWordCount: getProjectWordCount(p.id),
                 projectTodayInput: getTodayInput(p.id),
                 projectLastEdited: p.updatedAt || "",

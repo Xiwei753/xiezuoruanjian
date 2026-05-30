@@ -34,14 +34,14 @@ ScrollView {
 
         // Header
         Label {
-            text: "Action 调试"
+            text: qsTr("Action 调试")
             font.pixelSize: root.appTheme ? root.appTheme.fontXl : 18
             font.weight: Font.Bold
             color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
         }
 
         Label {
-            text: "列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。"
+            text: qsTr("列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。")
             color: root.appTheme ? root.appTheme.textSecondary : "#475569"
             font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
             wrapMode: Text.Wrap
@@ -54,16 +54,16 @@ ScrollView {
             spacing: root.appTheme ? root.appTheme.sp8 : 8
 
             Button {
-                text: "列出所有 Action"
+                text: qsTr("列出所有 Action")
                 implicitHeight: 32; implicitWidth: 130
                 onClicked: {
                     var result = root.backendRef.list_registered_actions()
                     try {
                         var actions = JSON.parse(result)
                         actionListRepeater.model = actions
-                        actionResultText.text = "共加载 " + actions.length + " 个 Action"
+                        actionResultText.text = qsTr("共加载 ") + actions.length + qsTr(" 个 Action")
                     } catch(e) {
-                        actionResultText.text = "解析 Action 列表失败: " + e
+                        actionResultText.text = qsTr("解析 Action 列表失败: ") + e
                     }
                 }
                 contentItem: Text {
@@ -82,7 +82,7 @@ ScrollView {
             }
 
             Button {
-                text: "清空结果"
+                text: qsTr("清空结果")
                 implicitHeight: 32
                 flat: true
                 onClicked: {
@@ -134,10 +134,10 @@ ScrollView {
                         Label {
                             text: {
                                 var risk = modelData.riskLevel || ""
-                                if (risk === "dangerous") return "危险"
-                                if (risk === "contentWrite") return "内容写入"
-                                if (risk === "safeWrite") return "写入"
-                                return "只读"
+                                if (risk === "dangerous") return qsTr("危险")
+                                if (risk === "contentWrite") return qsTr("内容写入")
+                                if (risk === "safeWrite") return qsTr("写入")
+                                return qsTr("只读")
                             }
                             font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
                             color: {
@@ -168,7 +168,7 @@ ScrollView {
                     RowLayout {
                         spacing: root.appTheme ? root.appTheme.sp8 : 8
                         Button {
-                            text: "执行"
+                            text: qsTr("执行")
                             visible: modelData.kind === "query" || modelData.kind === "preview"
                             implicitHeight: 28; implicitWidth: 60
                             onClicked: {
@@ -177,12 +177,12 @@ ScrollView {
                                 try {
                                     var r = JSON.parse(result)
                                     if (r.success) {
-                                        actionResultText.text = "执行成功: " + (r.message || "") + "\n数据: " + JSON.stringify(r.data, null, 2)
+                                        actionResultText.text = qsTr("执行成功: ") + (r.message || "") + qsTr("\n数据: ") + JSON.stringify(r.data, null, 2)
                                     } else {
-                                        actionResultText.text = "执行失败: " + (r.message || "未知错误")
+                                        actionResultText.text = qsTr("执行失败: ") + (r.message || qsTr("未知错误"))
                                     }
                                 } catch(e) {
-                                    actionResultText.text = "解析结果失败: " + result
+                                    actionResultText.text = qsTr("解析结果失败: ") + result
                                 }
                             }
                             contentItem: Text {
@@ -200,7 +200,7 @@ ScrollView {
                             }
                         }
                         Button {
-                            text: "应用 (Mutation)"
+                            text: qsTr("应用 (Mutation)")
                             visible: modelData.kind === "mutation"
                             enabled: { var risk = modelData.riskLevel || ""; return risk !== "dangerous" && risk !== "contentWrite" }
                             implicitHeight: 28; implicitWidth: 110
@@ -226,12 +226,12 @@ ScrollView {
                                 try {
                                     var r = JSON.parse(result)
                                     if (r.success) {
-                                        actionResultText.text = "应用成功: " + (r.message || "") + "\n数据: " + JSON.stringify(r.data, null, 2)
+                                        actionResultText.text = qsTr("应用成功: ") + (r.message || "") + qsTr("\n数据: ") + JSON.stringify(r.data, null, 2)
                                     } else {
-                                        actionResultText.text = "应用失败: " + (r.message || "未知错误")
+                                        actionResultText.text = qsTr("应用失败: ") + (r.message || qsTr("未知错误"))
                                     }
                                 } catch(e) {
-                                    actionResultText.text = "解析结果失败: " + result
+                                    actionResultText.text = qsTr("解析结果失败: ") + result
                                 }
                             }
                             contentItem: Text {
@@ -251,7 +251,7 @@ ScrollView {
                             }
                         }
                         Label {
-                            text: "危险操作已阻断"
+                            text: qsTr("危险操作已阻断")
                             visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
                             color: root.appTheme ? root.appTheme.danger : "#ef4444"
                             font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
@@ -279,14 +279,14 @@ ScrollView {
                 color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                 font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                 font.family: "monospace"
-                placeholderText: "执行结果将显示在此处..."
+                placeholderText: qsTr("执行结果将显示在此处...")
                 background: Rectangle { color: "transparent" }
                 placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
             }
         }
 
         // Workspace diagnostics
-        SectionHeader { theme: root.appTheme; text: "工作区诊断" }
+        SectionHeader { theme: root.appTheme; text: qsTr("工作区诊断") }
         Rectangle {
             Layout.fillWidth: true
             height: 320
@@ -299,7 +299,7 @@ ScrollView {
                 anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
                 Label {
-                    text: "获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。"
+                    text: qsTr("获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。")
                     font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                     color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                     wrapMode: Text.Wrap
@@ -309,7 +309,7 @@ ScrollView {
                     Layout.fillWidth: true
                     spacing: root.appTheme ? root.appTheme.sp8 : 8
                     Button {
-                        text: "获取工作区诊断"
+                        text: qsTr("获取工作区诊断")
                         implicitHeight: 32; implicitWidth: 130
                         onClicked: {
                             var diag = root.backendRef.get_workspace_diagnostics()
@@ -317,7 +317,7 @@ ScrollView {
                                 var obj = JSON.parse(diag)
                                 workspaceDiagText.text = JSON.stringify(obj, null, 2)
                             } catch(e) {
-                                workspaceDiagText.text = "解析诊断失败: " + e
+                                workspaceDiagText.text = qsTr("解析诊断失败: ") + e
                             }
                         }
                         contentItem: Text {
@@ -333,12 +333,12 @@ ScrollView {
                         }
                     }
                     Button {
-                        text: "复制诊断"
+                        text: qsTr("复制诊断")
                         implicitHeight: 32; flat: true
                         onClicked: {
                             if (workspaceDiagText.text.length > 0 && root.backendRef) {
                                 var result = JSON.parse(root.backendRef.copy_text_to_clipboard(workspaceDiagText.text))
-                                workspaceDiagText.text = result.success ? "诊断已复制" : ("复制失败: " + result.message)
+                                workspaceDiagText.text = result.success ? qsTr("诊断已复制") : (qsTr("复制失败: ") + result.message)
                             }
                         }
                         contentItem: Text {
@@ -374,7 +374,7 @@ ScrollView {
                             border.width: 1
                         }
                         leftPadding: 8; topPadding: 8; rightPadding: 8; bottomPadding: 8
-                        placeholderText: "点击「获取工作区诊断」查看详情..."
+                        placeholderText: qsTr("点击「获取工作区诊断」查看详情...")
                         placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
                     }
                 }

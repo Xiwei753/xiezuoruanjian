@@ -62,13 +62,13 @@ Rectangle {
                     Repeater {
                         model: {
                             var tabs = [
-                                { label: "星图", idx: 0 }
+                                { label: qsTr("星图"), idx: 0 }
                             ];
                             if (root.aiCapable && root.aiEnabled) {
-                                tabs.push({ label: "AI", idx: 1 });
+                                tabs.push({ label: qsTr("AI"), idx: 1 });
                             }
-                            tabs.push({ label: "统计", idx: 2 });
-                            tabs.push({ label: "设定", idx: 3 });
+                            tabs.push({ label: qsTr("统计"), idx: 2 });
+                            tabs.push({ label: qsTr("设定"), idx: 3 });
                             return tabs;
                         }
 
@@ -177,7 +177,7 @@ Rectangle {
                         }
 
                         Text {
-                            text: "写作设定"
+                            text: qsTr("写作设定")
                             color: dt ? dt.textPrimary : "#E2E4E9"
                             font.pixelSize: dt ? dt.fontLg : 16
                             font.weight: Font.DemiBold
@@ -185,7 +185,7 @@ Rectangle {
                         }
 
                         Text {
-                            text: "字号、行距、主题等设置"
+                            text: qsTr("字号、行距、主题等设置")
                             color: dt ? dt.textMuted : "#606470"
                             font.pixelSize: dt ? dt.fontSm : 12
                             Layout.alignment: Qt.AlignHCenter
@@ -209,7 +209,7 @@ Rectangle {
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
                                 Text {
-                                    text: "打开设置"
+                                    text: qsTr("打开设置")
                                     color: "#FFFFFF"
                                     font.pixelSize: dt ? dt.fontSm : 12
                                     font.weight: Font.Medium
@@ -244,14 +244,14 @@ Rectangle {
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Text {
-                            text: "AI 助手"
+                            text: qsTr("AI 助手")
                             color: dt ? dt.textPrimary : "#E2E4E9"
                             font.pixelSize: dt ? dt.fontLg : 16
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Text {
-                            text: "AI 功能将在后续版本实现"
+                            text: qsTr("AI 功能将在后续版本实现")
                             color: dt ? dt.textMuted : "#606470"
                             font.pixelSize: dt ? dt.fontSm : 12
                             Layout.alignment: Qt.AlignHCenter

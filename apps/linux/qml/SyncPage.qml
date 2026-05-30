@@ -34,12 +34,12 @@ Rectangle {
 
     function statusText() {
         var s = root.backendRef ? root.backendRef.sync_status : ""
-        if (s === "success") return "已同步"
-        if (s === "syncing") return "同步中"
-        if (s === "error") return "同步失败"
-        if (s === "conflict") return "存在冲突"
-        if (root.backendRef && root.backendRef.sync_enabled) return "已配置"
-        return "未配置"
+        if (s === "success") return qsTr("已同步")
+        if (s === "syncing") return qsTr("同步中")
+        if (s === "error") return qsTr("同步失败")
+        if (s === "conflict") return qsTr("存在冲突")
+        if (root.backendRef && root.backendRef.sync_enabled) return qsTr("已配置")
+        return qsTr("未配置")
     }
 
     Connections {
@@ -83,15 +83,15 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: theme ? theme.sp4 : 4
                 Text {
-                    text: "同步设置"
-                    color: theme ? theme.onBackground : "#1A1C1E"
+                    text: qsTr("同步设置")
+                    color: theme ? theme.onBackground : root.palette.text
                     font.pixelSize: theme ? theme.title : 24
                     font.family: theme ? theme.fontFamily : "sans-serif"
                     font.weight: Font.Bold
                 }
                 Text {
-                    text: "配置远端仓库并查看同步状态"
-                    color: theme ? theme.onSurfaceVariant : "#42474E"
+                    text: qsTr("配置远端仓库并查看同步状态")
+                    color: theme ? theme.onSurfaceVariant : root.palette.text
                     font.pixelSize: theme ? theme.body : 14
                     font.family: theme ? theme.fontFamily : "sans-serif"
                 }
@@ -114,7 +114,7 @@ Rectangle {
                 id: urlField
                 Layout.fillWidth: true
                 theme: root.theme
-                label: "远程仓库地址"
+                label: qsTr("远程仓库地址")
                 text: (root.backendRef ? root.backendRef.sync_remote_url : "")
                 placeholderText: "https://github.com/user/repo"
             }
@@ -123,7 +123,7 @@ Rectangle {
                 id: branchField
                 Layout.fillWidth: true
                 theme: root.theme
-                label: "分支名"
+                label: qsTr("分支名")
                 text: (root.backendRef ? root.backendRef.sync_branch : "")
                 placeholderText: "main"
             }
@@ -132,8 +132,8 @@ Rectangle {
                 id: tokenField
                 Layout.fillWidth: true
                 theme: root.theme
-                label: "访问 Token"
-                placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? "已设置（输入新 Token 以覆盖）" : "请输入 GitHub Personal Access Token"
+                label: qsTr("访问 Token")
+                placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
                 echoMode: TextInput.Password
             }
         }
@@ -143,7 +143,7 @@ Rectangle {
             spacing: theme ? theme.sp8 : 8
 
             AppButton {
-                text: "保存配置"
+                text: qsTr("保存配置")
                 theme: root.theme
                 variant: "primary"
                 onClicked: {
@@ -170,30 +170,30 @@ Rectangle {
             }
 
             AppButton {
-                text: "执行同步"
+                text: qsTr("执行同步")
                 theme: root.theme
                 variant: "secondary"
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
-                    syncResultArea.text = "正在同步..."
+                    syncResultArea.text = qsTr("正在同步...")
                     if (typeof root.beforeSyncHook === "function") root.beforeSyncHook()
                     if (root.backendRef) root.backendRef.perform_sync()
                 }
             }
 
             AppButton {
-                text: "运行诊断"
+                text: qsTr("运行诊断")
                 theme: root.theme
                 variant: "secondary"
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
-                    syncResultArea.text = "正在诊断..."
+                    syncResultArea.text = qsTr("正在诊断...")
                     if (root.backendRef) root.backendRef.perform_sync_diagnostics()
                 }
             }
 
             AppButton {
-                text: "打开工作区目录"
+                text: qsTr("打开工作区目录")
                 theme: root.theme
                 variant: "text"
                 visible: root.backendRef && root.backendRef.has_workspace
@@ -201,7 +201,7 @@ Rectangle {
             }
 
             AppButton {
-                text: "复制冲突信息"
+                text: qsTr("复制冲突信息")
                 theme: root.theme
                 variant: "danger"
                 visible: root.backendRef && root.backendRef.sync_status === "conflict"

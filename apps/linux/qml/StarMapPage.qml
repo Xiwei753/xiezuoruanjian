@@ -61,15 +61,14 @@ Rectangle {
     CardCollectionPage {
         anchors.fill: parent
         dt: root.dt
-        title: "星图"
-        subtitle: gridModel.count > 0 ? (gridModel.count + " 个星图") : "构建你的创作宇宙"
-        actionText: "+ 新建星图"
+        title: qsTr("星图")
+        subtitle: gridModel.count > 0 ? qsTr("%1 个星图").arg(gridModel.count) : qsTr("构建你的创作宇宙")
+        actionText: qsTr("+ 新建星图")
         model: gridModel
         cardHeight: 260
         minCardWidth: 280
-        emptyIcon: "⭐"
-        emptyTitle: "还没有星图"
-        emptySubtitle: "创建你的第一个星图，构建角色关系与故事脉络"
+        emptyTitle: qsTr("还没有星图")
+        emptySubtitle: qsTr("创建你的第一个星图，构建角色关系与故事脉络")
         onActionClicked: createStarmapDialog.open()
 
         delegate: Item {
@@ -159,8 +158,8 @@ Rectangle {
             spacing: dt ? dt.sp12 : 12
 
             Text {
-                text: "新建星图"
-                color: dt ? dt.onSurface : "#1A1C1E"
+                text: qsTr("新建星图")
+                color: dt ? dt.onSurface : root.palette.text
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
@@ -169,29 +168,29 @@ Rectangle {
                 id: starmapTitleField
                 Layout.fillWidth: true
                 theme: dt
-                label: "星图名称"
-                placeholderText: "例如：人物关系图"
+                label: qsTr("星图名称")
+                placeholderText: qsTr("例如：人物关系图")
                 onAccepted: createStarmapButton.clicked()
             }
             AppTextField {
                 id: starmapDescField
                 Layout.fillWidth: true
                 theme: dt
-                label: "描述（可选）"
-                placeholderText: "简要描述这个星图的内容"
+                label: qsTr("描述（可选）")
+                placeholderText: qsTr("简要描述这个星图的内容")
             }
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
                 AppButton {
-                    text: "取消"
+                    text: qsTr("取消")
                     theme: dt
                     variant: "text"
                     onClicked: createStarmapDialog.close()
                 }
                 AppButton {
                     id: createStarmapButton
-                    text: "创建"
+                    text: qsTr("创建")
                     theme: dt
                     variant: "primary"
                     onClicked: {
@@ -216,11 +215,11 @@ Rectangle {
         id: starmapContextMenu
         property string starmapId: ""
         property string starmapTitle: ""
-        MenuItem { text: "打开"; onTriggered: root.openStarmap(starmapContextMenu.starmapId) }
-        MenuItem { text: "新建子星图"; onTriggered: { createChildStarmapDialog.parentId = starmapContextMenu.starmapId; createChildStarmapDialog.open() } }
+        MenuItem { text: qsTr("打开"); onTriggered: root.openStarmap(starmapContextMenu.starmapId) }
+        MenuItem { text: qsTr("新建子星图"); onTriggered: { createChildStarmapDialog.parentId = starmapContextMenu.starmapId; createChildStarmapDialog.open() } }
         MenuSeparator {}
-        MenuItem { text: "重命名"; onTriggered: { renameStarmapDialog.starmapId = starmapContextMenu.starmapId; renameStarmapDialog.currentTitle = starmapContextMenu.starmapTitle; renameStarmapDialog.open() } }
-        MenuItem { text: "删除"; onTriggered: { backendRef.delete_starmap_json(starmapContextMenu.starmapId); loadStarmaps() } }
+        MenuItem { text: qsTr("重命名"); onTriggered: { renameStarmapDialog.starmapId = starmapContextMenu.starmapId; renameStarmapDialog.currentTitle = starmapContextMenu.starmapTitle; renameStarmapDialog.open() } }
+        MenuItem { text: qsTr("删除"); onTriggered: { backendRef.delete_starmap_json(starmapContextMenu.starmapId); loadStarmaps() } }
     }
 
     Dialog {
@@ -237,13 +236,13 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
-            Text { text: "重命名星图"; color: dt ? dt.onSurface : "#1A1C1E"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
-            AppTextField { id: renameField; Layout.fillWidth: true; theme: dt; text: renameStarmapDialog.currentTitle; placeholderText: "星图名称"; onAccepted: renameStarmapButton.clicked() }
+            Text { text: qsTr("重命名星图"); color: dt ? dt.onSurface : root.palette.text; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            AppTextField { id: renameField; Layout.fillWidth: true; theme: dt; text: renameStarmapDialog.currentTitle; placeholderText: qsTr("星图名称"); onAccepted: renameStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton { text: "取消"; theme: dt; variant: "text"; onClicked: renameStarmapDialog.close() }
-                AppButton { id: renameStarmapButton; text: "确定"; theme: dt; variant: "primary"; onClicked: { var t = renameField.text.trim(); if (t === "") return; backendRef.rename_starmap_json(renameStarmapDialog.starmapId, t); renameStarmapDialog.close(); loadStarmaps() } }
+                AppButton { text: qsTr("取消"); theme: dt; variant: "text"; onClicked: renameStarmapDialog.close() }
+                AppButton { id: renameStarmapButton; text: qsTr("确定"); theme: dt; variant: "primary"; onClicked: { var t = renameField.text.trim(); if (t === "") return; backendRef.rename_starmap_json(renameStarmapDialog.starmapId, t); renameStarmapDialog.close(); loadStarmaps() } }
             }
         }
     }
@@ -261,13 +260,13 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
-            Text { text: "新建子星图"; color: dt ? dt.onSurface : "#1A1C1E"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
-            AppTextField { id: childTitleField; Layout.fillWidth: true; theme: dt; placeholderText: "子星图名称"; onAccepted: createChildStarmapButton.clicked() }
+            Text { text: qsTr("新建子星图"); color: dt ? dt.onSurface : root.palette.text; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            AppTextField { id: childTitleField; Layout.fillWidth: true; theme: dt; placeholderText: qsTr("子星图名称"); onAccepted: createChildStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton { text: "取消"; theme: dt; variant: "text"; onClicked: createChildStarmapDialog.close() }
-                AppButton { id: createChildStarmapButton; text: "创建"; theme: dt; variant: "primary"; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; backendRef.create_child_starmap_legacy_json(createChildStarmapDialog.parentId, t, "", ""); createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } }
+                AppButton { text: qsTr("取消"); theme: dt; variant: "text"; onClicked: createChildStarmapDialog.close() }
+                AppButton { id: createChildStarmapButton; text: qsTr("创建"); theme: dt; variant: "primary"; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; backendRef.create_child_starmap_legacy_json(createChildStarmapDialog.parentId, t, "", ""); createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } }
             }
         }
     }
