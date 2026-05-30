@@ -58,6 +58,18 @@ pub struct LocalSettings {
     pub ai_enabled: bool,
     #[serde(default)]
     pub stats_device_id: Option<String>,
+    #[serde(default = "default_linux_sidebar_width")]
+    pub linux_sidebar_width: f64,
+    #[serde(default = "default_linux_editor_width")]
+    pub linux_editor_width: f64,
+}
+
+fn default_linux_sidebar_width() -> f64 {
+    240.0
+}
+
+fn default_linux_editor_width() -> f64 {
+    0.0
 }
 
 fn default_editor_font_size() -> f32 {
@@ -111,6 +123,8 @@ impl Default for LocalSettings {
             editor_smooth_cursor_duration_ms: default_editor_smooth_cursor_duration_ms(),
             ai_enabled: false,
             stats_device_id: None,
+            linux_sidebar_width: default_linux_sidebar_width(),
+            linux_editor_width: default_linux_editor_width(),
         }
     }
 }

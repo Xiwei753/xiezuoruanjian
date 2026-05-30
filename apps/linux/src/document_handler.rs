@@ -37,6 +37,8 @@ cpp!{{
     #include <QtGui/QTextDocument>
     #include <QtGui/QTextCursor>
     #include <QtGui/QTextBlockFormat>
+    #include <QtGui/QTextCharFormat>
+    #include <QtGui/QColor>
 }}
 
 #[allow(dead_code)]
@@ -47,10 +49,12 @@ pub struct DocumentHandler {
     document: qt_property!(QVariant; READ document WRITE set_document NOTIFY document_changed),
     line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY line_spacing_changed),
     text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY text_indent_changed),
+    text_color: qt_property!(QString; READ text_color WRITE set_text_color NOTIFY text_color_changed),
 
     document_changed: qt_signal!(),
     line_spacing_changed: qt_signal!(),
     text_indent_changed: qt_signal!(),
+    text_color_changed: qt_signal!(),
 
     apply_format: qt_method!(fn(&self)),
     set_plain_text: qt_method!(fn(&self, text: QString)),
@@ -60,6 +64,7 @@ pub struct DocumentHandler {
     current_doc: QVariant,
     current_line_spacing: f32,
     current_text_indent: f32,
+    current_text_color: QString,
 }
 
 impl DocumentHandler {
@@ -88,12 +93,22 @@ impl DocumentHandler {
         }
     }
 
+    fn text_color(&self) -> QString { self.current_text_color.clone() }
+    fn set_text_color(&mut self, val: QString) {
+        if self.current_text_color != val {
+            self.current_text_color = val;
+            self.text_color_changed();
+            self.apply_format();
+        }
+    }
+
     fn apply_format(&self) {
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
+        let text_color = self.current_text_color.clone();
 
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float"] {
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text_color as "QString"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -110,6 +125,13 @@ impl DocumentHandler {
             blockFormat.setTextIndent(indent);
             cursor.mergeBlockFormat(blockFormat);
 
+            QTextCharFormat charFormat;
+            QColor color(text_color);
+            if (color.isValid()) {
+                charFormat.setForeground(color);
+                cursor.mergeCharFormat(charFormat);
+            }
+
             cursor.endEditBlock();
         });
     }
@@ -118,8 +140,9 @@ impl DocumentHandler {
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
+        let text_color = self.current_text_color.clone();
 
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text as "QString"] {
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text as "QString", text_color as "QString"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -143,6 +166,14 @@ impl DocumentHandler {
             formatCursor.beginEditBlock();
             formatCursor.select(QTextCursor::Document);
             formatCursor.mergeBlockFormat(blockFormat);
+
+            QTextCharFormat charFormat;
+            QColor color(text_color);
+            if (color.isValid()) {
+                charFormat.setForeground(color);
+                formatCursor.mergeCharFormat(charFormat);
+            }
+
             formatCursor.endEditBlock();
 
             cursor.endEditBlock();

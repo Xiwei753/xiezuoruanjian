@@ -849,51 +849,67 @@ pub(crate) fn fetch_and_reset_local_repo(
     token: &str,
     new_commit_sha: &str,
 ) -> crate::Result<()> {
-    if let Ok(repo) = git2::Repository::open(workspace_path) {
-        let mut remote = repo
-            .find_remote("origin")
-            .or_else(|_| repo.remote("origin", &config.remote_url))
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Ok(repo) = git2::Repository::open(workspace_path) {
+            let mut remote = repo
+                .find_remote("origin")
+                .or_else(|_| repo.remote("origin", &config.remote_url))
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
 
-        let mut fetch_opts = git2::FetchOptions::new();
-        if !token.is_empty() {
-            let mut callbacks = git2::RemoteCallbacks::new();
-            let token_clone = token.to_string();
-            callbacks.credentials(move |_url, username_from_url, _allowed_types| {
-                let user = username_from_url.unwrap_or("x-access-token");
-                git2::Cred::userpass_plaintext(user, &token_clone)
-            });
-            fetch_opts.remote_callbacks(callbacks);
-        }
-
-        if config.proxy_enabled {
-            if let Ok(proxy_opts) = Git2Backend::build_proxy_options(Some(config)) {
-                fetch_opts.proxy_options(proxy_opts);
+            let mut fetch_opts = git2::FetchOptions::new();
+            if !token.is_empty() {
+                let mut callbacks = git2::RemoteCallbacks::new();
+                let token_clone = token.to_string();
+                callbacks.credentials(move |_url, username_from_url, _allowed_types| {
+                    let user = username_from_url.unwrap_or("x-access-token");
+                    git2::Cred::userpass_plaintext(user, &token_clone)
+                });
+                fetch_opts.remote_callbacks(callbacks);
             }
+
+            if config.proxy_enabled {
+                if let Ok(proxy_opts) = Git2Backend::build_proxy_options(Some(config)) {
+                    fetch_opts.proxy_options(proxy_opts);
+                }
+            }
+
+            let refspec = format!(
+                "refs/heads/{}:refs/remotes/origin/{}",
+                config.branch, config.branch
+            );
+            remote
+                .fetch(&[refspec], Some(&mut fetch_opts), None)
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+
+            let commit_oid =
+                git2::Oid::from_str(new_commit_sha).map_err(|e| crate::Error::Other(e.to_string()))?;
+            let commit_obj = repo
+                .find_commit(commit_oid)
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+
+            repo.reset(commit_obj.as_object(), git2::ResetType::Mixed, None)
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+
+            let branch_ref_name = format!("refs/heads/{}", config.branch);
+            repo.reference(&branch_ref_name, commit_oid, true, "LWW sync update")
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
+
+            let _ = repo.set_head(&format!("refs/heads/{}", config.branch));
         }
+        Ok(())
+    }));
 
-        let refspec = format!(
-            "refs/heads/{}:refs/remotes/origin/{}",
-            config.branch, config.branch
-        );
-        remote
-            .fetch(&[refspec], Some(&mut fetch_opts), None)
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-
-        let commit_oid =
-            git2::Oid::from_str(new_commit_sha).map_err(|e| crate::Error::Other(e.to_string()))?;
-        let commit_obj = repo
-            .find_commit(commit_oid)
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-
-        repo.reset(commit_obj.as_object(), git2::ResetType::Mixed, None)
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-
-        let branch_ref_name = format!("refs/heads/{}", config.branch);
-        repo.reference(&branch_ref_name, commit_oid, true, "LWW sync update")
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-
-        let _ = repo.set_head(&format!("refs/heads/{}", config.branch));
+    match result {
+        Ok(inner_res) => inner_res,
+        Err(panic_err) => {
+            let panic_msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "未知 Panic".to_string()
+            };
+            Err(crate::Error::Other(format!("fetch_and_reset_local_repo panic: {}", panic_msg)))
+        }
     }
-    Ok(())
 }

@@ -19,6 +19,8 @@ pub struct SettingsBackend {
     setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms WRITE set_setting_smooth_cursor_duration_ms NOTIFY settings_changed),
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
+    setting_linux_sidebar_width: qt_property!(f64; READ setting_linux_sidebar_width WRITE set_setting_linux_sidebar_width NOTIFY settings_changed),
+    setting_linux_editor_width: qt_property!(f64; READ setting_linux_editor_width WRITE set_setting_linux_editor_width NOTIFY settings_changed),
     settings_changed: qt_signal!(),
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),
@@ -75,6 +77,10 @@ impl SettingsBackend {
     fn ai_available(&self) -> bool { self.with_app(false, |app| app.ai_available()) }
     fn ai_enabled(&self) -> bool { self.with_app(false, |app| app.ai_enabled()) }
     fn set_ai_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_ai_enabled(val)); self.ai_enabled_changed(); self.settings_changed(); }
+    fn setting_linux_sidebar_width(&self) -> f64 { self.with_app(240.0, |app| app.setting_linux_sidebar_width()) }
+    fn set_setting_linux_sidebar_width(&mut self, val: f64) { self.with_app_mut((), |app| app.set_setting_linux_sidebar_width(val)); self.settings_changed(); }
+    fn setting_linux_editor_width(&self) -> f64 { self.with_app(0.0, |app| app.setting_linux_editor_width()) }
+    fn set_setting_linux_editor_width(&mut self, val: f64) { self.with_app_mut((), |app| app.set_setting_linux_editor_width(val)); self.settings_changed(); }
     fn load_local_settings(&mut self) { self.with_app_mut((), |app| app.load_local_settings()); self.settings_changed(); }
     fn save_local_settings(&mut self) -> bool { self.with_app_mut(false, |app| app.save_local_settings()) }
 }
@@ -161,6 +167,18 @@ impl AppBackend {
 // AppBackend::set_setting_smooth_cursor_duration_ms
     pub(crate) fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) { self.current_setting_smooth_cursor_duration_ms = val; self.settings_changed(); self.save_local_settings(); }
 
+// AppBackend::setting_linux_sidebar_width
+    pub(crate) fn setting_linux_sidebar_width(&self) -> f64 { self.current_setting_linux_sidebar_width }
+
+// AppBackend::set_setting_linux_sidebar_width
+    pub(crate) fn set_setting_linux_sidebar_width(&mut self, val: f64) { self.current_setting_linux_sidebar_width = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_linux_editor_width
+    pub(crate) fn setting_linux_editor_width(&self) -> f64 { self.current_setting_linux_editor_width }
+
+// AppBackend::set_setting_linux_editor_width
+    pub(crate) fn set_setting_linux_editor_width(&mut self, val: f64) { self.current_setting_linux_editor_width = val; self.settings_changed(); self.save_local_settings(); }
+
 // AppBackend::load_app_theme_mode
     pub(crate) fn load_app_theme_mode(&mut self) {
         // Load theme mode from app_config (when no workspace is open)
@@ -193,6 +211,8 @@ impl AppBackend {
                         self.stats_device_id = device_id.clone();
                     }
                 }
+                self.current_setting_linux_sidebar_width = settings.linux_sidebar_width;
+                self.current_setting_linux_editor_width = settings.linux_editor_width;
             }
 
             let syncable_load = core.load_syncable_settings();
@@ -245,6 +265,8 @@ impl AppBackend {
             local.editor_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms as u64;
             local.editor_smooth_cursor_duration_ms = self.current_setting_smooth_cursor_duration_ms as u64;
             local.ai_enabled = self.current_ai_enabled;
+            local.linux_sidebar_width = self.current_setting_linux_sidebar_width;
+            local.linux_editor_width = self.current_setting_linux_editor_width;
 
             let local_save = core.save_local_settings(local.clone());
             self.debug_log("settings", "save_local_settings_result", &format!("success={}", local_save.is_ok()));

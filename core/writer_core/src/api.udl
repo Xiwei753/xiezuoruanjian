@@ -92,6 +92,8 @@ dictionary LocalSettingsDto {
     u64 editor_smooth_cursor_duration_ms;
     boolean ai_enabled;
     string? stats_device_id;
+    f64 linux_sidebar_width;
+    f64 linux_editor_width;
 };
 
 dictionary SyncableSettingsDto {
@@ -113,6 +115,8 @@ dictionary SyncConfigDto {
     string proxy_host;
     u16 proxy_port;
     string username;
+    boolean android_has_internet_permission;
+    boolean android_has_access_network_state_permission;
 };
 
 dictionary SyncSecretsDto {

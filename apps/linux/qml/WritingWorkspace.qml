@@ -63,6 +63,7 @@ Rectangle {
         id: editorController
         targetTextArea: editorArea
         backendRef: root.backendRef
+        dt: root.dt
         onEmptySaveBlocked: function(msg) {
             emptySaveDialogText.text = msg;
             emptySaveDialog.open();
@@ -144,17 +145,25 @@ Rectangle {
 
     color: dt ? dt.bg : "#111318"
 
-    RowLayout {
+    SplitView {
         anchors.fill: parent
-        spacing: 0
+        orientation: Qt.Horizontal
 
         // Left sidebar: volume/chapter tree
         Rectangle {
-            Layout.preferredWidth: 240
-            Layout.fillHeight: true
+            id: sidebarRect
+            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_linux_sidebar_width > 0 ? root.backendRef.setting_linux_sidebar_width : 240
+            SplitView.minimumWidth: 180
+            SplitView.maximumWidth: 420
             color: dt ? dt.sidebar : "#14161B"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
+
+            onWidthChanged: {
+                if (root.backendRef && width > 0) {
+                    root.backendRef.setting_linux_sidebar_width = width;
+                }
+            }
 
             ColumnLayout {
                 anchors.fill: parent
@@ -370,8 +379,7 @@ Rectangle {
 
         // Right side: Toolbar + Editor
         ColumnLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            SplitView.fillWidth: true
             spacing: 0
 
             // Top toolbar
@@ -426,12 +434,64 @@ Rectangle {
                             anchors.horizontalCenter: parent.horizontalCenter
                             property real editorWidthRatio: parent.width >= 1400 ? 0.78 : 1.0
                             property int editorMaxWidth: parent.width >= 1600 ? 1280 : 960
-                            width: Math.min(parent.width, editorMaxWidth, Math.max(820, parent.width * editorWidthRatio))
+                            property real baseResponsiveWidth: Math.min(parent.width, editorMaxWidth, Math.max(820, parent.width * editorWidthRatio))
+                            
+                            width: root.backendRef && root.backendRef.setting_linux_editor_width > 0 ? Math.min(parent.width, root.backendRef.setting_linux_editor_width) : baseResponsiveWidth
                             height: parent.height
                             color: dt ? dt.editorBg : "#191C21"
                             radius: dt ? dt.radiusMd : 12
                             border.color: dt ? dt.border : "#2A2E36"
                             border.width: 1
+
+                            // Left edge drag handle
+                            MouseArea {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: 12
+                                cursorShape: Qt.SizeHorCursor
+                                property real startX: 0
+                                property real startWidth: 0
+                                onPressed: function(mouse) {
+                                    startX = mouse.x;
+                                    startWidth = paperBg.width;
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (pressed) {
+                                        var dx = mouse.x - startX;
+                                        var newWidth = startWidth - dx * 2;
+                                        newWidth = Math.max(600, Math.min(newWidth, paperBg.parent.width));
+                                        if (root.backendRef) {
+                                            root.backendRef.setting_linux_editor_width = newWidth;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Right edge drag handle
+                            MouseArea {
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: 12
+                                cursorShape: Qt.SizeHorCursor
+                                property real startX: 0
+                                property real startWidth: 0
+                                onPressed: function(mouse) {
+                                    startX = mouse.x;
+                                    startWidth = paperBg.width;
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (pressed) {
+                                        var dx = mouse.x - startX;
+                                        var newWidth = startWidth + dx * 2;
+                                        newWidth = Math.max(600, Math.min(newWidth, paperBg.parent.width));
+                                        if (root.backendRef) {
+                                            root.backendRef.setting_linux_editor_width = newWidth;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         ScrollView {

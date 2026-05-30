@@ -19,6 +19,7 @@ pub struct SyncBackend {
     has_sync_token: qt_property!(bool; READ has_sync_token NOTIFY sync_config_changed),
     sync_action_result: qt_property!(QString; READ sync_action_result NOTIFY sync_action_completed),
     sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
+    sync_in_progress: qt_property!(bool; READ sync_in_progress NOTIFY sync_status_changed),
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
     sync_config_changed: qt_signal!(),
     sync_action_completed: qt_signal!(),
@@ -80,6 +81,7 @@ impl SyncBackend {
     fn has_sync_token(&self) -> bool { self.with_app(false, |app| app.has_sync_token()) }
     fn sync_action_result(&self) -> QString { self.with_app("".into(), |app| app.sync_action_result()) }
     fn sync_status(&self) -> QString { self.with_app("not_configured".into(), |app| app.sync_status()) }
+    fn sync_in_progress(&self) -> bool { self.with_app(false, |app| app.sync_in_progress()) }
     fn set_sync_status(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_status(val)); self.sync_status_changed(); }
     fn has_workspace(&self) -> bool { self.with_app(false, |app| app.has_workspace()) }
     fn set_sync_token(&mut self, token: QString) { self.with_app_mut((), |app| app.set_sync_token(token)); self.sync_config_changed(); }
@@ -180,6 +182,11 @@ impl AppBackend {
 // AppBackend::sync_status
     pub(crate) fn sync_status(&self) -> QString {
         self.current_sync_status.clone().into()
+    }
+
+// AppBackend::sync_in_progress
+    pub(crate) fn sync_in_progress(&self) -> bool {
+        self.current_sync_in_progress
     }
 
 // AppBackend::set_sync_status
@@ -366,32 +373,54 @@ impl AppBackend {
         });
 
         thread::spawn(move || {
-            let api = WriterCoreApi::new(&workspace_path);
-            let config = match api.load_sync_config() {
-                Ok(c) => c,
-                Err(e) => {
-                    callback(SyncTaskOutcome {
-                        sync_status: "error".to_string(),
-                        action_result: format!("无法加载同步配置: {}", e),
-                    });
-                    return;
-                }
-            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let api = WriterCoreApi::new(&workspace_path);
+                let mut config = match api.load_sync_config() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return SyncTaskOutcome {
+                            sync_status: "error".to_string(),
+                            action_result: format!("无法加载同步配置: {}", e),
+                        };
+                    }
+                };
+                
+                // Bypass Android permission checks for Linux backend
+                config.android_has_internet_permission = true;
+                config.android_has_access_network_state_permission = true;
 
-            match api.perform_sync_diagnostics(config) {
-                Ok(result) => {
-                    let status = determine_diagnostics_status(&result);
-                    let msg = format_diagnostics_message(&result);
+                match api.perform_sync_diagnostics(config) {
+                    Ok(result) => {
+                        let status = determine_diagnostics_status(&result);
+                        let msg = format_diagnostics_message(&result);
 
-                    callback(SyncTaskOutcome {
-                        sync_status: status.to_string(),
-                        action_result: msg,
-                    });
+                        SyncTaskOutcome {
+                            sync_status: status.to_string(),
+                            action_result: msg,
+                        }
+                    }
+                    Err(e) => {
+                        SyncTaskOutcome {
+                            sync_status: sync_error_category(&e.to_string()),
+                            action_result: format!("诊断过程发生错误:\n{}", mask_sync_error(&e.to_string())),
+                        }
+                    }
                 }
-                Err(e) => {
+            }));
+            
+            match result {
+                Ok(outcome) => callback(outcome),
+                Err(err) => {
+                    let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = err.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "未知 Panic".to_string()
+                    };
                     callback(SyncTaskOutcome {
-                        sync_status: sync_error_category(&e.to_string()),
-                        action_result: format!("诊断过程发生错误:\n{}", mask_sync_error(&e.to_string())),
+                        sync_status: "fatal_error".to_string(),
+                        action_result: format!("同步诊断发生致命错误 (Panic):\n{}", panic_msg),
                     });
                 }
             }
@@ -464,6 +493,8 @@ impl AppBackend {
                     proxy_host: "".to_string(),
                     proxy_port: 0,
                     username: "".to_string(),
+                    android_has_internet_permission: false,
+                    android_has_access_network_state_permission: false,
                 });
 
             let raw_url = self.current_sync_remote_url.clone();
@@ -572,45 +603,65 @@ impl AppBackend {
         });
 
         thread::spawn(move || {
-            let api = WriterCoreApi::new(&workspace_path);
-            let config = match api.load_sync_config() {
-                Ok(c) => c,
-                Err(e) => {
-                    callback(SyncTaskOutcome {
-                        sync_status: "configured_untested".to_string(),
-                        action_result: format!("无法加载同步配置: {}", e),
-                    });
-                    return;
-                }
-            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let api = WriterCoreApi::new(&workspace_path);
+                let mut config = match api.load_sync_config() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return SyncTaskOutcome {
+                            sync_status: "configured_untested".to_string(),
+                            action_result: format!("无法加载同步配置: {}", e),
+                        };
+                    }
+                };
+                config.android_has_internet_permission = true;
+                config.android_has_access_network_state_permission = true;
 
-            match api.perform_sync_dry_run(config) {
-                Ok(plan) => {
-                    let mut msg = String::new();
-                    msg.push_str("同步计划检查完成\n");
-                    msg.push_str(&format!("需要上传的文件数: {}\n", plan.files_to_upload.len()));
-                    msg.push_str(&format!("需要下载的文件数: {}\n", plan.files_to_download.len()));
-                    msg.push_str(&format!("本地待删除的文件数: {}\n", plan.files_to_delete_local.len()));
-                    msg.push_str(&format!("远程待删除的文件数: {}\n", plan.files_to_delete_remote.len()));
+                match api.perform_sync_dry_run(config) {
+                    Ok(plan) => {
+                        let mut msg = String::new();
+                        msg.push_str("同步计划检查完成\n");
+                        msg.push_str(&format!("需要上传的文件数: {}\n", plan.files_to_upload.len()));
+                        msg.push_str(&format!("需要下载的文件数: {}\n", plan.files_to_download.len()));
+                        msg.push_str(&format!("本地待删除的文件数: {}\n", plan.files_to_delete_local.len()));
+                        msg.push_str(&format!("远程待删除的文件数: {}\n", plan.files_to_delete_remote.len()));
 
-                    if !plan.files_to_upload.is_empty() {
-                        msg.push_str("\n将要上传的文件:\n");
-                        for f in plan.files_to_upload.iter().take(10) {
-                            msg.push_str(&format!("  - {}\n", f));
+                        if !plan.files_to_upload.is_empty() {
+                            msg.push_str("\n将要上传的文件:\n");
+                            for f in plan.files_to_upload.iter().take(10) {
+                                msg.push_str(&format!("  - {}\n", f));
+                            }
+                            if plan.files_to_upload.len() > 10 {
+                                msg.push_str("  ... 更多文件省略\n");
+                            }
                         }
-                        if plan.files_to_upload.len() > 10 {
-                            msg.push_str("  ... 更多文件省略\n");
+                        SyncTaskOutcome {
+                            sync_status: "configured_untested".to_string(),
+                            action_result: msg,
                         }
                     }
-                    callback(SyncTaskOutcome {
-                        sync_status: "configured_untested".to_string(),
-                        action_result: msg,
-                    });
+                    Err(e) => {
+                        SyncTaskOutcome {
+                            sync_status: "configured_untested".to_string(),
+                            action_result: format!("检查同步计划失败: {}", mask_sync_error(&e.to_string())),
+                        }
+                    }
                 }
-                Err(e) => {
+            }));
+            
+            match result {
+                Ok(outcome) => callback(outcome),
+                Err(err) => {
+                    let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = err.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "未知 Panic".to_string()
+                    };
                     callback(SyncTaskOutcome {
-                        sync_status: "configured_untested".to_string(),
-                        action_result: format!("检查同步计划失败: {}", mask_sync_error(&e.to_string())),
+                        sync_status: "fatal_error".to_string(),
+                        action_result: format!("检查同步计划发生致命错误 (Panic):\n{}", panic_msg),
                     });
                 }
             }
@@ -719,135 +770,156 @@ impl AppBackend {
         });
 
         thread::spawn(move || {
-            let api = WriterCoreApi::new(&workspace_path);
-            let config = match api.load_sync_config() {
-                Ok(c) => c,
-                Err(e) => {
-                    callback(SyncTaskOutcome {
-                        sync_status: "error".to_string(),
-                        action_result: format!("无法读取同步配置: {}", e),
-                    });
-                    return;
-                }
-            };
-            let backend_label = config.backend_type.clone();
-            debug_log_static(
-                "sync",
-                "perform_sync_backend",
-                &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
-            );
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let api = WriterCoreApi::new(&workspace_path);
+                let mut config = match api.load_sync_config() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return SyncTaskOutcome {
+                            sync_status: "error".to_string(),
+                            action_result: format!("无法读取同步配置: {}", e),
+                        };
+                    }
+                };
+                config.android_has_internet_permission = true;
+                config.android_has_access_network_state_permission = true;
+                
+                let backend_label = config.backend_type.clone();
+                debug_log_static(
+                    "sync",
+                    "perform_sync_backend",
+                    &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
+                );
 
-            match api.perform_sync(config) {
-                Ok(result) => {
-                    let (status, msg) = match result.status.as_str() {
-                        "success" => {
-                            let m = format!(
-                                "同步成功\n上传: {} 个文件\n下载: {} 个文件",
-                                result.uploaded_files.len(),
-                                result.downloaded_files.len()
-                            );
-                            ("success".to_string(), m)
-                        }
-                        "latest_wins_applied" => {
-                            let m = format!(
-                                "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件",
-                                result.uploaded_files.len(),
-                                result.downloaded_files.len(),
-                                result.local_deletes.len(),
-                                result.remote_deletes.len(),
-                                result.overwritten_files.len()
-                            );
-                            ("success".to_string(), m)
-                        }
-                        "no_changes" => {
-                            ("success".to_string(), "同步完成：本地和远端均已是最新状态，无须更新。".to_string())
-                        }
-                        "configured_untested" => {
-                            ("configured_untested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
-                        }
-                        "conflict" => {
-                            let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
-                            files.sort();
-                            files.dedup();
-                            
-                            let file_str = if files.is_empty() {
-                                "未能列出具体冲突文件".to_string()
-                            } else {
-                                let display_files = if files.len() > 100 {
-                                    let mut subset = files[0..100].to_vec();
-                                    subset.push(format!("...等共 {} 个文件", files.len()));
-                                    subset
+                match api.perform_sync(config) {
+                    Ok(result) => {
+                        let (status, msg) = match result.status.as_str() {
+                            "success" => {
+                                let m = format!(
+                                    "同步成功\n上传: {} 个文件\n下载: {} 个文件",
+                                    result.uploaded_files.len(),
+                                    result.downloaded_files.len()
+                                );
+                                ("success".to_string(), m)
+                            }
+                            "latest_wins_applied" => {
+                                let m = format!(
+                                    "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件",
+                                    result.uploaded_files.len(),
+                                    result.downloaded_files.len(),
+                                    result.local_deletes.len(),
+                                    result.remote_deletes.len(),
+                                    result.overwritten_files.len()
+                                );
+                                ("success".to_string(), m)
+                            }
+                            "no_changes" => {
+                                ("success".to_string(), "同步完成：本地和远端均已是最新状态，无须更新。".to_string())
+                            }
+                            "configured_untested" => {
+                                ("configured_untested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
+                            }
+                            "conflict" => {
+                                let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
+                                files.sort();
+                                files.dedup();
+                                
+                                let file_str = if files.is_empty() {
+                                    "未能列出具体冲突文件".to_string()
                                 } else {
-                                    files.clone()
+                                    let display_files = if files.len() > 100 {
+                                        let mut subset = files[0..100].to_vec();
+                                        subset.push(format!("...等共 {} 个文件", files.len()));
+                                        subset
+                                    } else {
+                                        files.clone()
+                                    };
+                                    display_files.join("\n  - ")
                                 };
-                                display_files.join("\n  - ")
-                            };
-                            
-                            let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
-                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
+                                
+                                let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
+                                debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
 
-                            let m = format!(
-                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
-                                file_str
-                            );
-                            ("conflict".to_string(), m)
-                        }
-                        "recoverable_error" => {
-                            let e = result.error.as_deref().unwrap_or("未知错误");
-                            ("recoverable_error".to_string(), format!("可恢复的同步错误:\n{}\n请检查后重试。", mask_sync_error(e)))
-                        }
-                        "fatal_error" => {
-                            let e = result.error.as_deref().unwrap_or("未知错误");
-                            ("fatal_error".to_string(), format!("严重同步错误:\n{}\n建议备份数据并重新配置。", mask_sync_error(e)))
-                        }
-                        "dirty_repo_blocked" => {
-                            ("dirty_repo_blocked".to_string(), "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件。".to_string())
-                        }
-                        "branch_missing_recovered" => {
-                            ("branch_missing_recovered".to_string(), "同步成功 (分支已恢复)\n已自动恢复并关联本地与远端分支。".to_string())
-                        }
-                        "error" => {
-                            let e = result.error.as_deref().unwrap_or("未知错误");
-                            let cat = sync_error_category(e);
-                            let m = if cat == "conflict" {
-                                debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(e)));
-                                format!(
-                                    "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
-                                    mask_sync_error(e)
-                                )
-                            } else {
-                                format!("同步失败:\n{}", mask_sync_error(e))
-                            };
-                            (cat, m)
-                        }
-                        "idle" => {
-                            ("configured_untested".to_string(), "同步未执行".to_string())
-                        }
-                        other => {
-                            ("error".to_string(), format!("同步状态: {}", other))
-                        }
-                    };
+                                let m = format!(
+                                    "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
+                                    file_str
+                                );
+                                ("conflict".to_string(), m)
+                            }
+                            "recoverable_error" => {
+                                let e = result.error.as_deref().unwrap_or("未知错误");
+                                ("recoverable_error".to_string(), format!("可恢复的同步错误:\n{}\n请检查后重试。", mask_sync_error(e)))
+                            }
+                            "fatal_error" => {
+                                let e = result.error.as_deref().unwrap_or("未知错误");
+                                ("fatal_error".to_string(), format!("严重同步错误:\n{}\n建议备份数据并重新配置。", mask_sync_error(e)))
+                            }
+                            "dirty_repo_blocked" => {
+                                ("dirty_repo_blocked".to_string(), "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件。".to_string())
+                            }
+                            "branch_missing_recovered" => {
+                                ("branch_missing_recovered".to_string(), "同步成功 (分支已恢复)\n已自动恢复并关联本地与远端分支。".to_string())
+                            }
+                            "error" => {
+                                let e = result.error.as_deref().unwrap_or("未知错误");
+                                let cat = sync_error_category(e);
+                                let m = if cat == "conflict" {
+                                    debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(e)));
+                                    format!(
+                                        "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
+                                        mask_sync_error(e)
+                                    )
+                                } else {
+                                    format!("同步失败:\n{}", mask_sync_error(e))
+                                };
+                                (cat, m)
+                            }
+                            "idle" => {
+                                ("configured_untested".to_string(), "同步未执行".to_string())
+                            }
+                            other => {
+                                ("error".to_string(), format!("同步状态: {}", other))
+                            }
+                        };
 
-                    callback(SyncTaskOutcome {
-                        sync_status: status.to_string(),
-                        action_result: msg,
-                    });
+                        SyncTaskOutcome {
+                            sync_status: status.to_string(),
+                            action_result: msg,
+                        }
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        let cat = sync_error_category(&err_str);
+                        let action_result = if cat == "conflict" {
+                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err_str)));
+                            format!(
+                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
+                                mask_sync_error(&err_str)
+                            )
+                        } else {
+                            format!("同步操作失败:\n{}", mask_sync_error(&err_str))
+                        };
+                        SyncTaskOutcome {
+                            sync_status: cat,
+                            action_result,
+                        }
+                    }
                 }
-                Err(e) => {
-                    let err_str = e.to_string();
-                    let cat = sync_error_category(&err_str);
-                    let action_result = if cat == "conflict" {
-                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err_str)));
-                        format!(
-                            "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
-                            mask_sync_error(&err_str)
-                        )
+            }));
+
+            match result {
+                Ok(outcome) => callback(outcome),
+                Err(err) => {
+                    let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = err.downcast_ref::<String>() {
+                        s.clone()
                     } else {
-                        format!("同步操作失败:\n{}", mask_sync_error(&err_str))
+                        "未知 Panic".to_string()
                     };
                     callback(SyncTaskOutcome {
-                        sync_status: cat,
-                        action_result,
+                        sync_status: "fatal_error".to_string(),
+                        action_result: format!("同步执行发生致命错误 (Panic):\n{}", panic_msg),
                     });
                 }
             }

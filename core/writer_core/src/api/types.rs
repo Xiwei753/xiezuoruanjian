@@ -168,6 +168,8 @@ pub struct LocalSettingsDto {
     pub editor_smooth_cursor_duration_ms: u64,
     pub ai_enabled: bool,
     pub stats_device_id: Option<String>,
+    pub linux_sidebar_width: f64,
+    pub linux_editor_width: f64,
 }
 
 impl From<crate::settings::LocalSettings> for LocalSettingsDto {
@@ -189,6 +191,8 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
             editor_smooth_cursor_duration_ms: s.editor_smooth_cursor_duration_ms,
             ai_enabled: s.ai_enabled,
             stats_device_id: s.stats_device_id,
+            linux_sidebar_width: s.linux_sidebar_width,
+            linux_editor_width: s.linux_editor_width,
         }
     }
 }
@@ -212,7 +216,8 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             editor_smooth_cursor_duration_ms: s.editor_smooth_cursor_duration_ms,
             ai_enabled: s.ai_enabled,
             stats_device_id: s.stats_device_id,
-            
+            linux_sidebar_width: s.linux_sidebar_width,
+            linux_editor_width: s.linux_editor_width,
         }
     }
 }
@@ -258,6 +263,8 @@ pub struct SyncConfigDto {
     pub proxy_host: String,
     pub proxy_port: u16,
     pub username: String,
+    pub android_has_internet_permission: bool,
+    pub android_has_access_network_state_permission: bool,
 }
 
 impl From<crate::sync_service::SyncConfig> for SyncConfigDto {
@@ -284,6 +291,8 @@ impl From<crate::sync_service::SyncConfig> for SyncConfigDto {
             proxy_host: c.proxy_host,
             proxy_port: c.proxy_port,
             username: c.username,
+            android_has_internet_permission: c.android_has_internet_permission,
+            android_has_access_network_state_permission: c.android_has_access_network_state_permission,
         }
     }
 }
@@ -313,8 +322,8 @@ impl From<SyncConfigDto> for crate::sync_service::SyncConfig {
             proxy_host: c.proxy_host,
             proxy_port: c.proxy_port,
             username: c.username,
-            android_has_access_network_state_permission: false,
-            android_has_internet_permission: false,
+            android_has_access_network_state_permission: c.android_has_access_network_state_permission,
+            android_has_internet_permission: c.android_has_internet_permission,
         }
     }
 }

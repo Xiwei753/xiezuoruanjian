@@ -172,6 +172,7 @@ Item {
                 text: qsTr("执行同步")
                 theme: root.theme
                 variant: "secondary"
+                enabled: !(root.backendRef && root.backendRef.sync_in_progress)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
                     syncResultArea.text = qsTr("正在同步...")

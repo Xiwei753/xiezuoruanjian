@@ -1454,6 +1454,7 @@ dependencies = [
  "cpp_build",
  "pkg-config",
  "qmetaobject",
+ "regex",
  "rfd",
  "semver",
  "serde",

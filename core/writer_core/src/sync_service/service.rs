@@ -814,7 +814,9 @@ impl crate::sync_service::SyncService {
             mode
         ));
 
-        let _ = fetch_and_reset_local_repo(workspace_path, config, token, &new_commit_sha);
+        if let Err(e) = fetch_and_reset_local_repo(workspace_path, config, token, &new_commit_sha) {
+            eprintln!("sync: fetch_and_reset_failed - LWW 同步后 Git 仓库重置失败 (已降级为警告): {}", e);
+        }
 
         Ok(result.clone())
     }
