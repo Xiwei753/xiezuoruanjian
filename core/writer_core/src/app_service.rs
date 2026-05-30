@@ -378,22 +378,22 @@ impl WriterAppService {
         self.api.save_starmap_layout_json(&starmap_id, &layout_json)
     }
 
-    pub fn add_starmap_embed(
+    pub fn add_starmap_embed_json(
         &self,
         starmap_id: String,
         embed_json: String,
     ) -> Result<String, WriterError> {
-        self.api.add_starmap_embed(&starmap_id, &embed_json)
+        self.api.add_starmap_embed_json(&starmap_id, &embed_json)
     }
 
-    pub fn update_starmap_embed(
+    pub fn update_starmap_embed_json(
         &self,
         starmap_id: String,
         instance_id: String,
         patch_json: String,
     ) -> Result<String, WriterError> {
         self.api
-            .update_starmap_embed(&starmap_id, &instance_id, &patch_json)
+            .update_starmap_embed_json(&starmap_id, &instance_id, &patch_json)
     }
 
     pub fn delete_starmap_embed(
@@ -404,22 +404,22 @@ impl WriterAppService {
         self.api.delete_starmap_embed(&starmap_id, &instance_id)
     }
 
-    pub fn add_starmap_link(
+    pub fn add_starmap_link_json(
         &self,
         starmap_id: String,
         link_json: String,
     ) -> Result<String, WriterError> {
-        self.api.add_starmap_link(&starmap_id, &link_json)
+        self.api.add_starmap_link_json(&starmap_id, &link_json)
     }
 
-    pub fn update_starmap_link(
+    pub fn update_starmap_link_json(
         &self,
         starmap_id: String,
         link_id: String,
         patch_json: String,
     ) -> Result<String, WriterError> {
         self.api
-            .update_starmap_link(&starmap_id, &link_id, &patch_json)
+            .update_starmap_link_json(&starmap_id, &link_id, &patch_json)
     }
 
     pub fn delete_starmap_link(
@@ -430,10 +430,10 @@ impl WriterAppService {
         self.api.delete_starmap_link(&starmap_id, &link_id)
     }
 
-    pub fn find_starmap_references(
+    pub fn find_starmap_references_json(
         &self,
         target_starmap_id: String,
     ) -> Result<String, WriterError> {
-        self.api.find_starmap_references(&target_starmap_id)
+        self.api.find_starmap_references_json(&target_starmap_id)
     }
 }

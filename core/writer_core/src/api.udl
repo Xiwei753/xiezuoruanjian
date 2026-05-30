@@ -378,23 +378,23 @@ interface WriterAppService {
     boolean save_starmap_layout_json(string starmap_id, string layout_json);
 
     [Throws=WriterError]
-    string add_starmap_embed(string starmap_id, string embed_json);
+    string add_starmap_embed_json(string starmap_id, string embed_json);
 
     [Throws=WriterError]
-    string update_starmap_embed(string starmap_id, string instance_id, string patch_json);
+    string update_starmap_embed_json(string starmap_id, string instance_id, string patch_json);
 
     [Throws=WriterError]
     boolean delete_starmap_embed(string starmap_id, string instance_id);
 
     [Throws=WriterError]
-    string add_starmap_link(string starmap_id, string link_json);
+    string add_starmap_link_json(string starmap_id, string link_json);
 
     [Throws=WriterError]
-    string update_starmap_link(string starmap_id, string link_id, string patch_json);
+    string update_starmap_link_json(string starmap_id, string link_id, string patch_json);
 
     [Throws=WriterError]
     boolean delete_starmap_link(string starmap_id, string link_id);
 
     [Throws=WriterError]
-    string find_starmap_references(string target_starmap_id);
+    string find_starmap_references_json(string target_starmap_id);
 };
