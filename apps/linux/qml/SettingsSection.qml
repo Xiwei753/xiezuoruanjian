@@ -18,7 +18,7 @@ Rectangle {
     property string title: ""
     default property alias contentData: rows.data
 
-    radius: dt ? dt.radiusMd : 12
+    radius: dt ? dt.radiusLg : 16
     color: dt ? dt.card : "#1E2128"
     border.color: dt ? dt.border : "#2A2E36"
     border.width: 1
@@ -29,13 +29,14 @@ Rectangle {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: dt ? dt.sp16 : 16
-        spacing: dt ? dt.sp10 : 10
+        anchors.margins: dt ? dt.sp20 : 20
+        spacing: dt ? dt.sp12 : 12
 
         Text {
             text: root.title
             color: dt ? dt.textPrimary : "#E2E4E9"
-            font.pixelSize: dt ? dt.fontLg : 16
+            font.pixelSize: dt ? dt.subtitle : 18
+            font.family: dt ? dt.fontFamily : "sans-serif"
             font.weight: Font.DemiBold
             Layout.fillWidth: true
         }

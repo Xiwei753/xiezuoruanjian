@@ -30,42 +30,27 @@ Item {
 
             Text {
                 text: root.title
-                color: dt ? dt.textPrimary : "#E2E4E9"
+                color: dt ? dt.onBackground : "#1A1C1E"
                 font.pixelSize: dt ? dt.fontTitle : 26
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.Bold
             }
 
             Text {
                 text: root.subtitle
                 color: dt ? dt.textSecondary : "#9CA0AB"
-                font.pixelSize: dt ? dt.fontMd : 14
+                font.pixelSize: dt ? dt.body : 14
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 visible: text.length > 0
             }
         }
 
-        Rectangle {
+        AppButton {
             visible: root.actionText.length > 0
-            height: dt ? dt.actionButtonHeight : 40
-            width: actionLabel.implicitWidth + (dt ? dt.sp24 : 24)
-            radius: dt ? dt.actionButtonRadius : 12
-            color: actionHover.containsMouse ? (dt ? dt.accentHover : "#8E9EE8") : (dt ? dt.accent : "#7B8CDE")
-
-            Text {
-                id: actionLabel
-                anchors.centerIn: parent
-                text: root.actionText
-                color: "#FFFFFF"
-                font.pixelSize: dt ? dt.fontMd : 14
-                font.weight: Font.Medium
-            }
-
-            MouseArea {
-                id: actionHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.actionClicked()
-            }
+            text: root.actionText
+            theme: root.dt
+            variant: "primary"
+            onClicked: root.actionClicked()
         }
     }
 }

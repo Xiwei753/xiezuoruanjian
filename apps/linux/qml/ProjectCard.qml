@@ -30,10 +30,10 @@ Rectangle {
 
     width: 220
     height: 180
-    radius: dt ? dt.radiusCard : 18
-    color: hovered ? (dt ? dt.cardHover : "#22262E") : (dt ? dt.card : "#1E2128")
-    border.color: hovered ? (dt ? dt.border : "#2A2E36") : "transparent"
-    border.width: hovered ? 1 : 0
+    radius: dt ? dt.radiusLg : 16
+    color: hovered ? (dt ? dt.surfaceContainer : "#F0F3F7") : (dt ? dt.card : "#F6F8FB")
+    border.color: hovered ? (dt ? dt.primary : "#006497") : (dt ? dt.border : "#CBD5E1")
+    border.width: 1
 
     property bool hovered: false
 
@@ -70,13 +70,10 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
-            Rectangle {
-                width: 7; height: 7
-                radius: 4
-                color: root.syncStatus === "success" ? (dt ? dt.success : "#5CB880") :
-                       root.syncStatus === "syncing" ? (dt ? dt.warning : "#E0A840") :
-                       root.syncStatus === "error" ? (dt ? dt.danger : "#E06060") :
-                       (dt ? dt.textMuted : "#606470")
+            StatusPill {
+                theme: dt
+                status: root.syncStatus === "success" ? "success" : (root.syncStatus === "syncing" ? "warning" : (root.syncStatus === "error" ? "error" : "info"))
+                text: ""
                 visible: root.syncStatus !== "none"
             }
         }
@@ -87,7 +84,8 @@ Rectangle {
             Layout.topMargin: dt ? dt.sp12 : 12
             text: root.title || "未命名作品"
             color: dt ? dt.textPrimary : "#E2E4E9"
-            font.pixelSize: dt ? dt.fontLg : 16
+            font.pixelSize: dt ? dt.subtitle : 18
+            font.family: dt ? dt.fontFamily : "sans-serif"
             font.weight: Font.DemiBold
             elide: Text.ElideRight
             maximumLineCount: 2
@@ -106,13 +104,15 @@ Rectangle {
                 Text {
                     text: root.wordCount >= 10000 ? (root.wordCount / 10000).toFixed(1) + "w" : root.wordCount.toLocaleString()
                     color: dt ? dt.textPrimary : "#E2E4E9"
-                    font.pixelSize: dt ? dt.fontMd : 14
+                    font.pixelSize: dt ? dt.body : 14
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     font.weight: Font.Medium
                 }
                 Text {
                     text: "总字数"
                     color: dt ? dt.textMuted : "#606470"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    font.pixelSize: dt ? dt.caption : 12
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                 }
             }
 
@@ -121,14 +121,16 @@ Rectangle {
                 visible: root.todayInput > 0
                 Text {
                     text: "+" + (root.todayInput >= 1000 ? (root.todayInput / 1000).toFixed(1) + "k" : root.todayInput.toLocaleString())
-                    color: dt ? dt.accent : "#7B8CDE"
-                    font.pixelSize: dt ? dt.fontMd : 14
+                    color: dt ? dt.primary : "#006497"
+                    font.pixelSize: dt ? dt.body : 14
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     font.weight: Font.Medium
                 }
                 Text {
                     text: "今日"
                     color: dt ? dt.textMuted : "#606470"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    font.pixelSize: dt ? dt.caption : 12
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                 }
             }
 
@@ -137,7 +139,8 @@ Rectangle {
             Text {
                 text: root.lastEdited || ""
                 color: dt ? dt.textMuted : "#606470"
-                font.pixelSize: dt ? dt.fontXs : 11
+                font.pixelSize: dt ? dt.caption : 12
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 visible: text !== ""
             }
         }

@@ -19,7 +19,7 @@ Dialog {
     modal: true
     x: (parent ? (parent.width - width) / 2 : 0)
     y: (parent ? (parent.height - height) / 2 : 0)
-    standardButtons: Dialog.Ok | Dialog.Cancel
+    standardButtons: Dialog.NoButton
 
     property var theme: null
     signal submitProject(string title)
@@ -28,37 +28,50 @@ Dialog {
     height: 220
 
     background: Rectangle {
-        color: theme ? theme.bgDark : "#1E1E1E"
+        color: theme ? theme.surface : "#FCFCFF"
         border.color: theme ? theme.border : "#333333"
-        radius: 8
+        border.width: 1
+        radius: theme ? theme.radiusXl : 24
     }
+    header: null
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 16
+        anchors.margins: theme ? theme.sp24 : 24
+        spacing: theme ? theme.sp16 : 16
+
+        Text {
+            text: "新建作品"
+            color: theme ? theme.textPrimary : "#1A1C1E"
+            font.pixelSize: theme ? theme.subtitle : 18
+            font.family: theme ? theme.fontFamily : "sans-serif"
+            font.weight: Font.DemiBold
+        }
 
         Text {
             text: "请输入作品名称："
-            color: theme ? theme.textMain : "#E0E0E0"
-            font.pixelSize: 14
+            color: theme ? theme.onSurfaceVariant : "#42474E"
+            font.pixelSize: theme ? theme.body : 14
+            font.family: theme ? theme.fontFamily : "sans-serif"
         }
 
-        TextField {
+        AppTextField {
             id: titleField
             Layout.fillWidth: true
+            theme: root.theme
             placeholderText: "作品名称"
-            color: theme ? theme.textMain : "#E0E0E0"
-            background: Rectangle {
-                color: theme ? theme.inputBg : "#2A2A2A"
-                border.color: titleField.activeFocus ? (theme ? theme.accent : "#82AAFF") : (theme ? theme.border : "#444444")
-                radius: 4
-            }
             onAccepted: {
                 if (text.trim() !== "") {
                     root.accept();
                 }
             }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Item { Layout.fillWidth: true }
+            AppButton { text: "取消"; theme: root.theme; variant: "text"; onClicked: root.reject() }
+            AppButton { text: "创建"; theme: root.theme; variant: "primary"; onClicked: { if (titleField.text.trim() !== "") root.accept() } }
         }
     }
 

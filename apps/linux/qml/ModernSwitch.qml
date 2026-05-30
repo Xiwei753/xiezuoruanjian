@@ -15,7 +15,6 @@ Item {
     id: root
     property var dt: null
     property bool checked: false
-    property bool enabled: true
     signal toggled(bool checked)
 
     width: 52
@@ -26,19 +25,20 @@ Item {
         width: 50
         height: 28
         radius: 14
-        color: !root.enabled ? (dt ? dt.surfaceVariant : "#2A2E36") : (root.checked ? (dt ? dt.switchTrackOn : "#6679D8") : (dt ? dt.switchTrackOff : "#303543"))
-        border.width: 1
-        border.color: !root.enabled ? (dt ? dt.border : "#2A2E36") : (root.checked ? Qt.lighter(dt ? dt.switchTrackOn : "#6679D8", 1.1) : (dt ? dt.controlBorder : "#3A3F49"))
+        color: !root.enabled ? (dt ? dt.surfaceContainer : "#E2E8F0") : (root.checked ? (dt ? dt.primary : "#006497") : (dt ? dt.surfaceVariant : "#DFE3EB"))
+        border.width: root.checked ? 0 : 1
+        border.color: !root.enabled ? (dt ? dt.border : "#CBD5E1") : (dt ? dt.outline : "#72787E")
 
         Rectangle {
-            width: 24
-            height: 24
-            radius: 12
-            y: 2
-            x: root.checked ? (parent.width - width - 2) : 2
-            color: dt ? dt.switchThumb : "#EEF1FB"
+            width: root.checked ? 24 : 18
+            height: width
+            radius: width / 2
+            y: (parent.height - height) / 2
+            x: root.checked ? (parent.width - width - 2) : 5
+            color: root.checked ? (dt ? dt.onPrimary : "#FFFFFF") : (dt ? dt.outline : "#72787E")
             opacity: root.enabled ? 1.0 : 0.45
             Behavior on x { NumberAnimation { duration: 140 } }
+            Behavior on width { NumberAnimation { duration: 140 } }
         }
     }
 

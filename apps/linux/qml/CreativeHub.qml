@@ -42,15 +42,15 @@ Rectangle {
         // Top navigation bar
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 52
+            Layout.preferredHeight: 64
             color: dt ? dt.surface : "#1A1D23"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: dt ? dt.sp24 : 24
-                anchors.rightMargin: dt ? dt.sp24 : 24
+                anchors.leftMargin: dt ? dt.sp32 : 32
+                anchors.rightMargin: dt ? dt.sp32 : 32
                 spacing: dt ? dt.sp32 : 32
 
                 // Logo
@@ -59,8 +59,9 @@ Rectangle {
                     Layout.alignment: Qt.AlignVCenter
                     Text {
                         text: "Writer"
-                        color: dt ? dt.accent : "#7B8CDE"
+                        color: dt ? dt.primary : "#006497"
                         font.pixelSize: dt ? dt.fontXl : 18
+                        font.family: dt ? dt.fontFamily : "sans-serif"
                         font.weight: Font.Bold
                     }
                 }
@@ -80,19 +81,20 @@ Rectangle {
                         Rectangle {
                             width: navLabel.implicitWidth + (dt ? dt.sp20 : 20)
                             height: 36
-                            radius: dt ? dt.radiusSm : 8
+                            radius: dt ? dt.radiusPill : 999
                             color: root.currentTab === modelData.idx ?
-                                   (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") :
-                                   navHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                                   (dt ? dt.primaryContainer : "#CCE5FF") :
+                                   navHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                             Text {
                                 id: navLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
-                                       (dt ? dt.accentText : "#3D4D9E") :
-                                       (dt ? dt.textSecondary : "#5C6070")
-                                font.pixelSize: dt ? dt.fontMd : 14
+                                       (dt ? dt.onPrimaryContainer : "#001E31") :
+                                       (dt ? dt.onSurfaceVariant : "#42474E")
+                                font.pixelSize: dt ? dt.label : 13
+                                font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
                             }
 
@@ -118,8 +120,8 @@ Rectangle {
                     Rectangle {
                         width: syncRow.implicitWidth + (dt ? dt.sp16 : 16)
                         height: 40
-                        radius: dt ? dt.radiusSm : 8
-                        color: syncHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
+                        radius: dt ? dt.radiusPill : 999
+                        color: syncHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
                         visible: root.appState && root.appState.sync && root.appState.sync.status !== "not_configured"
 
                         Row {
@@ -133,7 +135,7 @@ Rectangle {
                                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
                                     if (s === "success") return dt ? dt.success : "#5CB880";
                                     if (s === "syncing") return dt ? dt.warning : "#E0A840";
-                                    if (s === "error" || s === "conflict") return dt ? dt.danger : "#E06060";
+                                    if (s === "error" || s === "conflict") return dt ? dt.error : "#E06060";
                                     return dt ? dt.textMuted : "#606470";
                                 }
                                 anchors.verticalCenter: parent.verticalCenter
@@ -148,8 +150,9 @@ Rectangle {
                                     if (s === "conflict") return "冲突";
                                     return "已配置";
                                 }
-                                color: dt ? dt.textSecondary : "#5C6070"
-                                font.pixelSize: dt ? dt.fontSm : 12
+                                color: dt ? dt.onSurfaceVariant : "#42474E"
+                                font.pixelSize: dt ? dt.caption : 12
+                                font.family: dt ? dt.fontFamily : "sans-serif"
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: root.width > 700
                             }
@@ -167,13 +170,13 @@ Rectangle {
                     // Settings button
                     Rectangle {
                         width: 40; height: 40
-                        radius: dt ? dt.radiusSm : 8
-                        color: settingsHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
+                        radius: dt ? dt.radiusPill : 999
+                        color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                         Text {
                             anchors.centerIn: parent
                             text: "\u2699"
-                            color: dt ? dt.textSecondary : "#5C6070"
+                            color: dt ? dt.onSurfaceVariant : "#42474E"
                             font.pixelSize: dt ? dt.fontLg : 16
                         }
 
@@ -190,8 +193,8 @@ Rectangle {
                     Rectangle {
                         width: switchRow.implicitWidth + (dt ? dt.sp16 : 16)
                         height: 40
-                        radius: dt ? dt.radiusSm : 8
-                        color: switchHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
+                        radius: dt ? dt.radiusPill : 999
+                        color: switchHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                         Row {
                             id: switchRow
@@ -204,8 +207,9 @@ Rectangle {
                             }
                             Text {
                                 text: "切换工作区"
-                                color: dt ? dt.textSecondary : "#5C6070"
-                                font.pixelSize: dt ? dt.fontSm : 12
+                                color: dt ? dt.onSurfaceVariant : "#42474E"
+                                font.pixelSize: dt ? dt.caption : 12
+                                font.family: dt ? dt.fontFamily : "sans-serif"
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: root.width > 700
                             }

@@ -18,64 +18,88 @@ QtObject {
     property bool isDark: true
     property string monetColor: ""
 
-    // --- Background ---
-    property color darkBg: "#111318"
-    property color darkSurface: "#1A1D23"
-    property color darkPaper: "#191C21"
-    property color darkBorder: "#2A2E36"
-    property color darkSidebar: "#14161B"
-    property color darkCard: "#1E2128"
-    property color darkCardHover: "#22262E"
-
-    property color lightBg: "#F3F1EC"
-    property color lightSurface: "#FAF8F3"
-    property color lightPaper: "#FFFDF8"
-    property color lightBorder: "#E2DED6"
-    property color lightSidebar: "#EDE9E1"
-    property color lightCard: "#FFFFFF"
-    property color lightCardHover: "#FAFAF7"
-
-    // --- Derived ---
-    property color bg: isDark ? darkBg : lightBg
-    property color surface: isDark ? darkSurface : lightSurface
-    property color paper: isDark ? darkPaper : lightPaper
-    property color border: isDark ? darkBorder : lightBorder
-    property color sidebar: isDark ? darkSidebar : lightSidebar
-    property color card: isDark ? darkCard : lightCard
-    property color cardHover: isDark ? darkCardHover : lightCardHover
-
-    // --- Text ---
-    property color textPrimary: isDark ? "#E2E4E9" : "#1A1C23"
-    property color textSecondary: isDark ? "#9CA0AB" : "#5C6070"
-    property color textMuted: isDark ? "#606470" : "#8E9099"
-
-    // --- Accent ---
-    property color defaultAccent: isDark ? "#7B8CDE" : "#5B6BC0"
-    property color defaultAccentHover: isDark ? "#8E9EE8" : "#4A5AB0"
-    property color defaultAccentText: isDark ? "#C5CCEE" : "#3D4D9E"
-
-    // Check if monetColor is valid hex color
+    // --- Material 3 color roles (aligned with Android colors.xml) ---
     property bool hasMonetColor: monetColor.length === 7 && monetColor.startsWith("#")
+    property color primary: hasMonetColor ? monetColor : (isDark ? "#92CCFF" : "#006497")
+    property color onPrimary: isDark ? "#003351" : "#FFFFFF"
+    property color primaryContainer: isDark ? "#004B73" : "#CCE5FF"
+    property color onPrimaryContainer: isDark ? "#CCE5FF" : "#001E31"
+    property color secondary: isDark ? "#B8C8DA" : "#51606F"
+    property color onSecondary: isDark ? "#233240" : "#FFFFFF"
+    property color secondaryContainer: isDark ? "#394857" : "#D4E4F6"
+    property color onSecondaryContainer: isDark ? "#D4E4F6" : "#0E1D2A"
+    property color background: isDark ? "#1A1C1E" : "#FCFCFF"
+    property color onBackground: isDark ? "#E2E2E5" : "#1A1C1E"
+    property color surface: isDark ? "#1A1C1E" : "#FCFCFF"
+    property color onSurface: isDark ? "#E2E2E5" : "#1A1C1E"
+    property color surfaceVariant: isDark ? "#42474E" : "#DFE3EB"
+    property color onSurfaceVariant: isDark ? "#C3C6CF" : "#42474E"
+    property color outline: isDark ? "#8C9198" : "#72787E"
+    property color error: isDark ? "#FFB4AB" : "#BA1A1A"
+    property color onError: isDark ? "#690005" : "#FFFFFF"
 
-    property color accent: hasMonetColor ? monetColor : defaultAccent
-    property color accentSoft: hasMonetColor ? Qt.rgba(accent.r, accent.g, accent.b, 0.12) : (isDark ? Qt.rgba(0.48, 0.55, 0.87, 0.12) : Qt.rgba(0.36, 0.42, 0.75, 0.08))
-    property color accentHover: hasMonetColor ? (isDark ? Qt.lighter(accent, 1.15) : Qt.darker(accent, 1.15)) : defaultAccentHover
-    property color accentText: hasMonetColor ? (isDark ? Qt.lighter(accent, 1.3) : Qt.darker(accent, 1.3)) : defaultAccentText
+    // --- Desktop surfaces ---
+    property color surfaceContainerLowest: isDark ? "#0F1113" : "#FFFFFF"
+    property color surfaceContainerLow: isDark ? "#1F2225" : "#F6F8FB"
+    property color surfaceContainer: isDark ? "#23272A" : "#F0F3F7"
+    property color surfaceContainerHigh: isDark ? "#2D3135" : "#EAEFF5"
+    property color surfaceContainerHighest: isDark ? "#383C40" : "#E4E9EF"
+    property color inverseSurface: isDark ? "#E2E2E5" : "#2F3033"
+    property color inverseOnSurface: isDark ? "#2F3033" : "#F1F0F4"
+    property color scrim: "#000000"
 
-    // --- Semantic ---
-    property color danger: isDark ? "#E06060" : "#D33030"
-    property color warning: isDark ? "#E0A840" : "#C88820"
-    property color success: isDark ? "#5CB880" : "#309060"
+    // --- Semantic colors ---
+    property color success: isDark ? "#8FD6A3" : "#1F7A45"
+    property color onSuccess: isDark ? "#00391D" : "#FFFFFF"
+    property color successContainer: isDark ? "#0F5A30" : "#B9F0C8"
+    property color onSuccessContainer: isDark ? "#B9F0C8" : "#00210F"
+    property color warning: isDark ? "#F4C56A" : "#7A5800"
+    property color onWarning: isDark ? "#402D00" : "#FFFFFF"
+    property color warningContainer: isDark ? "#5D4200" : "#FFE2A8"
+    property color onWarningContainer: isDark ? "#FFE2A8" : "#261A00"
+    property color info: primary
+    property color onInfo: onPrimary
+    property color infoContainer: primaryContainer
+    property color onInfoContainer: onPrimaryContainer
+
+    // --- Derived app roles ---
+    property color bg: background
+    property color paper: isDark ? "#202326" : "#FFFFFF"
+    property color border: isDark ? Qt.rgba(outline.r, outline.g, outline.b, 0.42) : Qt.rgba(outline.r, outline.g, outline.b, 0.34)
+    property color borderStrong: outline
+    property color sidebar: isDark ? "#15181B" : "#F3F7FC"
+    property color card: surfaceContainerLow
+    property color cardHover: surfaceContainer
+    property color selected: primaryContainer
+    property color selectedText: onPrimaryContainer
+    property color textPrimary: onSurface
+    property color textSecondary: onSurfaceVariant
+    property color textMuted: isDark ? "#8C9198" : "#74787F"
+    property color textDisabled: isDark ? Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38) : Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38)
+    property color defaultAccent: primary
+    property color defaultAccentHover: isDark ? Qt.lighter(primary, 1.08) : Qt.darker(primary, 1.08)
+    property color defaultAccentText: primary
+    property color accent: primary
+    property color accentSoft: primaryContainer
+    property color accentHover: defaultAccentHover
+    property color accentText: onPrimaryContainer
+    property color danger: error
+    property color dangerContainer: isDark ? "#93000A" : "#FFDAD6"
+    property color onDangerContainer: isDark ? "#FFDAD6" : "#410002"
 
     // --- Editor ---
-    property color editorBackground: isDark ? darkPaper : lightPaper
-    property color editorText: isDark ? "#D8DAE0" : "#2C2E36"
+    property color editorBackground: isDark ? "#202326" : "#FFFFFF"
+    property color editorText: onSurface
 
     // --- Radius ---
+    property int radiusXs: 4
     property int radiusSm: 8
     property int radiusMd: 12
-    property int radiusCard: 18
-    property int radiusPanel: 22
+    property int radiusLg: 16
+    property int radiusXl: 24
+    property int radiusPill: 999
+    property int radiusCard: radiusLg
+    property int radiusPanel: radiusXl
 
     // --- Spacing ---
     property int sp4: 4
@@ -92,25 +116,33 @@ QtObject {
     property int sp64: 64
 
     // --- Hub Layout ---
-    property int pageMarginWide: 40
+    property int pageMarginWide: 48
     property int pageMarginNarrow: 24
     property int maxContentWidth: 1240
-    property int pageHeaderHeight: 72
+    property int pageHeaderHeight: 76
     property int cardGap: 16
     property int gridGap: 16
     property int actionButtonHeight: 40
     property int actionButtonRadius: 12
-    property int settingsRowHeight: 64
-    property int settingsControlHeight: 36
+    property int settingsRowHeight: 68
+    property int settingsControlHeight: 40
 
     // --- Controls ---
-    property color controlBorder: isDark ? "#3A3F49" : "#D2CDC3"
-    property color surfaceVariant: isDark ? "#242933" : "#F1EEE7"
-    property color switchTrackOn: isDark ? "#6679D8" : "#5B6BC0"
-    property color switchTrackOff: isDark ? "#303543" : "#E1DBD0"
-    property color switchThumb: isDark ? "#EEF1FB" : "#FFFFFF"
+    property color controlBorder: border
+    property color borderFocus: primary
+    property color inputBg: surfaceContainerLow
+    property color switchTrackOn: primary
+    property color switchTrackOff: surfaceVariant
+    property color switchThumb: isDark ? "#D8EFFF" : "#FFFFFF"
 
-    // --- Font ---
+    // --- Typography ---
+    property string fontFamily: "sans-serif"
+    property int display: 28
+    property int title: 24
+    property int subtitle: 18
+    property int body: 14
+    property int label: 13
+    property int caption: 12
     property int fontXs: 11
     property int fontSm: 12
     property int fontMd: 14
@@ -128,22 +160,20 @@ QtObject {
     property int animFast: 120
     property int animNormal: 200
 
-    // --- Legacy aliases (for SettingsDialog, SyncPage, etc.) ---
+    // --- Legacy aliases (kept so existing pages do not duplicate color logic) ---
     property color bgDark: bg
-    property color bgDarker: surface
-    property color surfaceAlt: surface
+    property color bgDarker: surfaceContainerLowest
+    property color surfaceAlt: surfaceContainer
     property color divider: border
     property color primaryHover: accentHover
     property color primaryText: accentText
     property color textMain: textPrimary
     property color textDim: textMuted
     property color sidebarBg: sidebar
-    property color sidebarHover: cardHover
-    property color inputBg: paper
+    property color sidebarHover: surfaceContainer
     property color buttonBg: surface
     property color buttonHover: cardHover
     property color editorBg: editorBackground
     property color hover: cardHover
-    property color primary: accent
-    property color textDisabled: isDark ? "#4A4E58" : "#B0B3BA"
+    property color text: textPrimary
 }

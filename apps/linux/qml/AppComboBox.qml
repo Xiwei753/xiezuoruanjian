@@ -45,8 +45,9 @@ ComboBox {
         color: control.enabled
             ? (control.theme ? control.theme.textPrimary : "#0f172a")
             : (control.theme ? control.theme.textDisabled : "#94a3b8")
-        font.pixelSize: control.theme ? control.theme.fontMd : 13
-        leftPadding: control.theme ? control.theme.sp8 : 8
+        font.pixelSize: control.theme ? control.theme.label : 13
+        font.family: control.theme ? control.theme.fontFamily : "sans-serif"
+        leftPadding: control.theme ? control.theme.sp12 : 12
         rightPadding: control.theme ? control.theme.sp24 : 24
         verticalAlignment: Text.AlignVCenter
     }
@@ -72,15 +73,15 @@ ComboBox {
     }
 
     background: Rectangle {
-        color: control.theme ? control.theme.surfaceAlt : "#f1f5f9"
+        color: control.theme ? control.theme.inputBg : "#f1f5f9"
         border.color: {
             if (!control.theme) return "#e2e8f0"
             if (control.activeFocus) return control.theme.borderFocus
-            if (control.hovered) return control.theme.secondary
+            if (control.hovered) return control.theme.outline
             return control.theme.border
         }
         border.width: 1
-        radius: control.theme ? control.theme.radiusSm : 6
+        radius: control.theme ? control.theme.radiusMd : 12
     }
 
     delegate: ItemDelegate {
@@ -93,7 +94,7 @@ ComboBox {
         }
         background: Rectangle {
             color: control.highlightedIndex === index
-                ? (control.theme ? control.theme.selected : "#dbeafe")
+                ? (control.theme ? control.theme.primaryContainer : "#dbeafe")
                 : "transparent"
         }
     }
@@ -116,7 +117,7 @@ ComboBox {
             color: control.theme ? control.theme.surface : "#ffffff"
             border.color: control.theme ? control.theme.border : "#e2e8f0"
             border.width: 1
-            radius: control.theme ? control.theme.radiusSm : 6
+            radius: control.theme ? control.theme.radiusLg : 16
         }
     }
 }

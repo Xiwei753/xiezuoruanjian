@@ -39,7 +39,7 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             width: 64; height: 64
             radius: 32
-            color: root.appTheme ? root.appTheme.surface : "#ffffff"
+            color: root.appTheme ? root.appTheme.primaryContainer : "#CCE5FF"
             border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
             border.width: 1
 
@@ -54,7 +54,8 @@ Item {
         Label {
             Layout.alignment: Qt.AlignHCenter
             text: "未打开工作区"
-            font.pixelSize: root.appTheme ? root.appTheme.fontXxl : 22
+            font.pixelSize: root.appTheme ? root.appTheme.title : 24
+            font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
             font.weight: Font.Bold
             color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
         }
@@ -63,7 +64,8 @@ Item {
         Label {
             Layout.alignment: Qt.AlignHCenter
             text: "选择或创建工作区后开始写作"
-            font.pixelSize: root.appTheme ? root.appTheme.fontMd : 13
+            font.pixelSize: root.appTheme ? root.appTheme.body : 14
+            font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
             color: root.appTheme ? root.appTheme.textSecondary : "#475569"
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
@@ -81,6 +83,7 @@ Item {
                 Layout.fillWidth: true
                 text: "新建工作区"
                 theme: root.appTheme
+                variant: "primary"
                 onClicked: root.createWorkspace()
             }
 
@@ -88,6 +91,7 @@ Item {
                 Layout.fillWidth: true
                 text: "打开工作区"
                 theme: root.appTheme
+                variant: "secondary"
                 onClicked: root.openWorkspace()
             }
 
@@ -99,34 +103,21 @@ Item {
                 Layout.bottomMargin: root.appTheme ? root.appTheme.sp4 : 4
             }
 
-            Button {
+            AppButton {
                 Layout.fillWidth: true
-                flat: true
                 text: "从 GitHub 同步仓库初始化"
-                implicitHeight: 36
+                theme: root.appTheme
+                variant: "text"
                 onClicked: {
                     root.initFromGithub()
-                }
-
-                contentItem: Text {
-                    text: parent.text
-                    color: root.appTheme ? root.appTheme.primary : "#3b82f6"
-                    font.pixelSize: root.appTheme ? root.appTheme.fontMd : 13
-                    font.weight: Font.Medium
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-
-                background: Rectangle {
-                    color: parent.hovered ? (root.appTheme ? root.appTheme.hover : "#f1f5f9") : "transparent"
-                    radius: root.appTheme ? root.appTheme.radiusSm : 6
                 }
             }
 
             Label {
                 Layout.fillWidth: true
                 text: "点击后会进入同步页面：配置远端仓库地址、分支、Token，然后点击「选择目录并初始化/克隆」。"
-                font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
+                font.pixelSize: root.appTheme ? root.appTheme.caption : 12
+                font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
                 color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter

@@ -22,17 +22,17 @@ Item {
     property bool compact: false
     signal clicked()
 
-    height: 36
+    height: 44
     implicitWidth: 160
 
     Rectangle {
         anchors.fill: parent
         anchors.leftMargin: control.theme ? control.theme.sp8 : 8
         anchors.rightMargin: control.theme ? control.theme.sp8 : 8
-        radius: control.theme ? control.theme.radiusSm : 4
+        radius: control.theme ? control.theme.radiusPill : 999
         color: {
-            if (control.active) return control.theme ? control.theme.selected : "#0c4a6e"
-            return ma.containsMouse ? (control.theme ? control.theme.hover : "#1e293b") : "transparent"
+            if (control.active) return control.theme ? control.theme.primaryContainer : "#CCE5FF"
+            return ma.containsMouse ? (control.theme ? control.theme.surfaceVariant : "#DFE3EB") : "transparent"
         }
     }
 
@@ -53,10 +53,11 @@ Item {
         Text {
             text: control.text
             color: {
-                if (control.active) return control.theme ? control.theme.selectedText : "#e2e8f0"
-                return control.theme ? control.theme.textPrimary : "#0f172a"
+                if (control.active) return control.theme ? control.theme.onPrimaryContainer : "#001E31"
+                return control.theme ? control.theme.onSurfaceVariant : "#42474E"
             }
-            font.pixelSize: control.theme ? control.theme.fontMd : 13
+            font.pixelSize: control.theme ? control.theme.label : 13
+            font.family: control.theme ? control.theme.fontFamily : "sans-serif"
             font.weight: control.active ? Font.Medium : Font.Normal
             Layout.fillWidth: true
             elide: Text.ElideRight

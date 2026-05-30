@@ -39,40 +39,21 @@ Item {
     }
 
     // 浮动返回按钮
-    Button {
+    AppButton {
         id: backBtn
         text: "← 返回"
+        theme: root.dt
+        variant: "secondary"
         anchors.top: parent.top
         anchors.left: parent.left
-        anchors.margins: 16
+        anchors.margins: dt ? dt.sp16 : 16
         z: 100
-
-        contentItem: Text {
-            text: backBtn.text
-            font.pixelSize: 14
-            font.bold: true
-            color: backBtn.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.textPrimary : "#E2E4E9")
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            Behavior on color { ColorAnimation { duration: 150 } }
-        }
-
-        background: Rectangle {
-            implicitWidth: 80
-            implicitHeight: 36
-            color: backBtn.hovered ? (dt ? dt.card : "#2A2E36") : (dt ? dt.surface : "#1A1D23")
-            border.color: backBtn.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
-            border.width: 1.5
-            radius: 8
-            Behavior on color { ColorAnimation { duration: 150 } }
-            Behavior on border.color { ColorAnimation { duration: 150 } }
-        }
+        onClicked: root.backClicked()
     }
 
     Component.onCompleted: {
         if (starmapId !== "") {
             canvas.loadGraph()
         }
-        backBtn.clicked.connect(root.backClicked)
     }
 }

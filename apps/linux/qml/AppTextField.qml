@@ -24,9 +24,10 @@ Item {
     property alias validator: inputField.validator
     property bool fieldTabFocus: true
 
+    signal accepted()
     signal editingFinished()
 
-    implicitHeight: inputField.height + 22
+    implicitHeight: inputField.height + (control.label.length > 0 ? 24 : 0)
     implicitWidth: 200
 
     ColumnLayout {
@@ -35,32 +36,35 @@ Item {
 
         Label {
             text: control.label
-            font.pixelSize: control.theme ? control.theme.fontMd : 13
-            color: control.theme ? control.theme.text : "#e2e8f0"
+            font.pixelSize: control.theme ? control.theme.label : 13
+            color: control.theme ? control.theme.onSurfaceVariant : "#475569"
             font.weight: Font.Medium
+            font.family: control.theme ? control.theme.fontFamily : "sans-serif"
             visible: control.label.length > 0
         }
 
         TextField {
             id: inputField
             Layout.fillWidth: true
-            implicitHeight: 32
+            implicitHeight: control.theme ? control.theme.settingsControlHeight : 40
             placeholderText: control.placeholder
-            color: control.theme ? control.theme.text : "#e2e8f0"
-            echoMode: control.echoMode
-            validator: control.validator
+            color: control.theme ? control.theme.onSurface : "#0f172a"
+            placeholderTextColor: control.theme ? control.theme.textMuted : "#64748b"
             activeFocusOnTab: control.fieldTabFocus
+            onAccepted: control.accepted()
             onEditingFinished: control.editingFinished()
             background: Rectangle {
-                color: control.theme ? control.theme.surface : "#1a1a2e"
-                border.color: inputField.activeFocus ? (control.theme ? control.theme.borderFocus : "#0ea5e9") : (control.theme ? control.theme.border : "#334155")
-                border.width: 1
-                radius: control.theme ? control.theme.radiusSm : 4
+                color: control.theme ? control.theme.inputBg : "#ffffff"
+                border.color: inputField.activeFocus ? (control.theme ? control.theme.borderFocus : "#006497") : (control.theme ? control.theme.controlBorder : "#cbd5e1")
+                border.width: inputField.activeFocus ? 2 : 1
+                radius: control.theme ? control.theme.radiusMd : 12
             }
-            font.pixelSize: control.theme ? control.theme.fontMd : 13
-            leftPadding: control.theme ? control.theme.sp8 : 8
-            topPadding: control.theme ? control.theme.sp6 : 6
-            bottomPadding: control.theme ? control.theme.sp6 : 6
+            font.pixelSize: control.theme ? control.theme.body : 14
+            font.family: control.theme ? control.theme.fontFamily : "sans-serif"
+            leftPadding: control.theme ? control.theme.sp12 : 12
+            rightPadding: control.theme ? control.theme.sp12 : 12
+            topPadding: control.theme ? control.theme.sp8 : 8
+            bottomPadding: control.theme ? control.theme.sp8 : 8
         }
     }
 }

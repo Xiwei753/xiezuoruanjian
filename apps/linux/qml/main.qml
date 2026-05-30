@@ -317,11 +317,13 @@ ApplicationWindow {
         height: 220
         x: (parent ? (parent.width - width) / 2 : 0)
         y: (parent ? (parent.height - height) / 2 : 0)
-        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
+        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
+        header: null
 
         ColumnLayout {
             anchors.fill: parent
-            spacing: 16
+            anchors.margins: designTokens.sp24
+            spacing: designTokens.sp16
 
             Text {
                 text: {
@@ -331,7 +333,8 @@ ApplicationWindow {
                     return "确定要删除吗？";
                 }
                 color: designTokens.textPrimary
-                font.pixelSize: 14
+                font.pixelSize: designTokens.body
+                font.family: designTokens.fontFamily
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
@@ -339,14 +342,18 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignRight
-                spacing: 8
+                spacing: designTokens.sp8
                 Item { Layout.fillWidth: true }
-                Button {
+                AppButton {
                     text: "取消"
+                    theme: designTokens
+                    variant: "text"
                     onClicked: confirmDialog.close()
                 }
-                Button {
+                AppButton {
                     text: "删除"
+                    theme: designTokens
+                    variant: "danger"
                     onClicked: {
                         appController.deleteItem(confirmDialog.actionType, confirmDialog.contextData);
                         confirmDialog.close();
@@ -365,19 +372,24 @@ ApplicationWindow {
         height: 180
         x: (parent ? (parent.width - width) / 2 : 0)
         y: (parent ? (parent.height - height) / 2 : 0)
-        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
+        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
+        header: null
         ColumnLayout {
             anchors.fill: parent
-            spacing: 16
+            anchors.margins: designTokens.sp24
+            spacing: designTokens.sp16
             Text {
                 text: errorDialog.message
                 color: designTokens.textPrimary
-                font.pixelSize: 14
+                font.pixelSize: designTokens.body
+                font.family: designTokens.fontFamily
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
-            Button {
+            AppButton {
                 text: "确定"
+                theme: designTokens
+                variant: "primary"
                 Layout.alignment: Qt.AlignRight
                 onClicked: errorDialog.close()
             }
@@ -406,17 +418,17 @@ ApplicationWindow {
             height: Math.max(420, Math.min(window.height - 120, 560))
             x: (parent ? (parent.width - width) / 2 : 0)
             y: (parent ? (parent.height - height) / 2 : 0)
-            background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd; border.width: 1 }
+            background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
 
             header: null
 
             contentItem: ScrollView {
                 id: syncDialogScroll
                 clip: true
-                topPadding: 16
-                bottomPadding: 16
-                leftPadding: 16
-                rightPadding: 16
+                topPadding: designTokens.sp16
+                bottomPadding: designTokens.sp16
+                leftPadding: designTokens.sp16
+                rightPadding: designTokens.sp16
 
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ScrollBar.vertical.policy: ScrollBar.AsNeeded
@@ -451,37 +463,47 @@ ApplicationWindow {
         y: (parent ? (parent.height - height) / 2 : 0)
         title: inputDialog.dialogTitle
 
-        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusMd }
+        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
+        header: null
 
         ColumnLayout {
             anchors.fill: parent
-            spacing: 8
+            anchors.margins: designTokens.sp24
+            spacing: designTokens.sp12
 
             Text {
                 text: inputDialog.actionType === "volume" ? "卷名称" : "章节名称"
                 color: designTokens.textSecondary
-                font.pixelSize: 12
+                font.pixelSize: designTokens.label
+                font.family: designTokens.fontFamily
             }
 
-            TextField {
+            AppTextField {
                 id: inputField
                 Layout.fillWidth: true
+                theme: designTokens
                 placeholderText: inputDialog.actionType === "volume" ? "例如：第一卷" : "例如：第一章"
-                color: designTokens.textPrimary
-                background: Rectangle { color: designTokens.paper; border.color: designTokens.border; radius: designTokens.radiusSm }
+                onAccepted: confirmInputButton.clicked()
             }
-            Button {
-                text: "确定"
-                onClicked: {
-                    var title = inputField.text.trim();
-                    if (title !== "") {
-                        if (inputDialog.actionType === "volume") {
-                            appController.createVolume(inputDialog.projectId, title);
-                        } else if (inputDialog.actionType === "chapter") {
-                            appController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    id: confirmInputButton
+                    text: "确定"
+                    theme: designTokens
+                    variant: "primary"
+                    onClicked: {
+                        var title = inputField.text.trim();
+                        if (title !== "") {
+                            if (inputDialog.actionType === "volume") {
+                                appController.createVolume(inputDialog.projectId, title);
+                            } else if (inputDialog.actionType === "chapter") {
+                                appController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
+                            }
                         }
+                        inputDialog.close();
                     }
-                    inputDialog.close();
                 }
             }
         }

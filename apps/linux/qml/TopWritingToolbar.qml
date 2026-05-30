@@ -31,8 +31,8 @@ Rectangle {
     signal linkToStarMap()
     signal openStats()
 
-    color: dt ? dt.surface : "#1A1D23"
-    height: 44
+    color: dt ? dt.surface : "#FCFCFF"
+    height: 48
 
     RowLayout {
         anchors.fill: parent
@@ -44,9 +44,9 @@ Rectangle {
         Rectangle {
             width: fontRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
-            radius: dt ? dt.radiusSm : 8
+            radius: dt ? dt.radiusPill : 999
             color: fontPopover.visible || fontHover.containsMouse ?
-                   (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") : "transparent"
+                   (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
 
             Row {
                 id: fontRow
@@ -54,20 +54,22 @@ Rectangle {
                 spacing: dt ? dt.sp4 : 4
                 Text {
                     text: "A"
-                    color: dt ? dt.textSecondary : "#5C6070"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     font.weight: Font.Bold
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: Math.round(root.currentFontSize) + "px"
-                    color: dt ? dt.textPrimary : "#E2E4E9"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt ? dt.onSurface : "#1A1C1E"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "\u25BE"
-                    color: dt ? dt.textMuted : "#606470"
+                    color: dt ? dt.onSurfaceVariant : "#42474E"
                     font.pixelSize: dt ? dt.fontXs : 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -89,9 +91,9 @@ Rectangle {
         Rectangle {
             width: layoutRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
-            radius: dt ? dt.radiusSm : 8
+            radius: dt ? dt.radiusPill : 999
             color: layoutPopover.visible || layoutHover.containsMouse ?
-                   (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") : "transparent"
+                   (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
 
             Row {
                 id: layoutRow
@@ -99,19 +101,21 @@ Rectangle {
                 spacing: dt ? dt.sp4 : 4
                 Text {
                     text: "\u2630"
-                    color: dt ? dt.textSecondary : "#5C6070"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "排版设置"
-                    color: dt ? dt.textPrimary : "#E2E4E9"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt ? dt.onSurface : "#1A1C1E"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
                     text: "\u25BE"
-                    color: dt ? dt.textMuted : "#606470"
+                    color: dt ? dt.onSurfaceVariant : "#42474E"
                     font.pixelSize: dt ? dt.fontXs : 11
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -133,8 +137,8 @@ Rectangle {
         Rectangle {
             width: formatRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
-            radius: dt ? dt.radiusSm : 8
-            color: formatHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
+            radius: dt ? dt.radiusPill : 999
+            color: formatHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
 
@@ -149,8 +153,9 @@ Rectangle {
                 }
                 Text {
                     text: "一键排版"
-                    color: dt ? dt.textSecondary : "#5C6070"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -170,8 +175,8 @@ Rectangle {
         Rectangle {
             width: starRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
-            radius: dt ? dt.radiusSm : 8
-            color: starHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
+            radius: dt ? dt.radiusPill : 999
+            color: starHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
 
@@ -186,8 +191,9 @@ Rectangle {
                 }
                 Text {
                     text: "星图"
-                    color: dt ? dt.textSecondary : "#5C6070"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -205,8 +211,8 @@ Rectangle {
         Rectangle {
             width: statsRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
-            radius: dt ? dt.radiusSm : 8
-            color: statsHover.containsMouse ? (dt ? dt.cardHover : "#22262E") : "transparent"
+            radius: dt ? dt.radiusPill : 999
+            color: statsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
 
@@ -221,8 +227,9 @@ Rectangle {
                 }
                 Text {
                     text: "统计"
-                    color: dt ? dt.textSecondary : "#5C6070"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt ? dt.onSurfaceVariant : "#42474E"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -242,7 +249,8 @@ Rectangle {
         Text {
             text: root.saveStatus || ""
             color: dt ? dt.textMuted : "#606470"
-            font.pixelSize: dt ? dt.fontXs : 11
+            font.pixelSize: dt ? dt.caption : 12
+            font.family: dt ? dt.fontFamily : "sans-serif"
             visible: text !== ""
         }
     }
@@ -256,7 +264,7 @@ Rectangle {
         padding: dt ? dt.sp12 : 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusPanel : 22
+            radius: dt ? dt.radiusXl : 24
             color: dt ? dt.surface : "#1A1D23"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
@@ -268,7 +276,8 @@ Rectangle {
             Text {
                 text: "字号"
                 color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.fontMd : 14
+                font.pixelSize: dt ? dt.subtitle : 18
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
             }
 
@@ -282,18 +291,19 @@ Rectangle {
 
                     Rectangle {
                         width: 40; height: 32
-                        radius: dt ? dt.radiusSm : 8
+                        radius: dt ? dt.radiusPill : 999
                         color: Math.round(root.currentFontSize) === modelData ?
-                               (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") :
-                               presetHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                               (dt ? dt.primaryContainer : "#CCE5FF") :
+                               presetHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                         Text {
                             anchors.centerIn: parent
                             text: modelData
                             color: Math.round(root.currentFontSize) === modelData ?
-                                   (dt ? dt.accentText : "#3D4D9E") :
-                                   (dt ? dt.textSecondary : "#5C6070")
-                            font.pixelSize: dt ? dt.fontSm : 12
+                                   (dt ? dt.onPrimaryContainer : "#001E31") :
+                                   (dt ? dt.onSurfaceVariant : "#42474E")
+                            font.pixelSize: dt ? dt.label : 13
+                            font.family: dt ? dt.fontFamily : "sans-serif"
                             font.weight: Math.round(root.currentFontSize) === modelData ? Font.DemiBold : Font.Normal
                         }
 
@@ -322,40 +332,15 @@ Rectangle {
                     font.pixelSize: dt ? dt.fontXs : 11
                 }
 
-                Slider {
+                AppSlider {
                     id: fontSlider
                     Layout.fillWidth: true
+                    theme: dt
                     from: 10
                     to: 40
                     stepSize: 1
                     value: root.currentFontSize
                     onMoved: root.fontSizeChanged(value)
-
-                    background: Rectangle {
-                        x: fontSlider.leftPadding
-                        y: fontSlider.topPadding + fontSlider.availableHeight / 2 - height / 2
-                        width: fontSlider.availableWidth
-                        height: 4
-                        radius: 2
-                        color: dt ? dt.border : "#2A2E36"
-
-                        Rectangle {
-                            width: fontSlider.visualPosition * parent.width
-                            height: parent.height
-                            radius: 2
-                            color: dt ? dt.accent : "#7B8CDE"
-                        }
-                    }
-
-                    handle: Rectangle {
-                        x: fontSlider.leftPadding + fontSlider.visualPosition * (fontSlider.availableWidth - width)
-                        y: fontSlider.topPadding + fontSlider.availableHeight / 2 - height / 2
-                        width: 16; height: 16
-                        radius: 8
-                        color: dt ? dt.accent : "#7B8CDE"
-                        border.color: dt ? dt.surface : "#1A1D23"
-                        border.width: 2
-                    }
                 }
 
                 Text {
@@ -383,7 +368,7 @@ Rectangle {
         padding: dt ? dt.sp12 : 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusPanel : 22
+            radius: dt ? dt.radiusXl : 24
             color: dt ? dt.surface : "#1A1D23"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
@@ -395,7 +380,8 @@ Rectangle {
             Text {
                 text: "排版设置"
                 color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.fontMd : 14
+                font.pixelSize: dt ? dt.subtitle : 18
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
             }
 
@@ -422,18 +408,19 @@ Rectangle {
 
                         Rectangle {
                             width: 44; height: 32
-                            radius: dt ? dt.radiusSm : 8
+                            radius: dt ? dt.radiusPill : 999
                             color: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ?
-                                   (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") :
-                                   lsHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                                   (dt ? dt.primaryContainer : "#CCE5FF") :
+                                   lsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ?
-                                       (dt ? dt.accentText : "#3D4D9E") :
-                                       (dt ? dt.textSecondary : "#5C6070")
-                                font.pixelSize: dt ? dt.fontSm : 12
+                                       (dt ? dt.onPrimaryContainer : "#001E31") :
+                                       (dt ? dt.onSurfaceVariant : "#42474E")
+                                font.pixelSize: dt ? dt.label : 13
+                                font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ? Font.DemiBold : Font.Normal
                             }
 
@@ -472,7 +459,8 @@ Rectangle {
                     }
                 }
 
-                Switch {
+                ModernSwitch {
+                    dt: root.dt
                     checked: root.firstLineIndent
                     onToggled: root.firstLineIndentToggled()
                 }

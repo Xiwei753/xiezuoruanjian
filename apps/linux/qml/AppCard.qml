@@ -16,15 +16,21 @@ Item {
     id: control
     property var theme: null
     property alias spacing: col.spacing
+    property string variant: "surface"
+    property int padding: theme ? theme.sp16 : 16
+    property bool outlined: true
 
     implicitWidth: 200
 
     Rectangle {
         anchors.fill: parent
-        radius: theme ? theme.radiusMd : 8
-        color: theme ? theme.surface : "#ffffff"
+        radius: theme ? theme.radiusLg : 16
+        color: {
+            if (!theme) return "#ffffff"
+            return control.variant === "surfaceVariant" ? theme.surfaceContainer : theme.card
+        }
         border.color: theme ? theme.border : "#e2e8f0"
-        border.width: 1
+        border.width: control.outlined ? 1 : 0
     }
 
     default property alias content: col.children
@@ -32,7 +38,7 @@ Item {
     ColumnLayout {
         id: col
         anchors.fill: parent
-        anchors.margins: theme ? theme.sp12 : 12
-        spacing: theme ? theme.sp8 : 8
+        anchors.margins: control.padding
+        spacing: theme ? theme.sp12 : 12
     }
 }

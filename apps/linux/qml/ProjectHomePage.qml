@@ -11,6 +11,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 
 Rectangle {
     id: root
@@ -104,30 +105,52 @@ Rectangle {
         id: renameProjectDialog
         property string projectId: ""
         property string currentTitle: ""
-        title: "重命名作品"
         modal: true
-        width: 320
+        width: 360
+        height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; radius: dt ? dt.radiusMd : 12; border.width: 1 }
-        Column {
+        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 24; border.width: 1 }
+        header: null
+        ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt ? dt.sp16 : 16
-            spacing: dt ? dt.sp8 : 8
-            TextField {
-                id: renameField
-                width: parent.width
-                text: renameProjectDialog.currentTitle
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                background: Rectangle { color: dt ? dt.paper : "#1E2128"; border.color: dt ? dt.border : "#2A2E36"; radius: dt ? dt.radiusSm : 8 }
+            anchors.margins: dt ? dt.sp24 : 24
+            spacing: dt ? dt.sp12 : 12
+
+            Text {
+                text: "重命名作品"
+                color: dt ? dt.onSurface : "#1A1C1E"
+                font.pixelSize: dt ? dt.subtitle : 18
+                font.family: dt ? dt.fontFamily : "sans-serif"
+                font.weight: Font.DemiBold
             }
-            Button {
-                text: "确定"
-                anchors.right: parent.right
-                onClicked: {
-                    var t = renameField.text.trim();
-                    if (t === "") return;
-                    root.renameProjectRequested(renameProjectDialog.projectId, t);
-                    renameProjectDialog.close();
+            AppTextField {
+                id: renameField
+                Layout.fillWidth: true
+                theme: dt
+                text: renameProjectDialog.currentTitle
+                placeholderText: "作品名称"
+                onAccepted: renameConfirmButton.clicked()
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                AppButton {
+                    text: "取消"
+                    theme: dt
+                    variant: "text"
+                    onClicked: renameProjectDialog.close()
+                }
+                AppButton {
+                    id: renameConfirmButton
+                    text: "确定"
+                    theme: dt
+                    variant: "primary"
+                    onClicked: {
+                        var t = renameField.text.trim();
+                        if (t === "") return;
+                        root.renameProjectRequested(renameProjectDialog.projectId, t);
+                        renameProjectDialog.close();
+                    }
                 }
             }
         }

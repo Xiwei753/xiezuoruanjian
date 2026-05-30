@@ -27,7 +27,8 @@ Dialog {
     property bool updatingValues: false
     signal settingsChanged()
 
-    background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; border.width: 1; radius: dt ? dt.radiusMd : 12 }
+    background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; border.width: 1; radius: dt ? dt.radiusXl : 24 }
+    header: null
 
     function saveAndNotify() { if (!backendRef) return; backendRef.save_local_settings(); root.settingsChanged() }
     function setSwitchValue(control, key, value) {
@@ -61,14 +62,14 @@ Dialog {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: 54
+        height: 64
         color: "transparent"
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: dt ? dt.sp24 : 24
             anchors.rightMargin: dt ? dt.sp16 : 16
-            Text { text: "设置"; color: dt ? dt.textPrimary : "#E2E4E9"; font.pixelSize: dt ? dt.fontLg : 16; font.weight: Font.Bold; Layout.fillWidth: true }
-            ToolButton { text: "x"; onClicked: root.close() }
+            Text { text: "设置"; color: dt ? dt.textPrimary : "#E2E4E9"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
+            ToolbarButton { text: "关闭"; theme: root.dt; onClicked: root.close() }
         }
     }
 
@@ -96,8 +97,9 @@ Dialog {
                     dt: root.dt
                     title: "字体大小"
                     description: Math.round(fontSizeSlider.value) + " px"
-                    Slider {
+                    AppSlider {
                         id: fontSizeSlider
+                        theme: root.dt
                         from: 12.0
                         to: 32.0
                         stepSize: 1.0
@@ -108,8 +110,9 @@ Dialog {
                     dt: root.dt
                     title: "行距倍数"
                     description: Number(lineSpacingSlider.value).toFixed(1) + "x"
-                    Slider {
+                    AppSlider {
                         id: lineSpacingSlider
+                        theme: root.dt
                         from: 1.0
                         to: 3.0
                         stepSize: 0.1
@@ -149,8 +152,9 @@ Dialog {
                     dt: root.dt
                     title: "打字动画持续时间"
                     description: Math.round(typingAnimDuration.value) + " ms"
-                    Slider {
+                    AppSlider {
                         id: typingAnimDuration
+                        theme: root.dt
                         from: 0
                         to: 240
                         stepSize: 10
@@ -169,8 +173,9 @@ Dialog {
                     dt: root.dt
                     title: "平滑光标持续时间"
                     description: Math.round(smoothCursorDuration.value) + " ms"
-                    Slider {
+                    AppSlider {
                         id: smoothCursorDuration
+                        theme: root.dt
                         from: 0
                         to: 240
                         stepSize: 10
@@ -189,8 +194,9 @@ Dialog {
                     dt: root.dt
                     title: "首行缩进宽度"
                     description: Number(autoIndentWidth.value).toFixed(1) + " 字符"
-                    Slider {
+                    AppSlider {
                         id: autoIndentWidth
+                        theme: root.dt
                         from: 0.0
                         to: 8.0
                         stepSize: 0.5
@@ -215,8 +221,9 @@ Dialog {
                     dt: root.dt
                     title: "自动保存延迟"
                     description: Math.round(autoSaveDelay.value) + " 秒"
-                    Slider {
+                    AppSlider {
                         id: autoSaveDelay
+                        theme: root.dt
                         from: 1
                         to: 10
                         stepSize: 1

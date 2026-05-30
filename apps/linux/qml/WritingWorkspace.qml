@@ -71,15 +71,40 @@ Rectangle {
 
     Dialog {
         id: emptySaveDialog
-        title: "保存被阻止"
         modal: true
-        standardButtons: Dialog.Ok
+        width: 360
+        height: 180
         anchors.centerIn: parent
+        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 24; border.width: 1 }
+        header: null
 
-        contentItem: Text {
-            id: emptySaveDialogText
-            text: "检测到异常空内容覆盖，已阻止保存。"
-            color: dt ? dt.textPrimary : "#E2E4E9"
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: dt ? dt.sp24 : 24
+            spacing: dt ? dt.sp16 : 16
+            Text {
+                text: "保存被阻止"
+                color: dt ? dt.onSurface : "#1A1C1E"
+                font.pixelSize: dt ? dt.subtitle : 18
+                font.family: dt ? dt.fontFamily : "sans-serif"
+                font.weight: Font.DemiBold
+            }
+            Text {
+                id: emptySaveDialogText
+                Layout.fillWidth: true
+                text: "检测到异常空内容覆盖，已阻止保存。"
+                color: dt ? dt.onSurfaceVariant : "#42474E"
+                font.pixelSize: dt ? dt.body : 14
+                font.family: dt ? dt.fontFamily : "sans-serif"
+                wrapMode: Text.Wrap
+            }
+            AppButton {
+                text: "确定"
+                theme: dt
+                variant: "primary"
+                Layout.alignment: Qt.AlignRight
+                onClicked: emptySaveDialog.close()
+            }
         }
     }
 
@@ -136,7 +161,7 @@ Rectangle {
                 spacing: 0
 
                 // Back button + project title
-                    Rectangle {
+                Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 48
                         color: "transparent"
@@ -149,13 +174,13 @@ Rectangle {
 
                             Rectangle {
                                 width: 28; height: 28
-                                radius: dt ? dt.radiusSm : 8
-                                color: backHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                                radius: dt ? dt.radiusPill : 999
+                                color: backHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                                 Text {
                                     anchors.centerIn: parent
                                     text: "\u2190"
-                                    color: dt ? dt.textSecondary : "#5C6070"
+                                    color: dt ? dt.onSurfaceVariant : "#42474E"
                                     font.pixelSize: dt ? dt.fontLg : 16
                                 }
 
@@ -170,20 +195,21 @@ Rectangle {
 
                             Text {
                                 text: root.projectTitle || "作品"
-                                color: dt ? dt.textPrimary : "#E2E4E9"
+                                color: dt ? dt.onSurface : "#1A1C1E"
                                 font.pixelSize: dt ? dt.fontMd : 14
+                                font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: Font.DemiBold
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                             }
                         }
-                    }
+                }
 
-                    // Divider
-                    Rectangle { Layout.fillWidth: true; height: 1; color: dt ? dt.border : "#2A2E36" }
+                // Divider
+                Rectangle { Layout.fillWidth: true; height: 1; color: dt ? dt.border : "#2A2E36" }
 
-                    // Tree list
-                    ScrollView {
+                // Tree list
+                ScrollView {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
@@ -200,11 +226,11 @@ Rectangle {
                                     anchors.fill: parent
                                     anchors.leftMargin: dt ? dt.sp8 : 8
                                     anchors.rightMargin: dt ? dt.sp8 : 8
-                                    radius: dt ? dt.radiusSm : 8
+                                    radius: dt ? dt.radiusPill : 999
                                     color: isSelected ?
-                                           (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") :
+                                           (dt ? dt.primaryContainer : "#CCE5FF") :
                                            delegateHover.containsMouse ?
-                                           (dt ? dt.card : "#1E2128") : "transparent"
+                                           (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                                     property bool isSelected: model.itemId === editorController.chapterId
 
@@ -222,9 +248,10 @@ Rectangle {
                                         Text {
                                             text: model.itemTitle || ""
                                             color: delegateBg.isSelected ?
-                                                   (dt ? dt.accentText : "#3D4D9E") :
-                                                   (dt ? dt.textPrimary : "#E2E4E9")
-                                            font.pixelSize: dt ? dt.fontSm : 12
+                                                   (dt ? dt.onPrimaryContainer : "#001E31") :
+                                                   (dt ? dt.onSurface : "#1A1C1E")
+                                            font.pixelSize: dt ? dt.label : 13
+                                            font.family: dt ? dt.fontFamily : "sans-serif"
                                             font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
                                             Layout.fillWidth: true
                                             elide: Text.ElideRight
@@ -235,12 +262,12 @@ Rectangle {
                                             visible: model.itemType === "volume"
                                             width: 20; height: 20
                                             radius: 10
-                                            color: addChapterHover.containsMouse ? (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") : "transparent"
+                                            color: addChapterHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
 
                                             Text {
                                                 anchors.centerIn: parent
                                                 text: "+"
-                                                color: dt ? dt.textMuted : "#606470"
+                                                color: dt ? dt.primary : "#006497"
                                                 font.pixelSize: dt ? dt.fontSm : 12
                                                 font.weight: Font.Bold
                                             }
@@ -287,22 +314,23 @@ Rectangle {
                         Layout.preferredHeight: 36
                         Layout.leftMargin: dt ? dt.sp8 : 8
                         Layout.rightMargin: dt ? dt.sp8 : 8
-                        radius: dt ? dt.radiusSm : 8
-                        color: addVolumeHover.containsMouse ? (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") : "transparent"
+                        radius: dt ? dt.radiusPill : 999
+                        color: addVolumeHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
 
                         RowLayout {
                             anchors.centerIn: parent
                             spacing: dt ? dt.sp4 : 4
                             Text {
                                 text: "+"
-                                color: dt ? dt.accent : "#7B8CDE"
+                                color: dt ? dt.primary : "#006497"
                                 font.pixelSize: dt ? dt.fontMd : 14
                                 font.weight: Font.Bold
                             }
                             Text {
                                 text: "新建卷"
-                                color: dt ? dt.accent : "#7B8CDE"
-                                font.pixelSize: dt ? dt.fontSm : 12
+                                color: dt ? dt.primary : "#006497"
+                                font.pixelSize: dt ? dt.label : 13
+                                font.family: dt ? dt.fontFamily : "sans-serif"
                             }
                         }
 
@@ -494,8 +522,8 @@ Rectangle {
 
                         Rectangle {
                             width: 28; height: 28
-                            radius: dt ? dt.radiusSm : 8
-                            color: drawerBtnHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                            radius: dt ? dt.radiusPill : 999
+                            color: drawerBtnHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
                             Text {
                                 anchors.centerIn: parent

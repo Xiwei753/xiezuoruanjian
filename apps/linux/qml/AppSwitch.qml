@@ -16,26 +16,23 @@ Item {
     id: control
     property var theme: null
     property bool checked: false
-    property bool enabled: true
     signal clicked()
 
-    implicitWidth: 40
-    implicitHeight: 22
+    implicitWidth: 52
+    implicitHeight: 32
 
     Rectangle {
         id: track
-        anchors.fill: parent
+        width: 52
+        height: 32
+        anchors.centerIn: parent
         radius: height / 2
         color: {
-            if (!control.enabled) return control.theme ? control.theme.border : "#555555"
-            if (control.checked) return control.theme ? control.theme.primary : "#0ea5e9"
-            return control.theme ? control.theme.border : "#334155"
+            if (!control.enabled) return control.theme ? control.theme.surfaceContainer : "#e2e8f0"
+            if (control.checked) return control.theme ? control.theme.primary : "#006497"
+            return control.theme ? control.theme.surfaceVariant : "#DFE3EB"
         }
-        border.color: {
-            if (!control.checked && !control.enabled) return "transparent"
-            if (!control.checked) return control.theme ? control.theme.border : "#334155"
-            return "transparent"
-        }
+        border.color: control.checked ? "transparent" : (control.theme ? control.theme.outline : "#72787E")
         border.width: control.checked ? 0 : 1
 
         Behavior on color {
@@ -45,16 +42,21 @@ Item {
 
     Rectangle {
         id: knob
-        width: 16
-        height: 16
-        radius: 8
-        color: control.enabled ? "#ffffff" : (control.theme ? control.theme.textDisabled : "#94a3b8")
-        y: 3
-        x: control.checked ? parent.width - width - 3 : 3
+        width: control.checked ? 24 : 18
+        height: width
+        radius: width / 2
+        color: {
+            if (!control.enabled) return control.theme ? control.theme.textDisabled : "#94a3b8"
+            if (control.checked) return control.theme ? control.theme.onPrimary : "#ffffff"
+            return control.theme ? control.theme.outline : "#72787E"
+        }
+        y: (track.height - height) / 2
+        x: control.checked ? track.width - width - 4 : 7
 
         Behavior on x {
             NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
         }
+        Behavior on width { NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
 
         Behavior on color {
             ColorAnimation { duration: 150 }

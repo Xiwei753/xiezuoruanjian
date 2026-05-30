@@ -297,6 +297,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/AppSwitch.qml" as "AppSwitch.qml",
     "qml/AppSlider.qml" as "AppSlider.qml",
     "qml/AppComboBox.qml" as "AppComboBox.qml",
+    "qml/AppDialog.qml" as "AppDialog.qml",
     "qml/AppText.qml" as "AppText.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
     "qml/SettingsRow.qml" as "SettingsRow.qml",

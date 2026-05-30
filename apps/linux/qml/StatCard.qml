@@ -18,8 +18,8 @@ Rectangle {
     property string title: ""
     property string value: "0"
     property string caption: ""
-    property color tone: dt ? dt.accent : "#7B8CDE"
-    radius: dt ? dt.radiusMd : 12
+    property color tone: dt ? dt.primary : "#006497"
+    radius: dt ? dt.radiusLg : 16
     color: dt ? dt.card : "#1E2128"
     border.color: dt ? dt.border : "#2A2E36"
     border.width: 1
@@ -29,8 +29,8 @@ Rectangle {
         anchors.margins: dt ? dt.sp12 : 12
         spacing: dt ? dt.sp6 : 6
 
-        Text { text: root.title; color: dt ? dt.textSecondary : "#9CA0AB"; font.pixelSize: dt ? dt.fontSm : 12 }
-        Text { text: root.value; color: root.tone; font.pixelSize: dt ? dt.fontXxl : 22; font.weight: Font.Bold }
-        Text { text: root.caption; color: dt ? dt.textMuted : "#606470"; font.pixelSize: dt ? dt.fontXs : 11 }
+        Text { text: root.title; color: dt ? dt.onSurfaceVariant : "#42474E"; font.pixelSize: dt ? dt.label : 13; font.family: dt ? dt.fontFamily : "sans-serif" }
+        Text { text: root.value; color: root.tone; font.pixelSize: dt ? dt.title : 24; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold }
+        Text { text: root.caption; color: dt ? dt.textMuted : "#74787F"; font.pixelSize: dt ? dt.caption : 12; font.family: dt ? dt.fontFamily : "sans-serif" }
     }
 }

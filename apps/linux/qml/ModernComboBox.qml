@@ -31,8 +31,8 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: dt ? dt.radiusSm : 8
-        color: dt ? dt.surfaceVariant : "#242933"
+        radius: dt ? dt.radiusMd : 12
+        color: dt ? dt.inputBg : "#F1F5F9"
         border.width: 1
         border.color: dt ? dt.controlBorder : "#3A3F49"
 
@@ -46,7 +46,8 @@ Item {
                 Layout.fillWidth: true
                 text: root.currentText
                 color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.fontSm : 12
+                font.pixelSize: dt ? dt.label : 13
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 elide: Text.ElideRight
             }
             Text {
@@ -73,7 +74,7 @@ Item {
         z: 2000
 
         background: Rectangle {
-            radius: dt ? dt.radiusMd : 12
+            radius: dt ? dt.radiusLg : 16
             color: dt ? dt.surface : "#1A1D23"
             border.width: 1
             border.color: dt ? dt.border : "#2A2E36"
@@ -87,9 +88,9 @@ Item {
                 delegate: Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: dt ? dt.settingsControlHeight : 36
-                    radius: dt ? dt.radiusSm : 8
+                    radius: dt ? dt.radiusMd : 12
                     color: itemHover.containsMouse || index === root.currentIndex
-                           ? (dt ? dt.accentSoft : "rgba(123,140,222,0.12)")
+                           ? (dt ? dt.primaryContainer : "#CCE5FF")
                            : "transparent"
 
                     Text {
@@ -97,8 +98,9 @@ Item {
                         anchors.left: parent.left
                         anchors.leftMargin: dt ? dt.sp10 : 10
                         text: (root.displayModel && root.displayModel.length > index) ? String(root.displayModel[index]) : String(modelData)
-                        color: index === root.currentIndex ? (dt ? dt.accentText : "#3D4D9E") : (dt ? dt.textPrimary : "#E2E4E9")
-                        font.pixelSize: dt ? dt.fontSm : 12
+                        color: index === root.currentIndex ? (dt ? dt.onPrimaryContainer : "#001E31") : (dt ? dt.textPrimary : "#E2E4E9")
+                        font.pixelSize: dt ? dt.label : 13
+                        font.family: dt ? dt.fontFamily : "sans-serif"
                     }
 
                     MouseArea {

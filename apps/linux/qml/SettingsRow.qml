@@ -21,12 +21,15 @@ Rectangle {
     signal clicked()
     default property alias controlData: controlHost.data
 
-    color: "transparent"
+    color: rowHover.containsMouse && root.clickable ? (dt ? dt.surfaceContainer : "#F1F5F9") : "transparent"
+    radius: dt ? dt.radiusMd : 12
     implicitHeight: dt ? dt.settingsRowHeight : 64
 
     RowLayout {
         id: row
         anchors.fill: parent
+        anchors.leftMargin: dt ? dt.sp8 : 8
+        anchors.rightMargin: dt ? dt.sp8 : 8
         spacing: dt ? dt.sp12 : 12
 
         ColumnLayout {
@@ -36,12 +39,14 @@ Rectangle {
             Text {
                 text: root.title
                 color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.fontMd : 14
+                font.pixelSize: dt ? dt.body : 14
+                font.family: dt ? dt.fontFamily : "sans-serif"
             }
             Text {
                 text: root.description
                 color: dt ? dt.textSecondary : "#9CA0AB"
-                font.pixelSize: dt ? dt.fontSm : 12
+                font.pixelSize: dt ? dt.caption : 12
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 visible: text.length > 0
             }
         }
@@ -66,6 +71,7 @@ Rectangle {
     }
 
     MouseArea {
+        id: rowHover
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: parent.left
@@ -73,6 +79,7 @@ Rectangle {
             ? Math.max(0, controlHost.mapToItem(root, 0, 0).x - row.spacing)
             : parent.width
         enabled: root.clickable
+        hoverEnabled: true
         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: root.clicked()
     }
