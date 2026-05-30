@@ -15,6 +15,7 @@ Rectangle {
     id: root
 
     property var targetTextArea: null
+    property var overlayItem: parent
     property var dt: null
     property bool smoothCursorEnabled: true
     property bool typingAnimationEnabled: true
@@ -45,7 +46,8 @@ Rectangle {
         if (!targetTextArea) return 0;
         var rect = targetTextArea.cursorRectangle;
         var left = targetTextArea.leftPadding || 0;
-        return Math.max((rect.x || 0) + left, left);
+        var origin = targetTextArea.mapToItem(overlayItem || parent, 0, 0);
+        return origin.x + Math.max((rect.x || 0) + left, left);
     }
 
     function cursorY() {
@@ -54,9 +56,10 @@ Rectangle {
         var top = targetTextArea.topPadding || 0;
         var bottom = targetTextArea.bottomPadding || 0;
         var h = cursorHeight();
+        var origin = targetTextArea.mapToItem(overlayItem || parent, 0, 0);
         var y = Math.max((rect.y || 0) + top, top);
         var maxY = targetTextArea.height - bottom - h;
-        return maxY >= top ? Math.min(y, maxY) : top;
+        return origin.y + (maxY >= top ? Math.min(y, maxY) : top);
     }
 
     Behavior on x {

@@ -187,6 +187,14 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
                     has_errors = true;
                 }
+                if !content.contains("id: cursorOverlay") || !content.contains("overlayItem: cursorOverlay") {
+                    eprintln!("{}: SmoothCursor must be hosted by an overlay above the TextArea", file_name);
+                    has_errors = true;
+                }
+                if content.contains("#606470") {
+                    eprintln!("{}: Found low-contrast muted text fallback #606470 in writing workspace", file_name);
+                    has_errors = true;
+                }
             }
 
             if file_name == "SmoothCursor.qml" {
@@ -196,6 +204,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
                 if !content.contains("targetTextArea.leftPadding") || !content.contains("targetTextArea.topPadding") || !content.contains("targetTextArea.bottomPadding") {
                     eprintln!("{}: SmoothCursor must position against TextArea padding", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("targetTextArea.mapToItem(overlayItem || parent") {
+                    eprintln!("{}: SmoothCursor must map TextArea cursor coordinates into overlay coordinates", file_name);
                     has_errors = true;
                 }
             }

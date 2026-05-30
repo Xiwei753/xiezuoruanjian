@@ -642,14 +642,23 @@ Rectangle {
                                     }
                                 }
 
-                                SmoothCursor {
-                                    targetTextArea: editorArea
-                                    dt: root.dt
-                                    smoothCursorEnabled: root.backendRef ? root.backendRef.setting_smooth_cursor_enabled : true
-                                    typingAnimationEnabled: root.backendRef ? root.backendRef.setting_typing_animation_enabled : true
-                                    cursorAnimationDuration: root.backendRef ? root.backendRef.setting_smooth_cursor_duration_ms : 80
-                                    typingAnimationDuration: root.backendRef ? root.backendRef.setting_typing_animation_duration_ms : 100
-                                }
+                            }
+                        }
+
+                        Item {
+                            id: cursorOverlay
+                            anchors.fill: editorScroll
+                            clip: false
+                            z: editorScroll.z + 1
+
+                            SmoothCursor {
+                                targetTextArea: editorArea
+                                overlayItem: cursorOverlay
+                                dt: root.dt
+                                smoothCursorEnabled: root.backendRef ? root.backendRef.setting_smooth_cursor_enabled : true
+                                typingAnimationEnabled: root.backendRef ? root.backendRef.setting_typing_animation_enabled : true
+                                cursorAnimationDuration: root.backendRef ? root.backendRef.setting_smooth_cursor_duration_ms : 80
+                                typingAnimationDuration: root.backendRef ? root.backendRef.setting_typing_animation_duration_ms : 100
                             }
                         }
                     }
@@ -695,7 +704,7 @@ Rectangle {
                             Text {
                                 anchors.centerIn: parent
                                 text: "\u25C0" // Left arrow to indicate it opens from the right
-                                color: dt ? dt.textMuted : "#606470"
+                                color: dt ? dt.textMuted : "#8C9198"
                                 font.pixelSize: dt ? dt.fontXs : 11
                             }
 

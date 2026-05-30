@@ -304,7 +304,7 @@ Rectangle {
 
                 Text {
                     text: "10"
-                    color: dt ? dt.textMuted : "#606470"
+                    color: dt ? dt.textMuted : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
                 }
 
@@ -321,7 +321,7 @@ Rectangle {
 
                 Text {
                     text: "40"
-                    color: dt ? dt.textMuted : "#606470"
+                    color: dt ? dt.textMuted : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
                 }
             }
