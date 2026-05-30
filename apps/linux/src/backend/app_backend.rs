@@ -91,6 +91,10 @@ fn blocked_empty_overwrite_user_message() -> &'static str {
     "已阻止空内容覆盖，原章节内容已保留"
 }
 
+fn blocked_empty_overwrite_error_code() -> &'static str {
+    "EMPTY_OVERWRITE_BLOCKED"
+}
+
 #[allow(dead_code)]
 fn debug_enabled() -> bool {
     get_debug_config().enabled

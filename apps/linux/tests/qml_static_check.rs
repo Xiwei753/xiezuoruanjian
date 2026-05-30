@@ -179,6 +179,38 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: TextArea missing selectionColor", file_name);
                     has_errors = true;
                 }
+                if !content.contains("emptyContentMinimumHeight") || !content.contains("topPadding: dt ? dt.sp16") || !content.contains("bottomPadding: dt ? dt.sp16") {
+                    eprintln!("{}: TextArea missing empty-content minimum height/padding guard", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("contentHeight: Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight, availableHeight)") {
+                    eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
+                    has_errors = true;
+                }
+            }
+
+            if file_name == "SmoothCursor.qml" {
+                if !content.contains("fallbackCursorHeight") || !content.contains("targetTextArea.cursorRectangle") || !content.contains("Math.max(rect.height || 0, fallbackCursorHeight)") {
+                    eprintln!("{}: SmoothCursor missing empty cursorRectangle fallback", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("targetTextArea.leftPadding") || !content.contains("targetTextArea.topPadding") || !content.contains("targetTextArea.bottomPadding") {
+                    eprintln!("{}: SmoothCursor must position against TextArea padding", file_name);
+                    has_errors = true;
+                }
+            }
+
+            if file_name == "TopWritingToolbar.qml" || file_name == "WorkspaceTree.qml" {
+                for forbidden in ["palette.text", "root.palette.text", "control.palette.text", "textMain", "textDim", "sidebarBg"] {
+                    if content.contains(forbidden) {
+                        eprintln!("{}: Found forbidden dark text fallback/token alias '{}'", file_name, forbidden);
+                        has_errors = true;
+                    }
+                }
+                if !content.contains("textPrimary") || !content.contains("textSecondary") {
+                    eprintln!("{}: Missing explicit DesignTokens text colors", file_name);
+                    has_errors = true;
+                }
             }
         }
     }

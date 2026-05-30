@@ -27,7 +27,7 @@ Rectangle {
     signal showError(string message)
     signal deleteItem(string type, string projectId, string volumeId, string chapterId, string title)
 
-    color: theme ? theme.sidebarBg : "#2D2D2D"
+    color: theme ? theme.sidebar : "#14161B"
 
     ListModel {
         id: treeModel
@@ -86,8 +86,8 @@ Rectangle {
                 property bool isSelected: root.selectedId !== "" && root.selectedId === model.id
                 property bool isHovered: hoverArea.containsMouse
                 
-                color: isSelected ? (theme ? Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.15) : "#404040") :
-                       isHovered ? (theme ? theme.sidebarHover : "#383838") : "transparent"
+                color: isSelected ? (theme ? theme.primaryContainer : "#CCE5FF") :
+                       isHovered ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent"
 
                 RowLayout {
                     anchors.fill: parent
@@ -107,14 +107,14 @@ Rectangle {
                             if (model.type === "chapter") return "●";
                             return "";
                         }
-                        color: root.theme ? root.theme.textMain : "#E0E0E0"
+                        color: delegateRect.isSelected ? (root.theme ? root.theme.onPrimaryContainer : "#CCE5FF") : (root.theme ? root.theme.textSecondary : "#8C9198")
                         font.pixelSize: 14
                     }
 
                     Text {
                         Layout.fillWidth: true
                         text: model.title || ""
-                        color: delegateRect.isSelected ? (root.theme ? root.theme.accent : "#82AAFF") : (root.theme ? root.theme.textMain : "#E0E0E0")
+                        color: delegateRect.isSelected ? (root.theme ? root.theme.onPrimaryContainer : "#CCE5FF") : (root.theme ? root.theme.textPrimary : "#E2E2E5")
                         font.pixelSize: 14
                         elide: Text.ElideRight
                     }
@@ -148,17 +148,32 @@ Rectangle {
         anchors.centerIn: parent
         visible: treeModel.count === 0
         text: qsTr("暂无作品")
-        color: theme ? theme.textDim : "#808080"
+        color: theme ? theme.textMuted : "#8C9198"
         font.pixelSize: 14
     }
 
     Menu {
         id: contextMenu
         property var itemData: null
+        background: Rectangle {
+            color: theme ? theme.surface : "#1A1D23"
+            border.color: theme ? theme.border : "#2A2E36"
+            radius: theme ? theme.radiusMd : 12
+            border.width: 1
+        }
 
         MenuItem {
+            id: menuCreateVolume
             text: qsTr("新建卷")
             visible: contextMenu.itemData && contextMenu.itemData.type === "project"
+            contentItem: Text {
+                text: menuCreateVolume.text
+                color: theme ? theme.textPrimary : "#E2E2E5"
+                font.pixelSize: theme ? theme.label : 13
+                font.family: theme ? theme.fontFamily : "sans-serif"
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle { color: menuCreateVolume.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -169,8 +184,17 @@ Rectangle {
             }
         }
         MenuItem {
+            id: menuCreateChapter
             text: qsTr("新建章节")
             visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
+            contentItem: Text {
+                text: menuCreateChapter.text
+                color: theme ? theme.textPrimary : "#E2E2E5"
+                font.pixelSize: theme ? theme.label : 13
+                font.family: theme ? theme.fontFamily : "sans-serif"
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle { color: menuCreateChapter.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -184,7 +208,16 @@ Rectangle {
             visible: contextMenu.itemData && (contextMenu.itemData.type === "project" || contextMenu.itemData.type === "volume")
         }
         MenuItem {
+            id: menuRename
             text: qsTr("重命名")
+            contentItem: Text {
+                text: menuRename.text
+                color: theme ? theme.textPrimary : "#E2E2E5"
+                font.pixelSize: theme ? theme.label : 13
+                font.family: theme ? theme.fontFamily : "sans-serif"
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle { color: menuRename.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
@@ -203,7 +236,16 @@ Rectangle {
             }
         }
         MenuItem {
+            id: menuDelete
             text: qsTr("删除")
+            contentItem: Text {
+                text: menuDelete.text
+                color: theme ? theme.error : "#FFB4AB"
+                font.pixelSize: theme ? theme.label : 13
+                font.family: theme ? theme.fontFamily : "sans-serif"
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle { color: menuDelete.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;

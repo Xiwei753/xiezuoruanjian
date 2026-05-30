@@ -226,6 +226,26 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn save_chapter_content_with_options(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        allow_empty_overwrite: bool,
+    ) -> ApiResult<ChapterSaveReceiptDto> {
+        self.core()
+            .write_chapter_verified_with_allow_empty_overwrite(
+                project_id,
+                volume_id,
+                chapter_id,
+                content,
+                allow_empty_overwrite,
+            )
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
     pub fn clear_chapter_content(
         &self,
         project_id: &str,

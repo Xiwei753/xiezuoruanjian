@@ -36,7 +36,7 @@ pub struct EditorBackend {
     open_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString),
     open_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject),
     get_chapter_content: qt_method!(fn(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString),
-    save_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> QJsonObject),
+    save_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString, allow_empty_overwrite: bool) -> QJsonObject),
     clear_chapter_content: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject),
     report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
     process_writing_event_from_text: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, old_text: QString, new_text: QString)),
@@ -109,7 +109,7 @@ impl EditorBackend {
     fn open_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.open_chapter_json(project_id, volume_id, chapter_id)); self.selected_item_changed(); self.chapter_path_changed(); out }
     fn open_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject { let out = self.with_app_mut(QJsonObject::default(), |app| app.open_chapter(project_id, volume_id, chapter_id)); self.selected_item_changed(); self.chapter_path_changed(); out }
     fn get_chapter_content(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString { self.with_app("".into(), |app| app.get_chapter_content(project_id, volume_id, chapter_id)) }
-    fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> QJsonObject { let out = self.with_app_mut(QJsonObject::default(), |app| app.save_chapter(project_id, volume_id, chapter_id, content)); self.save_status_changed(); out }
+    fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString, allow_empty_overwrite: bool) -> QJsonObject { let out = self.with_app_mut(QJsonObject::default(), |app| app.save_chapter(project_id, volume_id, chapter_id, content, allow_empty_overwrite)); self.save_status_changed(); out }
     fn clear_chapter_content(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.clear_chapter_content(project_id, volume_id, chapter_id)) }
     fn report_writing_event(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32) { self.with_app_mut((), |app| app.report_writing_event(project_id, volume_id, chapter_id, source, inserted_chars, deleted_chars, pasted_chars)); }
     fn process_writing_event_from_text(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, old_text: QString, new_text: QString) { self.with_app_mut((), |app| app.process_writing_event_from_text(project_id, volume_id, chapter_id, old_text, new_text)); }
@@ -392,23 +392,26 @@ impl AppBackend {
     }
 
 // AppBackend::save_chapter
-    pub(crate) fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> QJsonObject {
+    pub(crate) fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString, allow_empty_overwrite: bool) -> QJsonObject {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
         let text_str = content.to_string();
         let len = text_str.len();
-        self.debug_log("chapter", "save_chapter_start", &format!("len={}", len));
+        self.debug_log("chapter", "save_chapter_start", &format!("len={} allow_empty_overwrite={}", len, allow_empty_overwrite));
+        if len == 0 && allow_empty_overwrite {
+            self.debug_log("chapter", "save_chapter_empty_allowed_user_clear", &format!("chapter_id={}", c));
+        }
         
         let save_result = if let Some(core) = self.core_api() {
-            Some(writing_bridge::save_chapter(&core, &p, &v, &c, &text_str))
+            Some(writing_bridge::save_chapter(&core, &p, &v, &c, &text_str, allow_empty_overwrite))
         } else {
             None
         };
         
         let result_obj = match save_result {
             Some(Ok(receipt)) => {
-                self.debug_log("chapter", "save_chapter_success", "");
+                self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
                 self.current_save_status = "已保存".to_string();
                 self.workspace_content_changed();
                 self.flush_writing_stats();
@@ -417,13 +420,15 @@ impl AppBackend {
             Some(Err(e)) => {
                 self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
                 if is_empty_overwrite_blocked(&e) {
+                    self.debug_error("chapter", "blocked_empty_overwrite", &format!("chapter_id={} len={}", c, len));
                     let msg = blocked_empty_overwrite_user_message();
                     self.current_save_status = msg.to_string();
                     self.set_error(msg);
+                    bridge_error_object(msg, blocked_empty_overwrite_error_code())
                 } else {
                     self.current_save_status = "保存失败".to_string();
+                    bridge_error_object(&format!("保存失败: {}", e), "CORE_ERROR")
                 }
-                bridge_error_object(&format!("保存失败: {}", e), "CORE_ERROR")
             }
             None => {
                 self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");

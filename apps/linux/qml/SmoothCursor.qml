@@ -21,18 +21,43 @@ Rectangle {
     property int cursorAnimationDuration: 80
     property int typingAnimationDuration: 100
     property int lastTextLength: targetTextArea ? targetTextArea.length : 0
+    property real fallbackCursorHeight: targetTextArea ? Math.max(targetTextArea.font.pixelSize * 1.2, 18) : 18
 
     width: 2
-    height: targetTextArea ? targetTextArea.cursorRectangle.height : 0
+    height: cursorHeight()
     color: dt ? dt.accent : "#7B8CDE"
-    visible: smoothCursorEnabled && targetTextArea && targetTextArea.focus && targetTextArea.enabled && targetTextArea.cursorRectangle.height > 0
+    visible: smoothCursorEnabled && targetTextArea && targetTextArea.focus && targetTextArea.enabled && height > 0
     z: 3
     
-    x: targetTextArea ? targetTextArea.cursorRectangle.x : 0
-    y: targetTextArea ? targetTextArea.cursorRectangle.y : 0
+    x: cursorX()
+    y: cursorY()
 
 
     property bool isTyping: false
+
+    function cursorHeight() {
+        if (!targetTextArea) return 0;
+        var rect = targetTextArea.cursorRectangle;
+        return Math.max(rect.height || 0, fallbackCursorHeight);
+    }
+
+    function cursorX() {
+        if (!targetTextArea) return 0;
+        var rect = targetTextArea.cursorRectangle;
+        var left = targetTextArea.leftPadding || 0;
+        return Math.max((rect.x || 0) + left, left);
+    }
+
+    function cursorY() {
+        if (!targetTextArea) return 0;
+        var rect = targetTextArea.cursorRectangle;
+        var top = targetTextArea.topPadding || 0;
+        var bottom = targetTextArea.bottomPadding || 0;
+        var h = cursorHeight();
+        var y = Math.max((rect.y || 0) + top, top);
+        var maxY = targetTextArea.height - bottom - h;
+        return maxY >= top ? Math.min(y, maxY) : top;
+    }
 
     Behavior on x {
         id: xBehavior

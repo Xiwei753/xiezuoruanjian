@@ -37,10 +37,23 @@ pub fn open_chapter(api: &WriterCoreApi, project_id: &str, volume_id: &str, chap
     }
 }
 
-pub fn save_chapter(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str, text_str: &str) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
+pub fn save_chapter(
+    api: &WriterCoreApi,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    text_str: &str,
+    allow_empty_overwrite: bool,
+) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
     let chapters = api.list_chapters(project_id, volume_id).unwrap_or_default();
     if chapters.iter().any(|ch| ch.id == chapter_id) {
-        let receipt = api.save_chapter_content(project_id, volume_id, chapter_id, text_str)?;
+        let receipt = api.save_chapter_content_with_options(
+            project_id,
+            volume_id,
+            chapter_id,
+            text_str,
+            allow_empty_overwrite,
+        )?;
         Ok(receipt)
     } else {
         Err(writer_core::api::error::WriterError::ChapterNotFound)

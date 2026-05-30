@@ -224,7 +224,7 @@ Rectangle {
         // Save status
         Text {
             text: root.saveStatus || ""
-            color: dt ? dt.textMuted : "#606470"
+            color: dt ? dt.textSecondary : "#8C9198"
             font.pixelSize: dt ? dt.caption : 12
             font.family: dt ? dt.fontFamily : "sans-serif"
             visible: text !== ""

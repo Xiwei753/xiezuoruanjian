@@ -381,15 +381,43 @@ Rectangle {
                         property string itemTitle: ""
                         property string itemProjectId: ""
                         property string itemVolumeId: ""
+                        background: Rectangle {
+                            color: dt ? dt.surface : "#1A1D23"
+                            border.color: dt ? dt.border : "#2A2E36"
+                            radius: dt ? dt.radiusMd : 12
+                            border.width: 1
+                        }
 
                         MenuItem {
+                            id: createVolumeMenuItem
                             text: qsTr("新建卷")
                             visible: treeContextMenu.itemType === "project"
+                            contentItem: Text {
+                                text: createVolumeMenuItem.text
+                                color: dt ? dt.textPrimary : "#E2E2E5"
+                                font.pixelSize: dt ? dt.label : 13
+                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: createVolumeMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                            }
                             onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
                         }
                         MenuItem {
+                            id: createChapterMenuItem
                             text: qsTr("新建章节")
                             visible: treeContextMenu.itemType === "volume"
+                            contentItem: Text {
+                                text: createChapterMenuItem.text
+                                color: dt ? dt.textPrimary : "#E2E2E5"
+                                font.pixelSize: dt ? dt.label : 13
+                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: createChapterMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                            }
                             onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
                         }
                     }
@@ -568,6 +596,7 @@ Rectangle {
                             anchors.margins: dt ? dt.sp20 : 20
                             clip: true
                             contentWidth: availableWidth
+                            contentHeight: Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight, availableHeight)
                             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                             ScrollBar.vertical: ScrollBar {
                                 policy: ScrollBar.AsNeeded
@@ -579,8 +608,9 @@ Rectangle {
 
                             TextArea {
                                 id: editorArea
+                                property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
                                 width: editorScroll.availableWidth
-                                height: Math.max(implicitHeight, editorScroll.availableHeight)
+                                height: Math.max(implicitHeight, emptyContentMinimumHeight)
                                 color: dt ? dt.editorText : "#E2E2E5"
                                 selectedTextColor: dt ? dt.selectedText : "#CCE5FF"
                                 selectionColor: dt ? dt.primary : "#006497"
@@ -598,6 +628,7 @@ Rectangle {
                                 rightPadding: dt ? dt.sp16 : 16
                                 topPadding: dt ? dt.sp16 : 16
                                 bottomPadding: dt ? dt.sp16 : 16
+                                implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
 
                                 cursorVisible: false
 

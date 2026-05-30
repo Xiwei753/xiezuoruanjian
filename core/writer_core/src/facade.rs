@@ -770,6 +770,24 @@ impl WriterCore {
         )
     }
 
+    pub fn write_chapter_verified_with_allow_empty_overwrite(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+        allow_empty_overwrite: bool,
+    ) -> Result<ChapterSaveReceipt> {
+        chapter::save_chapter_verified_with_allow_empty_overwrite(
+            &self.workspace_path,
+            project_id,
+            volume_id,
+            chapter_id,
+            content,
+            allow_empty_overwrite,
+        )
+    }
+
     pub fn update_chapter_note(
         &self,
         project_id: &str,

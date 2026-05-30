@@ -2,7 +2,7 @@
 mod tests {
     use crate::chapter::{
         clear_chapter_content, create_chapter, list_chapters, read_chapter, save_chapter_verified,
-        Chapter,
+        save_chapter_verified_with_allow_empty_overwrite, Chapter,
     };
     use crate::error::Error;
     use crate::project::{create_project, Project};
@@ -174,6 +174,45 @@ mod tests {
         )
         .unwrap();
         clear_chapter_content(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+
+        let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+        assert_eq!(content.content, "");
+    }
+
+    #[test]
+    fn user_allowed_empty_overwrite_succeeds_and_persists() {
+        let (dir, project, volume, chapter) = setup_chapter();
+        let workspace_path = dir.path();
+
+        save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "User text",
+        )
+        .unwrap();
+
+        let blocked = save_chapter_verified_with_allow_empty_overwrite(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "",
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(blocked, Error::EmptyOverwriteBlocked { .. }));
+
+        save_chapter_verified_with_allow_empty_overwrite(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "",
+            true,
+        )
+        .unwrap();
 
         let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");

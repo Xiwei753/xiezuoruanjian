@@ -212,12 +212,12 @@ QtObject {
     }
 
     function hasRecentExplicitClearCandidate() {
-        if (!targetTextArea || (targetTextArea.length || 0) !== 0) return false;
+        if (!targetTextArea || !targetTextArea.activeFocus || (targetTextArea.length || 0) !== 0) return false;
         return (Date.now() - lastPotentialExplicitClearAtMs) < 2000;
     }
 
     function markPotentialExplicitClear() {
-        if (!targetTextArea) return;
+        if (!targetTextArea || !targetTextArea.activeFocus || saveGuardActive()) return;
         var currentLen = targetTextArea.length || 0;
         var selectedLen = targetTextArea.selectedText ? targetTextArea.selectedText.length : 0;
         if (currentLen <= 1 || (selectedLen > 0 && selectedLen >= currentLen)) {
@@ -263,8 +263,9 @@ QtObject {
 
         var plainText = read.text;
         if (plainText === lastSavedEditorText) return true;
+        var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
 
-        var result = backendRef.save_chapter(projectId, volumeId, chapterId, plainText);
+        var result = backendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
         if (result && result.success) {
             lastSavedEditorText = plainText;
             previousEditorText = plainText;

@@ -28,11 +28,11 @@ Button {
         return control.theme ? control.theme.secondaryContainer : "#D4E4F6"
     }
     readonly property color contentColor: {
-        if (!control.enabled) return control.theme ? control.theme.textDisabled : "#94a3b8"
+        if (!control.enabled) return control.theme ? control.theme.textDisabled : "#8C9198"
         if (control.variant === "primary") return control.theme ? control.theme.onPrimary : "#ffffff"
         if (control.variant === "danger") return control.theme ? control.theme.onError : "#ffffff"
         if (control.variant === "text") return control.theme ? control.theme.primary : "#006497"
-        return control.theme ? control.theme.onSecondaryContainer : "#0E1D2A"
+        return control.theme ? control.theme.textPrimary : "#E2E2E5"
     }
 
     implicitHeight: small ? 32 : 40

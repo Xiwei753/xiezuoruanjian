@@ -163,6 +163,23 @@ impl WriterAppService {
             .save_chapter_content(&project_id, &volume_id, &chapter_id, &content)
     }
 
+    pub fn save_chapter_content_with_options(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        content: String,
+        allow_empty_overwrite: bool,
+    ) -> Result<ChapterSaveReceiptDto, WriterError> {
+        self.api.save_chapter_content_with_options(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &content,
+            allow_empty_overwrite,
+        )
+    }
+
     pub fn clear_chapter_content(
         &self,
         project_id: String,

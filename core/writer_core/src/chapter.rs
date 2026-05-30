@@ -220,6 +220,24 @@ pub fn save_chapter_verified(
     )
 }
 
+pub fn save_chapter_verified_with_allow_empty_overwrite(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    content: &str,
+    allow_empty_overwrite: bool,
+) -> Result<ChapterSaveReceipt> {
+    save_chapter_verified_with_options(
+        workspace_path,
+        project_id,
+        volume_id,
+        chapter_id,
+        content,
+        allow_empty_overwrite,
+    )
+}
+
 pub fn clear_chapter_content(
     workspace_path: &Path,
     project_id: &str,
