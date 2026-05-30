@@ -74,6 +74,15 @@ Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来�
 - `ChapterSaveReceipt { chapter_relative_path, content_len, content_hash, meta_hash, updated_at, word_count }`：保存或明确清空后的回执，供客户端确认 Core 已完成写入和校验。
 - `ProjectStats { total_word_count, volume_count, chapter_count }`：作品统计由 Core 计算，Android 通过 UniFFI `ProjectStatsDto` 获取，不在客户端自行遍历汇总。
 
+### 同步 API
+
+- `SyncConfigDto.backend_type = "github_api"` 使用 Rust Core 的 GitHub REST API 同步路径，不进入 libgit2/Git 工作树 reset 流程；`backend_type = "git"` 才使用传统 Git 后端。
+- GitHub API 同步采用 `app-meta/sync/manifest.sync.json` 作为 LWW 清单。清单文件由 Core 管理，不作为普通用户文件计入 `downloaded_files` / `uploaded_files`。
+- `ManifestFileRecord` 字段包括 `path`、`content_hash`、`updated_at_ms`、`deleted_at_ms`、`device_id`、`op`、`schema_version`。`deleted_at_ms` 为可选 tombstone 时间戳；旧清单缺少该字段时按 `updated_at_ms` 兼容读取。
+- GitHub API 写入使用 Contents API 串行执行：更新文件时带当前远端 blob `sha`，删除文件时带当前远端 blob `sha`；遇到 `409` 会重新读取 `sha` 并重试一次。此路径不调用 Git Database API 写提交，也不调用本地 `fetch/reset`。
+- `SyncResultDto` 的 `uploaded_files`、`downloaded_files`、`local_deletes`、`remote_deletes`、`overwritten_files`、`ignored_files` 为 UI 展示的权威计数来源；`error` 非空时客户端不得显示同步成功，即使状态字符串异常地表示成功。
+- `perform_sync_diagnostics` 在 `github_api` 后端返回 `backend_type = "github_api"`，避免 UI 将 GitHub API 模式误判为传统 Git。
+
 ### Android Bridge 入口
 
 Android 主业务入口是 `AppServiceBridge + UniFFI`，UniFFI 暴露的 `WriterAppService` 只适配到 `WriterCoreApi`。上层必须使用领域 Bridge：`WorkspaceBridge`、`WritingBridge`、`StatsBridge`、`StarMapBridge`、`MindMapBridge`、`SettingsBridge`、`SyncBridge`。`NativeCoreBridge` 仅作为 legacy JSON/JNI fallback 和 native 状态/旧动作路径；Repository/UI/ViewModel/Controller 不应直接处理 `NativeResult` 或 `NativeCoreBridge`。

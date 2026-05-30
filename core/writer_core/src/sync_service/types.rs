@@ -362,6 +362,8 @@ pub struct ManifestFileRecord {
     pub path: String,
     pub content_hash: String,
     pub updated_at_ms: i64,
+    #[serde(default)]
+    pub deleted_at_ms: Option<i64>,
     pub device_id: String,
     pub op: String, // "upsert" or "delete"
     #[serde(default = "default_schema_version")]

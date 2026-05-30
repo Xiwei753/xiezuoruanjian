@@ -754,12 +754,15 @@ impl AppBackend {
             self.sync_config_changed();
         }
 
+        self.flush_writing_stats();
+        self.current_sync_action_result = if silent_success {
+            "后台同步中...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件".to_string()
+        } else {
+            "正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件".to_string()
+        };
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
         self.sync_status_changed();
-
-        self.flush_writing_stats();
-        self.current_sync_action_result = if silent_success { "后台同步中...".to_string() } else { "正在同步...".to_string() };
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -793,28 +796,68 @@ impl AppBackend {
 
                 match api.perform_sync(config) {
                     Ok(result) => {
+                        if let Some(e) = result.error.as_deref() {
+                            if matches!(result.status.as_str(), "success" | "latest_wins_applied" | "no_changes" | "branch_missing_recovered") {
+                                let cat = sync_error_category(e);
+                                debug_log_static("sync", "sync_error_prevented_success", &format!("status={}, masked error={}", result.status, mask_sync_error(e)));
+                                return SyncTaskOutcome {
+                                    sync_status: cat,
+                                    action_result: format!("同步返回异常，已阻止显示成功:\n{}", mask_sync_error(e)),
+                                };
+                            }
+                        }
+
                         let (status, msg) = match result.status.as_str() {
                             "success" => {
-                                let m = format!(
-                                    "同步成功\n上传: {} 个文件\n下载: {} 个文件",
-                                    result.uploaded_files.len(),
-                                    result.downloaded_files.len()
-                                );
-                                ("success".to_string(), m)
-                            }
-                            "latest_wins_applied" => {
-                                let m = format!(
-                                    "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件",
+                                let mut m = format!(
+                                    "同步成功\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
                                     result.uploaded_files.len(),
                                     result.downloaded_files.len(),
                                     result.local_deletes.len(),
                                     result.remote_deletes.len(),
-                                    result.overwritten_files.len()
+                                    result.overwritten_files.len(),
+                                    result.ignored_files.len()
                                 );
+                                if let Some(user_message) = result.user_message.as_deref() {
+                                    if !user_message.is_empty() {
+                                        m.push_str(&format!("\n\n说明:\n{}", user_message));
+                                    }
+                                }
+                                ("success".to_string(), m)
+                            }
+                            "latest_wins_applied" => {
+                                let mut m = format!(
+                                    "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
+                                    result.uploaded_files.len(),
+                                    result.downloaded_files.len(),
+                                    result.local_deletes.len(),
+                                    result.remote_deletes.len(),
+                                    result.overwritten_files.len(),
+                                    result.ignored_files.len()
+                                );
+                                if let Some(user_message) = result.user_message.as_deref() {
+                                    if !user_message.is_empty() {
+                                        m.push_str(&format!("\n\n说明:\n{}", user_message));
+                                    }
+                                }
                                 ("success".to_string(), m)
                             }
                             "no_changes" => {
-                                ("success".to_string(), "同步完成：本地和远端均已是最新状态，无须更新。".to_string())
+                                let mut m = format!(
+                                    "同步完成：本地和远端均已是最新状态，无须更新。\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
+                                    result.uploaded_files.len(),
+                                    result.downloaded_files.len(),
+                                    result.local_deletes.len(),
+                                    result.remote_deletes.len(),
+                                    result.overwritten_files.len(),
+                                    result.ignored_files.len()
+                                );
+                                if let Some(user_message) = result.user_message.as_deref() {
+                                    if !user_message.is_empty() {
+                                        m.push_str(&format!("\n\n说明:\n{}", user_message));
+                                    }
+                                }
+                                ("success".to_string(), m)
                             }
                             "configured_untested" => {
                                 ("configured_untested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())

@@ -1,7 +1,6 @@
 use crate::sync_service::conflict::build_conflict_summary;
 use crate::sync_service::types::SyncConfig;
 use crate::sync_service::git_backend::GitBackend;
-use crate::sync_service::git_backend::fetch_and_reset_local_repo;
 use crate::sync_service::github_backend::GitHubApiBackend;
 use crate::sync_service::conflict::collect_git_status_summary;
 use crate::sync_service::types::SyncManifest;
@@ -23,6 +22,8 @@ use crate::sync_service::git_backend::GitAuth;
 use crate::sync_service::types::SyncConflictSummary;
 use std::path::Path;
 use base64::Engine;
+
+const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
 
 pub struct SyncService {
     pub config: Option<SyncConfig>,
@@ -168,10 +169,21 @@ impl crate::sync_service::SyncService {
                 Err(e) => {
                     attempt += 1;
                     if attempt >= max_retries {
-                        result.status = SyncStatus::RecoverableError(e.to_string());
-                        result.error = Some(e.to_string());
+                        let err = e.to_string();
+                        result.status = if err.contains("local_io_error") {
+                            SyncStatus::Error("local_io_error".to_string())
+                        } else if err.contains("auth_error") {
+                            SyncStatus::Error("auth_error".to_string())
+                        } else if err.contains("api_rate_limited") {
+                            SyncStatus::RecoverableError("api_rate_limited".to_string())
+                        } else if err.contains("network_error") {
+                            SyncStatus::RecoverableError("network_error".to_string())
+                        } else {
+                            SyncStatus::RecoverableError("api_error".to_string())
+                        };
+                        result.error = Some(err.clone());
                         result.user_message =
-                            Some(format!("同步失败，已重试 {} 次。错误: {}", max_retries, e));
+                            Some(format!("同步失败，已重试 {} 次。错误: {}", max_retries, err));
                         return Ok(result);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -183,6 +195,240 @@ impl crate::sync_service::SyncService {
 }
 
 impl crate::sync_service::SyncService {
+    fn github_api_error(context: &str, status: reqwest::StatusCode, body: String) -> crate::Error {
+        let status_u16 = status.as_u16();
+        let category = match status_u16 {
+            401 | 403 => "auth_error",
+            404 => "not_found",
+            409 => "remote_sha_conflict",
+            429 => "api_rate_limited",
+            _ => {
+                let lower = body.to_lowercase();
+                if lower.contains("rate limit") {
+                    "api_rate_limited"
+                } else if status.is_server_error() {
+                    "network_error"
+                } else {
+                    "api_error"
+                }
+            }
+        };
+        let body_preview = body.chars().take(240).collect::<String>();
+        crate::Error::Other(format!(
+            "{}: {} failed with HTTP {}: {}",
+            category, context, status_u16, body_preview
+        ))
+    }
+
+    fn github_get_content(
+        client: &reqwest::blocking::Client,
+        api_base: &str,
+        token: &str,
+        branch: &str,
+        path: &str,
+    ) -> crate::Result<Option<(Vec<u8>, Option<String>)>> {
+        let url = format!("{}/contents/{}?ref={}", api_base, path, branch);
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        if status.as_u16() == 404 {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(Self::github_api_error(
+                &format!("get contents {}", path),
+                status,
+                body,
+            ));
+        }
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| crate::Error::Other(format!("api_error: invalid contents json: {}", e)))?;
+        let sha = json["sha"].as_str().map(|s| s.to_string());
+        let content_b64 = json["content"].as_str().unwrap_or_default().replace('\n', "");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(content_b64.as_bytes())
+            .map_err(|e| crate::Error::Other(format!("api_error: invalid base64 for {}: {}", path, e)))?;
+        Ok(Some((bytes, sha)))
+    }
+
+    fn github_get_content_sha(
+        client: &reqwest::blocking::Client,
+        api_base: &str,
+        token: &str,
+        branch: &str,
+        path: &str,
+    ) -> crate::Result<Option<String>> {
+        Ok(Self::github_get_content(client, api_base, token, branch, path)?
+            .and_then(|(_, sha)| sha))
+    }
+
+    fn github_put_content_once(
+        client: &reqwest::blocking::Client,
+        api_base: &str,
+        token: &str,
+        branch: &str,
+        path: &str,
+        content: &[u8],
+        sha: Option<&str>,
+    ) -> crate::Result<(reqwest::StatusCode, String)> {
+        let url = format!("{}/contents/{}", api_base, path);
+        let mut payload = serde_json::json!({
+            "message": format!("WriterApp sync {}", path),
+            "content": base64::engine::general_purpose::STANDARD.encode(content),
+            "branch": branch,
+        });
+        if let Some(sha) = sha {
+            payload["sha"] = serde_json::json!(sha);
+        }
+        let resp = client
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        Ok((status, body))
+    }
+
+    fn github_put_content_serial(
+        client: &reqwest::blocking::Client,
+        api_base: &str,
+        token: &str,
+        branch: &str,
+        path: &str,
+        content: &[u8],
+        remote_sha: Option<String>,
+    ) -> crate::Result<()> {
+        let (status, body) = Self::github_put_content_once(
+            client,
+            api_base,
+            token,
+            branch,
+            path,
+            content,
+            remote_sha.as_deref(),
+        )?;
+        if status.is_success() {
+            return Ok(());
+        }
+        if status.as_u16() == 409 {
+            let refreshed_sha = Self::github_get_content_sha(client, api_base, token, branch, path)?;
+            let (retry_status, retry_body) = Self::github_put_content_once(
+                client,
+                api_base,
+                token,
+                branch,
+                path,
+                content,
+                refreshed_sha.as_deref(),
+            )?;
+            if retry_status.is_success() {
+                return Ok(());
+            }
+            return Err(Self::github_api_error(
+                &format!("put contents {} after sha refresh", path),
+                retry_status,
+                retry_body,
+            ));
+        }
+        Err(Self::github_api_error(
+            &format!("put contents {}", path),
+            status,
+            body,
+        ))
+    }
+
+    fn github_delete_content_once(
+        client: &reqwest::blocking::Client,
+        api_base: &str,
+        token: &str,
+        branch: &str,
+        path: &str,
+        sha: &str,
+    ) -> crate::Result<(reqwest::StatusCode, String)> {
+        let url = format!("{}/contents/{}", api_base, path);
+        let payload = serde_json::json!({
+            "message": format!("WriterApp delete {}", path),
+            "sha": sha,
+            "branch": branch,
+        });
+        let resp = client
+            .delete(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .json(&payload)
+            .send()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        Ok((status, body))
+    }
+
+    fn github_delete_content_serial(
+        client: &reqwest::blocking::Client,
+        api_base: &str,
+        token: &str,
+        branch: &str,
+        path: &str,
+        remote_sha: Option<String>,
+    ) -> crate::Result<()> {
+        let Some(mut sha) = remote_sha else {
+            return Ok(());
+        };
+        let (status, body) = Self::github_delete_content_once(
+            client, api_base, token, branch, path, &sha,
+        )?;
+        if status.is_success() || status.as_u16() == 404 {
+            return Ok(());
+        }
+        if status.as_u16() == 409 {
+            if let Some(refreshed_sha) = Self::github_get_content_sha(client, api_base, token, branch, path)? {
+                sha = refreshed_sha;
+                let (retry_status, retry_body) = Self::github_delete_content_once(
+                    client, api_base, token, branch, path, &sha,
+                )?;
+                if retry_status.is_success() || retry_status.as_u16() == 404 {
+                    return Ok(());
+                }
+                return Err(Self::github_api_error(
+                    &format!("delete contents {} after sha refresh", path),
+                    retry_status,
+                    retry_body,
+                ));
+            }
+            return Ok(());
+        }
+        Err(Self::github_api_error(
+            &format!("delete contents {}", path),
+            status,
+            body,
+        ))
+    }
+
+    fn lww_record_time(record: &ManifestFileRecord) -> i64 {
+        if record.op == "delete" {
+            record.deleted_at_ms.unwrap_or(record.updated_at_ms)
+        } else {
+            record.updated_at_ms
+        }
+    }
+
     fn execute_lww_sync_attempt(
         workspace_path: &Path,
         config: &SyncConfig,
@@ -193,110 +439,62 @@ impl crate::sync_service::SyncService {
         state: &mut SyncState,
         result: &mut SyncResult,
     ) -> crate::Result<SyncResult> {
-        let branch_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
+        eprintln!("[sync] github_api step=正在拉取远端清单");
+        let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, config.branch);
         let resp = client
-            .get(&branch_url)
+            .get(&tree_url)
             .header("Authorization", format!("Bearer {}", token))
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
             .send()
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
 
-        let mut latest_commit_sha = String::new();
-        let mut base_tree_sha = String::new();
         let mut remote_tree_files = std::collections::HashMap::new();
-
-        if resp.status().as_u16() == 200 {
-            let json: serde_json::Value = resp
-                .json()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-            latest_commit_sha = json["object"]["sha"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-
-            // get commit
-            let commit_url = format!("{}/git/commits/{}", api_base, latest_commit_sha);
-            let resp = client
-                .get(&commit_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("User-Agent", "WriterApp/1.0")
-                .header("Accept", "application/vnd.github+json")
-                .send()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() == 200 {
-                let json: serde_json::Value = resp
-                    .json()
-                    .map_err(|e| crate::Error::Other(e.to_string()))?;
-                base_tree_sha = json["tree"]["sha"].as_str().unwrap_or_default().to_string();
+        let tree_status = resp.status();
+        let tree_body = resp
+            .text()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        if tree_status.as_u16() == 200 {
+            let json: serde_json::Value = serde_json::from_str(&tree_body)
+                .map_err(|e| crate::Error::Other(format!("api_error: invalid tree json: {}", e)))?;
+            if json["truncated"].as_bool().unwrap_or(false) {
+                return Err(crate::Error::Other(
+                    "api_error: GitHub tree response truncated, repository is too large".to_string(),
+                ));
             }
-
-            // get tree recursively
-            if !base_tree_sha.is_empty() {
-                let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, base_tree_sha);
-                let resp = client
-                    .get(&tree_url)
-                    .header("Authorization", format!("Bearer {}", token))
-                    .header("User-Agent", "WriterApp/1.0")
-                    .header("Accept", "application/vnd.github+json")
-                    .send()
-                    .map_err(|e| crate::Error::Other(e.to_string()))?;
-                if resp.status().as_u16() == 200 {
-                    let json: serde_json::Value = resp
-                        .json()
-                        .map_err(|e| crate::Error::Other(e.to_string()))?;
-                    if let Some(tree) = json["tree"].as_array() {
-                        for item in tree {
-                            if item["type"].as_str() == Some("blob") {
-                                if let (Some(path), Some(sha)) =
-                                    (item["path"].as_str(), item["sha"].as_str())
-                                {
-                                    remote_tree_files.insert(path.to_string(), sha.to_string());
-                                }
-                            }
+            if let Some(tree) = json["tree"].as_array() {
+                for item in tree {
+                    if item["type"].as_str() == Some("blob") {
+                        if let (Some(path), Some(sha)) =
+                            (item["path"].as_str(), item["sha"].as_str())
+                        {
+                            remote_tree_files.insert(path.to_string(), sha.to_string());
                         }
                     }
                 }
             }
+        } else if tree_status.as_u16() != 404 {
+            return Err(Self::github_api_error("get recursive tree", tree_status, tree_body));
         }
 
         let mut remote_manifest = SyncManifest::default();
-        if remote_tree_files.contains_key("app-meta/sync/manifest.sync.json") {
-            let manifest_url = format!(
-                "{}/contents/app-meta/sync/manifest.sync.json?ref={}",
-                api_base, config.branch
-            );
-            let resp = client
-                .get(&manifest_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("User-Agent", "WriterApp/1.0")
-                .header("Accept", "application/vnd.github+json")
-                .send()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().is_success() {
-                let json: serde_json::Value = resp.json().unwrap_or_default();
-                if let Some(content_b64) = json["content"].as_str() {
-                    let content_b64 = content_b64.replace("\n", "");
-                    use base64::Engine;
-                    if let Ok(content_bytes) =
-                        base64::engine::general_purpose::STANDARD.decode(&content_b64)
-                    {
-                        if let Ok(manifest) = serde_json::from_slice::<SyncManifest>(&content_bytes)
-                        {
-                            remote_manifest = manifest;
-                        }
-                    }
-                }
+        if remote_tree_files.contains_key(SYNC_MANIFEST_PATH) {
+            if let Some((content_bytes, _)) =
+                Self::github_get_content(client, api_base, token, &config.branch, SYNC_MANIFEST_PATH)?
+            {
+                remote_manifest = serde_json::from_slice::<SyncManifest>(&content_bytes)
+                    .map_err(|e| crate::Error::Other(format!("api_error: invalid remote manifest: {}", e)))?;
             }
         }
 
+        eprintln!("[sync] github_api step=正在比较本地和远端");
         let local_entries = Self::scan_workspace_for_sync(workspace_path)?;
         let now_ms = chrono::Utc::now().timestamp_millis();
         let mut local_records = std::collections::HashMap::new();
 
         // 1. Existing local files
         for entry in &local_entries {
-            if entry.sync_kind == SyncKind::Upload {
+            if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
                 let path = entry.relative_path.clone();
                 let local_hash = entry.file_hash.clone();
 
@@ -339,6 +537,7 @@ impl crate::sync_service::SyncService {
                         path,
                         content_hash: local_hash,
                         updated_at_ms,
+                        deleted_at_ms: None,
                         device_id: state.device_id.clone(),
                         op,
                         schema_version: 1,
@@ -367,6 +566,7 @@ impl crate::sync_service::SyncService {
                             path: path.clone(),
                             content_hash: String::new(),
                             updated_at_ms,
+                            deleted_at_ms: Some(updated_at_ms),
                             device_id: state.device_id.clone(),
                             op: "delete".to_string(),
                             schema_version: 1,
@@ -378,11 +578,13 @@ impl crate::sync_service::SyncService {
 
         let mut remote_records = std::collections::HashMap::new();
         for rec in remote_manifest.files {
-            remote_records.insert(rec.path.clone(), rec);
+            if rec.path != SYNC_MANIFEST_PATH {
+                remote_records.insert(rec.path.clone(), rec);
+            }
         }
 
         for (path, sha) in &remote_tree_files {
-            if !remote_records.contains_key(path) {
+            if path != SYNC_MANIFEST_PATH && !remote_records.contains_key(path) {
                 if !Self::is_whitelisted_path(path) || Self::is_blacklisted_path(path) {
                     continue;
                 }
@@ -392,6 +594,7 @@ impl crate::sync_service::SyncService {
                         path: path.clone(),
                         content_hash: sha.clone(),
                         updated_at_ms: 0,
+                        deleted_at_ms: None,
                         device_id: "remote".to_string(),
                         op: "upsert".to_string(),
                         schema_version: 1,
@@ -435,13 +638,25 @@ impl crate::sync_service::SyncService {
                     }
                 }
                 (Some(local_rec), Some(remote_rec)) => {
+                    let local_time = Self::lww_record_time(local_rec);
+                    let remote_time = Self::lww_record_time(remote_rec);
                     let mut remote_wins = false;
-                    if remote_rec.updated_at_ms > local_rec.updated_at_ms {
+                    if remote_time > local_time {
                         remote_wins = true;
-                    } else if remote_rec.updated_at_ms == local_rec.updated_at_ms
-                        && remote_rec.device_id > local_rec.device_id
-                    {
-                        remote_wins = true;
+                    } else if remote_time == local_time {
+                        if remote_rec.content_hash == local_rec.content_hash && remote_rec.op == local_rec.op {
+                            merged_manifest_files.insert(path.clone(), local_rec.clone());
+                            result.ignored_files.push(path);
+                            continue;
+                        }
+                        remote_wins = remote_rec.device_id > local_rec.device_id;
+                        eprintln!(
+                            "[sync] lww_tie_breaker path={} winner={} local_device={} remote_device={}",
+                            path,
+                            if remote_wins { "remote" } else { "local" },
+                            local_rec.device_id,
+                            remote_rec.device_id
+                        );
                     }
 
                     if remote_wins {
@@ -502,254 +717,89 @@ impl crate::sync_service::SyncService {
             }
         }
 
-        // Download remote files
+        eprintln!("[sync] github_api step=正在下载远端较新文件");
         for path in &to_download {
-            let api_content_url = format!("{}/contents/{}?ref={}", api_base, path, config.branch);
-            let dl_resp = client
-                .get(&api_content_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("User-Agent", "WriterApp/1.0")
-                .header("Accept", "application/vnd.github+json")
-                .send()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-            if dl_resp.status().is_success() {
-                let json: serde_json::Value = dl_resp.json().unwrap_or_default();
-                if let Some(content_b64) = json["content"].as_str() {
-                    let content_b64 = content_b64.replace("\n", "");
-                    use base64::Engine;
-                    if let Ok(content) =
-                        base64::engine::general_purpose::STANDARD.decode(&content_b64)
-                    {
-                        let full_path = workspace_path.join(path);
-                        if let Some(parent) = full_path.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        let tmp_path =
-                            full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                        if std::fs::write(&tmp_path, content).is_ok() {
-                            let _ = std::fs::rename(tmp_path, &full_path);
-                        }
-                    }
-                }
-            } else {
+            let Some((content, _sha)) =
+                Self::github_get_content(client, api_base, token, &config.branch, path)?
+            else {
                 return Err(crate::Error::Other(format!(
-                    "Failed to download file {}: {}",
-                    path,
-                    dl_resp.status()
+                    "api_error: remote file missing while downloading {}",
+                    path
                 )));
-            }
-        }
-
-        let mut tree_nodes = vec![];
-
-        // Upload whitelisted files
-        for path in &to_upload {
+            };
             let full_path = workspace_path.join(path);
-            if !full_path.exists() {
-                continue;
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
             }
-
-            let content = std::fs::read(&full_path)
-                .map_err(|e| crate::Error::Other(format!("读取文件失败 {}: {}", path, e)))?;
-
-            let blob_url = format!("{}/git/blobs", api_base);
-            let blob_payload = serde_json::json!({
-                "content": base64::engine::general_purpose::STANDARD.encode(&content),
-                "encoding": "base64"
-            });
-            let resp = client
-                .post(&blob_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("User-Agent", "WriterApp/1.0")
-                .header("Accept", "application/vnd.github+json")
-                .json(&blob_payload)
-                .send()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-
-            if resp.status().as_u16() == 201 {
-                let json: serde_json::Value = resp
-                    .json()
-                    .map_err(|e| crate::Error::Other(e.to_string()))?;
-                let sha = json["sha"].as_str().unwrap_or_default().to_string();
-                tree_nodes.push(serde_json::json!({
-                    "path": path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": sha
-                }));
-            } else {
-                return Err(crate::Error::Other(format!(
-                    "Failed to upload blob for {}: {}",
-                    path,
-                    resp.status()
-                )));
-            }
+            let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+            std::fs::write(&tmp_path, content)
+                .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
+            std::fs::rename(tmp_path, &full_path)
+                .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
         }
 
         let purge_time = now_ms - 30 * 24 * 3600 * 1000;
         let mut manifest_files_vec: Vec<ManifestFileRecord> =
             merged_manifest_files.values().cloned().collect();
-        manifest_files_vec.retain(|rec| rec.op != "delete" || rec.updated_at_ms > purge_time);
+        manifest_files_vec.retain(|rec| rec.op != "delete" || Self::lww_record_time(rec) > purge_time);
+        manifest_files_vec.sort_by(|a, b| a.path.cmp(&b.path));
 
         let sync_manifest = SyncManifest {
             files: manifest_files_vec,
         };
 
         let manifest_json = serde_json::to_string_pretty(&sync_manifest).unwrap_or_default();
-        let manifest_path = "app-meta/sync/manifest.sync.json";
-        let full_manifest_path = workspace_path.join(manifest_path);
+        let full_manifest_path = workspace_path.join(SYNC_MANIFEST_PATH);
         if let Some(parent) = full_manifest_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent)
+                .map_err(|e| crate::Error::Other(format!("local_io_error: manifest dir: {}", e)))?;
         }
         std::fs::write(&full_manifest_path, &manifest_json)
-            .map_err(|e| crate::Error::Other(format!("Failed to write manifest locally: {}", e)))?;
+            .map_err(|e| crate::Error::Other(format!("local_io_error: write manifest: {}", e)))?;
 
-        let blob_url = format!("{}/git/blobs", api_base);
-        let blob_payload = serde_json::json!({
-            "content": base64::engine::general_purpose::STANDARD.encode(manifest_json.as_bytes()),
-            "encoding": "base64"
-        });
-        let resp = client
-            .post(&blob_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "WriterApp/1.0")
-            .header("Accept", "application/vnd.github+json")
-            .json(&blob_payload)
-            .send()
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-        let manifest_sha = if resp.status().as_u16() == 201 {
-            let json: serde_json::Value = resp
-                .json()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-            json["sha"].as_str().unwrap_or_default().to_string()
-        } else {
-            return Err(crate::Error::Other(format!(
-                "Failed to upload manifest blob: {}",
-                resp.status()
-            )));
-        };
-
-        tree_nodes.push(serde_json::json!({
-            "path": manifest_path,
-            "mode": "100644",
-            "type": "blob",
-            "sha": manifest_sha
-        }));
-
-        for (path, remote_rec) in &remote_records {
-            if let Some(merged_rec) = merged_manifest_files.get(path) {
-                if merged_rec.op == "delete" && remote_rec.op == "upsert" {
-                    tree_nodes.push(serde_json::json!({
-                        "path": path,
-                        "mode": "100644",
-                        "type": "blob",
-                        "sha": serde_json::Value::Null
-                    }));
-                }
+        eprintln!("[sync] github_api step=正在上传本地较新文件");
+        for path in &to_upload {
+            let full_path = workspace_path.join(path);
+            if !full_path.exists() {
+                continue;
             }
+            let content = std::fs::read(&full_path)
+                .map_err(|e| crate::Error::Other(format!("local_io_error: read {}: {}", path, e)))?;
+            Self::github_put_content_serial(
+                client,
+                api_base,
+                token,
+                &config.branch,
+                path,
+                &content,
+                remote_tree_files.get(path).cloned(),
+            )?;
         }
 
-        let mut tree_payload = serde_json::json!({
-            "tree": tree_nodes
-        });
-        if !base_tree_sha.is_empty() {
-            tree_payload["base_tree"] = serde_json::json!(base_tree_sha);
+        for path in &local_deletes_count {
+            Self::github_delete_content_serial(
+                client,
+                api_base,
+                token,
+                &config.branch,
+                path,
+                remote_tree_files.get(path).cloned(),
+            )?;
         }
 
-        let tree_url = format!("{}/git/trees", api_base);
-        let resp = client
-            .post(&tree_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "WriterApp/1.0")
-            .header("Accept", "application/vnd.github+json")
-            .json(&tree_payload)
-            .send()
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(crate::Error::Other(format!(
-                "Failed to create tree: {}",
-                resp.status()
-            )));
-        }
-        let json: serde_json::Value = resp
-            .json()
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-        let new_tree_sha = json["sha"].as_str().unwrap_or_default().to_string();
-
-        let commit_url = format!("{}/git/commits", api_base);
-        let mut commit_payload = serde_json::json!({
-            "message": format!("WriterApp LWW Sync: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")),
-            "tree": new_tree_sha
-        });
-        if !latest_commit_sha.is_empty() {
-            commit_payload["parents"] = serde_json::json!(vec![latest_commit_sha.clone()]);
-        }
-        let resp = client
-            .post(&commit_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", "WriterApp/1.0")
-            .header("Accept", "application/vnd.github+json")
-            .json(&commit_payload)
-            .send()
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(crate::Error::Other(format!(
-                "Failed to create commit: {}",
-                resp.status()
-            )));
-        }
-        let json: serde_json::Value = resp
-            .json()
-            .map_err(|e| crate::Error::Other(e.to_string()))?;
-        let new_commit_sha = json["sha"].as_str().unwrap_or_default().to_string();
-
-        if !latest_commit_sha.is_empty() {
-            let ref_url = format!("{}/git/refs/heads/{}", api_base, config.branch);
-            let ref_payload = serde_json::json!({
-                "sha": new_commit_sha,
-                "force": false
-            });
-            let resp = client
-                .patch(&ref_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("User-Agent", "WriterApp/1.0")
-                .header("Accept", "application/vnd.github+json")
-                .json(&ref_payload)
-                .send()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-            if resp.status().as_u16() == 422 || resp.status().as_u16() == 409 {
-                return Err(crate::Error::Other("occ_conflict".to_string()));
-            }
-            if !resp.status().is_success() {
-                return Err(crate::Error::Other(format!(
-                    "Failed to update ref: {}",
-                    resp.status()
-                )));
-            }
-        } else {
-            let ref_url = format!("{}/git/refs", api_base);
-            let ref_payload = serde_json::json!({
-                "ref": format!("refs/heads/{}", config.branch),
-                "sha": new_commit_sha
-            });
-            let resp = client
-                .post(&ref_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .header("User-Agent", "WriterApp/1.0")
-                .header("Accept", "application/vnd.github+json")
-                .json(&ref_payload)
-                .send()
-                .map_err(|e| crate::Error::Other(e.to_string()))?;
-            if !resp.status().is_success() {
-                return Err(crate::Error::Other(format!(
-                    "Failed to create ref: {}",
-                    resp.status()
-                )));
-            }
-        }
+        Self::github_put_content_serial(
+            client,
+            api_base,
+            token,
+            &config.branch,
+            SYNC_MANIFEST_PATH,
+            manifest_json.as_bytes(),
+            remote_tree_files.get(SYNC_MANIFEST_PATH).cloned(),
+        )?;
 
         state.last_sync_time = Some(chrono::Utc::now().timestamp());
-        state.last_synced_commit = Some(new_commit_sha.clone());
+        state.last_synced_commit = None;
         state.last_error = None;
         state.last_successful_network_mode = Some(mode.to_string());
 
@@ -757,7 +807,7 @@ impl crate::sync_service::SyncService {
         state.known_files.clear();
         state.known_files_updated_at.clear();
         for entry in post_local_entries {
-            if entry.sync_kind == SyncKind::Upload {
+            if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
                 state
                     .known_files
                     .insert(entry.relative_path.clone(), entry.file_hash.clone());
@@ -797,12 +847,8 @@ impl crate::sync_service::SyncService {
         result.local_deletes = local_deletes_count;
         result.remote_deletes = remote_deletes_count;
         result.overwritten_files = overwritten_files;
-        result.commit_hash = Some(new_commit_sha.clone());
-        result.first_sync_mode = if latest_commit_sha.is_empty() {
-            FirstSyncMode::InitExistingWorkspace
-        } else {
-            FirstSyncMode::AlreadyGitRepo
-        };
+        result.commit_hash = None;
+        result.first_sync_mode = FirstSyncMode::AlreadyGitRepo;
 
         result.user_message = Some(format!(
             "双向同步完成。上传: {}, 下载: {}, 本地删除: {}, 远端删除: {}, 覆盖: {} (网络模式: {})。",
@@ -814,10 +860,7 @@ impl crate::sync_service::SyncService {
             mode
         ));
 
-        if let Err(e) = fetch_and_reset_local_repo(workspace_path, config, token, &new_commit_sha) {
-            eprintln!("sync: fetch_and_reset_failed - LWW 同步后 Git 仓库重置失败 (已降级为警告): {}", e);
-        }
-
+        eprintln!("[sync] github_api step=同步完成");
         Ok(result.clone())
     }
 

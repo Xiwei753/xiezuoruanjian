@@ -71,7 +71,8 @@ impl SyncBackend for GitSyncBackend {
         config: &SyncConfig,
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncResult> {
-        SyncService::perform_lww_sync(workspace_path, config, secrets)
+        let backend = Git2Backend;
+        SyncService::perform_sync(workspace_path, config, secrets, &backend)
     }
 }
 

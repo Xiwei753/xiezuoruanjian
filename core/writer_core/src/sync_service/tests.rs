@@ -1,9 +1,11 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::sync_service::backends::SyncBackend;
     use crate::sync_service::git_backend::Git2Backend;
     use crate::sync_service::git_backend::GitAuth;
     use crate::sync_service::git_backend::GitBackend;
+    use crate::sync_service::github_backend::GitHubApiBackend;
     use crate::sync_service::service::SyncService;
     use crate::sync_service::types::BackendType;
     use crate::sync_service::types::FirstSyncMode;
@@ -18,6 +20,52 @@ mod tests {
     use base64::Engine;
     use std::path::Path;
     use tempfile::tempdir;
+    #[test]
+    fn test_github_api_diagnostics_reports_backend_type_without_token() {
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: "https://github.com/user/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: None,
+            ssh_private_key: None,
+        };
+
+        let result = GitHubApiBackend.diagnose(&config, &secrets).unwrap();
+        assert_eq!(result.backend_type, "github_api");
+        assert_eq!(result.error_category, "token_missing");
+    }
+
+    #[test]
+    fn test_sync_manifest_deserializes_without_deleted_at_ms() {
+        let raw = r#"{
+            "files": [{
+                "path": "projects/p1/project.json",
+                "content_hash": "abc",
+                "updated_at_ms": 1000,
+                "device_id": "device_a",
+                "op": "upsert",
+                "schema_version": 1
+            }]
+        }"#;
+
+        let manifest: SyncManifest = serde_json::from_str(raw).unwrap();
+        assert_eq!(manifest.files.len(), 1);
+        assert_eq!(manifest.files[0].deleted_at_ms, None);
+    }
+
     #[test]
     fn test_sync_secrets_local_json_blacklisted() {
         assert!(SyncService::is_blacklisted_path(
@@ -1361,7 +1409,7 @@ mod tests {
                                 } else if path.contains("/git/commits/mock_commit_sha") {
                                     response_body =
                                         r#"{"tree":{"sha":"mock_tree_sha"}}"#.to_string();
-                                } else if path.contains("/git/trees/mock_tree_sha") {
+                                } else if path.contains("/git/trees/mock_tree_sha") || path.contains("/git/trees/main") {
                                     let mut tree_list = Vec::new();
                                     let m = manifest_clone.lock().unwrap();
                                     if !m.is_empty() {
@@ -1370,52 +1418,123 @@ mod tests {
                                             "type": "blob",
                                             "sha": "manifest_blob_sha"
                                         }));
-                                        let fls = files_clone.lock().unwrap();
-                                        for filename in fls.keys() {
-                                            tree_list.push(serde_json::json!({
-                                                "path": filename,
-                                                "type": "blob",
-                                                "sha": format!("{}_sha", filename)
-                                            }));
-                                        }
+                                    }
+                                    let fls = files_clone.lock().unwrap();
+                                    for filename in fls.keys() {
+                                        tree_list.push(serde_json::json!({
+                                            "path": filename,
+                                            "type": "blob",
+                                            "sha": format!("{}_sha", filename)
+                                        }));
                                     }
                                     response_body =
                                         serde_json::json!({ "tree": tree_list }).to_string();
-                                } else if path
-                                    .contains("/contents/app-meta/sync/manifest.sync.json")
-                                {
+                                } else if path.contains("/contents/app-meta/sync/manifest.sync.json") {
                                     let m = manifest_clone.lock().unwrap();
-                                    if m.is_empty() {
-                                        status_line = "HTTP/1.1 404 Not Found";
+                                    if method == "GET" {
+                                        if m.is_empty() {
+                                            status_line = "HTTP/1.1 404 Not Found";
+                                        } else {
+                                            let encoded = base64::engine::general_purpose::STANDARD
+                                                .encode(m.as_bytes());
+                                            response_body = serde_json::json!({
+                                                "content": encoded,
+                                                "encoding": "base64",
+                                                "sha": "manifest_blob_sha"
+                                            })
+                                            .to_string();
+                                        }
+                                    } else if method == "PUT" {
+                                        let manifest_exists = !m.is_empty();
+                                        drop(m);
+                                        if let Some(body_start) = req.find("\r\n\r\n") {
+                                            let body = &req[body_start + 4..];
+                                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                                                if manifest_exists && val["sha"].as_str().is_none() {
+                                                    status_line = "HTTP/1.1 422 Unprocessable Entity";
+                                                    response_body = r#"{"message":"sha required"}"#.to_string();
+                                                }
+                                                if let Some(b64_content) = val["content"].as_str() {
+                                                    if status_line == "HTTP/1.1 200 OK" {
+                                                        let decoded = base64::engine::general_purpose::STANDARD
+                                                            .decode(b64_content)
+                                                            .unwrap();
+                                                        let mut m = manifest_clone.lock().unwrap();
+                                                        *m = String::from_utf8(decoded).unwrap();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if status_line == "HTTP/1.1 200 OK" {
+                                            response_body = r#"{"content":{"sha":"manifest_new_sha"}}"#.to_string();
+                                        }
                                     } else {
-                                        let encoded = base64::engine::general_purpose::STANDARD
-                                            .encode(m.as_bytes());
-                                        response_body = serde_json::json!({
-                                            "content": encoded,
-                                            "encoding": "base64"
-                                        })
-                                        .to_string();
+                                        status_line = "HTTP/1.1 405 Method Not Allowed";
                                     }
                                 } else if path.contains("/contents/") {
                                     if let Some(idx) = path.find("/contents/") {
                                         let file_path = &path[idx + 10..];
                                         let file_path =
                                             file_path.split('?').next().unwrap_or(file_path);
-                                        let fls = files_clone.lock().unwrap();
-                                        if let Some(content) = fls.get(file_path) {
-                                            let encoded = base64::engine::general_purpose::STANDARD
-                                                .encode(content.as_bytes());
-                                            response_body = serde_json::json!({
-                                                "content": encoded,
-                                                "encoding": "base64"
-                                            })
-                                            .to_string();
+                                        if method == "GET" {
+                                            let fls = files_clone.lock().unwrap();
+                                            if let Some(content) = fls.get(file_path) {
+                                                let encoded = base64::engine::general_purpose::STANDARD
+                                                    .encode(content.as_bytes());
+                                                response_body = serde_json::json!({
+                                                    "content": encoded,
+                                                    "encoding": "base64",
+                                                    "sha": format!("{}_sha", file_path)
+                                                })
+                                                .to_string();
+                                            } else {
+                                                status_line = "HTTP/1.1 404 Not Found";
+                                            }
+                                        } else if method == "PUT" {
+                                            if let Some(body_start) = req.find("\r\n\r\n") {
+                                                let body = &req[body_start + 4..];
+                                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+                                                    let file_exists = files_clone.lock().unwrap().contains_key(file_path);
+                                                    if file_exists && val["sha"].as_str().is_none() {
+                                                        status_line = "HTTP/1.1 422 Unprocessable Entity";
+                                                        response_body = r#"{"message":"sha required"}"#.to_string();
+                                                    }
+                                                    if let Some(b64_content) = val["content"].as_str() {
+                                                        if status_line == "HTTP/1.1 200 OK" {
+                                                            let decoded = base64::engine::general_purpose::STANDARD
+                                                                .decode(b64_content)
+                                                                .unwrap();
+                                                            let mut fls = files_clone.lock().unwrap();
+                                                            fls.insert(
+                                                                file_path.to_string(),
+                                                                String::from_utf8(decoded).unwrap(),
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if status_line == "HTTP/1.1 200 OK" {
+                                                response_body = r#"{"content":{"sha":"new_sha"}}"#.to_string();
+                                            }
+                                        } else if method == "DELETE" {
+                                            if let Some(body_start) = req.find("\r\n\r\n") {
+                                                let body = &req[body_start + 4..];
+                                                let val = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
+                                                if val["sha"].as_str().is_none() {
+                                                    status_line = "HTTP/1.1 422 Unprocessable Entity";
+                                                    response_body = r#"{"message":"sha required"}"#.to_string();
+                                                } else {
+                                                    let mut fls = files_clone.lock().unwrap();
+                                                    fls.remove(file_path);
+                                                    response_body = r#"{"content":null}"#.to_string();
+                                                }
+                                            }
                                         } else {
-                                            status_line = "HTTP/1.1 404 Not Found";
+                                            status_line = "HTTP/1.1 405 Method Not Allowed";
                                         }
                                     }
                                 } else if method == "POST" && path.contains("/git/blobs") {
-                                    status_line = "HTTP/1.1 201 Created";
+                                    status_line = "HTTP/1.1 500 Internal Server Error";
                                     if let Some(body_start) = req.find("\r\n\r\n") {
                                         let body = &req[body_start + 4..];
                                         if let Ok(val) =
@@ -1442,40 +1561,20 @@ mod tests {
                                             }
                                         }
                                     }
-                                    response_body = r#"{"sha":"mock_blob_sha"}"#.to_string();
+                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "POST" && path.contains("/git/trees") {
-                                    status_line = "HTTP/1.1 201 Created";
-                                    if let Some(body_start) = req.find("\r\n\r\n") {
-                                        let body = &req[body_start + 4..];
-                                        if let Ok(val) =
-                                            serde_json::from_str::<serde_json::Value>(body)
-                                        {
-                                            if let Some(tree_nodes) = val["tree"].as_array() {
-                                                let mut fls = files_clone.lock().unwrap();
-                                                for node in tree_nodes {
-                                                    if let Some(n_path) = node["path"].as_str() {
-                                                        if node["sha"].is_null() {
-                                                            fls.remove(n_path);
-                                                        } else {
-                                                            if !fls.contains_key(n_path) && n_path != "app-meta/sync/manifest.sync.json" {
-                                                                fls.insert(n_path.to_string(), "dummy content".to_string());
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    response_body = r#"{"sha":"mock_tree_sha"}"#.to_string();
+                                    status_line = "HTTP/1.1 500 Internal Server Error";
+                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "POST" && path.contains("/git/commits") {
-                                    status_line = "HTTP/1.1 201 Created";
-                                    response_body = r#"{"sha":"mock_commit_sha"}"#.to_string();
+                                    status_line = "HTTP/1.1 500 Internal Server Error";
+                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "POST" && path.contains("/git/refs") {
-                                    status_line = "HTTP/1.1 201 Created";
-                                    response_body = r#"{}"#.to_string();
+                                    status_line = "HTTP/1.1 500 Internal Server Error";
+                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "PATCH" && path.contains("/git/refs/heads/main")
                                 {
-                                    response_body = r#"{}"#.to_string();
+                                    status_line = "HTTP/1.1 500 Internal Server Error";
+                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
                                 }
 
                                 let response = format!(
@@ -1513,6 +1612,7 @@ mod tests {
                 path: "projects/p1/project.json".to_string(),
                 content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
                 updated_at_ms: 1000,
+                deleted_at_ms: None,
                 device_id: "device_remote".to_string(),
                 op: "upsert".to_string(),
                 schema_version: 1,
@@ -1548,7 +1648,7 @@ mod tests {
         assert!(res
             .downloaded_files
             .contains(&"projects/p1/project.json".to_string()));
-        assert!(res
+        assert!(!res
             .downloaded_files
             .contains(&"app-meta/sync/manifest.sync.json".to_string()));
         assert!(res.uploaded_files.is_empty());
@@ -1560,6 +1660,10 @@ mod tests {
         assert!(local_file_path.exists());
         let local_content = std::fs::read_to_string(local_file_path).unwrap();
         assert_eq!(local_content, "remote content");
+        assert!(dir
+            .path()
+            .join("app-meta/sync/manifest.sync.json")
+            .exists());
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();
@@ -1590,6 +1694,7 @@ mod tests {
                 path: "projects/p1/project.json".to_string(),
                 content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
                 updated_at_ms: 900,
+                deleted_at_ms: None,
                 device_id: "device_remote".to_string(),
                 op: "upsert".to_string(),
                 schema_version: 1,
@@ -1661,6 +1766,7 @@ mod tests {
                 path: "projects/p1/project.json".to_string(),
                 content_hash: String::new(),
                 updated_at_ms: 3000,
+                deleted_at_ms: Some(3000),
                 device_id: "device_remote".to_string(),
                 op: "delete".to_string(),
                 schema_version: 1,
@@ -1747,6 +1853,7 @@ mod tests {
                     path: "projects/p1/project.json".to_string(),
                     content_hash: format!("{:x}", md5::compute("remote older content".as_bytes())),
                     updated_at_ms: 2000,
+                    deleted_at_ms: None,
                     device_id: "device_remote".to_string(),
                     op: "upsert".to_string(),
                     schema_version: 1,
@@ -1755,6 +1862,7 @@ mod tests {
                     path: "projects/p2/project.json".to_string(),
                     content_hash: format!("{:x}", md5::compute("remote newer content".as_bytes())),
                     updated_at_ms: 4000,
+                    deleted_at_ms: None,
                     device_id: "device_remote".to_string(),
                     op: "upsert".to_string(),
                     schema_version: 1,

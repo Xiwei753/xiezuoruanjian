@@ -294,6 +294,7 @@ impl SyncBackend for GitHubApiBackend {
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
+        result.backend_type = "github_api".to_string();
         result.remote_url_sanitized = sanitize_remote_url(&config.remote_url)
             .sanitized_url
             .clone();
@@ -486,6 +487,25 @@ impl SyncBackend for GitHubApiBackend {
             "[sync] backend_type=github_api sync_mode=lww_manifest entry=GitHubApiBackend::sync remote_url={}",
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
         );
-        SyncService::perform_lww_sync(workspace_path, config, secrets)
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            SyncService::perform_lww_sync(workspace_path, config, secrets)
+        })) {
+            Ok(result) => result,
+            Err(err) => {
+                let panic_msg = if let Some(s) = err.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = err.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                Ok(SyncResult::error(
+                    SyncStatus::FatalError("backend_panic".to_string()),
+                    FirstSyncMode::NotAttempted,
+                    Some("同步底层发生异常，已阻止显示成功。".to_string()),
+                    format!("backend_panic: {}", panic_msg),
+                ))
+            }
+        }
     }
 }

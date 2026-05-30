@@ -27,16 +27,20 @@ Item {
         var s = root.backendRef ? root.backendRef.sync_status : ""
         if (s === "success") return "success"
         if (s === "syncing") return "warning"
-        if (s === "error" || s === "conflict") return "error"
+        if (root.isFailureStatus(s)) return "error"
         return "info"
+    }
+
+    function isFailureStatus(s) {
+        return s === "error" || s === "conflict" || s === "recoverable_error" || s === "fatal_error" || s === "auth_failed" || s === "network_failed"
     }
 
     function statusText() {
         var s = root.backendRef ? root.backendRef.sync_status : ""
         if (s === "success") return qsTr("已同步")
         if (s === "syncing") return qsTr("同步中")
-        if (s === "error") return qsTr("同步失败")
         if (s === "conflict") return qsTr("存在冲突")
+        if (root.isFailureStatus(s)) return qsTr("同步失败")
         if (root.backendRef && root.backendRef.sync_enabled) return qsTr("已配置")
         return qsTr("未配置")
     }
@@ -175,7 +179,7 @@ Item {
                 enabled: !(root.backendRef && root.backendRef.sync_in_progress)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
-                    syncResultArea.text = qsTr("正在同步...")
+                    syncResultArea.text = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
                     if (typeof root.beforeSyncHook === "function") root.beforeSyncHook()
                     if (root.backendRef) root.backendRef.perform_sync()
                 }
@@ -212,12 +216,12 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 180
-            color: (root.backendRef && root.backendRef.sync_status === "conflict") ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.surfaceContainerLow : "#F6F8FB")
-            border.color: (root.backendRef && root.backendRef.sync_status === "conflict") ? (theme ? theme.error : "#BA1A1A") : (theme ? theme.border : "#CBD5E1")
-            border.width: (root.backendRef && root.backendRef.sync_status === "conflict") ? 2 : 1
+            color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.surfaceContainerLow : "#F6F8FB")
+            border.color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.error : "#BA1A1A") : (theme ? theme.border : "#CBD5E1")
+            border.width: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? 2 : 1
             radius: theme ? theme.radiusLg : 16
             clip: true
-            visible: (root.backendRef && (root.backendRef.sync_action_result !== "" || root.backendRef.sync_status === "syncing" || root.backendRef.sync_status === "error" || root.backendRef.sync_status === "conflict"))
+            visible: (root.backendRef && (root.backendRef.sync_action_result !== "" || root.backendRef.sync_status === "syncing" || root.isFailureStatus(root.backendRef.sync_status)))
 
             ScrollView {
                 id: logScroll
@@ -229,7 +233,7 @@ Item {
                     id: syncResultArea
                     width: logScroll.availableWidth
                     text: root.backendRef ? root.backendRef.sync_action_result : ""
-                    color: (root.backendRef && root.backendRef.sync_status === "conflict") ? (theme ? theme.onDangerContainer : "#410002") : (theme ? theme.onSurfaceVariant : "#42474E")
+                    color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.onDangerContainer : "#410002") : (theme ? theme.onSurfaceVariant : "#42474E")
                     font.family: "monospace"
                     font.pixelSize: theme ? theme.caption : 12
                     readOnly: true
