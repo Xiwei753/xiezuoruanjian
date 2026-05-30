@@ -18,6 +18,9 @@ QtObject {
     id: controller
 
     property var backendRef: null
+    property var workspaceBackendRef: null
+    property var projectBackendRef: null
+    property var appBackendRef: null
     property var appState: ({
         hasWorkspace: false,
         workspacePath: "",
@@ -65,15 +68,18 @@ QtObject {
     }
 
     function refreshState(fallbackMessage) {
-        if (!backendRef) return;
-        var state = parseJson(backendRef.refresh_app_state_json(), fallbackMessage || "刷新应用状态失败");
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi) return;
+        var state = parseJson(projectApi.refresh_app_state_json(), fallbackMessage || "刷新应用状态失败");
         if (state) applyState(state);
     }
 
     function restoreWorkspace() {
-        if (!backendRef) return;
-        backendRef.query_system_color_scheme();
-        backendRef.try_restore_last_workspace();
+        var workspaceApi = workspaceBackendRef || backendRef;
+        var appApi = appBackendRef || backendRef;
+        if (!workspaceApi) return;
+        if (appApi) appApi.query_system_color_scheme();
+        workspaceApi.try_restore_last_workspace();
         refreshState("恢复工作区失败");
     }
 
@@ -103,16 +109,18 @@ QtObject {
     }
 
     function switchWorkspace() {
-        if (!backendRef) return;
-        backendRef.switch_workspace();
+        var workspaceApi = workspaceBackendRef || backendRef;
+        if (!workspaceApi) return;
+        workspaceApi.switch_workspace();
         route = "hub";
         refreshState("切换工作区失败");
     }
 
     function createWorkspace(openExisting) {
-        if (!backendRef) return;
-        if (openExisting) backendRef.open_existing_workspace();
-        else backendRef.create_new_workspace();
+        var workspaceApi = workspaceBackendRef || backendRef;
+        if (!workspaceApi) return;
+        if (openExisting) workspaceApi.open_existing_workspace();
+        else workspaceApi.create_new_workspace();
         refreshState("打开工作区失败");
     }
 
@@ -129,10 +137,11 @@ QtObject {
     }
 
     function createProject(title) {
-        if (!backendRef) return false;
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi) return false;
         var actionId = generateActionId();
         try {
-            return handleMutationResult(backendRef.create_project_json(title, actionId), "创建作品失败");
+            return handleMutationResult(projectApi.create_project_json(title, actionId), "创建作品失败");
         } catch (e) {
             emitError("后端调用失败: " + e);
             return false;
@@ -140,9 +149,10 @@ QtObject {
     }
 
     function renameProject(projectId, title) {
-        if (!backendRef || !projectId || !title) return false;
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi || !projectId || !title) return false;
         try {
-            backendRef.rename_project(projectId, title);
+            projectApi.rename_project(projectId, title);
             refreshState("刷新重命名结果失败");
             return true;
         } catch (e) {
@@ -152,10 +162,11 @@ QtObject {
     }
 
     function createVolume(projectId, title) {
-        if (!backendRef) return false;
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi) return false;
         var actionId = generateActionId();
         try {
-            return handleMutationResult(backendRef.create_volume_json(projectId, title, actionId), "创建卷失败");
+            return handleMutationResult(projectApi.create_volume_json(projectId, title, actionId), "创建卷失败");
         } catch (e) {
             emitError("后端调用失败: " + e);
             return false;
@@ -163,10 +174,11 @@ QtObject {
     }
 
     function createChapter(projectId, volumeId, title) {
-        if (!backendRef) return false;
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi) return false;
         var actionId = generateActionId();
         try {
-            return handleMutationResult(backendRef.create_chapter_json(projectId, volumeId, title, actionId), "创建章节失败");
+            return handleMutationResult(projectApi.create_chapter_json(projectId, volumeId, title, actionId), "创建章节失败");
         } catch (e) {
             emitError("后端调用失败: " + e);
             return false;
@@ -174,13 +186,14 @@ QtObject {
     }
 
     function deleteItem(type, contextData) {
-        if (!backendRef) return false;
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi) return false;
         var actionId = generateActionId();
         var raw = "";
         try {
-            if (type === "delete_project") raw = backendRef.delete_project_json(contextData.projectId, actionId);
-            else if (type === "delete_volume") raw = backendRef.delete_volume_json(contextData.projectId, contextData.volumeId, actionId);
-            else if (type === "delete_chapter") raw = backendRef.delete_chapter_json(contextData.projectId, contextData.volumeId, contextData.chapterId, actionId);
+            if (type === "delete_project") raw = projectApi.delete_project_json(contextData.projectId, actionId);
+            else if (type === "delete_volume") raw = projectApi.delete_volume_json(contextData.projectId, contextData.volumeId, actionId);
+            else if (type === "delete_chapter") raw = projectApi.delete_chapter_json(contextData.projectId, contextData.volumeId, contextData.chapterId, actionId);
             else return false;
             return handleMutationResult(raw, "删除失败");
         } catch (e) {

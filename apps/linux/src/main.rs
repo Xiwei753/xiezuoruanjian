@@ -17,7 +17,10 @@ mod sync_bridge;
 mod writing_bridge;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
-use backend::AppBackend;
+use backend::{
+    AppBackend, EditorBackend, ProjectBackend, SettingsBackend, StarMapBackend, SyncBackend,
+    WorkspaceBackend,
+};
 
 cpp! {{
     #include <QtGlobal>
@@ -193,6 +196,29 @@ fn main() {
     remember_qml_load_error("");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
+
+    let app_backend = QObjectBox::new(AppBackend::default());
+    let app_ptr = {
+        let app_pinned = app_backend.pinned();
+        let app_ref = app_pinned.borrow();
+        QPointer::from(&*app_ref)
+    };
+    let workspace_backend = QObjectBox::new(WorkspaceBackend::new(app_ptr.clone()));
+    let project_backend = QObjectBox::new(ProjectBackend::new(app_ptr.clone()));
+    let editor_backend = QObjectBox::new(EditorBackend::new(app_ptr.clone()));
+    let settings_backend = QObjectBox::new(SettingsBackend::new(app_ptr.clone()));
+    let sync_backend = QObjectBox::new(SyncBackend::new(app_ptr.clone()));
+    let starmap_backend = QObjectBox::new(StarMapBackend::new(app_ptr));
+
+    engine.set_object_property("backend".into(), app_backend.pinned());
+    engine.set_object_property("appBackend".into(), app_backend.pinned());
+    engine.set_object_property("workspaceBackend".into(), workspace_backend.pinned());
+    engine.set_object_property("projectBackend".into(), project_backend.pinned());
+    engine.set_object_property("editorBackend".into(), editor_backend.pinned());
+    engine.set_object_property("settingsBackend".into(), settings_backend.pinned());
+    engine.set_object_property("syncBackend".into(), sync_backend.pinned());
+    engine.set_object_property("starmapBackend".into(), starmap_backend.pinned());
+
     engine.load_file(qml_path.into());
     install_message_handler(prev_handler);
 

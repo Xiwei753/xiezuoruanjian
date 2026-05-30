@@ -156,15 +156,6 @@ fn try_kreadconfig(cmd: &str) -> Option<String> {
 pub struct AppBackend {
     base: qt_base_class!(trait QObject),
 
-    workspace_path: qt_property!(QString; READ workspace_path NOTIFY workspace_opened),
-    has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
-    save_status: qt_property!(QString; READ save_status WRITE set_save_status NOTIFY save_status_changed),
-    word_count: qt_property!(i32; READ word_count WRITE set_word_count NOTIFY word_count_changed),
-    error_message: qt_property!(QString; READ error_message NOTIFY error_occurred),
-    selected_item_id: qt_property!(QString; READ selected_item_id NOTIFY selected_item_changed),
-    has_selected_chapter_prop: qt_property!(bool; READ has_selected_chapter_prop NOTIFY selected_item_changed),
-    chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
-
     workspace_opened: qt_signal!(),
     workspace_content_changed: qt_signal!(),
     workspace_state_changed: qt_signal!(),
@@ -178,39 +169,9 @@ pub struct AppBackend {
     chapter_path_changed: qt_signal!(),
     clear_editor: qt_signal!(),
 
-    sync_enabled: qt_property!(bool; READ sync_enabled WRITE set_sync_enabled NOTIFY sync_config_changed),
-    sync_backend_type: qt_property!(QString; READ sync_backend_type WRITE set_sync_backend_type NOTIFY sync_config_changed),
-    sync_remote_url: qt_property!(QString; READ sync_remote_url WRITE set_sync_remote_url NOTIFY sync_config_changed),
-    sync_branch: qt_property!(QString; READ sync_branch WRITE set_sync_branch NOTIFY sync_config_changed),
-    sync_auto_sync: qt_property!(bool; READ sync_auto_sync WRITE set_sync_auto_sync NOTIFY sync_config_changed),
-    sync_interval: qt_property!(u32; READ sync_interval WRITE set_sync_interval NOTIFY sync_config_changed),
-    sync_proxy_enabled: qt_property!(bool; READ sync_proxy_enabled WRITE set_sync_proxy_enabled NOTIFY sync_config_changed),
-    sync_proxy_type: qt_property!(QString; READ sync_proxy_type WRITE set_sync_proxy_type NOTIFY sync_config_changed),
-    sync_proxy_host: qt_property!(QString; READ sync_proxy_host WRITE set_sync_proxy_host NOTIFY sync_config_changed),
-    sync_proxy_port: qt_property!(u16; READ sync_proxy_port WRITE set_sync_proxy_port NOTIFY sync_config_changed),
-    sync_username: qt_property!(QString; READ sync_username WRITE set_sync_username NOTIFY sync_config_changed),
-    has_sync_token: qt_property!(bool; READ has_sync_token NOTIFY sync_config_changed),
-    set_sync_token: qt_method!(fn(&mut self, token: QString)),
-
     sync_config_changed: qt_signal!(),
-    sync_action_result: qt_property!(QString; READ sync_action_result NOTIFY sync_action_completed),
     sync_action_completed: qt_signal!(),
-    sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
     sync_status_changed: qt_signal!(),
-
-    setting_font_size: qt_property!(f32; READ setting_font_size WRITE set_setting_font_size NOTIFY settings_changed),
-    setting_line_spacing: qt_property!(f32; READ setting_line_spacing WRITE set_setting_line_spacing NOTIFY settings_changed),
-    setting_auto_save_enabled: qt_property!(bool; READ setting_auto_save_enabled WRITE set_setting_auto_save_enabled NOTIFY settings_changed),
-    setting_auto_save_delay_ms: qt_property!(u32; READ setting_auto_save_delay_ms WRITE set_setting_auto_save_delay_ms NOTIFY settings_changed),
-    setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
-    setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
-    setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
-    setting_monet_color: qt_property!(QString; READ setting_monet_color WRITE set_setting_monet_color NOTIFY settings_changed),
-
-    setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
-    setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
-    setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
-    setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms WRITE set_setting_smooth_cursor_duration_ms NOTIFY settings_changed),
 
     settings_changed: qt_signal!(),
 
@@ -222,162 +183,12 @@ pub struct AppBackend {
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),
 
-    load_local_settings: qt_method!(fn(&mut self)),
-    save_local_settings: qt_method!(fn(&mut self) -> bool),
-    perform_sync_diagnostics: qt_method!(fn(&mut self)),
-
-    load_sync_config: qt_method!(fn(&mut self)),
-    save_sync_config: qt_method!(fn(&mut self) -> bool),
-    perform_sync_dry_run: qt_method!(fn(&mut self)),
-    perform_sync: qt_method!(fn(&mut self)),
-    request_auto_sync: qt_method!(fn(&mut self, reason: QString)),
-    maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
-    open_workspace_dir: qt_method!(fn(&mut self)),
-
-    try_restore_last_workspace: qt_method!(fn(&mut self)),
-    create_new_workspace: qt_method!(fn(&mut self)),
-    open_existing_workspace: qt_method!(fn(&mut self)),
-    close_workspace: qt_method!(fn(&mut self)),
-    clear_last_workspace: qt_method!(fn(&mut self)),
-    switch_workspace: qt_method!(fn(&mut self)),
-    init_workspace_from_github: qt_method!(fn(&mut self)),
-    pending_github_init_path: qt_property!(QString; READ pending_github_init_path NOTIFY pending_github_init_path_changed),
     pending_github_init_path_changed: qt_signal!(),
-    execute_github_init: qt_method!(fn(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16)),
     query_system_color_scheme: qt_method!(fn(&mut self)),
-    get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
     log_qml: qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
-
-    create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
-    create_new_chapter:
-        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
-
-    rename_project: qt_method!(fn(&mut self, project_id: QString, new_title: QString)),
-    delete_project: qt_method!(fn(&mut self, project_id: QString)),
-    reorder_projects: qt_method!(fn(&mut self, ordered_ids_joined: QString)),
-
-    rename_volume:
-        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, new_title: QString)),
-    delete_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
-    reorder_volumes: qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString)),
-
-    rename_chapter: qt_method!(
-        fn(
-            &mut self,
-            project_id: QString,
-            volume_id: QString,
-            chapter_id: QString,
-            new_title: QString,
-        )
-    ),
-    delete_chapter:
-        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
-    reorder_chapters: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString)
-    ),
-
-    get_tree_model: qt_method!(fn(&self) -> QJsonArray),
-    get_tree_model_json: qt_method!(fn(&self) -> QString),
-    get_mind_map_snapshot_json: qt_method!(fn(&self, project_id: QString) -> QString),
-    create_mind_map_graph_json: qt_method!(fn(&mut self, project_id: QString, title: QString) -> QString),
-    list_mind_map_graphs_json: qt_method!(fn(&self, project_id: QString) -> QString),
-    set_default_mind_map_graph_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString) -> QString),
-    create_mind_map_node_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_json: QString) -> QString),
-    update_mind_map_node_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_id: QString, patch_json: QString) -> QString),
-    delete_mind_map_node_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_id: QString, cascade: bool) -> QString),
-    create_mind_map_edge_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, edge_json: QString) -> QString),
-    update_mind_map_edge_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, edge_id: QString, patch_json: QString) -> QString),
-    delete_mind_map_edge_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, edge_id: QString) -> QString),
-    create_mind_map_anchor_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, anchor_json: QString) -> QString),
-    bind_mind_map_anchor_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_id: QString, anchor_id: QString, link_kind: QString) -> QString),
-    save_mind_map_layout_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, layout_json: QString) -> QString),
-
-    refresh_app_state_json: qt_method!(fn(&mut self) -> QString),
-    create_project_json: qt_method!(fn(&mut self, title: QString, action_id: QString) -> QString),
-    create_volume_json: qt_method!(fn(&mut self, project_id: QString, title: QString, action_id: QString) -> QString),
-    create_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString, action_id: QString) -> QString),
-    select_tree_item_json: qt_method!(fn(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString),
-    delete_project_json: qt_method!(fn(&mut self, project_id: QString, action_id: QString) -> QString),
-    delete_volume_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString),
-    delete_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString),
-
-    refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
-    calculate_word_count: qt_method!(fn(&mut self, text: QString)),
-
-    select_project: qt_method!(fn(&mut self, project_id: QString)),
-    select_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
-    select_chapter:
-        qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
-
-    open_chapter_json: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
-    ),
-    open_chapter: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
-    ),
-    get_chapter_content: qt_method!(
-        fn(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
-    ),
-    save_chapter: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString) -> QJsonObject
-    ),
-    clear_chapter_content: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
-    ),
-    report_writing_event: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, source: QString, inserted_chars: u32, deleted_chars: u32, pasted_chars: u32)),
-    process_writing_event_from_text: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, old_text: QString, new_text: QString)),
-    get_writing_stats_summary: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
-    get_writing_stats_summary_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
-    get_writing_stats_by_project: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
-    get_writing_stats_by_project_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
-    get_writing_stats_by_chapter: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
-    get_writing_stats_by_chapter_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
-    get_writing_stats_by_device: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
-    get_writing_stats_by_device_object: qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
-    get_writing_speed_curve: qt_method!(fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString),
-    get_writing_speed_curve_object: qt_method!(fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject),
-    flush_writing_stats: qt_method!(fn(&self)),
-    flush_recent_edits: qt_method!(fn(&self)),
-
-    list_starmaps_json: qt_method!(fn(&self) -> QString),
-    list_starmaps: qt_method!(fn(&self) -> QJsonArray),
-    list_starmaps_for_project_json: qt_method!(fn(&self, project_id: QString) -> QString),
-    get_starmap_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
-    create_starmap_json: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QString),
-    create_starmap: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject),
-    create_child_starmap_legacy_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
-    rename_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
-    delete_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
-    bind_starmap_to_project_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
-    set_main_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
-    get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
-    unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
-    get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
-    get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
-    create_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QString),
-    create_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QJsonObject),
-    update_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString),
-    update_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QJsonObject),
-    delete_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QString),
-    delete_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject),
-    create_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString),
-    create_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QJsonObject),
-    update_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString),
-    update_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QJsonObject),
-    delete_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString) -> QString),
-    delete_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject),
-    save_starmap_layout_json: qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QString),
-    save_starmap_layout: qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
-
-    has_selected_chapter: qt_method!(fn(&self) -> bool),
-    selected_chapter_exists: qt_method!(fn(&self) -> bool),
-    clear_editor_state: qt_method!(fn(&mut self)),
-
-    list_registered_actions: qt_method!(fn(&mut self) -> QString),
-    execute_action: qt_method!(fn(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString),
 
 
     current_workspace: String,
@@ -863,12 +674,26 @@ impl AppBackend {
 
 }
 
-mod workspace_backend;
-mod project_backend;
-mod editor_backend;
-mod settings_backend;
-mod sync_backend;
-mod starmap_backend;
+#[path = "workspace_backend.rs"]
+pub mod workspace_backend;
+#[path = "project_backend.rs"]
+pub mod project_backend;
+#[path = "editor_backend.rs"]
+pub mod editor_backend;
+#[path = "settings_backend.rs"]
+pub mod settings_backend;
+#[path = "sync_backend.rs"]
+pub mod sync_backend;
+#[path = "starmap_backend.rs"]
+pub mod starmap_backend;
+
+pub use editor_backend::EditorBackend;
+pub use project_backend::ProjectBackend;
+pub use settings_backend::SettingsBackend;
+pub use starmap_backend::StarMapBackend;
+pub use sync_backend::SyncBackend;
+pub use workspace_backend::WorkspaceBackend;
+
 #[cfg(test)]
 mod tests {
     use super::*;

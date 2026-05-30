@@ -18,6 +18,8 @@ Rectangle {
     id: root
     property var dt: null
     property var backendRef: null
+    property var editorBackendRef: backendRef
+    property var starmapBackendRef: backendRef
     property var appState: ({})
     property var tree: []
     property int currentTab: 0
@@ -239,7 +241,7 @@ Rectangle {
                 active: root.currentTab === 0
                 sourceComponent: ProjectHomePage {
                     dt: root.dt
-                    backendRef: root.backendRef
+                    backendRef: root.editorBackendRef
                     appState: root.appState
                     tree: root.tree
                     onOpenProject: function(projectId) {
@@ -264,7 +266,7 @@ Rectangle {
                 active: root.currentTab === 1
                 sourceComponent: StarMapPage {
                     dt: root.dt
-                    backendRef: root.backendRef
+                    backendRef: root.starmapBackendRef
                     appState: root.appState
 
                     onOpenStarmap: function(starmapId, title) {
@@ -279,7 +281,7 @@ Rectangle {
                 active: root.currentTab === 2
                 sourceComponent: StatsPreviewPage {
                     dt: root.dt
-                    backendRef: root.backendRef
+                    backendRef: root.editorBackendRef
                     appState: root.appState
                 }
             }

@@ -1,5 +1,73 @@
 use super::*;
 
+#[allow(non_snake_case)]
+#[derive(QObject, Default)]
+pub struct SettingsBackend {
+    base: qt_base_class!(trait QObject),
+    setting_font_size: qt_property!(f32; READ setting_font_size WRITE set_setting_font_size NOTIFY settings_changed),
+    setting_line_spacing: qt_property!(f32; READ setting_line_spacing WRITE set_setting_line_spacing NOTIFY settings_changed),
+    setting_auto_save_enabled: qt_property!(bool; READ setting_auto_save_enabled WRITE set_setting_auto_save_enabled NOTIFY settings_changed),
+    setting_auto_save_delay_ms: qt_property!(u32; READ setting_auto_save_delay_ms WRITE set_setting_auto_save_delay_ms NOTIFY settings_changed),
+    setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
+    setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
+    setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
+    setting_monet_color: qt_property!(QString; READ setting_monet_color WRITE set_setting_monet_color NOTIFY settings_changed),
+    setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
+    setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
+    setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
+    setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms WRITE set_setting_smooth_cursor_duration_ms NOTIFY settings_changed),
+    ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
+    ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
+    settings_changed: qt_signal!(),
+    ai_enabled_changed: qt_signal!(),
+    ai_available_changed: qt_signal!(),
+    load_local_settings: qt_method!(fn(&mut self)),
+    save_local_settings: qt_method!(fn(&mut self) -> bool),
+    app: QPointer<AppBackend>,
+}
+
+impl SettingsBackend {
+    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
+
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+        self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default)
+    }
+
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+        self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default)
+    }
+
+    fn setting_font_size(&self) -> f32 { self.with_app(16.0, |app| app.setting_font_size()) }
+    fn set_setting_font_size(&mut self, val: f32) { self.with_app_mut((), |app| app.set_setting_font_size(val)); self.settings_changed(); }
+    fn setting_line_spacing(&self) -> f32 { self.with_app(1.5, |app| app.setting_line_spacing()) }
+    fn set_setting_line_spacing(&mut self, val: f32) { self.with_app_mut((), |app| app.set_setting_line_spacing(val)); self.settings_changed(); }
+    fn setting_auto_save_enabled(&self) -> bool { self.with_app(true, |app| app.setting_auto_save_enabled()) }
+    fn set_setting_auto_save_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_setting_auto_save_enabled(val)); self.settings_changed(); }
+    fn setting_auto_save_delay_ms(&self) -> u32 { self.with_app(1500, |app| app.setting_auto_save_delay_ms()) }
+    fn set_setting_auto_save_delay_ms(&mut self, val: u32) { self.with_app_mut((), |app| app.set_setting_auto_save_delay_ms(val)); self.settings_changed(); }
+    fn setting_auto_indent_enabled(&self) -> bool { self.with_app(true, |app| app.setting_auto_indent_enabled()) }
+    fn set_setting_auto_indent_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_setting_auto_indent_enabled(val)); self.settings_changed(); }
+    fn setting_auto_indent_width(&self) -> f32 { self.with_app(2.0, |app| app.setting_auto_indent_width()) }
+    fn set_setting_auto_indent_width(&mut self, val: f32) { self.with_app_mut((), |app| app.set_setting_auto_indent_width(val)); self.settings_changed(); }
+    fn setting_theme_mode(&self) -> QString { self.with_app("system".into(), |app| app.setting_theme_mode()) }
+    fn set_setting_theme_mode(&mut self, val: QString) { self.with_app_mut((), |app| app.set_setting_theme_mode(val)); self.settings_changed(); }
+    fn setting_monet_color(&self) -> QString { self.with_app("".into(), |app| app.setting_monet_color()) }
+    fn set_setting_monet_color(&mut self, val: QString) { self.with_app_mut((), |app| app.set_setting_monet_color(val)); self.settings_changed(); }
+    fn setting_typing_animation_enabled(&self) -> bool { self.with_app(true, |app| app.setting_typing_animation_enabled()) }
+    fn set_setting_typing_animation_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_setting_typing_animation_enabled(val)); self.settings_changed(); }
+    fn setting_smooth_cursor_enabled(&self) -> bool { self.with_app(true, |app| app.setting_smooth_cursor_enabled()) }
+    fn set_setting_smooth_cursor_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_setting_smooth_cursor_enabled(val)); self.settings_changed(); }
+    fn setting_typing_animation_duration_ms(&self) -> u32 { self.with_app(100, |app| app.setting_typing_animation_duration_ms()) }
+    fn set_setting_typing_animation_duration_ms(&mut self, val: u32) { self.with_app_mut((), |app| app.set_setting_typing_animation_duration_ms(val)); self.settings_changed(); }
+    fn setting_smooth_cursor_duration_ms(&self) -> u32 { self.with_app(80, |app| app.setting_smooth_cursor_duration_ms()) }
+    fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) { self.with_app_mut((), |app| app.set_setting_smooth_cursor_duration_ms(val)); self.settings_changed(); }
+    fn ai_available(&self) -> bool { self.with_app(false, |app| app.ai_available()) }
+    fn ai_enabled(&self) -> bool { self.with_app(false, |app| app.ai_enabled()) }
+    fn set_ai_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_ai_enabled(val)); self.ai_enabled_changed(); self.settings_changed(); }
+    fn load_local_settings(&mut self) { self.with_app_mut((), |app| app.load_local_settings()); self.settings_changed(); }
+    fn save_local_settings(&mut self) -> bool { self.with_app_mut(false, |app| app.save_local_settings()) }
+}
+
 impl AppBackend {
 // Included inside impl AppBackend from app_backend.rs.
 // Deprecated compatibility methods for this Linux backend domain.

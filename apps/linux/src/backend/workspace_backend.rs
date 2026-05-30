@@ -1,5 +1,57 @@
 use super::*;
 
+#[allow(non_snake_case)]
+#[derive(QObject, Default)]
+pub struct WorkspaceBackend {
+    base: qt_base_class!(trait QObject),
+    workspace_path: qt_property!(QString; READ workspace_path NOTIFY workspace_opened),
+    has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
+    pending_github_init_path: qt_property!(QString; READ pending_github_init_path NOTIFY pending_github_init_path_changed),
+    workspace_opened: qt_signal!(),
+    workspace_content_changed: qt_signal!(),
+    workspace_state_changed: qt_signal!(),
+    pending_github_init_path_changed: qt_signal!(),
+    try_restore_last_workspace: qt_method!(fn(&mut self)),
+    create_new_workspace: qt_method!(fn(&mut self)),
+    open_existing_workspace: qt_method!(fn(&mut self)),
+    close_workspace: qt_method!(fn(&mut self)),
+    clear_last_workspace: qt_method!(fn(&mut self)),
+    switch_workspace: qt_method!(fn(&mut self)),
+    init_workspace_from_github: qt_method!(fn(&mut self)),
+    execute_github_init: qt_method!(fn(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16)),
+    get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
+    open_workspace_dir: qt_method!(fn(&mut self)),
+    app: QPointer<AppBackend>,
+}
+
+impl WorkspaceBackend {
+    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+        self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default)
+    }
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+        self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default)
+    }
+    fn emit_workspace_changed(&mut self) { self.workspace_opened(); self.workspace_content_changed(); self.workspace_state_changed(); }
+    fn workspace_path(&self) -> QString { self.with_app("".into(), |app| app.workspace_path()) }
+    fn has_workspace(&self) -> bool { self.with_app(false, |app| app.has_workspace()) }
+    fn pending_github_init_path(&self) -> QString { self.with_app("".into(), |app| app.pending_github_init_path()) }
+    fn try_restore_last_workspace(&mut self) { self.with_app_mut((), |app| app.try_restore_last_workspace()); self.emit_workspace_changed(); }
+    fn create_new_workspace(&mut self) { self.with_app_mut((), |app| app.create_new_workspace()); self.emit_workspace_changed(); }
+    fn open_existing_workspace(&mut self) { self.with_app_mut((), |app| app.open_existing_workspace()); self.emit_workspace_changed(); }
+    fn close_workspace(&mut self) { self.with_app_mut((), |app| app.close_workspace()); self.emit_workspace_changed(); }
+    fn clear_last_workspace(&mut self) { self.with_app_mut((), |app| app.clear_last_workspace()); self.workspace_state_changed(); }
+    fn switch_workspace(&mut self) { self.with_app_mut((), |app| app.switch_workspace()); self.emit_workspace_changed(); }
+    fn init_workspace_from_github(&mut self) { self.with_app_mut((), |app| app.init_workspace_from_github()); self.pending_github_init_path_changed(); }
+    fn execute_github_init(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16) {
+        self.with_app_mut((), |app| app.execute_github_init(path, remote_url, branch, token, proxy_type, proxy_host, proxy_port));
+        self.emit_workspace_changed();
+        self.pending_github_init_path_changed();
+    }
+    fn get_workspace_diagnostics(&self) -> QString { self.with_app("{}".into(), |app| app.get_workspace_diagnostics()) }
+    fn open_workspace_dir(&mut self) { self.with_app_mut((), |app| app.open_workspace_dir()); }
+}
+
 impl AppBackend {
 // Included inside impl AppBackend from app_backend.rs.
 // Deprecated compatibility methods for this Linux backend domain.

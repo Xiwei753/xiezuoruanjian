@@ -16,7 +16,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import WriterApp 1.0
 
 ApplicationWindow {
     id: window
@@ -74,25 +73,15 @@ ApplicationWindow {
             if (appState.settings && appState.settings.themeMode === "light") return false;
             return backend.system_color_scheme !== "light";
         }
-        monetColor: backend.setting_monet_color
+        monetColor: settingsBackend.setting_monet_color
     }
-
-    AppBackend {
-        id: backend
-    }
-
-    // Domain backend names are the stable QML contract. During compatibility
-    // migration they point at AppBackend forwarding methods.
-    property var workspaceBackend: backend
-    property var projectBackend: backend
-    property var editorBackend: backend
-    property var settingsBackend: backend
-    property var syncBackend: backend
-    property var starmapBackend: backend
 
     AppController {
         id: appController
         backendRef: backend
+        workspaceBackendRef: workspaceBackend
+        projectBackendRef: projectBackend
+        appBackendRef: backend
         onErrorRaised: function(message) {
             errorDialog.message = message;
             errorDialog.open();
@@ -105,14 +94,14 @@ ApplicationWindow {
     }
 
     onActiveChanged: {
-        if (active && backend) {
+        if (active && syncBackend) {
             foregroundAutoSyncTimer.restart();
         }
     }
 
     onClosing: {
         if (appController.inWriting) {
-            backend.flush_writing_stats();
+            editorBackend.flush_writing_stats();
         }
     }
 
@@ -121,8 +110,8 @@ ApplicationWindow {
         interval: 1500
         repeat: false
         onTriggered: {
-            if (backend && backend.has_workspace && backend.sync_enabled && backend.sync_auto_sync && backend.sync_remote_url && backend.has_sync_token) {
-                backend.request_auto_sync("auto_sync_on_workspace_open");
+            if (workspaceBackend && syncBackend && workspaceBackend.has_workspace && syncBackend.sync_enabled && syncBackend.sync_auto_sync && syncBackend.sync_remote_url && syncBackend.has_sync_token) {
+                syncBackend.request_auto_sync("auto_sync_on_workspace_open");
             }
         }
     }
@@ -132,8 +121,8 @@ ApplicationWindow {
         interval: 1200
         repeat: false
         onTriggered: {
-            if (backend && backend.has_workspace && backend.sync_enabled && backend.sync_auto_sync && backend.sync_remote_url && backend.has_sync_token) {
-                backend.maybe_auto_sync_on_foreground();
+            if (workspaceBackend && syncBackend && workspaceBackend.has_workspace && syncBackend.sync_enabled && syncBackend.sync_auto_sync && syncBackend.sync_remote_url && syncBackend.has_sync_token) {
+                syncBackend.maybe_auto_sync_on_foreground();
             }
         }
     }
@@ -143,10 +132,14 @@ ApplicationWindow {
     }
 
     Connections {
-        target: backend
+        target: projectBackend
         function onProjects_reloaded() {
             appController.refreshState("刷新作品列表失败");
         }
+    }
+
+    Connections {
+        target: workspaceBackend
         function onWorkspace_state_changed() {
             appController.refreshState("刷新工作区状态失败");
         }
@@ -156,11 +149,19 @@ ApplicationWindow {
         function onWorkspace_content_changed() {
             appController.refreshState("刷新工作区内容失败");
         }
+    }
+
+    Connections {
+        target: editorBackend
         function onClear_editor() {
             if (writingWorkspaceLoader.item) {
                 writingWorkspaceLoader.item.previousEditorText = "";
             }
         }
+    }
+
+    Connections {
+        target: settingsBackend
         function onSettings_changed() {
             appController.refreshState("刷新设置失败");
         }
@@ -177,7 +178,7 @@ ApplicationWindow {
             active: appState.hasWorkspace && appController.inStarmap
             sourceComponent: StarMapWorkspace {
                 dt: designTokens
-                backendRef: backend
+                backendRef: starmapBackend
                 starmapId: appController.starmapId
                 starmapTitle: appController.starmapTitle
                 onBackClicked: {
@@ -193,11 +194,13 @@ ApplicationWindow {
             active: appState.hasWorkspace && appController.route === "hub"
             sourceComponent: CreativeHub {
                 dt: designTokens
-                backendRef: backend
+                backendRef: projectBackend
+                editorBackendRef: editorBackend
+                starmapBackendRef: starmapBackend
                 appState: window.appState
                 tree: window.appState.tree || []
-                aiCapable: backend.ai_available
-                aiEnabled: backend.ai_enabled
+                aiCapable: settingsBackend.ai_available
+                aiEnabled: settingsBackend.ai_enabled
 
                 onOpenStarmapWorkspace: function(smId, smTitle) {
                     appController.openStarmap(smId, smTitle);
@@ -247,13 +250,13 @@ ApplicationWindow {
             active: appState.hasWorkspace && appController.inWriting
             sourceComponent: WritingWorkspace {
                 dt: designTokens
-                backendRef: backend
+                backendRef: editorBackend
                 appState: window.appState
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
                 projectTitle: appController.writingProjectTitle
-                aiCapable: backend.ai_available
-                aiEnabled: backend.ai_enabled
+                aiCapable: settingsBackend.ai_available
+                aiEnabled: settingsBackend.ai_enabled
 
                 onBackToProjects: {
                     appController.openHub();
@@ -290,7 +293,7 @@ ApplicationWindow {
         EmptyWorkspace {
             anchors.fill: parent
             visible: !appState.hasWorkspace
-            backendRef: backend
+            backendRef: workspaceBackend
             appTheme: designTokens
             onCreateWorkspace: {
                 appController.createWorkspace(false);
@@ -439,7 +442,7 @@ ApplicationWindow {
                     theme: designTokens
                     backendRef: syncBackend
                     beforeSyncHook: function() {
-                        backend.flush_writing_stats();
+                        editorBackend.flush_writing_stats();
                     }
                     onSettingsChanged: {
                         appController.refreshState("刷新同步设置失败");

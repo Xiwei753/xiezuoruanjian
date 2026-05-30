@@ -1,5 +1,74 @@
 use super::*;
 
+#[allow(non_snake_case)]
+#[derive(QObject, Default)]
+pub struct ProjectBackend {
+    base: qt_base_class!(trait QObject),
+    projects_reloaded: qt_signal!(),
+    #[allow(non_snake_case)]
+    projectsReloaded: qt_signal!(),
+    selected_item_changed: qt_signal!(),
+    workspace_content_changed: qt_signal!(),
+    refresh_app_state_json: qt_method!(fn(&mut self) -> QString),
+    refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
+    get_tree_model_json: qt_method!(fn(&self) -> QString),
+    get_tree_model: qt_method!(fn(&self) -> QJsonArray),
+    create_project_json: qt_method!(fn(&mut self, title: QString, action_id: QString) -> QString),
+    create_volume_json: qt_method!(fn(&mut self, project_id: QString, title: QString, action_id: QString) -> QString),
+    create_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString, action_id: QString) -> QString),
+    select_tree_item_json: qt_method!(fn(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString),
+    delete_project_json: qt_method!(fn(&mut self, project_id: QString, action_id: QString) -> QString),
+    delete_volume_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString),
+    delete_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString),
+    create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
+    create_new_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
+    rename_project: qt_method!(fn(&mut self, project_id: QString, new_title: QString)),
+    delete_project: qt_method!(fn(&mut self, project_id: QString)),
+    reorder_projects: qt_method!(fn(&mut self, ordered_ids_joined: QString)),
+    rename_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, new_title: QString)),
+    delete_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
+    reorder_volumes: qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString)),
+    rename_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString)),
+    delete_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
+    reorder_chapters: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString)),
+    select_project: qt_method!(fn(&mut self, project_id: QString)),
+    select_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
+    select_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
+    app: QPointer<AppBackend>,
+}
+
+impl ProjectBackend {
+    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default) }
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default) }
+    fn emit_changed(&mut self) { self.projects_reloaded(); self.projectsReloaded(); self.workspace_content_changed(); self.selected_item_changed(); }
+    fn refresh_app_state_json(&mut self) -> QString { self.with_app_mut("{}".into(), |app| app.refresh_app_state_json()) }
+    fn refresh_tree_model_json(&mut self) -> QString { let out = self.with_app_mut("[]".into(), |app| app.refresh_tree_model_json()); self.emit_changed(); out }
+    fn get_tree_model_json(&self) -> QString { self.with_app("[]".into(), |app| app.get_tree_model_json()) }
+    fn get_tree_model(&self) -> QJsonArray { self.with_app(QJsonArray::default(), |app| app.get_tree_model()) }
+    fn create_project_json(&mut self, title: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.create_project_json(title, action_id)); self.emit_changed(); out }
+    fn create_volume_json(&mut self, project_id: QString, title: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.create_volume_json(project_id, title, action_id)); self.emit_changed(); out }
+    fn create_chapter_json(&mut self, project_id: QString, volume_id: QString, title: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.create_chapter_json(project_id, volume_id, title, action_id)); self.emit_changed(); out }
+    fn select_tree_item_json(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.select_tree_item_json(item_type, project_id, volume_id, chapter_id, action_id)); self.selected_item_changed(); out }
+    fn delete_project_json(&mut self, project_id: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.delete_project_json(project_id, action_id)); self.emit_changed(); out }
+    fn delete_volume_json(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.delete_volume_json(project_id, volume_id, action_id)); self.emit_changed(); out }
+    fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.delete_chapter_json(project_id, volume_id, chapter_id, action_id)); self.emit_changed(); out }
+    fn create_new_volume(&mut self, project_id: QString, title: QString) { self.with_app_mut((), |app| app.create_new_volume(project_id, title)); self.emit_changed(); }
+    fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) { self.with_app_mut((), |app| app.create_new_chapter(project_id, volume_id, title)); self.emit_changed(); }
+    fn rename_project(&mut self, project_id: QString, new_title: QString) { self.with_app_mut((), |app| app.rename_project(project_id, new_title)); self.emit_changed(); }
+    fn delete_project(&mut self, project_id: QString) { self.with_app_mut((), |app| app.delete_project(project_id)); self.emit_changed(); }
+    fn reorder_projects(&mut self, ordered_ids_joined: QString) { self.with_app_mut((), |app| app.reorder_projects(ordered_ids_joined)); self.emit_changed(); }
+    fn rename_volume(&mut self, project_id: QString, volume_id: QString, new_title: QString) { self.with_app_mut((), |app| app.rename_volume(project_id, volume_id, new_title)); self.emit_changed(); }
+    fn delete_volume(&mut self, project_id: QString, volume_id: QString) { self.with_app_mut((), |app| app.delete_volume(project_id, volume_id)); self.emit_changed(); }
+    fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) { self.with_app_mut((), |app| app.reorder_volumes(project_id, ordered_ids_joined)); self.emit_changed(); }
+    fn rename_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) { self.with_app_mut((), |app| app.rename_chapter(project_id, volume_id, chapter_id, new_title)); self.emit_changed(); }
+    fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) { self.with_app_mut((), |app| app.delete_chapter(project_id, volume_id, chapter_id)); self.emit_changed(); }
+    fn reorder_chapters(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString) { self.with_app_mut((), |app| app.reorder_chapters(project_id, volume_id, ordered_ids_joined)); self.emit_changed(); }
+    fn select_project(&mut self, project_id: QString) { self.with_app_mut((), |app| app.select_project(project_id)); self.selected_item_changed(); }
+    fn select_volume(&mut self, project_id: QString, volume_id: QString) { self.with_app_mut((), |app| app.select_volume(project_id, volume_id)); self.selected_item_changed(); }
+    fn select_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) { self.with_app_mut((), |app| app.select_chapter(project_id, volume_id, chapter_id)); self.selected_item_changed(); }
+}
+
 impl AppBackend {
 // Included inside impl AppBackend from app_backend.rs.
 // Deprecated compatibility methods for this Linux backend domain.
@@ -384,14 +453,14 @@ impl AppBackend {
             "delete_project_start",
             &format!("[actionId={}] project_id={}", action_id_str, project_id.to_string())
         );
-        self.error_message = "".into();
+        self.current_error_message = "".into();
         self.delete_project(project_id);
-        let success = self.error_message.to_string().is_empty();
+        let success = self.current_error_message.is_empty();
         let msg = if success {
             self.debug_log("project", "delete_project_success", &format!("[actionId={}] project deleted successfully", action_id_str));
             "删除成功".to_string()
         } else {
-            let err = self.error_message.to_string();
+            let err = self.current_error_message.clone();
             self.debug_error("project", "delete_project_failed", &format!("[actionId={}] error: {}", action_id_str, err));
             err
         };
@@ -411,14 +480,14 @@ impl AppBackend {
             "delete_volume_start",
             &format!("[actionId={}] project_id={}, volume_id={}", action_id_str, project_id.to_string(), volume_id.to_string())
         );
-        self.error_message = "".into();
+        self.current_error_message = "".into();
         self.delete_volume(project_id, volume_id);
-        let success = self.error_message.to_string().is_empty();
+        let success = self.current_error_message.is_empty();
         let msg = if success {
             self.debug_log("volume", "delete_volume_success", &format!("[actionId={}] volume deleted successfully", action_id_str));
             "删除成功".to_string()
         } else {
-            let err = self.error_message.to_string();
+            let err = self.current_error_message.clone();
             self.debug_error("volume", "delete_volume_failed", &format!("[actionId={}] error: {}", action_id_str, err));
             err
         };
@@ -438,14 +507,14 @@ impl AppBackend {
             "delete_chapter_start",
             &format!("[actionId={}] project_id={}, volume_id={}, chapter_id={}", action_id_str, project_id.to_string(), volume_id.to_string(), chapter_id.to_string())
         );
-        self.error_message = "".into();
+        self.current_error_message = "".into();
         self.delete_chapter(project_id, volume_id, chapter_id);
-        let success = self.error_message.to_string().is_empty();
+        let success = self.current_error_message.is_empty();
         let msg = if success {
             self.debug_log("chapter", "delete_chapter_success", &format!("[actionId={}] chapter deleted successfully", action_id_str));
             "删除成功".to_string()
         } else {
-            let err = self.error_message.to_string();
+            let err = self.current_error_message.clone();
             self.debug_error("chapter", "delete_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, err));
             err
         };

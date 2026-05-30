@@ -1,5 +1,102 @@
 use super::*;
 
+#[allow(non_snake_case)]
+#[derive(QObject, Default)]
+pub struct StarMapBackend {
+    base: qt_base_class!(trait QObject),
+    list_starmaps_json: qt_method!(fn(&self) -> QString),
+    list_starmaps: qt_method!(fn(&self) -> QJsonArray),
+    list_starmaps_for_project_json: qt_method!(fn(&self, project_id: QString) -> QString),
+    get_starmap_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
+    create_starmap_json: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QString),
+    create_starmap: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject),
+    create_child_starmap_legacy_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
+    rename_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
+    delete_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
+    bind_starmap_to_project_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
+    set_main_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, project_id: QString) -> QString),
+    get_main_starmap_json: qt_method!(fn(&self, project_id: QString) -> QString),
+    unbind_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
+    get_starmap_graph_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
+    get_starmap_graph: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
+    create_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QString),
+    create_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QJsonObject),
+    update_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString),
+    update_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QJsonObject),
+    delete_starmap_node_json: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QString),
+    delete_starmap_node: qt_method!(fn(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject),
+    create_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString),
+    create_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QJsonObject),
+    update_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString),
+    update_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QJsonObject),
+    delete_starmap_edge_json: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString) -> QString),
+    delete_starmap_edge: qt_method!(fn(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject),
+    save_starmap_layout_json: qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QString),
+    save_starmap_layout: qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
+    get_mind_map_snapshot_json: qt_method!(fn(&self, project_id: QString) -> QString),
+    create_mind_map_graph_json: qt_method!(fn(&mut self, project_id: QString, title: QString) -> QString),
+    list_mind_map_graphs_json: qt_method!(fn(&self, project_id: QString) -> QString),
+    set_default_mind_map_graph_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString) -> QString),
+    create_mind_map_node_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_json: QString) -> QString),
+    update_mind_map_node_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_id: QString, patch_json: QString) -> QString),
+    delete_mind_map_node_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_id: QString, cascade: bool) -> QString),
+    create_mind_map_edge_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, edge_json: QString) -> QString),
+    update_mind_map_edge_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, edge_id: QString, patch_json: QString) -> QString),
+    delete_mind_map_edge_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, edge_id: QString) -> QString),
+    create_mind_map_anchor_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, anchor_json: QString) -> QString),
+    bind_mind_map_anchor_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, node_id: QString, anchor_id: QString, link_kind: QString) -> QString),
+    save_mind_map_layout_json: qt_method!(fn(&mut self, project_id: QString, graph_id: QString, layout_json: QString) -> QString),
+    app: QPointer<AppBackend>,
+}
+
+impl StarMapBackend {
+    pub fn new(app: QPointer<AppBackend>) -> Self { Self { app, ..Default::default() } }
+    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&app.borrow())).unwrap_or(default) }
+    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R { self.app.as_pinned().map(|app| f(&mut app.borrow_mut())).unwrap_or(default) }
+    fn list_starmaps_json(&self) -> QString { self.with_app("[]".into(), |app| app.list_starmaps_json()) }
+    fn list_starmaps(&self) -> QJsonArray { self.with_app(QJsonArray::default(), |app| app.list_starmaps()) }
+    fn list_starmaps_for_project_json(&self, project_id: QString) -> QString { self.with_app("[]".into(), |app| app.list_starmaps_for_project_json(project_id)) }
+    fn get_starmap_json(&self, starmap_id: QString) -> QString { self.with_app("{}".into(), |app| app.get_starmap_json(starmap_id)) }
+    fn create_starmap_json(&mut self, title: QString, description: QString, accent_color: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_starmap_json(title, description, accent_color)) }
+    fn create_starmap(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.create_starmap(title, description, accent_color)) }
+    fn create_child_starmap_legacy_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_child_starmap_legacy_json(parent_id, title, description, accent_color)) }
+    fn rename_starmap_json(&mut self, starmap_id: QString, new_title: QString) -> QString { self.with_app_mut("{}".into(), |app| app.rename_starmap_json(starmap_id, new_title)) }
+    fn delete_starmap_json(&mut self, starmap_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.delete_starmap_json(starmap_id)) }
+    fn bind_starmap_to_project_json(&mut self, starmap_id: QString, project_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.bind_starmap_to_project_json(starmap_id, project_id)) }
+    fn set_main_starmap_json(&mut self, starmap_id: QString, project_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.set_main_starmap_json(starmap_id, project_id)) }
+    fn get_main_starmap_json(&self, project_id: QString) -> QString { self.with_app("{}".into(), |app| app.get_main_starmap_json(project_id)) }
+    fn unbind_starmap_json(&mut self, starmap_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.unbind_starmap_json(starmap_id)) }
+    fn get_starmap_graph_json(&self, starmap_id: QString) -> QString { self.with_app("{}".into(), |app| app.get_starmap_graph_json(starmap_id)) }
+    fn get_starmap_graph(&self, starmap_id: QString) -> QJsonObject { self.with_app(QJsonObject::default(), |app| app.get_starmap_graph(starmap_id)) }
+    fn create_starmap_node_json(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QString { self.with_app_mut("{}".into(), |app| app.create_starmap_node_json(starmap_id, title, kind, x, y)) }
+    fn create_starmap_node(&mut self, starmap_id: QString, title: QString, kind: QString, x: f64, y: f64) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.create_starmap_node(starmap_id, title, kind, x, y)) }
+    fn update_starmap_node_json(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.update_starmap_node_json(starmap_id, node_id, patch_json)) }
+    fn update_starmap_node(&mut self, starmap_id: QString, node_id: QString, patch_json: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.update_starmap_node(starmap_id, node_id, patch_json)) }
+    fn delete_starmap_node_json(&mut self, starmap_id: QString, node_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.delete_starmap_node_json(starmap_id, node_id)) }
+    fn delete_starmap_node(&mut self, starmap_id: QString, node_id: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.delete_starmap_node(starmap_id, node_id)) }
+    fn create_starmap_edge_json(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_starmap_edge_json(starmap_id, from_node_id, to_node_id, kind, label)) }
+    fn create_starmap_edge(&mut self, starmap_id: QString, from_node_id: QString, to_node_id: QString, kind: QString, label: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.create_starmap_edge(starmap_id, from_node_id, to_node_id, kind, label)) }
+    fn update_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.update_starmap_edge_json(starmap_id, edge_id, patch_json)) }
+    fn update_starmap_edge(&mut self, starmap_id: QString, edge_id: QString, patch_json: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.update_starmap_edge(starmap_id, edge_id, patch_json)) }
+    fn delete_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.delete_starmap_edge_json(starmap_id, edge_id)) }
+    fn delete_starmap_edge(&mut self, starmap_id: QString, edge_id: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.delete_starmap_edge(starmap_id, edge_id)) }
+    fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.save_starmap_layout_json(starmap_id, layout_json)) }
+    fn save_starmap_layout(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.save_starmap_layout(starmap_id, layout_json)) }
+    fn get_mind_map_snapshot_json(&self, project_id: QString) -> QString { self.with_app("{}".into(), |app| app.get_mind_map_snapshot_json(project_id)) }
+    fn create_mind_map_graph_json(&mut self, project_id: QString, title: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_mind_map_graph_json(project_id, title)) }
+    fn list_mind_map_graphs_json(&self, project_id: QString) -> QString { self.with_app("[]".into(), |app| app.list_mind_map_graphs_json(project_id)) }
+    fn set_default_mind_map_graph_json(&mut self, project_id: QString, graph_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.set_default_mind_map_graph_json(project_id, graph_id)) }
+    fn create_mind_map_node_json(&mut self, project_id: QString, graph_id: QString, node_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_mind_map_node_json(project_id, graph_id, node_json)) }
+    fn update_mind_map_node_json(&mut self, project_id: QString, graph_id: QString, node_id: QString, patch_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.update_mind_map_node_json(project_id, graph_id, node_id, patch_json)) }
+    fn delete_mind_map_node_json(&mut self, project_id: QString, graph_id: QString, node_id: QString, cascade: bool) -> QString { self.with_app_mut("{}".into(), |app| app.delete_mind_map_node_json(project_id, graph_id, node_id, cascade)) }
+    fn create_mind_map_edge_json(&mut self, project_id: QString, graph_id: QString, edge_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_mind_map_edge_json(project_id, graph_id, edge_json)) }
+    fn update_mind_map_edge_json(&mut self, project_id: QString, graph_id: QString, edge_id: QString, patch_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.update_mind_map_edge_json(project_id, graph_id, edge_id, patch_json)) }
+    fn delete_mind_map_edge_json(&mut self, project_id: QString, graph_id: QString, edge_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.delete_mind_map_edge_json(project_id, graph_id, edge_id)) }
+    fn create_mind_map_anchor_json(&mut self, project_id: QString, graph_id: QString, anchor_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_mind_map_anchor_json(project_id, graph_id, anchor_json)) }
+    fn bind_mind_map_anchor_json(&mut self, project_id: QString, graph_id: QString, node_id: QString, anchor_id: QString, link_kind: QString) -> QString { self.with_app_mut("{}".into(), |app| app.bind_mind_map_anchor_json(project_id, graph_id, node_id, anchor_id, link_kind)) }
+    fn save_mind_map_layout_json(&mut self, project_id: QString, graph_id: QString, layout_json: QString) -> QString { self.with_app_mut("{}".into(), |app| app.save_mind_map_layout_json(project_id, graph_id, layout_json)) }
+}
+
 impl AppBackend {
 // Included inside impl AppBackend from app_backend.rs.
 // Deprecated compatibility methods for this Linux backend domain.
