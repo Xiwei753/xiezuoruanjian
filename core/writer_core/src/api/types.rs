@@ -1,6 +1,6 @@
 use crate::facade::ChapterOpenResult;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ProjectDto {
     pub id: String,
     pub title: String,
@@ -19,7 +19,7 @@ impl From<crate::project::Project> for ProjectDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ProjectStatsDto {
     pub total_word_count: u32,
     pub volume_count: u32,
@@ -36,7 +36,7 @@ impl From<crate::project::ProjectStats> for ProjectStatsDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct VolumeDto {
     pub id: String,
     pub title: String,
@@ -57,7 +57,7 @@ impl From<crate::volume::Volume> for VolumeDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ChapterMetaDto {
     pub id: String,
     pub title: String,
@@ -84,7 +84,7 @@ impl From<crate::chapter::Chapter> for ChapterMetaDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ChapterContentDto {
     pub meta: ChapterMetaDto,
     pub content: String,
@@ -108,7 +108,7 @@ impl From<ChapterOpenResult> for ChapterContentDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ChapterSaveReceiptDto {
     pub chapter_relative_path: String,
     pub content_len: u32,
@@ -131,7 +131,7 @@ impl From<crate::chapter::ChapterSaveReceipt> for ChapterSaveReceiptDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RecentEditDto {
     pub project_id: String,
     pub volume_id: String,
@@ -150,7 +150,7 @@ impl From<crate::workspace::RecentEdit> for RecentEditDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct LocalSettingsDto {
     pub theme_mode: Option<String>,
     pub locale: Option<String>,
@@ -217,7 +217,7 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncableSettingsDto {
     pub font_size: f64,
     pub theme_mode: String,
@@ -244,7 +244,7 @@ impl From<SyncableSettingsDto> for crate::settings::SyncableSettings {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncConfigDto {
     pub enabled: bool,
     pub backend_type: String,
@@ -319,7 +319,7 @@ impl From<SyncConfigDto> for crate::sync_service::SyncConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncSecretsDto {
     pub token: Option<String>,
 }
@@ -339,7 +339,7 @@ impl From<SyncSecretsDto> for crate::sync_service::SyncSecrets {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncStateDto {
     pub status: String,
     pub remote_url: Option<String>,
@@ -352,7 +352,7 @@ pub struct SyncStateDto {
     pub conflicts: Option<Vec<SyncConflictDto>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncConflictDto {
     pub local_path: String,
     pub remote_path: String,
@@ -393,7 +393,7 @@ impl From<crate::sync_service::SyncState> for SyncStateDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct NetworkProbeResultDto {
     pub mode: String,
     pub success: bool,
@@ -405,7 +405,7 @@ pub struct NetworkProbeResultDto {
 impl From<crate::sync_service::NetworkProbeResult> for NetworkProbeResultDto {
     fn from(p: crate::sync_service::NetworkProbeResult) -> Self {
         Self {
-            mode: p.mode,
+            mode: p.mode.into(),
             success: p.success,
             status: p.status,
             message: p.message,
@@ -414,7 +414,7 @@ impl From<crate::sync_service::NetworkProbeResult> for NetworkProbeResultDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncDiagnosticsResultDto {
     pub success: bool,
     pub backend_type: String,
@@ -479,7 +479,7 @@ impl From<crate::sync_service::SyncDiagnosticsResult> for SyncDiagnosticsResultD
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncPlanDto {
     pub files_to_upload: Vec<String>,
     pub files_to_download: Vec<String>,
@@ -502,7 +502,7 @@ impl From<crate::sync_service::SyncPlan> for SyncPlanDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncResultDto {
     pub status: String,
     pub uploaded_files: Vec<String>,
@@ -584,7 +584,7 @@ fn first_sync_mode_to_wire(mode: &crate::sync_service::FirstSyncMode) -> String 
 
 
 // MindMap DTOs
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapSnapshotDto {
     pub project_id: String,
@@ -595,12 +595,12 @@ pub struct MindMapSnapshotDto {
     pub generated_at: u64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapSnapshotNodeDto {
     pub id: String,
     pub title: String,
-    pub kind: crate::mind_map::MindMapNodeKind,
+    pub kind: MindMapNodeKindDto,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -613,7 +613,7 @@ pub struct MindMapSnapshotNodeDto {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapSnapshotEdgeDto {
     pub id: String,
@@ -623,7 +623,7 @@ pub struct MindMapSnapshotEdgeDto {
     pub label: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapBoundsDto {
     pub min_x: f32,
@@ -650,7 +650,7 @@ impl From<crate::mind_map::MindMapSnapshotNode> for MindMapSnapshotNodeDto {
         Self {
             id: n.id,
             title: n.title,
-            kind: n.kind,
+            kind: n.kind.into(),
             x: n.x,
             y: n.y,
             width: n.width,
@@ -670,7 +670,7 @@ impl From<crate::mind_map::MindMapSnapshotEdge> for MindMapSnapshotEdgeDto {
             id: e.id,
             from: e.from,
             to: e.to,
-            kind: e.kind,
+            kind: e.kind.into(),
             label: e.label,
         }
     }
@@ -687,7 +687,7 @@ impl From<crate::mind_map::MindMapBounds> for MindMapBoundsDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapGraphDto {
     pub schema_version: u32,
@@ -719,12 +719,12 @@ impl From<crate::mind_map::MindMapGraph> for MindMapGraphDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapGraphNodeDto {
     pub id: String,
     pub title: String,
-    pub kind: crate::mind_map::MindMapNodeKind,
+    pub kind: MindMapNodeKindDto,
     pub payload: Option<serde_json::Value>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -737,7 +737,7 @@ impl From<crate::mind_map::MindMapGraphNode> for MindMapGraphNodeDto {
         Self {
             id: n.id,
             title: n.title,
-            kind: n.kind,
+            kind: n.kind.into(),
             payload: n.payload,
             tags: n.tags,
             created_at: n.created_at,
@@ -751,7 +751,7 @@ impl From<MindMapGraphNodeDto> for crate::mind_map::MindMapGraphNode {
         Self {
             id: d.id,
             title: d.title,
-            kind: d.kind,
+            kind: d.kind.into(),
             payload: d.payload,
             tags: d.tags,
             created_at: d.created_at,
@@ -760,13 +760,13 @@ impl From<MindMapGraphNodeDto> for crate::mind_map::MindMapGraphNode {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapGraphEdgeDto {
     pub id: String,
     pub from: String,
     pub to: String,
-    pub kind: crate::mind_map::MindMapEdgeKind,
+    pub kind: MindMapEdgeKindDto,
     pub label: Option<String>,
     pub payload: Option<serde_json::Value>,
     pub created_at: u64,
@@ -779,7 +779,7 @@ impl From<crate::mind_map::MindMapGraphEdge> for MindMapGraphEdgeDto {
             id: e.id,
             from: e.from,
             to: e.to,
-            kind: e.kind,
+            kind: e.kind.into(),
             label: e.label,
             payload: e.payload,
             created_at: e.created_at,
@@ -794,7 +794,7 @@ impl From<MindMapGraphEdgeDto> for crate::mind_map::MindMapGraphEdge {
             id: d.id,
             from: d.from,
             to: d.to,
-            kind: d.kind,
+            kind: d.kind.into(),
             label: d.label,
             payload: d.payload,
             created_at: d.created_at,
@@ -803,7 +803,7 @@ impl From<MindMapGraphEdgeDto> for crate::mind_map::MindMapGraphEdge {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapAnchorDto {
     pub id: String,
@@ -855,7 +855,7 @@ impl From<MindMapAnchorDto> for crate::mind_map::MindMapAnchor {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapLinkDto {
     pub id: String,
@@ -872,24 +872,24 @@ impl From<crate::mind_map::MindMapLink> for MindMapLinkDto {
             id: l.id,
             node_id: l.node_id,
             anchor_id: l.anchor_id,
-            kind: l.kind,
+            kind: l.kind.into(),
             created_at: l.created_at,
             updated_at: l.updated_at,
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapLayoutDto {
-    pub kind: crate::mind_map::LayoutKind,
+    pub kind: MindMapLayoutKindDto,
     pub nodes: Vec<MindMapLayoutNodeDto>,
 }
 
 impl From<crate::mind_map::MindMapLayout> for MindMapLayoutDto {
     fn from(l: crate::mind_map::MindMapLayout) -> Self {
         Self {
-            kind: l.kind,
+            kind: l.kind.into(),
             nodes: l.nodes.into_iter().map(Into::into).collect(),
         }
     }
@@ -898,13 +898,13 @@ impl From<crate::mind_map::MindMapLayout> for MindMapLayoutDto {
 impl From<MindMapLayoutDto> for crate::mind_map::MindMapLayout {
     fn from(d: MindMapLayoutDto) -> Self {
         Self {
-            kind: d.kind,
+            kind: d.kind.into(),
             nodes: d.nodes.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapLayoutNodeDto {
     pub node_id: String,
@@ -947,7 +947,7 @@ impl From<MindMapLayoutNodeDto> for crate::mind_map::MindMapLayoutNode {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapGraphMetadataDto {
     pub id: String,
@@ -967,7 +967,7 @@ impl From<crate::mind_map::edit::MindMapGraphMetadata> for MindMapGraphMetadataD
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapGraphsListDto {
     pub default_graph_id: Option<String>,
@@ -983,11 +983,11 @@ impl From<crate::mind_map::edit::MindMapGraphsList> for MindMapGraphsListDto {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapNodePatchDto {
     pub title: Option<String>,
-    pub kind: Option<crate::mind_map::MindMapNodeKind>,
+    pub kind: Option<MindMapNodeKindDto>,
     pub payload: Option<Option<serde_json::Value>>,
     pub tags: Option<Vec<String>>,
 }
@@ -996,17 +996,17 @@ impl From<MindMapNodePatchDto> for crate::mind_map::edit::MindMapGraphNodePatch 
     fn from(d: MindMapNodePatchDto) -> Self {
         Self {
             title: d.title,
-            kind: d.kind,
+            kind: d.kind.map(Into::into),
             payload: d.payload,
             tags: d.tags,
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapEdgePatchDto {
-    pub kind: Option<crate::mind_map::MindMapEdgeKind>,
+    pub kind: Option<MindMapEdgeKindDto>,
     pub label: Option<Option<String>>,
     pub payload: Option<Option<serde_json::Value>>,
 }
@@ -1014,7 +1014,7 @@ pub struct MindMapEdgePatchDto {
 impl From<MindMapEdgePatchDto> for crate::mind_map::edit::MindMapGraphEdgePatch {
     fn from(d: MindMapEdgePatchDto) -> Self {
         Self {
-            kind: d.kind,
+            kind: d.kind.map(Into::into),
             label: d.label,
             payload: d.payload,
         }
@@ -1023,7 +1023,7 @@ impl From<MindMapEdgePatchDto> for crate::mind_map::edit::MindMapGraphEdgePatch 
 
 
 // StarMap DTOs
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapMetaDto {
     pub starmap_id: String,
@@ -1081,7 +1081,7 @@ impl From<StarMapMetaDto> for crate::starmap::StarMapMeta {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapGraphDto {
     pub schema_version: u32,
@@ -1132,12 +1132,12 @@ impl From<StarMapGraphDto> for crate::starmap::types::StarMapGraph {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNodeDto {
     pub id: String,
     pub title: String,
-    pub kind: crate::starmap::types::StarMapNodeKind,
+    pub kind: StarMapNodeKindDto,
     pub payload: Option<serde_json::Value>,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -1162,7 +1162,7 @@ impl From<crate::starmap::types::StarMapNode> for StarMapNodeDto {
         Self {
             id: n.id,
             title: n.title,
-            kind: n.kind,
+            kind: n.kind.into(),
             payload: n.payload,
             tags: n.tags,
             content: n.content.into(),
@@ -1182,7 +1182,7 @@ impl From<StarMapNodeDto> for crate::starmap::types::StarMapNode {
         Self {
             id: d.id,
             title: d.title,
-            kind: d.kind,
+            kind: d.kind.into(),
             payload: d.payload,
             tags: d.tags,
             content: d.content.into(),
@@ -1200,6 +1200,7 @@ impl From<StarMapNodeDto> for crate::starmap::types::StarMapNode {
 // Map the enums identically to avoid copying the whole tree
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[derive(PartialEq)]
 pub enum StarMapNodeContentDto {
     #[default]
     Empty,
@@ -1249,23 +1250,23 @@ impl From<StarMapNodeContentDto> for crate::starmap::semantic::StarMapNodeConten
 }
 
 // Since StarMapAnchor depends on semantic enums, we copy its structure
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapAnchorDto {
     pub anchor_id: String,
-    pub target: crate::starmap::semantic::StarMapAnchorTarget,
+    pub target: StarMapAnchorTargetDto,
     pub label: Option<String>,
     #[serde(default)]
-    pub role: crate::starmap::semantic::StarMapAnchorRole,
+    pub role: StarMapAnchorRoleDto,
 }
 
 impl From<crate::starmap::semantic::StarMapAnchor> for StarMapAnchorDto {
     fn from(a: crate::starmap::semantic::StarMapAnchor) -> Self {
         Self {
             anchor_id: a.anchor_id,
-            target: a.target,
+            target: a.target.into(),
             label: a.label,
-            role: a.role,
+            role: a.role.into(),
         }
     }
 }
@@ -1274,23 +1275,23 @@ impl From<StarMapAnchorDto> for crate::starmap::semantic::StarMapAnchor {
     fn from(d: StarMapAnchorDto) -> Self {
         Self {
             anchor_id: d.anchor_id,
-            target: d.target,
+            target: d.target.into(),
             label: d.label,
-            role: d.role,
+            role: d.role.into(),
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPortalDto {
     pub target_starmap_id: String,
     #[serde(default)]
     pub deep_target: Option<StarMapDeepTargetDto>,
     #[serde(default)]
-    pub mode: crate::starmap::semantic::StarMapPortalMode,
+    pub mode: StarMapPortalModeDto,
     #[serde(default)]
-    pub preview_policy: crate::starmap::semantic::StarMapPortalPreviewPolicy,
+    pub preview_policy: StarMapPortalPreviewPolicyDto,
 }
 
 impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
@@ -1298,8 +1299,8 @@ impl From<crate::starmap::semantic::StarMapPortal> for StarMapPortalDto {
         Self {
             target_starmap_id: p.target_starmap_id,
             deep_target: p.deep_target.map(Into::into),
-            mode: p.mode,
-            preview_policy: p.preview_policy,
+            mode: p.mode.into(),
+            preview_policy: p.preview_policy.into(),
         }
     }
 }
@@ -1309,13 +1310,13 @@ impl From<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
         Self {
             target_starmap_id: d.target_starmap_id,
             deep_target: d.deep_target.map(Into::into),
-            mode: d.mode,
-            preview_policy: d.preview_policy,
+            mode: d.mode.into(),
+            preview_policy: d.preview_policy.into(),
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapDisplayPolicyDto {
     pub importance: f32,
@@ -1401,27 +1402,27 @@ impl From<StarMapOpenBehaviorDto> for crate::starmap::semantic::StarMapOpenBehav
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapProvenanceDto {
     #[serde(default)]
-    pub source: crate::starmap::semantic::StarMapSourceKind,
+    pub source: StarMapSourceKindDto,
     pub source_id: Option<String>,
     pub generated_by: Option<String>,
     pub prompt_id: Option<String>,
     #[serde(default)]
-    pub review_status: crate::starmap::semantic::StarMapReviewStatus,
+    pub review_status: StarMapReviewStatusDto,
     pub created_from_anchor: Option<String>,
 }
 
 impl From<crate::starmap::semantic::StarMapProvenance> for StarMapProvenanceDto {
     fn from(p: crate::starmap::semantic::StarMapProvenance) -> Self {
         Self {
-            source: p.source,
+            source: p.source.into(),
             source_id: p.source_id,
             generated_by: p.generated_by,
             prompt_id: p.prompt_id,
-            review_status: p.review_status,
+            review_status: p.review_status.into(),
             created_from_anchor: p.created_from_anchor,
         }
     }
@@ -1430,11 +1431,11 @@ impl From<crate::starmap::semantic::StarMapProvenance> for StarMapProvenanceDto 
 impl From<StarMapProvenanceDto> for crate::starmap::semantic::StarMapProvenance {
     fn from(d: StarMapProvenanceDto) -> Self {
         Self {
-            source: d.source,
+            source: d.source.into(),
             source_id: d.source_id,
             generated_by: d.generated_by,
             prompt_id: d.prompt_id,
-            review_status: d.review_status,
+            review_status: d.review_status.into(),
             created_from_anchor: d.created_from_anchor,
         }
     }
@@ -1452,7 +1453,7 @@ pub struct StarMapDeepTargetDto {
     pub starmap_id: String,
     #[serde(default)]
     pub path: Vec<StarMapPathSegmentDto>,
-    pub target: crate::starmap::semantic::StarMapTargetDetail,
+    pub target: StarMapTargetDetailDto,
 }
 
 impl From<crate::starmap::semantic::StarMapDeepTarget> for StarMapDeepTargetDto {
@@ -1460,7 +1461,7 @@ impl From<crate::starmap::semantic::StarMapDeepTarget> for StarMapDeepTargetDto 
         Self {
             starmap_id: t.starmap_id,
             path: t.path.into_iter().map(Into::into).collect(),
-            target: t.target,
+            target: t.target.into(),
         }
     }
 }
@@ -1470,7 +1471,7 @@ impl From<StarMapDeepTargetDto> for crate::starmap::semantic::StarMapDeepTarget 
         Self {
             starmap_id: d.starmap_id,
             path: d.path.into_iter().map(Into::into).collect(),
-            target: d.target,
+            target: d.target.into(),
         }
     }
 }
@@ -1531,13 +1532,13 @@ impl From<StarMapEdgeEndpointDto> for crate::starmap::types::StarMapEdgeEndpoint
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEdgeDto {
     pub id: String,
     pub from: Option<String>,
     pub to: Option<String>,
-    pub kind: crate::starmap::types::StarMapEdgeKind,
+    pub kind: StarMapEdgeKindDto,
     pub label: Option<String>,
     pub payload: Option<serde_json::Value>,
     #[serde(default)]
@@ -1558,7 +1559,7 @@ impl From<crate::starmap::types::StarMapEdge> for StarMapEdgeDto {
             id: e.id,
             from: e.from,
             to: e.to,
-            kind: e.kind,
+            kind: e.kind.into(),
             label: e.label,
             payload: e.payload,
             from_target: e.from_target.map(Into::into),
@@ -1577,7 +1578,7 @@ impl From<StarMapEdgeDto> for crate::starmap::types::StarMapEdge {
             id: d.id,
             from: d.from,
             to: d.to,
-            kind: d.kind,
+            kind: d.kind.into(),
             label: d.label,
             payload: d.payload,
             from_target: d.from_target.map(Into::into),
@@ -1590,7 +1591,7 @@ impl From<StarMapEdgeDto> for crate::starmap::types::StarMapEdge {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedPlacementDto {
     pub x: f32,
@@ -1630,7 +1631,7 @@ impl From<StarMapEmbedPlacementDto> for crate::starmap::types::StarMapEmbedPlace
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedViewportDto {
     pub scale: f32,
@@ -1658,7 +1659,7 @@ impl From<StarMapEmbedViewportDto> for crate::starmap::types::StarMapEmbedViewpo
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedDto {
     pub instance_id: String,
@@ -1669,7 +1670,7 @@ pub struct StarMapEmbedDto {
     pub placement: StarMapEmbedPlacementDto,
     pub target_viewport: StarMapEmbedViewportDto,
     pub source_node_id: Option<String>,
-    pub host_endpoint: Option<crate::starmap::types::StarMapEndpoint>,
+    pub host_endpoint: Option<StarMapEndpointDto>,
     pub provenance: StarMapProvenanceDto,
     pub created_at: u64,
     pub updated_at: u64,
@@ -1686,7 +1687,7 @@ impl From<crate::starmap::types::StarMapEmbed> for StarMapEmbedDto {
             placement: e.placement.into(),
             target_viewport: e.target_viewport.into(),
             source_node_id: e.source_node_id,
-            host_endpoint: e.host_endpoint,
+            host_endpoint: e.host_endpoint.map(Into::into),
             provenance: e.provenance.into(),
             created_at: e.created_at,
             updated_at: e.updated_at,
@@ -1705,7 +1706,7 @@ impl From<StarMapEmbedDto> for crate::starmap::types::StarMapEmbed {
             placement: d.placement.into(),
             target_viewport: d.target_viewport.into(),
             source_node_id: d.source_node_id,
-            host_endpoint: d.host_endpoint,
+            host_endpoint: d.host_endpoint.map(Into::into),
             provenance: d.provenance.into(),
             created_at: d.created_at,
             updated_at: d.updated_at,
@@ -1713,11 +1714,11 @@ impl From<StarMapEmbedDto> for crate::starmap::types::StarMapEmbed {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapLinkDto {
     pub link_id: String,
-    pub source: crate::starmap::types::StarMapEndpoint,
+    pub source: StarMapEndpointDto,
     pub target: StarMapDeepTargetDto,
     pub label: Option<String>,
     pub created_at: u64,
@@ -1728,7 +1729,7 @@ impl From<crate::starmap::types::StarMapLink> for StarMapLinkDto {
     fn from(l: crate::starmap::types::StarMapLink) -> Self {
         Self {
             link_id: l.link_id,
-            source: l.source,
+            source: l.source.into(),
             target: l.target.into(),
             label: l.label,
             created_at: l.created_at,
@@ -1741,7 +1742,7 @@ impl From<StarMapLinkDto> for crate::starmap::types::StarMapLink {
     fn from(d: StarMapLinkDto) -> Self {
         Self {
             link_id: d.link_id,
-            source: d.source,
+            source: d.source.into(),
             target: d.target.into(),
             label: d.label,
             created_at: d.created_at,
@@ -1750,17 +1751,17 @@ impl From<StarMapLinkDto> for crate::starmap::types::StarMapLink {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapLayoutDto {
-    pub kind: crate::starmap::types::StarMapLayoutKind,
+    pub kind: StarMapLayoutKindDto,
     pub nodes: Vec<StarMapLayoutNodeDto>,
 }
 
 impl From<crate::starmap::types::StarMapLayout> for StarMapLayoutDto {
     fn from(l: crate::starmap::types::StarMapLayout) -> Self {
         Self {
-            kind: l.kind,
+            kind: l.kind.into(),
             nodes: l.nodes.into_iter().map(Into::into).collect(),
         }
     }
@@ -1769,13 +1770,13 @@ impl From<crate::starmap::types::StarMapLayout> for StarMapLayoutDto {
 impl From<StarMapLayoutDto> for crate::starmap::types::StarMapLayout {
     fn from(d: StarMapLayoutDto) -> Self {
         Self {
-            kind: d.kind,
+            kind: d.kind.into(),
             nodes: d.nodes.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapLayoutNodeDto {
     pub node_id: String,
@@ -1830,7 +1831,7 @@ impl From<StarMapLayoutNodeDto> for crate::starmap::types::StarMapLayoutNode {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapReferenceDto {
     pub host_starmap_id: String,
@@ -1864,11 +1865,11 @@ impl From<StarMapReferenceDto> for crate::starmap::StarMapReference {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapNodePatchDto {
     pub title: Option<String>,
-    pub kind: Option<crate::starmap::types::StarMapNodeKind>,
+    pub kind: Option<StarMapNodeKindDto>,
     pub payload: Option<Option<serde_json::Value>>,
     pub tags: Option<Vec<String>>,
     pub content: Option<StarMapNodeContentDto>,
@@ -1883,7 +1884,7 @@ impl From<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
     fn from(d: StarMapNodePatchDto) -> Self {
         Self {
             title: d.title,
-            kind: d.kind,
+            kind: d.kind.map(Into::into),
             payload: d.payload,
             tags: d.tags,
             content: d.content.map(Into::into),
@@ -1896,10 +1897,10 @@ impl From<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEdgePatchDto {
-    pub kind: Option<crate::starmap::types::StarMapEdgeKind>,
+    pub kind: Option<StarMapEdgeKindDto>,
     pub label: Option<Option<String>>,
     pub payload: Option<Option<serde_json::Value>>,
     pub from_target: Option<Option<StarMapDeepTargetDto>>,
@@ -1911,7 +1912,7 @@ pub struct StarMapEdgePatchDto {
 impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
     fn from(d: StarMapEdgePatchDto) -> Self {
         Self {
-            kind: d.kind,
+            kind: d.kind.map(Into::into),
             label: d.label,
             payload: d.payload,
             from_target: d.from_target.map(|v| v.map(Into::into)),
@@ -1922,18 +1923,18 @@ impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedPatchDto {
     pub label: Option<Option<String>>,
     pub display_policy: Option<StarMapDisplayPolicyDto>,
     pub open_behavior: Option<StarMapOpenBehaviorDto>,
-    pub viewport: Option<Option<crate::starmap::types::StarMapViewport>>,
+    pub viewport: Option<Option<StarMapViewportDto>>,
     pub placement: Option<Option<StarMapEmbedPlacementDto>>,
     pub target_viewport: Option<Option<StarMapEmbedViewportDto>>,
     pub source_node_id: Option<Option<String>>,
     pub host_anchor: Option<Option<String>>,
-    pub host_endpoint: Option<Option<crate::starmap::types::StarMapEndpoint>>,
+    pub host_endpoint: Option<Option<StarMapEndpointDto>>,
 }
 
 impl From<StarMapEmbedPatchDto> for crate::starmap::types::StarMapEmbedPatch {
@@ -1942,20 +1943,20 @@ impl From<StarMapEmbedPatchDto> for crate::starmap::types::StarMapEmbedPatch {
             label: d.label,
             display_policy: d.display_policy.map(Into::into),
             open_behavior: d.open_behavior.map(Into::into),
-            viewport: d.viewport,
+            viewport: d.viewport.map(|v| v.map(Into::into)),
             placement: d.placement.map(|p| p.map(Into::into)),
             target_viewport: d.target_viewport.map(|v| v.map(Into::into)),
             source_node_id: d.source_node_id,
             host_anchor: d.host_anchor,
-            host_endpoint: d.host_endpoint,
+            host_endpoint: d.host_endpoint.map(|v| v.map(Into::into)),
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapLinkPatchDto {
-    pub source: Option<crate::starmap::types::StarMapEndpoint>,
+    pub source: Option<StarMapEndpointDto>,
     pub target: Option<StarMapDeepTargetDto>,
     pub label: Option<Option<String>>,
 }
@@ -1963,7 +1964,7 @@ pub struct StarMapLinkPatchDto {
 impl From<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {
     fn from(d: StarMapLinkPatchDto) -> Self {
         Self {
-            source: d.source,
+            source: d.source.map(Into::into),
             target: d.target.map(Into::into),
             label: d.label,
         }
@@ -1972,14 +1973,14 @@ impl From<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {
 
 
 // WritingStats DTOs
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DateRangeDto {
     pub start_date: String,
     pub end_date: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WritingStatsSummaryDto {
     pub range: DateRangeDto,
@@ -1993,7 +1994,7 @@ pub struct WritingStatsSummaryDto {
     pub days_count: usize,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectStatsRecordDto {
     pub project_id: String,
@@ -2005,14 +2006,14 @@ pub struct ProjectStatsRecordDto {
     pub active_seconds: u64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectStatsSummaryDto {
     pub range: DateRangeDto,
     pub projects: Vec<ProjectStatsRecordDto>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterStatsRecordDto {
     pub chapter_id: String,
@@ -2024,18 +2025,18 @@ pub struct ChapterStatsRecordDto {
     pub active_seconds: u64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterStatsSummaryDto {
     pub range: DateRangeDto,
     pub chapters: Vec<ChapterStatsRecordDto>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceStatsRecordDto {
     pub device_id: String,
-    pub platform: crate::writing_stats::Platform,
+    pub platform: PlatformDto,
     pub human_typed_chars: u64,
     pub pasted_chars: u64,
     pub deleted_chars: u64,
@@ -2045,14 +2046,14 @@ pub struct DeviceStatsRecordDto {
     pub sessions_count: u32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceStatsSummaryDto {
     pub range: DateRangeDto,
     pub devices: Vec<DeviceStatsRecordDto>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeedCurvePointDto {
     pub start_ms: i64,
@@ -2061,10 +2062,717 @@ pub struct SpeedCurvePointDto {
     pub chars_per_minute: f32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeedCurveSummaryDto {
     pub range: DateRangeDto,
     pub bucket_minutes: u32,
     pub buckets: Vec<SpeedCurvePointDto>,
+}
+
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MindMapNodeKindDto {
+    Project, Volume, Chapter, TextAnchor, Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, #[serde(other)] Custom,
+}
+
+impl From<crate::mind_map::MindMapNodeKind> for MindMapNodeKindDto {
+    fn from(k: crate::mind_map::MindMapNodeKind) -> Self {
+        match k {
+            crate::mind_map::MindMapNodeKind::Project => Self::Project,
+            crate::mind_map::MindMapNodeKind::Volume => Self::Volume,
+            crate::mind_map::MindMapNodeKind::Chapter => Self::Chapter,
+            crate::mind_map::MindMapNodeKind::TextAnchor => Self::TextAnchor,
+            crate::mind_map::MindMapNodeKind::Character => Self::Character,
+            crate::mind_map::MindMapNodeKind::Event => Self::Event,
+            crate::mind_map::MindMapNodeKind::Location => Self::Location,
+            crate::mind_map::MindMapNodeKind::Item => Self::Item,
+            crate::mind_map::MindMapNodeKind::Concept => Self::Concept,
+            crate::mind_map::MindMapNodeKind::Theme => Self::Theme,
+            crate::mind_map::MindMapNodeKind::Note => Self::Note,
+            crate::mind_map::MindMapNodeKind::Organization => Self::Organization,
+            crate::mind_map::MindMapNodeKind::Timeline => Self::Timeline,
+            crate::mind_map::MindMapNodeKind::Plot => Self::Plot,
+            crate::mind_map::MindMapNodeKind::Foreshadowing => Self::Foreshadowing,
+            crate::mind_map::MindMapNodeKind::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<MindMapNodeKindDto> for crate::mind_map::MindMapNodeKind {
+    fn from(dto: MindMapNodeKindDto) -> Self {
+        match dto {
+            MindMapNodeKindDto::Project => Self::Project,
+            MindMapNodeKindDto::Volume => Self::Volume,
+            MindMapNodeKindDto::Chapter => Self::Chapter,
+            MindMapNodeKindDto::TextAnchor => Self::TextAnchor,
+            MindMapNodeKindDto::Character => Self::Character,
+            MindMapNodeKindDto::Event => Self::Event,
+            MindMapNodeKindDto::Location => Self::Location,
+            MindMapNodeKindDto::Item => Self::Item,
+            MindMapNodeKindDto::Concept => Self::Concept,
+            MindMapNodeKindDto::Theme => Self::Theme,
+            MindMapNodeKindDto::Note => Self::Note,
+            MindMapNodeKindDto::Organization => Self::Organization,
+            MindMapNodeKindDto::Timeline => Self::Timeline,
+            MindMapNodeKindDto::Plot => Self::Plot,
+            MindMapNodeKindDto::Foreshadowing => Self::Foreshadowing,
+            MindMapNodeKindDto::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MindMapEdgeKindDto {
+    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, #[serde(other)] Custom,
+}
+
+impl From<crate::mind_map::MindMapEdgeKind> for MindMapEdgeKindDto {
+    fn from(k: crate::mind_map::MindMapEdgeKind) -> Self {
+        match k {
+            crate::mind_map::MindMapEdgeKind::Contains => Self::Contains,
+            crate::mind_map::MindMapEdgeKind::References => Self::References,
+            crate::mind_map::MindMapEdgeKind::AppearsIn => Self::AppearsIn,
+            crate::mind_map::MindMapEdgeKind::Causes => Self::Causes,
+            crate::mind_map::MindMapEdgeKind::RelatedTo => Self::RelatedTo,
+            crate::mind_map::MindMapEdgeKind::LocatedAt => Self::LocatedAt,
+            crate::mind_map::MindMapEdgeKind::CharacterRelation => Self::CharacterRelation,
+            crate::mind_map::MindMapEdgeKind::Timeline => Self::Timeline,
+            crate::mind_map::MindMapEdgeKind::Foreshadows => Self::Foreshadows,
+            crate::mind_map::MindMapEdgeKind::Resolves => Self::Resolves,
+            crate::mind_map::MindMapEdgeKind::DependsOn => Self::DependsOn,
+            crate::mind_map::MindMapEdgeKind::ConflictsWith => Self::ConflictsWith,
+            crate::mind_map::MindMapEdgeKind::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<MindMapEdgeKindDto> for crate::mind_map::MindMapEdgeKind {
+    fn from(dto: MindMapEdgeKindDto) -> Self {
+        match dto {
+            MindMapEdgeKindDto::Contains => Self::Contains,
+            MindMapEdgeKindDto::References => Self::References,
+            MindMapEdgeKindDto::AppearsIn => Self::AppearsIn,
+            MindMapEdgeKindDto::Causes => Self::Causes,
+            MindMapEdgeKindDto::RelatedTo => Self::RelatedTo,
+            MindMapEdgeKindDto::LocatedAt => Self::LocatedAt,
+            MindMapEdgeKindDto::CharacterRelation => Self::CharacterRelation,
+            MindMapEdgeKindDto::Timeline => Self::Timeline,
+            MindMapEdgeKindDto::Foreshadows => Self::Foreshadows,
+            MindMapEdgeKindDto::Resolves => Self::Resolves,
+            MindMapEdgeKindDto::DependsOn => Self::DependsOn,
+            MindMapEdgeKindDto::ConflictsWith => Self::ConflictsWith,
+            MindMapEdgeKindDto::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MindMapLayoutKindDto {
+    AutoRadial, HorizontalTree, Freeform, Timeline, Relationship, #[serde(other)] Custom,
+}
+
+impl From<crate::mind_map::LayoutKind> for MindMapLayoutKindDto {
+    fn from(k: crate::mind_map::LayoutKind) -> Self {
+        match k {
+            crate::mind_map::LayoutKind::AutoRadial => Self::AutoRadial,
+            crate::mind_map::LayoutKind::HorizontalTree => Self::HorizontalTree,
+            crate::mind_map::LayoutKind::Freeform => Self::Freeform,
+            crate::mind_map::LayoutKind::Timeline => Self::Timeline,
+            crate::mind_map::LayoutKind::Relationship => Self::Relationship,
+            crate::mind_map::LayoutKind::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<MindMapLayoutKindDto> for crate::mind_map::LayoutKind {
+    fn from(dto: MindMapLayoutKindDto) -> Self {
+        match dto {
+            MindMapLayoutKindDto::AutoRadial => Self::AutoRadial,
+            MindMapLayoutKindDto::HorizontalTree => Self::HorizontalTree,
+            MindMapLayoutKindDto::Freeform => Self::Freeform,
+            MindMapLayoutKindDto::Timeline => Self::Timeline,
+            MindMapLayoutKindDto::Relationship => Self::Relationship,
+            MindMapLayoutKindDto::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapNodeKindDto {
+    Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, Chapter, #[serde(other)] Custom,
+}
+
+impl From<crate::starmap::types::StarMapNodeKind> for StarMapNodeKindDto {
+    fn from(k: crate::starmap::types::StarMapNodeKind) -> Self {
+        match k {
+            crate::starmap::types::StarMapNodeKind::Character => Self::Character,
+            crate::starmap::types::StarMapNodeKind::Event => Self::Event,
+            crate::starmap::types::StarMapNodeKind::Location => Self::Location,
+            crate::starmap::types::StarMapNodeKind::Item => Self::Item,
+            crate::starmap::types::StarMapNodeKind::Concept => Self::Concept,
+            crate::starmap::types::StarMapNodeKind::Theme => Self::Theme,
+            crate::starmap::types::StarMapNodeKind::Note => Self::Note,
+            crate::starmap::types::StarMapNodeKind::Organization => Self::Organization,
+            crate::starmap::types::StarMapNodeKind::Timeline => Self::Timeline,
+            crate::starmap::types::StarMapNodeKind::Plot => Self::Plot,
+            crate::starmap::types::StarMapNodeKind::Foreshadowing => Self::Foreshadowing,
+            crate::starmap::types::StarMapNodeKind::Chapter => Self::Chapter,
+            crate::starmap::types::StarMapNodeKind::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<StarMapNodeKindDto> for crate::starmap::types::StarMapNodeKind {
+    fn from(dto: StarMapNodeKindDto) -> Self {
+        match dto {
+            StarMapNodeKindDto::Character => Self::Character,
+            StarMapNodeKindDto::Event => Self::Event,
+            StarMapNodeKindDto::Location => Self::Location,
+            StarMapNodeKindDto::Item => Self::Item,
+            StarMapNodeKindDto::Concept => Self::Concept,
+            StarMapNodeKindDto::Theme => Self::Theme,
+            StarMapNodeKindDto::Note => Self::Note,
+            StarMapNodeKindDto::Organization => Self::Organization,
+            StarMapNodeKindDto::Timeline => Self::Timeline,
+            StarMapNodeKindDto::Plot => Self::Plot,
+            StarMapNodeKindDto::Foreshadowing => Self::Foreshadowing,
+            StarMapNodeKindDto::Chapter => Self::Chapter,
+            StarMapNodeKindDto::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapEdgeKindDto {
+    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, #[serde(other)] Custom,
+}
+
+impl From<crate::starmap::types::StarMapEdgeKind> for StarMapEdgeKindDto {
+    fn from(k: crate::starmap::types::StarMapEdgeKind) -> Self {
+        match k {
+            crate::starmap::types::StarMapEdgeKind::Contains => Self::Contains,
+            crate::starmap::types::StarMapEdgeKind::References => Self::References,
+            crate::starmap::types::StarMapEdgeKind::AppearsIn => Self::AppearsIn,
+            crate::starmap::types::StarMapEdgeKind::Causes => Self::Causes,
+            crate::starmap::types::StarMapEdgeKind::RelatedTo => Self::RelatedTo,
+            crate::starmap::types::StarMapEdgeKind::LocatedAt => Self::LocatedAt,
+            crate::starmap::types::StarMapEdgeKind::CharacterRelation => Self::CharacterRelation,
+            crate::starmap::types::StarMapEdgeKind::Timeline => Self::Timeline,
+            crate::starmap::types::StarMapEdgeKind::Foreshadows => Self::Foreshadows,
+            crate::starmap::types::StarMapEdgeKind::Resolves => Self::Resolves,
+            crate::starmap::types::StarMapEdgeKind::DependsOn => Self::DependsOn,
+            crate::starmap::types::StarMapEdgeKind::ConflictsWith => Self::ConflictsWith,
+            crate::starmap::types::StarMapEdgeKind::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<StarMapEdgeKindDto> for crate::starmap::types::StarMapEdgeKind {
+    fn from(dto: StarMapEdgeKindDto) -> Self {
+        match dto {
+            StarMapEdgeKindDto::Contains => Self::Contains,
+            StarMapEdgeKindDto::References => Self::References,
+            StarMapEdgeKindDto::AppearsIn => Self::AppearsIn,
+            StarMapEdgeKindDto::Causes => Self::Causes,
+            StarMapEdgeKindDto::RelatedTo => Self::RelatedTo,
+            StarMapEdgeKindDto::LocatedAt => Self::LocatedAt,
+            StarMapEdgeKindDto::CharacterRelation => Self::CharacterRelation,
+            StarMapEdgeKindDto::Timeline => Self::Timeline,
+            StarMapEdgeKindDto::Foreshadows => Self::Foreshadows,
+            StarMapEdgeKindDto::Resolves => Self::Resolves,
+            StarMapEdgeKindDto::DependsOn => Self::DependsOn,
+            StarMapEdgeKindDto::ConflictsWith => Self::ConflictsWith,
+            StarMapEdgeKindDto::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapLayoutKindDto {
+    Freeform, AutoRadial, #[serde(other)] Custom,
+}
+
+impl From<crate::starmap::types::StarMapLayoutKind> for StarMapLayoutKindDto {
+    fn from(k: crate::starmap::types::StarMapLayoutKind) -> Self {
+        match k {
+            crate::starmap::types::StarMapLayoutKind::Freeform => Self::Freeform,
+            crate::starmap::types::StarMapLayoutKind::AutoRadial => Self::AutoRadial,
+            crate::starmap::types::StarMapLayoutKind::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<StarMapLayoutKindDto> for crate::starmap::types::StarMapLayoutKind {
+    fn from(dto: StarMapLayoutKindDto) -> Self {
+        match dto {
+            StarMapLayoutKindDto::Freeform => Self::Freeform,
+            StarMapLayoutKindDto::AutoRadial => Self::AutoRadial,
+            StarMapLayoutKindDto::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StarMapAnchorTargetDto {
+    ChapterRange { project_id: Option<String>, volume_id: Option<String>, chapter_id: String, range_start: Option<u32>, range_end: Option<u32> },
+    Project { project_id: String },
+    Volume { project_id: Option<String>, volume_id: String },
+    Chapter { project_id: Option<String>, volume_id: Option<String>, chapter_id: String },
+    Character { entity_id: String },
+    Item { entity_id: String },
+    Location { entity_id: String },
+    Event { entity_id: String },
+    Starmap { starmap_id: String },
+    External { uri: String },
+    Custom { payload: serde_json::Value },
+}
+
+impl From<crate::starmap::semantic::StarMapAnchorTarget> for StarMapAnchorTargetDto {
+    fn from(t: crate::starmap::semantic::StarMapAnchorTarget) -> Self {
+        match t {
+            crate::starmap::semantic::StarMapAnchorTarget::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
+            crate::starmap::semantic::StarMapAnchorTarget::Project { project_id } => Self::Project { project_id },
+            crate::starmap::semantic::StarMapAnchorTarget::Volume { project_id, volume_id } => Self::Volume { project_id, volume_id },
+            crate::starmap::semantic::StarMapAnchorTarget::Chapter { project_id, volume_id, chapter_id } => Self::Chapter { project_id, volume_id, chapter_id },
+            crate::starmap::semantic::StarMapAnchorTarget::Character { entity_id } => Self::Character { entity_id },
+            crate::starmap::semantic::StarMapAnchorTarget::Item { entity_id } => Self::Item { entity_id },
+            crate::starmap::semantic::StarMapAnchorTarget::Location { entity_id } => Self::Location { entity_id },
+            crate::starmap::semantic::StarMapAnchorTarget::Event { entity_id } => Self::Event { entity_id },
+            crate::starmap::semantic::StarMapAnchorTarget::Starmap { starmap_id } => Self::Starmap { starmap_id },
+            crate::starmap::semantic::StarMapAnchorTarget::External { uri } => Self::External { uri },
+            crate::starmap::semantic::StarMapAnchorTarget::Custom { payload } => Self::Custom { payload },
+        }
+    }
+}
+
+impl From<StarMapAnchorTargetDto> for crate::starmap::semantic::StarMapAnchorTarget {
+    fn from(dto: StarMapAnchorTargetDto) -> Self {
+        match dto {
+            StarMapAnchorTargetDto::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
+            StarMapAnchorTargetDto::Project { project_id } => Self::Project { project_id },
+            StarMapAnchorTargetDto::Volume { project_id, volume_id } => Self::Volume { project_id, volume_id },
+            StarMapAnchorTargetDto::Chapter { project_id, volume_id, chapter_id } => Self::Chapter { project_id, volume_id, chapter_id },
+            StarMapAnchorTargetDto::Character { entity_id } => Self::Character { entity_id },
+            StarMapAnchorTargetDto::Item { entity_id } => Self::Item { entity_id },
+            StarMapAnchorTargetDto::Location { entity_id } => Self::Location { entity_id },
+            StarMapAnchorTargetDto::Event { entity_id } => Self::Event { entity_id },
+            StarMapAnchorTargetDto::Starmap { starmap_id } => Self::Starmap { starmap_id },
+            StarMapAnchorTargetDto::External { uri } => Self::External { uri },
+            StarMapAnchorTargetDto::Custom { payload } => Self::Custom { payload },
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapAnchorRoleDto {
+    #[default]
+    Source, Destination, Reference, #[serde(other)] Custom,
+}
+
+impl From<crate::starmap::semantic::StarMapAnchorRole> for StarMapAnchorRoleDto {
+    fn from(r: crate::starmap::semantic::StarMapAnchorRole) -> Self {
+        match r {
+            crate::starmap::semantic::StarMapAnchorRole::Source => Self::Source,
+            crate::starmap::semantic::StarMapAnchorRole::Destination => Self::Destination,
+            crate::starmap::semantic::StarMapAnchorRole::Reference => Self::Reference,
+            crate::starmap::semantic::StarMapAnchorRole::Custom => Self::Custom,
+        }
+    }
+}
+
+impl From<StarMapAnchorRoleDto> for crate::starmap::semantic::StarMapAnchorRole {
+    fn from(dto: StarMapAnchorRoleDto) -> Self {
+        match dto {
+            StarMapAnchorRoleDto::Source => Self::Source,
+            StarMapAnchorRoleDto::Destination => Self::Destination,
+            StarMapAnchorRoleDto::Reference => Self::Reference,
+            StarMapAnchorRoleDto::Custom => Self::Custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapPortalModeDto {
+    #[default]
+    EnterChild, PreviewInline, ReferenceOnly,
+}
+
+impl From<crate::starmap::semantic::StarMapPortalMode> for StarMapPortalModeDto {
+    fn from(m: crate::starmap::semantic::StarMapPortalMode) -> Self {
+        match m {
+            crate::starmap::semantic::StarMapPortalMode::EnterChild => Self::EnterChild,
+            crate::starmap::semantic::StarMapPortalMode::PreviewInline => Self::PreviewInline,
+            crate::starmap::semantic::StarMapPortalMode::ReferenceOnly => Self::ReferenceOnly,
+        }
+    }
+}
+
+impl From<StarMapPortalModeDto> for crate::starmap::semantic::StarMapPortalMode {
+    fn from(dto: StarMapPortalModeDto) -> Self {
+        match dto {
+            StarMapPortalModeDto::EnterChild => Self::EnterChild,
+            StarMapPortalModeDto::PreviewInline => Self::PreviewInline,
+            StarMapPortalModeDto::ReferenceOnly => Self::ReferenceOnly,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapPortalPreviewPolicyDto {
+    #[default]
+    Auto, Always, Never,
+}
+
+impl From<crate::starmap::semantic::StarMapPortalPreviewPolicy> for StarMapPortalPreviewPolicyDto {
+    fn from(p: crate::starmap::semantic::StarMapPortalPreviewPolicy) -> Self {
+        match p {
+            crate::starmap::semantic::StarMapPortalPreviewPolicy::Auto => Self::Auto,
+            crate::starmap::semantic::StarMapPortalPreviewPolicy::Always => Self::Always,
+            crate::starmap::semantic::StarMapPortalPreviewPolicy::Never => Self::Never,
+        }
+    }
+}
+
+impl From<StarMapPortalPreviewPolicyDto> for crate::starmap::semantic::StarMapPortalPreviewPolicy {
+    fn from(dto: StarMapPortalPreviewPolicyDto) -> Self {
+        match dto {
+            StarMapPortalPreviewPolicyDto::Auto => Self::Auto,
+            StarMapPortalPreviewPolicyDto::Always => Self::Always,
+            StarMapPortalPreviewPolicyDto::Never => Self::Never,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StarMapTargetDetailDto {
+    Starmap, Node { node_id: String }, Anchor { node_id: String, anchor_id: String }, ChapterRange { project_id: Option<String>, volume_id: Option<String>, chapter_id: String, range_start: Option<u32>, range_end: Option<u32> }, Entity { entity_type: String, entity_id: String }, External { uri: String },
+}
+
+impl From<crate::starmap::semantic::StarMapTargetDetail> for StarMapTargetDetailDto {
+    fn from(d: crate::starmap::semantic::StarMapTargetDetail) -> Self {
+        match d {
+            crate::starmap::semantic::StarMapTargetDetail::Starmap => Self::Starmap,
+            crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => Self::Node { node_id },
+            crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
+            crate::starmap::semantic::StarMapTargetDetail::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
+            crate::starmap::semantic::StarMapTargetDetail::Entity { entity_type, entity_id } => Self::Entity { entity_type, entity_id },
+            crate::starmap::semantic::StarMapTargetDetail::External { uri } => Self::External { uri },
+        }
+    }
+}
+
+impl From<StarMapTargetDetailDto> for crate::starmap::semantic::StarMapTargetDetail {
+    fn from(dto: StarMapTargetDetailDto) -> Self {
+        match dto {
+            StarMapTargetDetailDto::Starmap => Self::Starmap,
+            StarMapTargetDetailDto::Node { node_id } => Self::Node { node_id },
+            StarMapTargetDetailDto::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
+            StarMapTargetDetailDto::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
+            StarMapTargetDetailDto::Entity { entity_type, entity_id } => Self::Entity { entity_type, entity_id },
+            StarMapTargetDetailDto::External { uri } => Self::External { uri },
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapSourceKindDto {
+    Human, Import, Plugin, Ai, System, #[default] #[serde(other)] Unknown,
+}
+
+impl From<crate::starmap::semantic::StarMapSourceKind> for StarMapSourceKindDto {
+    fn from(k: crate::starmap::semantic::StarMapSourceKind) -> Self {
+        match k {
+            crate::starmap::semantic::StarMapSourceKind::Human => Self::Human,
+            crate::starmap::semantic::StarMapSourceKind::Import => Self::Import,
+            crate::starmap::semantic::StarMapSourceKind::Plugin => Self::Plugin,
+            crate::starmap::semantic::StarMapSourceKind::Ai => Self::Ai,
+            crate::starmap::semantic::StarMapSourceKind::System => Self::System,
+            crate::starmap::semantic::StarMapSourceKind::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<StarMapSourceKindDto> for crate::starmap::semantic::StarMapSourceKind {
+    fn from(dto: StarMapSourceKindDto) -> Self {
+        match dto {
+            StarMapSourceKindDto::Human => Self::Human,
+            StarMapSourceKindDto::Import => Self::Import,
+            StarMapSourceKindDto::Plugin => Self::Plugin,
+            StarMapSourceKindDto::Ai => Self::Ai,
+            StarMapSourceKindDto::System => Self::System,
+            StarMapSourceKindDto::Unknown => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum StarMapReviewStatusDto {
+    Accepted, Draft, NeedsReview, Rejected, #[default] #[serde(other)] Unknown,
+}
+
+impl From<crate::starmap::semantic::StarMapReviewStatus> for StarMapReviewStatusDto {
+    fn from(s: crate::starmap::semantic::StarMapReviewStatus) -> Self {
+        match s {
+            crate::starmap::semantic::StarMapReviewStatus::Accepted => Self::Accepted,
+            crate::starmap::semantic::StarMapReviewStatus::Draft => Self::Draft,
+            crate::starmap::semantic::StarMapReviewStatus::NeedsReview => Self::NeedsReview,
+            crate::starmap::semantic::StarMapReviewStatus::Rejected => Self::Rejected,
+            crate::starmap::semantic::StarMapReviewStatus::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<StarMapReviewStatusDto> for crate::starmap::semantic::StarMapReviewStatus {
+    fn from(dto: StarMapReviewStatusDto) -> Self {
+        match dto {
+            StarMapReviewStatusDto::Accepted => Self::Accepted,
+            StarMapReviewStatusDto::Draft => Self::Draft,
+            StarMapReviewStatusDto::NeedsReview => Self::NeedsReview,
+            StarMapReviewStatusDto::Rejected => Self::Rejected,
+            StarMapReviewStatusDto::Unknown => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum StarMapEndpointDto {
+    Node { node_id: String },
+    Anchor { node_id: String, anchor_id: String },
+    Starmap,
+}
+
+impl From<crate::starmap::types::StarMapEndpoint> for StarMapEndpointDto {
+    fn from(e: crate::starmap::types::StarMapEndpoint) -> Self {
+        match e {
+            crate::starmap::types::StarMapEndpoint::Node { node_id } => Self::Node { node_id },
+            crate::starmap::types::StarMapEndpoint::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
+            crate::starmap::types::StarMapEndpoint::Starmap => Self::Starmap,
+        }
+    }
+}
+
+impl From<StarMapEndpointDto> for crate::starmap::types::StarMapEndpoint {
+    fn from(dto: StarMapEndpointDto) -> Self {
+        match dto {
+            StarMapEndpointDto::Node { node_id } => Self::Node { node_id },
+            StarMapEndpointDto::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
+            StarMapEndpointDto::Starmap => Self::Starmap,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapViewportDto {
+    pub scale: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl From<crate::starmap::types::StarMapViewport> for StarMapViewportDto {
+    fn from(v: crate::starmap::types::StarMapViewport) -> Self {
+        Self {
+            scale: v.scale,
+            offset_x: v.offset_x,
+            offset_y: v.offset_y,
+            width: v.width,
+            height: v.height,
+        }
+    }
+}
+
+impl From<StarMapViewportDto> for crate::starmap::types::StarMapViewport {
+    fn from(dto: StarMapViewportDto) -> Self {
+        Self {
+            scale: dto.scale,
+            offset_x: dto.offset_x,
+            offset_y: dto.offset_y,
+            width: dto.width,
+            height: dto.height,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionKindDto {
+    Query, Preview, Mutation,
+}
+
+impl From<crate::action_registry::ActionKind> for ActionKindDto {
+    fn from(k: crate::action_registry::ActionKind) -> Self {
+        match k {
+            crate::action_registry::ActionKind::Query => Self::Query,
+            crate::action_registry::ActionKind::Preview => Self::Preview,
+            crate::action_registry::ActionKind::Mutation => Self::Mutation,
+        }
+    }
+}
+
+impl From<ActionKindDto> for crate::action_registry::ActionKind {
+    fn from(dto: ActionKindDto) -> Self {
+        match dto {
+            ActionKindDto::Query => Self::Query,
+            ActionKindDto::Preview => Self::Preview,
+            ActionKindDto::Mutation => Self::Mutation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ActionRiskLevelDto {
+    SafeRead, SafeWrite, ContentWrite, Dangerous,
+}
+
+impl From<crate::action_registry::ActionRiskLevel> for ActionRiskLevelDto {
+    fn from(r: crate::action_registry::ActionRiskLevel) -> Self {
+        match r {
+            crate::action_registry::ActionRiskLevel::SafeRead => Self::SafeRead,
+            crate::action_registry::ActionRiskLevel::SafeWrite => Self::SafeWrite,
+            crate::action_registry::ActionRiskLevel::ContentWrite => Self::ContentWrite,
+            crate::action_registry::ActionRiskLevel::Dangerous => Self::Dangerous,
+        }
+    }
+}
+
+impl From<ActionRiskLevelDto> for crate::action_registry::ActionRiskLevel {
+    fn from(dto: ActionRiskLevelDto) -> Self {
+        match dto {
+            ActionRiskLevelDto::SafeRead => Self::SafeRead,
+            ActionRiskLevelDto::SafeWrite => Self::SafeWrite,
+            ActionRiskLevelDto::ContentWrite => Self::ContentWrite,
+            ActionRiskLevelDto::Dangerous => Self::Dangerous,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionDescriptorDto {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub kind: ActionKindDto,
+    pub risk_level: ActionRiskLevelDto,
+    pub confirm_required: bool,
+    pub undoable: bool,
+    pub platforms: Vec<String>,
+    pub input_schema: Option<serde_json::Value>,
+    pub ui_schema: Option<serde_json::Value>,
+}
+
+impl From<crate::action_registry::ActionDescriptor> for ActionDescriptorDto {
+    fn from(d: crate::action_registry::ActionDescriptor) -> Self {
+        Self {
+            id: d.id,
+            title: d.title,
+            description: d.description,
+            category: d.category,
+            kind: d.kind.into(),
+            risk_level: d.risk_level.into(),
+            confirm_required: d.confirm_required,
+            undoable: d.undoable,
+            platforms: d.platforms,
+            input_schema: d.input_schema,
+            ui_schema: d.ui_schema,
+        }
+    }
+}
+
+impl From<ActionDescriptorDto> for crate::action_registry::ActionDescriptor {
+    fn from(dto: ActionDescriptorDto) -> Self {
+        Self {
+            id: dto.id,
+            title: dto.title,
+            description: dto.description,
+            category: dto.category,
+            kind: dto.kind.into(),
+            risk_level: dto.risk_level.into(),
+            confirm_required: dto.confirm_required,
+            undoable: dto.undoable,
+            platforms: dto.platforms,
+            input_schema: dto.input_schema,
+            ui_schema: dto.ui_schema,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionResultDto {
+    pub success: bool,
+    pub message: Option<String>,
+    pub data: Option<serde_json::Value>,
+    pub proposed_ui: Option<serde_json::Value>,
+    pub requires_confirmation: Option<bool>,
+}
+
+impl From<crate::action_registry::ActionResult> for ActionResultDto {
+    fn from(r: crate::action_registry::ActionResult) -> Self {
+        Self {
+            success: r.success,
+            message: r.message,
+            data: r.data,
+            proposed_ui: r.proposed_ui,
+            requires_confirmation: r.requires_confirmation,
+        }
+    }
+}
+
+impl From<ActionResultDto> for crate::action_registry::ActionResult {
+    fn from(dto: ActionResultDto) -> Self {
+        Self {
+            success: dto.success,
+            message: dto.message,
+            data: dto.data,
+            proposed_ui: dto.proposed_ui,
+            requires_confirmation: dto.requires_confirmation,
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PlatformDto {
+    #[default]
+    Linux,
+    Android,
+}
+
+impl From<crate::writing_stats::Platform> for PlatformDto {
+    fn from(p: crate::writing_stats::Platform) -> Self {
+        match p {
+            crate::writing_stats::Platform::Linux => Self::Linux,
+            crate::writing_stats::Platform::Android => Self::Android,
+        }
+    }
+}
+
+impl From<PlatformDto> for crate::writing_stats::Platform {
+    fn from(dto: PlatformDto) -> Self {
+        match dto {
+            PlatformDto::Linux => Self::Linux,
+            PlatformDto::Android => Self::Android,
+        }
+    }
 }
