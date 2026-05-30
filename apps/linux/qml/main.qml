@@ -81,6 +81,15 @@ ApplicationWindow {
         id: backend
     }
 
+    // Domain backend names are the stable QML contract. During compatibility
+    // migration they point at AppBackend forwarding methods.
+    property var workspaceBackend: backend
+    property var projectBackend: backend
+    property var editorBackend: backend
+    property var settingsBackend: backend
+    property var syncBackend: backend
+    property var starmapBackend: backend
+
     AppController {
         id: appController
         backendRef: backend
@@ -401,7 +410,7 @@ ApplicationWindow {
         active: false
         sourceComponent: SettingsDialog {
             theme: designTokens
-            backendRef: backend
+            backendRef: settingsBackend
             onSettingsChanged: {
                 appController.refreshState("刷新设置失败");
             }
@@ -428,7 +437,7 @@ ApplicationWindow {
                     anchors.fill: parent
                     anchors.margins: designTokens.sp16
                     theme: designTokens
-                    backendRef: backend
+                    backendRef: syncBackend
                     beforeSyncHook: function() {
                         backend.flush_writing_stats();
                     }

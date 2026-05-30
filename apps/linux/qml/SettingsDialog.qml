@@ -5,7 +5,7 @@
 // 层级：Linux UI 层（QML UI 组件）
 // 职责：编辑器设置展示与保存（字号、行距、自动保存、主题、AI 开关）
 // 约束：
-//   - 通过 backendRef 直接读写 AppBackend 属性
+//   - 通过 settingsBackend 兼容入口读写设置属性
 //   - 不直接操作文件系统，通过 backendRef.save_local_settings() 持久化
 //   - 使用 DesignTokens 统一样式
 // =============================================================================

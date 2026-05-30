@@ -1,4 +1,200 @@
-//! SettingsBackend 边界。
-//!
-//! 本模块承接编辑器设置、外观设置、自动保存设置和本地设置持久化入口。
-//! QML 只绑定属性和命令，不在页面内复制设置保存规则。
+use super::*;
+
+impl AppBackend {
+// Included inside impl AppBackend from app_backend.rs.
+// Deprecated compatibility methods for this Linux backend domain.
+
+// AppBackend::setting_font_size
+    pub(crate) fn setting_font_size(&self) -> f32 { self.current_setting_font_size }
+
+// AppBackend::set_setting_font_size
+    pub(crate) fn set_setting_font_size(&mut self, val: f32) { self.current_setting_font_size = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_line_spacing
+    pub(crate) fn setting_line_spacing(&self) -> f32 { self.current_setting_line_spacing }
+
+// AppBackend::set_setting_line_spacing
+    pub(crate) fn set_setting_line_spacing(&mut self, val: f32) { self.current_setting_line_spacing = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_auto_save_enabled
+    pub(crate) fn setting_auto_save_enabled(&self) -> bool { self.current_setting_auto_save_enabled }
+
+// AppBackend::set_setting_auto_save_enabled
+    pub(crate) fn set_setting_auto_save_enabled(&mut self, val: bool) { self.current_setting_auto_save_enabled = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_auto_save_delay_ms
+    pub(crate) fn setting_auto_save_delay_ms(&self) -> u32 { self.current_setting_auto_save_delay_ms }
+
+// AppBackend::set_setting_auto_save_delay_ms
+    pub(crate) fn set_setting_auto_save_delay_ms(&mut self, val: u32) { self.current_setting_auto_save_delay_ms = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_auto_indent_enabled
+    pub(crate) fn setting_auto_indent_enabled(&self) -> bool { self.current_setting_auto_indent_enabled }
+
+// AppBackend::set_setting_auto_indent_enabled
+    pub(crate) fn set_setting_auto_indent_enabled(&mut self, val: bool) { self.current_setting_auto_indent_enabled = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_auto_indent_width
+    pub(crate) fn setting_auto_indent_width(&self) -> f32 { self.current_setting_auto_indent_width }
+
+// AppBackend::set_setting_auto_indent_width
+    pub(crate) fn set_setting_auto_indent_width(&mut self, val: f32) { self.current_setting_auto_indent_width = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_theme_mode
+    pub(crate) fn setting_theme_mode(&self) -> QString {
+        if self.current_setting_theme_mode.is_empty() {
+            "system".into()
+        } else {
+            self.current_setting_theme_mode.clone().into()
+        }
+    }
+
+// AppBackend::set_setting_theme_mode
+    pub(crate) fn set_setting_theme_mode(&mut self, val: QString) { self.current_setting_theme_mode = val.to_string(); self.settings_changed(); }
+
+// AppBackend::setting_monet_color
+    pub(crate) fn setting_monet_color(&self) -> QString { self.current_setting_monet_color.clone().into() }
+
+// AppBackend::set_setting_monet_color
+    pub(crate) fn set_setting_monet_color(&mut self, val: QString) { self.current_setting_monet_color = val.to_string(); self.settings_changed(); }
+
+// AppBackend::setting_typing_animation_enabled
+    pub(crate) fn setting_typing_animation_enabled(&self) -> bool { self.current_setting_typing_animation_enabled }
+
+// AppBackend::set_setting_typing_animation_enabled
+    pub(crate) fn set_setting_typing_animation_enabled(&mut self, val: bool) { self.current_setting_typing_animation_enabled = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_smooth_cursor_enabled
+    pub(crate) fn setting_smooth_cursor_enabled(&self) -> bool { self.current_setting_smooth_cursor_enabled }
+
+// AppBackend::set_setting_smooth_cursor_enabled
+    pub(crate) fn set_setting_smooth_cursor_enabled(&mut self, val: bool) { self.current_setting_smooth_cursor_enabled = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_typing_animation_duration_ms
+    pub(crate) fn setting_typing_animation_duration_ms(&self) -> u32 { self.current_setting_typing_animation_duration_ms }
+
+// AppBackend::set_setting_typing_animation_duration_ms
+    pub(crate) fn set_setting_typing_animation_duration_ms(&mut self, val: u32) { self.current_setting_typing_animation_duration_ms = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::setting_smooth_cursor_duration_ms
+    pub(crate) fn setting_smooth_cursor_duration_ms(&self) -> u32 { self.current_setting_smooth_cursor_duration_ms }
+
+// AppBackend::set_setting_smooth_cursor_duration_ms
+    pub(crate) fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) { self.current_setting_smooth_cursor_duration_ms = val; self.settings_changed(); self.save_local_settings(); }
+
+// AppBackend::load_app_theme_mode
+    pub(crate) fn load_app_theme_mode(&mut self) {
+        // Load theme mode from app_config (when no workspace is open)
+        // Default to "system"
+        self.current_setting_theme_mode = "system".to_string();
+        self.current_setting_monet_color = "".to_string();
+        self.settings_changed();
+    }
+
+// AppBackend::load_local_settings
+    pub(crate) fn load_local_settings(&mut self) {
+        self.debug_log("settings", "load_local_settings_start", "");
+        if let Some(core) = self.core_api() {
+
+            let local_load = core.load_local_settings();
+            self.debug_log("settings", "load_local_settings_result", &format!("success={}", local_load.is_ok()));
+            if let Ok(settings) = local_load {
+                self.current_setting_line_spacing = settings.editor_line_spacing_multiplier;
+                self.current_setting_auto_save_enabled = settings.auto_save_enabled;
+                self.current_setting_auto_save_delay_ms = settings.auto_save_delay_ms as u32;
+                self.current_setting_auto_indent_enabled = settings.auto_indent_enabled;
+                self.current_setting_auto_indent_width = settings.auto_indent_width;
+                self.current_setting_typing_animation_enabled = settings.editor_typing_animation_enabled;
+                self.current_setting_smooth_cursor_enabled = settings.editor_smooth_cursor_enabled;
+                self.current_setting_typing_animation_duration_ms = settings.editor_typing_animation_duration_ms as u32;
+                self.current_setting_smooth_cursor_duration_ms = settings.editor_smooth_cursor_duration_ms as u32;
+                self.current_ai_enabled = settings.ai_enabled;
+                if let Some(ref device_id) = settings.stats_device_id {
+                    if !device_id.is_empty() {
+                        self.stats_device_id = device_id.clone();
+                    }
+                }
+            }
+
+            let syncable_load = core.load_syncable_settings();
+            self.debug_log("settings", "load_syncable_settings_result", &format!("success={}", syncable_load.is_ok()));
+            if let Ok(sync_settings) = syncable_load {
+                self.current_setting_font_size = sync_settings.font_size as f32;
+                if self.current_setting_font_size <= 0.0 {
+                    if let Ok(local) = core.load_local_settings() {
+                        self.current_setting_font_size = local.editor_font_size;
+                    }
+                    if self.current_setting_font_size <= 0.0 {
+                        self.current_setting_font_size = 16.0;
+                    }
+                }
+                self.current_setting_theme_mode = sync_settings.theme_mode.clone();
+                self.current_setting_monet_color = sync_settings.monet_color.clone();
+            } else {
+                self.current_setting_monet_color = "".to_string();
+                if let Ok(local) = core.load_local_settings() {
+                    self.current_setting_font_size = local.editor_font_size;
+                }
+                if self.current_setting_font_size <= 0.0 {
+                    self.current_setting_font_size = 16.0;
+                }
+                self.current_setting_theme_mode = "system".to_string();
+            }
+
+            self.settings_changed();
+            self.debug_log("settings", "load_local_settings_success", &format!("fontSize={}, themeMode={}", self.current_setting_font_size, self.current_setting_theme_mode));
+        } else {
+            self.debug_warn("settings", "load_local_settings_failed", "core_not_initialized");
+        }
+    }
+
+// AppBackend::save_local_settings
+    pub(crate) fn save_local_settings(&mut self) -> bool {
+        self.debug_log("settings", "save_local_settings_start", "");
+        let mut error_msg: Option<String> = None;
+        if let Some(core) = self.core_api() {
+
+            let mut local = core.load_local_settings().unwrap_or_else(|_| writer_core::api::types::LocalSettingsDto::from(writer_core::settings::LocalSettings::default()));
+            local.editor_font_size = self.current_setting_font_size;
+            local.editor_line_spacing_multiplier = self.current_setting_line_spacing;
+            local.auto_save_enabled = self.current_setting_auto_save_enabled;
+            local.auto_save_delay_ms = self.current_setting_auto_save_delay_ms as u64;
+            local.auto_indent_enabled = self.current_setting_auto_indent_enabled;
+            local.auto_indent_width = self.current_setting_auto_indent_width;
+            local.editor_typing_animation_enabled = self.current_setting_typing_animation_enabled;
+            local.editor_smooth_cursor_enabled = self.current_setting_smooth_cursor_enabled;
+            local.editor_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms as u64;
+            local.editor_smooth_cursor_duration_ms = self.current_setting_smooth_cursor_duration_ms as u64;
+            local.ai_enabled = self.current_ai_enabled;
+
+            let local_save = core.save_local_settings(local.clone());
+            self.debug_log("settings", "save_local_settings_result", &format!("success={}", local_save.is_ok()));
+            if let Err(e) = local_save {
+                error_msg = Some(format!("保存本地设置失败: {}", e));
+            }
+
+            let mut syncable = core.load_syncable_settings().unwrap_or_else(|_| writer_core::api::types::SyncableSettingsDto::from(writer_core::settings::SyncableSettings::default()));
+            syncable.font_size = self.current_setting_font_size as f64;
+            syncable.theme_mode = self.current_setting_theme_mode.clone();
+            syncable.monet_color = self.current_setting_monet_color.clone();
+
+            let syncable_save = core.save_syncable_settings(syncable.clone());
+            self.debug_log("settings", "save_syncable_settings_result", &format!("success={}", syncable_save.is_ok()));
+            if let Err(e) = syncable_save {
+                error_msg = Some(format!("保存同步设置失败: {}", e));
+            }
+        } else {
+            error_msg = Some("Core 未初始化".to_string());
+        }
+
+        if let Some(msg) = error_msg {
+            self.set_error(&msg);
+            self.debug_error("settings", "save_local_settings_failed", &msg);
+            false
+        } else {
+            self.debug_log("settings", "save_local_settings_success", "");
+            true
+        }
+    }
+
+}
