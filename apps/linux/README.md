@@ -21,6 +21,7 @@
 
 - 依赖 `core/writer_core` Rust 核心库
 - 需要 Qt 6 开发环境，Linux 二进制不应再链接 `libQt5Core` / `libQt5Qml` / `libQt5Quick`
+- 需要支持 C++17 的 C++ 编译器；Linux Qt 绑定会在 `build.rs` 中强制给 `cpp_build` 传入 `-std=c++17`
 
 ## 使用说明
 
@@ -28,12 +29,12 @@
 
 **Fedora / openSUSE：**
 ```bash
-sudo dnf install qt6-qtbase qt6-qtdeclarative qt6-qtquickcontrols2 qt6-qttools qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel
+sudo dnf install gcc-c++ qt6-qtbase qt6-qtdeclarative qt6-qtquickcontrols2 qt6-qttools qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel
 ```
 
 **Ubuntu / Debian：**
 ```bash
-sudo apt install qt6-base-dev qt6-declarative-dev qt6-tools-dev qt6-tools-dev-tools qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window
+sudo apt install g++ qt6-base-dev qt6-declarative-dev qt6-tools-dev qt6-tools-dev-tools qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window
 ```
 
 ### 构建运行

@@ -91,6 +91,7 @@ prepend_path_var QML_IMPORT_PATH "/usr/lib64/qt6/qml"
 prepend_path_var QT_PLUGIN_PATH "/usr/lib64/qt6/plugins"
 
 echo "[start] Qt version detected: $QT_VERSION_DETECTED"
+echo "[start] Qt C++ standard: -std=c++17"
 echo "[start] QMAKE: ${QMAKE:-not found}"
 echo "[start] QT_INCLUDE_PATH: ${QT_INCLUDE_PATH:-}"
 echo "[start] QT_LIBRARY_PATH: ${QT_LIBRARY_PATH:-}"

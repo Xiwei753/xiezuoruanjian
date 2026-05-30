@@ -14,6 +14,34 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const QT6_MODULES: &[&str] = &["Core", "Gui", "Qml", "Quick", "QuickControls2"];
+const CPP_STANDARD_FLAG: &str = "-std=c++17";
+
+#[derive(Debug)]
+struct Qt6BuildInfo {
+    source: &'static str,
+    version: String,
+    include_paths: Vec<PathBuf>,
+    library_paths: Vec<PathBuf>,
+}
+
+impl Qt6BuildInfo {
+    fn apply_to(&self, config: &mut cpp_build::Config) {
+        for path in &self.include_paths {
+            config.include(path);
+        }
+    }
+}
+
+fn format_paths(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        return "not detected".to_string();
+    }
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(":")
+}
 
 fn qmake_query(qmake: &Path, key: &str) -> Option<String> {
     let output = Command::new(qmake).args(["-query", key]).output().ok()?;
@@ -45,14 +73,25 @@ fn find_qt6_qmake() -> Option<PathBuf> {
     })
 }
 
-fn include_qt6_from_pkg_config(config: &mut cpp_build::Config) -> bool {
+fn detect_qt6_from_pkg_config() -> Option<Qt6BuildInfo> {
     let mut found_all = true;
+    let mut version = None;
+    let mut include_paths = Vec::new();
+    let mut library_paths = Vec::new();
     for module in QT6_MODULES {
         let lib = format!("Qt6{}", module);
         match pkg_config::Config::new().atleast_version("6").probe(&lib) {
             Ok(library) => {
+                version.get_or_insert(library.version);
                 for path in library.include_paths {
-                    config.include(path);
+                    if !include_paths.contains(&path) {
+                        include_paths.push(path);
+                    }
+                }
+                for path in library.link_paths {
+                    if !library_paths.contains(&path) {
+                        library_paths.push(path);
+                    }
                 }
             }
             Err(err) => {
@@ -61,37 +100,81 @@ fn include_qt6_from_pkg_config(config: &mut cpp_build::Config) -> bool {
             }
         }
     }
-    found_all
+    found_all.then_some(Qt6BuildInfo {
+        source: "pkg-config",
+        version: version.unwrap_or_else(|| "6".to_string()),
+        include_paths,
+        library_paths,
+    })
 }
 
-fn include_qt6_from_qmake(config: &mut cpp_build::Config) -> bool {
+fn detect_qt6_from_qmake() -> Option<Qt6BuildInfo> {
     let Some(qmake) = find_qt6_qmake() else {
-        return false;
+        return None;
     };
+    let version = qmake_query(&qmake, "QT_VERSION")?;
     let Some(headers) = qmake_query(&qmake, "QT_INSTALL_HEADERS") else {
-        return false;
+        return None;
     };
     let header_root = PathBuf::from(headers);
-    config.include(&header_root);
+    let mut include_paths = vec![header_root.clone()];
     for module in QT6_MODULES {
-        config.include(header_root.join(format!("Qt{}", module)));
+        include_paths.push(header_root.join(format!("Qt{}", module)));
     }
-    true
+    let library_paths = qmake_query(&qmake, "QT_INSTALL_LIBS")
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    Some(Qt6BuildInfo {
+        source: "qmake",
+        version,
+        include_paths,
+        library_paths,
+    })
 }
 
-fn include_qt6_from_env(config: &mut cpp_build::Config) -> bool {
+fn detect_qt6_from_env() -> Option<Qt6BuildInfo> {
     let Ok(include_path) = std::env::var("QT_INCLUDE_PATH").map(|v| v.trim().to_string()) else {
-        return false;
+        return None;
     };
     if include_path.is_empty() {
-        return false;
+        return None;
+    }
+    let version = match qt_version_from_include_path(&include_path) {
+        Some(version) => version,
+        None => {
+            println!(
+                "cargo:warning=QT_INCLUDE_PATH={include_path} does not contain a readable Qt6 QtCore/qtcoreversion.h; trying other Qt6 probes"
+            );
+            return None;
+        }
+    };
+    let parsed = version
+        .parse::<Version>()
+        .unwrap_or_else(|_| panic!("Unable to parse Qt version from QT_INCLUDE_PATH: {version}"));
+    if parsed.major != 6 {
+        panic!(
+            "Linux binary is still linked against Qt5; Qt6 migration incomplete. QT_INCLUDE_PATH points to Qt {version}."
+        );
     }
     let header_root = PathBuf::from(include_path);
-    config.include(&header_root);
+    let mut include_paths = vec![header_root.clone()];
     for module in QT6_MODULES {
-        config.include(header_root.join(format!("Qt{}", module)));
+        include_paths.push(header_root.join(format!("Qt{}", module)));
     }
-    true
+    let library_paths = std::env::var("QT_LIBRARY_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    Some(Qt6BuildInfo {
+        source: "QT_INCLUDE_PATH",
+        version,
+        include_paths,
+        library_paths,
+    })
 }
 
 fn qt_version_from_include_path(path: &str) -> Option<String> {
@@ -105,46 +188,44 @@ fn qt_version_from_include_path(path: &str) -> Option<String> {
     })
 }
 
-fn assert_qt6_build_chain_available() {
+fn select_qt6_build_info() -> Qt6BuildInfo {
     println!("cargo:rerun-if-env-changed=QMAKE");
     println!("cargo:rerun-if-env-changed=QT_INCLUDE_PATH");
     println!("cargo:rerun-if-env-changed=QT_LIBRARY_PATH");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=CXX");
+    println!("cargo:rerun-if-env-changed=CXXFLAGS");
 
-    if let (Ok(include_path), Ok(library_path)) = (
-        std::env::var("QT_INCLUDE_PATH").map(|v| v.trim().to_string()),
-        std::env::var("QT_LIBRARY_PATH").map(|v| v.trim().to_string()),
-    ) {
-        if !include_path.is_empty() && !library_path.is_empty() {
-            let version = qt_version_from_include_path(&include_path)
-                .unwrap_or_else(|| panic!("Unable to detect Qt version from QT_INCLUDE_PATH={include_path}"));
-            let parsed = version
-                .parse::<Version>()
-                .unwrap_or_else(|_| panic!("Unable to parse Qt version from QT_INCLUDE_PATH: {version}"));
-            if parsed.major != 6 {
-                panic!("Linux binary is still linked against Qt5; Qt6 migration incomplete. QT_INCLUDE_PATH points to Qt {version}.");
-            }
-            println!("cargo:warning=Linux Qt binding selected Qt {version} from QT_INCLUDE_PATH");
-            return;
+    if std::env::var("QMAKE").is_ok() {
+        if let Some(info) = detect_qt6_from_qmake() {
+            return info;
         }
     }
 
-    let Some(qmake) = find_qt6_qmake() else {
-        panic!("Qt6 qmake was not found. Install Fedora Qt6 development tools or set QMAKE to qmake6 before building the Linux frontend.");
-    };
-    let version = qmake_query(&qmake, "QT_VERSION")
-        .unwrap_or_else(|| panic!("Unable to query Qt version from {}", qmake.display()));
-    let parsed = version
-        .parse::<Version>()
-        .unwrap_or_else(|_| panic!("Unable to parse Qt version reported by {}: {version}", qmake.display()));
-    if parsed.major != 6 {
-        panic!("Linux binary is still linked against Qt5; Qt6 migration incomplete. {} reports Qt {version}.", qmake.display());
+    if let Some(info) = detect_qt6_from_pkg_config() {
+        return info;
     }
-    println!("cargo:warning=Linux Qt binding selected Qt {version} via {}", qmake.display());
+
+    if let Some(info) = detect_qt6_from_qmake() {
+        return info;
+    }
+
+    if let Some(info) = detect_qt6_from_env() {
+        return info;
+    }
+
+    panic!(
+        "Qt6 development files were not found. Install qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel and gcc-c++ on Fedora."
+    );
+}
+
+fn configure_cpp_standard(config: &mut cpp_build::Config) {
+    // cpp_build 0.5.x otherwise injects -std=c++11, which is too old for Qt6 headers.
+    config.flag(CPP_STANDARD_FLAG);
 }
 
 fn main() {
-    assert_qt6_build_chain_available();
+    let qt_info = select_qt6_build_info();
 
     // Pages
     println!("cargo:rerun-if-changed=qml/main.qml");
@@ -182,11 +263,20 @@ fn main() {
     println!("cargo:rerun-if-changed=src/qml.qrc");
 
     let mut config = cpp_build::Config::new();
-    if !include_qt6_from_pkg_config(&mut config)
-        && !include_qt6_from_qmake(&mut config)
-        && !include_qt6_from_env(&mut config)
-    {
-        panic!("Qt6 development files were not found. Install qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel on Fedora.");
-    }
+    configure_cpp_standard(&mut config);
+    qt_info.apply_to(&mut config);
+    println!(
+        "cargo:warning=Linux Qt binding selected Qt {} via {}",
+        qt_info.version, qt_info.source
+    );
+    println!("cargo:warning=Linux Qt C++ standard: {CPP_STANDARD_FLAG}");
+    println!(
+        "cargo:warning=Linux Qt include path: {}",
+        format_paths(&qt_info.include_paths)
+    );
+    println!(
+        "cargo:warning=Linux Qt library path: {}",
+        format_paths(&qt_info.library_paths)
+    );
     config.build("src/main.rs");
 }
