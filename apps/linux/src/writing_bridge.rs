@@ -1,12 +1,11 @@
 //! # 写作桥接函数（Linux UI 层 - Backend Adapter）
 //!
-//! 将 WriterCore 的写作 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。
+//! 将 WriterCoreApi 的写作 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。
 
-use writer_core::api::WriterCoreApi;
-use writer_core::facade::WriterCore;
-use writer_core::error::Error;
-use writer_core::api::types::ChapterSaveReceiptDto;
 use serde::Serialize;
+use writer_core::api::error::WriterError;
+use writer_core::api::types::ChapterSaveReceiptDto;
+use writer_core::api::WriterCoreApi;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,7 +53,7 @@ pub fn clear_chapter_content(api: &WriterCoreApi, project_id: &str, volume_id: &
 }
 
 pub fn report_writing_event(
-    core: &WriterCore, 
+    api: &WriterCoreApi,
     project_id: &str, 
     volume_id: &str, 
     chapter_id: &str, 
@@ -62,27 +61,27 @@ pub fn report_writing_event(
     inserted_chars: u32, 
     deleted_chars: u32, 
     pasted_chars: u32, 
-    time_spent: u32,
+    ai_inserted_chars: u32,
     device_id: &str,
     session_id: &str
-) -> Result<(), Error> {
-    core.record_writing_event(
+) -> Result<bool, WriterError> {
+    api.record_writing_event_for_platform(
         device_id,
         "linux",
         project_id,
         volume_id,
         chapter_id,
         source,
-        inserted_chars,
-        deleted_chars,
-        pasted_chars,
-        time_spent,
+        inserted_chars as i32,
+        deleted_chars as i32,
+        pasted_chars as i32,
+        ai_inserted_chars as i32,
         session_id
     )
 }
 
 pub fn process_writing_event_from_text(
-    core: &WriterCore,
+    api: &WriterCoreApi,
     project_id: &str,
     volume_id: &str,
     chapter_id: &str,
@@ -90,8 +89,8 @@ pub fn process_writing_event_from_text(
     new_text: &str,
     device_id: &str,
     session_id: &str
-) -> Result<(), Error> {
-    core.process_writing_event(
+) -> Result<bool, WriterError> {
+    api.process_writing_event(
         device_id,
         "linux",
         project_id,
@@ -104,16 +103,17 @@ pub fn process_writing_event_from_text(
 }
 
 pub fn ensure_stats_session(
-    core: &WriterCore,
+    api: &WriterCoreApi,
     device_id: &mut String,
     session_id: &mut String,
     last_event_ms: &mut i64
 ) {
     if device_id.is_empty() {
         *device_id = format!("linux-{}", uuid::Uuid::new_v4());
-        let mut local = core.load_local_settings().unwrap_or_default();
-        local.stats_device_id = Some(device_id.clone());
-        let _ = core.save_local_settings(&local);
+        if let Ok(mut local) = api.load_local_settings() {
+            local.stats_device_id = Some(device_id.clone());
+            let _ = api.save_local_settings(local);
+        }
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();

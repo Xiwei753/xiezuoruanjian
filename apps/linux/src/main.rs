@@ -37,11 +37,9 @@ use qmetaobject::prelude::*;
 use cpp::cpp;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
-use std::cell::RefCell;
 use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::sync::{Mutex, OnceLock};
@@ -49,7 +47,6 @@ use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
-use writer_core::facade::WriterCore;
 
 mod document_handler;
 mod starmap_bridge;
@@ -555,7 +552,6 @@ struct AppBackend {
     execute_action: qt_method!(fn(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString),
 
 
-    core: Option<Rc<RefCell<WriterCore>>>,
     current_workspace: String,
     current_has_workspace: bool,
     current_save_status: String,
@@ -613,15 +609,6 @@ impl AppBackend {
     fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_workspace && !self.current_workspace.is_empty() {
             Some(WriterCoreApi::new(&self.current_workspace))
-        } else {
-            None
-        }
-    }
-
-    // TODO(api): migrate when WriterCoreApi exposes this capability
-    fn core_facade(&self) -> Option<WriterCore> {
-        if self.current_has_workspace && !self.current_workspace.is_empty() {
-            Some(WriterCore::new(&self.current_workspace))
         } else {
             None
         }
@@ -790,16 +777,13 @@ impl AppBackend {
 
     fn reconcile_selection_after_tree_reload(&mut self) -> bool {
         let mut had_chapter_deleted = false;
-        let Some(core_ref) = &self.core else {
+        let Some(api) = self.core_api() else {
             return false;
         };
 
         if let Some(project_id) = self.selected_project_id.clone() {
-            let project_exists = {
-                let core = core_ref.borrow();
-                let projects = core.list_projects().unwrap_or_default();
-                projects.iter().any(|p| p.id == project_id)
-            };
+            let projects = api.list_projects().unwrap_or_default();
+            let project_exists = projects.iter().any(|p| p.id == project_id);
             if !project_exists {
                 self.selected_project_id = None;
                 self.selected_volume_id = None;
@@ -811,11 +795,8 @@ impl AppBackend {
         }
 
         if let (Some(project_id), Some(volume_id)) = (self.selected_project_id.clone(), self.selected_volume_id.clone()) {
-            let volume_exists = {
-                let core = core_ref.borrow();
-                let volumes = core.list_volumes(&project_id).unwrap_or_default();
-                volumes.iter().any(|v| v.id == volume_id)
-            };
+            let volumes = api.list_volumes(&project_id).unwrap_or_default();
+            let volume_exists = volumes.iter().any(|v| v.id == volume_id);
             if !volume_exists {
                 self.selected_volume_id = None;
                 self.clear_editor_state();
@@ -830,11 +811,8 @@ impl AppBackend {
             self.selected_volume_id.clone(),
             self.selected_chapter_id.clone(),
         ) {
-            let chapter_exists = {
-                let core = core_ref.borrow();
-                let chapters = core.list_chapters(&project_id, &volume_id).unwrap_or_default();
-                chapters.iter().any(|c| c.id == chapter_id)
-            };
+            let chapters = api.list_chapters(&project_id, &volume_id).unwrap_or_default();
+            let chapter_exists = chapters.iter().any(|c| c.id == chapter_id);
             if !chapter_exists {
                 self.clear_editor_state();
                 had_chapter_deleted = true;
@@ -1052,17 +1030,12 @@ impl AppBackend {
         let projects_path = path_obj.join("projects");
         let projects_dir_exists = projects_path.exists();
         let app_meta_exists = path_obj.join("app-meta").exists();
-        let validate_workspace = if self.current_has_workspace && self.core.is_some() {
-            self.core.as_ref().and_then(|c| {
-                let core = c.borrow();
-                core.validate_workspace().ok()
-            }).unwrap_or(false)
-        } else if path_exists && path_obj.is_dir() {
-            let core = writer_core::facade::WriterCore::new(ws_path);
-            core.validate_workspace().unwrap_or(false)
+        let validate_workspace = if path_exists && path_obj.is_dir() {
+            WriterCoreApi::new(ws_path).validate_workspace().unwrap_or(false)
         } else {
             false
         };
+        let core_initialized = self.current_has_workspace && !self.current_workspace.is_empty();
         let last_workspace = writer_core::app_config::get_last_workspace_path().unwrap_or_default();
         // Real writable test: try to create and delete a temp file
         let (writable, writable_error) = if path_exists && path_obj.is_dir() {
@@ -1078,7 +1051,7 @@ impl AppBackend {
             (false, "path does not exist or is not a directory".to_string())
         };
         let create_project_available = self.current_has_workspace
-            && self.core.is_some()
+            && core_initialized
             && validate_workspace
             && path_exists
             && is_dir
@@ -1088,7 +1061,7 @@ impl AppBackend {
         let diag = serde_json::json!({
             "hasWorkspace": self.current_has_workspace,
             "workspacePath": ws_path,
-            "coreInitialized": self.core.is_some(),
+            "coreInitialized": core_initialized,
             "pathExists": path_exists,
             "isDir": is_dir,
             "manifestPath": manifest_path.to_string_lossy(),
@@ -1255,11 +1228,10 @@ impl AppBackend {
             self.debug_log("workspace", "try_restore_last_workspace_path_found", &format!("path={}", path));
             let path_obj = std::path::Path::new(&path);
             if path_obj.exists() && path_obj.is_dir() {
-                let core = writer_core::facade::WriterCore::new(&path);
-                let val_res = core.validate_workspace().unwrap_or(false);
+                let api = WriterCoreApi::new(&path);
+                let val_res = api.validate_workspace().unwrap_or(false);
                 self.debug_log("workspace", "try_restore_last_workspace_validate", &format!("path={}, is_valid={}", path, val_res));
                 if val_res {
-                    self.core = Some(Rc::new(RefCell::new(core)));
                     self.current_workspace = path.clone();
                     self.current_has_workspace = true;
                     self.current_save_status = "已保存".to_string();
@@ -1309,8 +1281,8 @@ impl AppBackend {
             return;
         }
 
-        let core = writer_core::facade::WriterCore::new(path);
-        let is_valid = core.validate_workspace().unwrap_or(false);
+        let api = WriterCoreApi::new(path);
+        let is_valid = api.validate_workspace().unwrap_or(false);
         self.debug_log("workspace", "internal_open_workspace_validate", &format!("path={}, is_valid={}", path, is_valid));
 
         if !is_valid && !initialize {
@@ -1322,7 +1294,7 @@ impl AppBackend {
 
         if !is_valid && initialize {
             self.debug_log("workspace", "internal_open_workspace_creating", path);
-            if let Err(e) = core.create_workspace() {
+            if let Err(e) = api.create_workspace_if_needed() {
                 let err_msg = format!("无法创建工作区: {}", e);
                 self.set_error(&err_msg);
                 self.debug_error("workspace", "internal_open_workspace_failed", &err_msg);
@@ -1330,8 +1302,7 @@ impl AppBackend {
             }
         }
 
-        let core = writer_core::facade::WriterCore::new(path);
-        let val_res = core.validate_workspace().unwrap_or(false);
+        let val_res = api.validate_workspace().unwrap_or(false);
         self.debug_log("workspace", "internal_open_workspace_revalidate", &format!("path={}, is_valid={}", path, val_res));
         if !val_res {
             let err_msg = "工作区验证失败";
@@ -1340,8 +1311,6 @@ impl AppBackend {
             return;
         }
 
-        
-        self.core = Some(Rc::new(RefCell::new(core)));
         self.current_workspace = path.to_string();
         self.current_has_workspace = true;
         self.current_save_status = "已保存".to_string();
@@ -1378,8 +1347,6 @@ impl AppBackend {
     fn close_workspace(&mut self) {
         self.debug_log("workspace", "close_workspace_start", "");
         self.flush_writing_stats();
-        // Clear core
-        self.core = None;
         // Clear workspace state
         self.current_workspace = "".to_string();
         self.current_has_workspace = false;
@@ -1489,8 +1456,7 @@ impl AppBackend {
         };
 
         let has_workspace = || -> bool {
-            let core = writer_core::facade::WriterCore::new(path);
-            core.validate_workspace().unwrap_or(false)
+            WriterCoreApi::new(path).validate_workspace().unwrap_or(false)
         };
 
         let is_git_repo = || -> bool {
@@ -1534,10 +1500,10 @@ impl AppBackend {
             match backend.sync(path_obj, &config, &secrets) {
                 Ok(result) => {
                     if result.status == writer_core::sync_service::SyncStatus::Success {
-                        let core = writer_core::facade::WriterCore::new(path);
-                        if !core.validate_workspace().unwrap_or(false) {
+                        let api = WriterCoreApi::new(path);
+                        if !api.validate_workspace().unwrap_or(false) {
                             // Remote is empty or not a valid workspace — create workspace locally
-                            if let Err(e) = core.create_workspace() {
+                            if let Err(e) = api.create_workspace_if_needed() {
                                 return SyncTaskOutcome {
                                     sync_status: "error".to_string(),
                                     action_result: format!("克隆成功但工作区初始化失败: {}", e),
@@ -1837,8 +1803,8 @@ impl AppBackend {
         });
 
         thread::spawn(move || {
-            let core = WriterCore::new(&workspace_path);
-            let config = match core.load_sync_config() {
+            let api = WriterCoreApi::new(&workspace_path);
+            let config = match api.load_sync_config() {
                 Ok(c) => c,
                 Err(e) => {
                     callback(SyncTaskOutcome {
@@ -1849,7 +1815,7 @@ impl AppBackend {
                 }
             };
 
-            match core.perform_sync_diagnostics(&config) {
+            match api.perform_sync_diagnostics(config) {
                 Ok(result) => {
                     let status = determine_diagnostics_status(&result);
                     let msg = format_diagnostics_message(&result);
@@ -1873,25 +1839,12 @@ impl AppBackend {
 
     fn load_sync_config(&mut self) {
         self.debug_log("sync", "load_sync_config_start", "");
-        if self.core.is_some() {
-            // Extract config data without holding Ref borrow, then update self
-            let (config_opt, token_opt) = {
-                let core_ref = self.core.as_ref().unwrap();
-                let core = core_ref.borrow();
-                let cfg = core.load_sync_config().ok();
-                let sec = core.load_sync_secrets().ok();
-                let t = sec.and_then(|s| s.token);
-                (cfg, t)
-            };
+        if let Some(api) = self.core_api() {
+            let config_opt = api.load_sync_config().ok();
+            let token_opt = api.load_sync_secrets().ok().and_then(|s| s.token);
             if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
-                self.current_sync_backend_type = match config.backend_type {
-                    writer_core::sync_service::BackendType::Git => "git".to_string(),
-                    writer_core::sync_service::BackendType::GithubApi => "github_api".to_string(),
-                    writer_core::sync_service::BackendType::WebDav => "webdav".to_string(),
-                    writer_core::sync_service::BackendType::S3 => "s3".to_string(),
-                    writer_core::sync_service::BackendType::LocalFolder => "local_folder".to_string(),
-                };
+                self.current_sync_backend_type = config.backend_type.clone();
                 self.current_sync_remote_url = config.remote_url.clone();
                 self.current_sync_branch = if config.branch.is_empty() { "main".to_string() } else { config.branch.clone() };
                 self.current_sync_auto_sync = config.auto_sync;
@@ -1931,15 +1884,15 @@ impl AppBackend {
     fn save_sync_config(&mut self) -> bool {
         self.debug_log("sync", "save_sync_config_start", "");
         let mut error_msg: Option<String> = None;
-        if let Some(core) = self.core_facade() {
+        if let Some(api) = self.core_api() {
 
-            let mut c = core
+            let mut c = api
                 .load_sync_config()
-                .unwrap_or(writer_core::sync_service::SyncConfig {
+                .unwrap_or(writer_core::api::types::SyncConfigDto {
                     enabled: false,
-                    backend_type: writer_core::sync_service::BackendType::GithubApi,
+                    backend_type: "github_api".to_string(),
                     remote_url: "".to_string(),
-                    transport: writer_core::sync_service::SyncTransport::HttpsToken,
+                    transport: "https_token".to_string(),
                     branch: "main".to_string(),
                     auto_sync: false,
                     sync_interval_seconds: 300,
@@ -1948,8 +1901,6 @@ impl AppBackend {
                     proxy_host: "".to_string(),
                     proxy_port: 0,
                     username: "".to_string(),
-                    android_has_internet_permission: true,
-                    android_has_access_network_state_permission: true,
                 });
 
             let raw_url = self.current_sync_remote_url.clone();
@@ -1957,11 +1908,8 @@ impl AppBackend {
 
             c.enabled = self.current_sync_enabled;
             c.backend_type = match self.current_sync_backend_type.as_str() {
-                "github_api" => writer_core::sync_service::BackendType::GithubApi,
-                "webdav" => writer_core::sync_service::BackendType::WebDav,
-                "s3" => writer_core::sync_service::BackendType::S3,
-                "local_folder" => writer_core::sync_service::BackendType::LocalFolder,
-                _ => writer_core::sync_service::BackendType::GithubApi,
+                "webdav" | "s3" | "local_folder" | "git" | "github_api" => self.current_sync_backend_type.clone(),
+                _ => "github_api".to_string(),
             };
             c.remote_url = parsed.sanitized_url.clone();
             c.branch = if self.current_sync_branch.is_empty() { "main".to_string() } else { self.current_sync_branch.clone() };
@@ -1979,7 +1927,7 @@ impl AppBackend {
                 }
             }
 
-            let mut s = core.load_sync_secrets().unwrap_or_default();
+            let mut s = api.load_sync_secrets().unwrap_or(writer_core::api::types::SyncSecretsDto { token: None });
             if let Some(ref extracted_token) = parsed.extracted_token {
                 s.token = Some(extracted_token.clone());
             } else if self.current_sync_token.is_empty() {
@@ -1988,9 +1936,9 @@ impl AppBackend {
                 s.token = Some(self.current_sync_token.clone());
             }
 
-            if let Err(e) = core.save_sync_config(&c) {
+            if let Err(e) = api.save_sync_config(c) {
                 error_msg = Some(format!("保存同步配置失败: {}", e));
-            } else if let Err(e) = core.save_sync_secrets(&s) {
+            } else if let Err(e) = api.save_sync_secrets(s) {
                 error_msg = Some(format!("保存同步凭证失败: {}", e));
             }
         } else {
@@ -2060,8 +2008,8 @@ impl AppBackend {
         });
 
         thread::spawn(move || {
-            let core = WriterCore::new(&workspace_path);
-            let config = match core.load_sync_config() {
+            let api = WriterCoreApi::new(&workspace_path);
+            let config = match api.load_sync_config() {
                 Ok(c) => c,
                 Err(e) => {
                     callback(SyncTaskOutcome {
@@ -2072,7 +2020,7 @@ impl AppBackend {
                 }
             };
 
-            match core.perform_sync_dry_run(&config) {
+            match api.perform_sync_dry_run(config) {
                 Ok(plan) => {
                     let mut msg = String::new();
                     msg.push_str("同步计划检查完成\n");
@@ -2202,8 +2150,8 @@ impl AppBackend {
         });
 
         thread::spawn(move || {
-            let core = WriterCore::new(&workspace_path);
-            let config = match core.load_sync_config() {
+            let api = WriterCoreApi::new(&workspace_path);
+            let config = match api.load_sync_config() {
                 Ok(c) => c,
                 Err(e) => {
                     callback(SyncTaskOutcome {
@@ -2213,24 +2161,17 @@ impl AppBackend {
                     return;
                 }
             };
-            let resolved_backend = writer_core::sync_service::resolved_backend_type(&config);
-            let backend_label = match resolved_backend {
-                writer_core::sync_service::BackendType::GithubApi => "github_api",
-                writer_core::sync_service::BackendType::Git => "git",
-                writer_core::sync_service::BackendType::WebDav => "webdav",
-                writer_core::sync_service::BackendType::S3 => "s3",
-                writer_core::sync_service::BackendType::LocalFolder => "local_folder",
-            };
+            let backend_label = config.backend_type.clone();
             debug_log_static(
                 "sync",
                 "perform_sync_backend",
                 &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
             );
 
-            match core.perform_sync(&config) {
+            match api.perform_sync(config) {
                 Ok(result) => {
-                    let (status, msg) = match result.status {
-                        writer_core::sync_service::SyncStatus::Success => {
+                    let (status, msg) = match result.status.as_str() {
+                        "success" => {
                             let m = format!(
                                 "同步成功\n上传: {} 个文件\n下载: {} 个文件",
                                 result.uploaded_files.len(),
@@ -2238,7 +2179,7 @@ impl AppBackend {
                             );
                             ("success".to_string(), m)
                         }
-                        writer_core::sync_service::SyncStatus::LatestWinsApplied => {
+                        "latest_wins_applied" => {
                             let m = format!(
                                 "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件",
                                 result.uploaded_files.len(),
@@ -2249,19 +2190,14 @@ impl AppBackend {
                             );
                             ("success".to_string(), m)
                         }
-                        writer_core::sync_service::SyncStatus::NoChanges => {
+                        "no_changes" => {
                             ("success".to_string(), "同步完成：本地和远端均已是最新状态，无须更新。".to_string())
                         }
-                        writer_core::sync_service::SyncStatus::ConfiguredUntested => {
+                        "configured_untested" => {
                             ("configured_untested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
                         }
-                        writer_core::sync_service::SyncStatus::Conflict => {
+                        "conflict" => {
                             let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
-                            if let Some(summary) = &result.conflict_summary {
-                                for f in &summary.conflicted_files {
-                                    files.push(f.clone());
-                                }
-                            }
                             files.sort();
                             files.dedup();
                             
@@ -2280,37 +2216,29 @@ impl AppBackend {
                             
                             let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
                             debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
-                            
-                            let detail_str = if let Some(ref details) = result.settings_conflicts {
-                                let mut lines = vec![];
-                                for d in details {
-                                    lines.push(format!("  • 键名: {}, 本地值: {:?}, 远程值: {:?}", d.key, d.local_value, d.remote_value));
-                                }
-                                format!("\n\n具体设置冲突:\n{}", lines.join("\n"))
-                            } else {
-                                "".to_string()
-                            };
 
                             let m = format!(
-                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。{}\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
-                                detail_str,
+                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
                                 file_str
                             );
                             ("conflict".to_string(), m)
                         }
-                        writer_core::sync_service::SyncStatus::RecoverableError(ref e) => {
+                        "recoverable_error" => {
+                            let e = result.error.as_deref().unwrap_or("未知错误");
                             ("recoverable_error".to_string(), format!("可恢复的同步错误:\n{}\n请检查后重试。", mask_sync_error(e)))
                         }
-                        writer_core::sync_service::SyncStatus::FatalError(ref e) => {
+                        "fatal_error" => {
+                            let e = result.error.as_deref().unwrap_or("未知错误");
                             ("fatal_error".to_string(), format!("严重同步错误:\n{}\n建议备份数据并重新配置。", mask_sync_error(e)))
                         }
-                        writer_core::sync_service::SyncStatus::DirtyRepoBlocked => {
+                        "dirty_repo_blocked" => {
                             ("dirty_repo_blocked".to_string(), "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件。".to_string())
                         }
-                        writer_core::sync_service::SyncStatus::BranchMissingRecovered => {
+                        "branch_missing_recovered" => {
                             ("branch_missing_recovered".to_string(), "同步成功 (分支已恢复)\n已自动恢复并关联本地与远端分支。".to_string())
                         }
-                        writer_core::sync_service::SyncStatus::Error(ref e) => {
+                        "error" => {
+                            let e = result.error.as_deref().unwrap_or("未知错误");
                             let cat = sync_error_category(e);
                             let m = if cat == "conflict" {
                                 debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(e)));
@@ -2323,11 +2251,11 @@ impl AppBackend {
                             };
                             (cat, m)
                         }
-                        writer_core::sync_service::SyncStatus::Idle => {
+                        "idle" => {
                             ("configured_untested".to_string(), "同步未执行".to_string())
                         }
-                        _ => {
-                            ("error".to_string(), format!("同步状态: {:?}", result.status))
+                        other => {
+                            ("error".to_string(), format!("同步状态: {}", other))
                         }
                     };
 
@@ -2397,14 +2325,13 @@ impl AppBackend {
     }
 
     fn selected_chapter_exists(&self) -> bool {
-        if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
-            &self.core,
+        if let (Some(api), Some(p), Some(v), Some(c)) = (
+            self.core_api(),
             &self.selected_project_id,
             &self.selected_volume_id,
             &self.selected_chapter_id,
         ) {
-            let core = core_ref.borrow();
-            if let Ok(chapters) = core.list_chapters(p, v) {
+            if let Ok(chapters) = api.list_chapters(p, v) {
                 return chapters.iter().any(|chap| chap.id == *c);
             }
         }
@@ -2413,8 +2340,8 @@ impl AppBackend {
 
 
     fn list_registered_actions(&mut self) -> QString {
-        if let Some(core) = self.core_facade() {
-            match core.list_registered_actions() {
+        if let Some(api) = self.core_api() {
+            match api.list_registered_actions() {
                 Ok(actions) => {
                     let json = serde_json::to_string(&actions).unwrap_or_else(|_| "[]".to_string());
                     json.into()
@@ -2427,8 +2354,8 @@ impl AppBackend {
     }
 
     fn execute_action(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString {
-        if let Some(core) = self.core_facade() {
-            match core.execute_action(&action_id.to_string(), &args_json.to_string(), &context_json.to_string()) {
+        if let Some(api) = self.core_api() {
+            match api.execute_action_ext(&action_id.to_string(), &args_json.to_string(), &context_json.to_string()) {
                 Ok(result) => {
                     let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
                     json.into()
@@ -2458,26 +2385,25 @@ impl AppBackend {
     }
 
     fn chapter_path(&self) -> QString {
-        if let (Some(core_ref), Some(p), Some(v), Some(c)) = (
-            &self.core,
+        if let (Some(api), Some(p), Some(v), Some(c)) = (
+            self.core_api(),
             &self.selected_project_id,
             &self.selected_volume_id,
             &self.selected_chapter_id,
         ) {
-            let core = core_ref.borrow();
             let mut path = String::new();
-            if let Ok(projects) = core.list_projects() {
+            if let Ok(projects) = api.list_projects() {
                 if let Some(proj) = projects.iter().find(|x| x.id == *p) {
                     path.push_str(&proj.title);
                 }
             }
-            if let Ok(volumes) = core.list_volumes(p) {
+            if let Ok(volumes) = api.list_volumes(p) {
                 if let Some(vol) = volumes.iter().find(|x| x.id == *v) {
                     path.push_str(" > ");
                     path.push_str(&vol.title);
                 }
             }
-            if let Ok(chapters) = core.list_chapters(p, v) {
+            if let Ok(chapters) = api.list_chapters(p, v) {
                 if let Some(chap) = chapters.iter().find(|x| x.id == *c) {
                     path.push_str(" > ");
                     path.push_str(&chap.title);
@@ -2512,8 +2438,8 @@ impl AppBackend {
 
     fn calculate_word_count(&mut self, text: QString) {
         let text_str = text.to_string();
-        let count = if let Some(core_ref) = &self.core {
-            core_ref.borrow().calculate_word_count(&text_str) as i32
+        let count = if let Some(api) = self.core_api() {
+            api.calculate_word_count(&text_str) as i32
         } else {
             writer_core::chapter::calculate_word_count(&text_str) as i32
         };
@@ -2633,8 +2559,8 @@ impl AppBackend {
 
     fn get_mind_map_snapshot_json(&self, project_id: QString) -> QString {
         let pid = project_id.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_mind_map_snapshot(&pid) {
+        if let Some(api) = self.core_api() {
+            match api.get_mind_map_snapshot(&pid) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2646,8 +2572,8 @@ impl AppBackend {
     fn create_mind_map_graph_json(&mut self, project_id: QString, title: QString) -> QString {
         let pid = project_id.to_string();
         let t = title.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.create_mind_map_graph(&pid, &t) {
+        if let Some(api) = self.core_api() {
+            match api.create_mind_map_graph(&pid, &t) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2658,8 +2584,8 @@ impl AppBackend {
 
     fn list_mind_map_graphs_json(&self, project_id: QString) -> QString {
         let pid = project_id.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.list_mind_map_graphs(&pid) {
+        if let Some(api) = self.core_api() {
+            match api.list_mind_map_graphs(&pid) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2671,8 +2597,8 @@ impl AppBackend {
     fn set_default_mind_map_graph_json(&mut self, project_id: QString, graph_id: QString) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.set_default_mind_map_graph(&pid, &gid) {
+        if let Some(api) = self.core_api() {
+            match api.set_default_mind_map_graph(&pid, &gid) {
                 Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2686,13 +2612,13 @@ impl AppBackend {
         let gid = graph_id.to_string();
         let nj = node_json.to_string();
 
-        let node: writer_core::mind_map::graph::MindMapGraphNode = match serde_json::from_str(&nj) {
+        let node: writer_core::api::types::MindMapGraphNodeDto = match serde_json::from_str(&nj) {
             Ok(n) => n,
             Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid node JSON: {}", e) }).to_string().into(),
         };
 
-        if let Some(core) = self.core_facade() {
-            match core.create_mind_map_node(&pid, &gid, node) {
+        if let Some(api) = self.core_api() {
+            match api.create_mind_map_node(&pid, &gid, node) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2711,7 +2637,7 @@ impl AppBackend {
         #[derive(serde::Deserialize)]
         struct NodePatch {
             title: Option<String>,
-            kind: Option<writer_core::mind_map::graph::MindMapNodeKind>,
+            kind: Option<writer_core::api::types::MindMapNodeKindDto>,
             payload: Option<serde_json::Value>,
             tags: Option<Vec<String>>,
         }
@@ -2721,8 +2647,8 @@ impl AppBackend {
             Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid patch JSON: {}", e) }).to_string().into(),
         };
 
-        if let Some(core) = self.core_facade() {
-            match core.update_mind_map_node(&pid, &gid, &nid, writer_core::mind_map::edit::MindMapGraphNodePatch { title: patch.title, kind: patch.kind, payload: patch.payload.map(Some), tags: patch.tags }) {
+        if let Some(api) = self.core_api() {
+            match api.update_mind_map_node(&pid, &gid, &nid, writer_core::api::types::MindMapNodePatchDto { title: patch.title, kind: patch.kind, payload: patch.payload.map(Some), tags: patch.tags }) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2736,8 +2662,8 @@ impl AppBackend {
         let gid = graph_id.to_string();
         let nid = node_id.to_string();
 
-        if let Some(core) = self.core_facade() {
-            match core.delete_mind_map_node(&pid, &gid, &nid, cascade) {
+        if let Some(api) = self.core_api() {
+            match api.delete_mind_map_node(&pid, &gid, &nid, cascade) {
                 Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2751,13 +2677,13 @@ impl AppBackend {
         let gid = graph_id.to_string();
         let ej = edge_json.to_string();
 
-        let edge: writer_core::mind_map::graph::MindMapGraphEdge = match serde_json::from_str(&ej) {
+        let edge: writer_core::api::types::MindMapGraphEdgeDto = match serde_json::from_str(&ej) {
             Ok(e) => e,
             Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid edge JSON: {}", e) }).to_string().into(),
         };
 
-        if let Some(core) = self.core_facade() {
-            match core.create_mind_map_edge(&pid, &gid, edge) {
+        if let Some(api) = self.core_api() {
+            match api.create_mind_map_edge(&pid, &gid, edge) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2774,7 +2700,7 @@ impl AppBackend {
 
         #[derive(serde::Deserialize)]
         struct EdgePatch {
-            kind: Option<writer_core::mind_map::graph::MindMapEdgeKind>,
+            kind: Option<writer_core::api::types::MindMapEdgeKindDto>,
             label: Option<String>,
             payload: Option<serde_json::Value>,
         }
@@ -2784,8 +2710,8 @@ impl AppBackend {
             Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid patch JSON: {}", e) }).to_string().into(),
         };
 
-        if let Some(core) = self.core_facade() {
-            match core.update_mind_map_edge(&pid, &gid, &eid, writer_core::mind_map::edit::MindMapGraphEdgePatch { kind: patch.kind, label: patch.label.map(Some), payload: patch.payload.map(Some) }) {
+        if let Some(api) = self.core_api() {
+            match api.update_mind_map_edge(&pid, &gid, &eid, writer_core::api::types::MindMapEdgePatchDto { kind: patch.kind, label: patch.label.map(Some), payload: patch.payload.map(Some) }) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2799,8 +2725,8 @@ impl AppBackend {
         let gid = graph_id.to_string();
         let eid = edge_id.to_string();
 
-        if let Some(core) = self.core_facade() {
-            match core.delete_mind_map_edge(&pid, &gid, &eid) {
+        if let Some(api) = self.core_api() {
+            match api.delete_mind_map_edge(&pid, &gid, &eid) {
                 Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2814,13 +2740,13 @@ impl AppBackend {
         let gid = graph_id.to_string();
         let aj = anchor_json.to_string();
 
-        let anchor: writer_core::mind_map::anchor::MindMapAnchor = match serde_json::from_str(&aj) {
+        let anchor: writer_core::api::types::MindMapAnchorDto = match serde_json::from_str(&aj) {
             Ok(a) => a,
             Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid anchor JSON: {}", e) }).to_string().into(),
         };
 
-        if let Some(core) = self.core_facade() {
-            match core.create_mind_map_anchor(&pid, &gid, anchor) {
+        if let Some(api) = self.core_api() {
+            match api.create_mind_map_anchor(&pid, &gid, anchor) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2836,8 +2762,8 @@ impl AppBackend {
         let aid = anchor_id.to_string();
         let lk = link_kind.to_string();
 
-        if let Some(core) = self.core_facade() {
-            match core.bind_mind_map_node_to_anchor(&pid, &gid, &nid, &aid, &lk) {
+        if let Some(api) = self.core_api() {
+            match api.bind_mind_map_node_to_anchor(&pid, &gid, &nid, &aid, &lk) {
                 Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -2851,13 +2777,13 @@ impl AppBackend {
         let gid = graph_id.to_string();
         let lj = layout_json.to_string();
 
-        let layout: writer_core::mind_map::layout::MindMapLayout = match serde_json::from_str(&lj) {
+        let layout: writer_core::api::types::MindMapLayoutDto = match serde_json::from_str(&lj) {
             Ok(l) => l,
             Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid layout JSON: {}", e) }).to_string().into(),
         };
 
-        if let Some(core) = self.core_facade() {
-            match core.save_mind_map_layout(&pid, &gid, layout) {
+        if let Some(api) = self.core_api() {
+            match api.save_mind_map_layout(&pid, &gid, layout) {
                 Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
                 Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
             }
@@ -3148,11 +3074,8 @@ impl AppBackend {
     }
 
     fn create_new_volume(&mut self, project_id: QString, title: QString) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.create_volume(&project_id.to_string(), &title.to_string())
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.create_volume(&project_id.to_string(), &title.to_string());
             match result {
                 Ok(vol) => {
                     self.selected_project_id = Some(project_id.to_string());
@@ -3168,15 +3091,12 @@ impl AppBackend {
     }
 
     fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.create_chapter(
-                    &project_id.to_string(),
-                    &volume_id.to_string(),
-                    &title.to_string(),
-                )
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.create_chapter(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &title.to_string(),
+            );
             match result {
                 Ok(chap) => {
                     self.selected_project_id = Some(project_id.to_string());
@@ -3192,11 +3112,8 @@ impl AppBackend {
     }
 
     fn rename_project(&mut self, project_id: QString, new_title: QString) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.rename_project(&project_id.to_string(), &new_title.to_string())
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.rename_project(&project_id.to_string(), &new_title.to_string());
             match result {
                 Ok(_) => {
                     self.reload_tree();
@@ -3208,11 +3125,8 @@ impl AppBackend {
     }
 
     fn delete_project(&mut self, project_id: QString) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.delete_project(&project_id.to_string())
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.delete_project(&project_id.to_string());
             match result {
                 Ok(_) => {
                     if self.selected_project_id.as_deref() == Some(&project_id.to_string()) {
@@ -3230,17 +3144,14 @@ impl AppBackend {
     }
 
     fn reorder_projects(&mut self, ordered_ids_joined: QString) {
-        if let Some(core_ref) = &self.core {
+        if let Some(api) = self.core_api() {
             let ordered_ids_str = ordered_ids_joined.to_string();
             let ids: Vec<String> = ordered_ids_str
                 .split(',')
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
                 .collect();
-            let result = {
-                let core = core_ref.borrow();
-                core.reorder_projects(&ids)
-            };
+            let result = api.reorder_projects(&ids);
             match result {
                 Ok(_) => {
                     self.reload_tree();
@@ -3252,15 +3163,12 @@ impl AppBackend {
     }
 
     fn rename_volume(&mut self, project_id: QString, volume_id: QString, new_title: QString) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.rename_volume(
-                    &project_id.to_string(),
-                    &volume_id.to_string(),
-                    &new_title.to_string(),
-                )
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.rename_volume(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &new_title.to_string(),
+            );
             match result {
                 Ok(_) => {
                     self.reload_tree();
@@ -3272,11 +3180,8 @@ impl AppBackend {
     }
 
     fn delete_volume(&mut self, project_id: QString, volume_id: QString) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.delete_volume(&project_id.to_string(), &volume_id.to_string())
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.delete_volume(&project_id.to_string(), &volume_id.to_string());
             match result {
                 Ok(_) => {
                     if self.selected_volume_id.as_deref() == Some(&volume_id.to_string()) {
@@ -3293,17 +3198,14 @@ impl AppBackend {
     }
 
     fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) {
-        if let Some(core_ref) = &self.core {
+        if let Some(api) = self.core_api() {
             let ordered_ids_str = ordered_ids_joined.to_string();
             let ids: Vec<String> = ordered_ids_str
                 .split(',')
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
                 .collect();
-            let result = {
-                let core = core_ref.borrow();
-                core.reorder_volumes(&project_id.to_string(), &ids)
-            };
+            let result = api.reorder_volumes(&project_id.to_string(), &ids);
             match result {
                 Ok(_) => {
                     self.reload_tree();
@@ -3321,16 +3223,13 @@ impl AppBackend {
         chapter_id: QString,
         new_title: QString,
     ) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.rename_chapter(
-                    &project_id.to_string(),
-                    &volume_id.to_string(),
-                    &chapter_id.to_string(),
-                    &new_title.to_string(),
-                )
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.rename_chapter(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &chapter_id.to_string(),
+                &new_title.to_string(),
+            );
             match result {
                 Ok(_) => {
                     self.reload_tree();
@@ -3342,15 +3241,12 @@ impl AppBackend {
     }
 
     fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {
-        if let Some(core_ref) = &self.core {
-            let result = {
-                let core = core_ref.borrow();
-                core.delete_chapter(
-                    &project_id.to_string(),
-                    &volume_id.to_string(),
-                    &chapter_id.to_string(),
-                )
-            };
+        if let Some(api) = self.core_api() {
+            let result = api.delete_chapter(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &chapter_id.to_string(),
+            );
             match result {
                 Ok(_) => {
                     if self.selected_chapter_id.as_deref() == Some(&chapter_id.to_string()) {
@@ -3371,17 +3267,14 @@ impl AppBackend {
         volume_id: QString,
         ordered_ids_joined: QString,
     ) {
-        if let Some(core_ref) = &self.core {
+        if let Some(api) = self.core_api() {
             let ordered_ids_str = ordered_ids_joined.to_string();
             let ids: Vec<String> = ordered_ids_str
                 .split(',')
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
                 .collect();
-            let result = {
-                let core = core_ref.borrow();
-                core.reorder_chapters(&project_id.to_string(), &volume_id.to_string(), &ids)
-            };
+            let result = api.reorder_chapters(&project_id.to_string(), &volume_id.to_string(), &ids);
             match result {
                 Ok(_) => {
                     self.reload_tree();
@@ -3426,8 +3319,8 @@ impl AppBackend {
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
         self.debug_log("chapter", "get_chapter_content_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
-        if let Some(core) = self.core_facade() {
-            match core.read_chapter(&p, &v, &c) {
+        if let Some(api) = self.core_api() {
+            match api.open_chapter(&p, &v, &c) {
                 Ok(content) => {
                     self.debug_log("chapter", "get_chapter_content_success", &format!("len={}", content.content.len()));
                     return content.content.into();
@@ -3602,7 +3495,7 @@ impl AppBackend {
         let cid = chapter_id.to_string();
         let src = source.to_string();
 
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             writing_bridge::ensure_stats_session(&core, &mut self.stats_device_id, &mut self.stats_session_id, &mut self.stats_last_event_ms);
             
             if let Err(e) = writing_bridge::report_writing_event(
@@ -3638,7 +3531,7 @@ impl AppBackend {
         let ot = old_text.to_string();
         let nt = new_text.to_string();
 
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             writing_bridge::ensure_stats_session(&core, &mut self.stats_device_id, &mut self.stats_session_id, &mut self.stats_last_event_ms);
             
             if let Err(e) = writing_bridge::process_writing_event_from_text(
@@ -3660,9 +3553,9 @@ impl AppBackend {
     fn get_writing_stats_summary(&self, start_date: QString, end_date: QString) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_summary(&sd, &ed) {
-                Ok(val) => val.to_string().into(),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_summary_json(&sd, &ed) {
+                Ok(val) => val.into(),
                 Err(_) => "{}".into(),
             }
         } else {
@@ -3673,9 +3566,9 @@ impl AppBackend {
     fn get_writing_stats_summary_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_summary(&sd, &ed) {
-                Ok(val) => serde_to_qjson_object(val),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_summary_json(&sd, &ed) {
+                Ok(val) => qjson_object_from_json(&val),
                 Err(_) => QJsonObject::default(),
             }
         } else {
@@ -3684,13 +3577,13 @@ impl AppBackend {
     }
 
     fn flush_writing_stats(&self) {
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             let _ = core.flush_writing_stats();
         }
     }
 
     fn flush_recent_edits(&self) {
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             let _ = core.flush_recent_edits();
         }
     }
@@ -3698,9 +3591,9 @@ impl AppBackend {
     fn get_writing_stats_by_project(&self, start_date: QString, end_date: QString) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_by_project(&sd, &ed) {
-                Ok(val) => val.to_string().into(),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_by_project_json(&sd, &ed) {
+                Ok(val) => val.into(),
                 Err(_) => "{}".into(),
             }
         } else {
@@ -3711,9 +3604,9 @@ impl AppBackend {
     fn get_writing_stats_by_project_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_by_project(&sd, &ed) {
-                Ok(val) => serde_to_qjson_object(val),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_by_project_json(&sd, &ed) {
+                Ok(val) => qjson_object_from_json(&val),
                 Err(_) => QJsonObject::default(),
             }
         } else {
@@ -3724,9 +3617,9 @@ impl AppBackend {
     fn get_writing_stats_by_chapter(&self, start_date: QString, end_date: QString) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_by_chapter(&sd, &ed) {
-                Ok(val) => val.to_string().into(),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_by_chapter_json(&sd, &ed) {
+                Ok(val) => val.into(),
                 Err(_) => "{}".into(),
             }
         } else {
@@ -3737,9 +3630,9 @@ impl AppBackend {
     fn get_writing_stats_by_chapter_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_by_chapter(&sd, &ed) {
-                Ok(val) => serde_to_qjson_object(val),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_by_chapter_json(&sd, &ed) {
+                Ok(val) => qjson_object_from_json(&val),
                 Err(_) => QJsonObject::default(),
             }
         } else {
@@ -3750,9 +3643,9 @@ impl AppBackend {
     fn get_writing_stats_by_device(&self, start_date: QString, end_date: QString) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_by_device(&sd, &ed) {
-                Ok(val) => val.to_string().into(),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_by_device_json(&sd, &ed) {
+                Ok(val) => val.into(),
                 Err(_) => "{}".into(),
             }
         } else {
@@ -3763,9 +3656,9 @@ impl AppBackend {
     fn get_writing_stats_by_device_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_stats_by_device(&sd, &ed) {
-                Ok(val) => serde_to_qjson_object(val),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_stats_by_device_json(&sd, &ed) {
+                Ok(val) => qjson_object_from_json(&val),
                 Err(_) => QJsonObject::default(),
             }
         } else {
@@ -3776,9 +3669,9 @@ impl AppBackend {
     fn get_writing_speed_curve(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_speed_curve(&sd, &ed, bucket_minutes) {
-                Ok(val) => val.to_string().into(),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_speed_curve_json(&sd, &ed, bucket_minutes) {
+                Ok(val) => val.into(),
                 Err(_) => "{}".into(),
             }
         } else {
@@ -3789,9 +3682,9 @@ impl AppBackend {
     fn get_writing_speed_curve_object(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
-        if let Some(core) = self.core_facade() {
-            match core.get_writing_speed_curve(&sd, &ed, bucket_minutes) {
-                Ok(val) => serde_to_qjson_object(val),
+        if let Some(core) = self.core_api() {
+            match core.get_writing_speed_curve_json(&sd, &ed, bucket_minutes) {
+                Ok(val) => qjson_object_from_json(&val),
                 Err(_) => QJsonObject::default(),
             }
         } else {
@@ -3801,7 +3694,7 @@ impl AppBackend {
 
     // --- StarMap methods ---
     fn list_starmaps_json(&self) -> QString {
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::list_starmaps(&core).into()
         } else {
             "[]".into()
@@ -3809,7 +3702,7 @@ impl AppBackend {
     }
 
     fn list_starmaps(&self) -> QJsonArray {
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             qjson_array_data_from_json(&starmap_bridge::list_starmaps(&core))
         } else {
             QJsonArray::default()
@@ -3818,7 +3711,7 @@ impl AppBackend {
 
     fn list_starmaps_for_project_json(&self, project_id: QString) -> QString {
         let pid = project_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::list_starmaps_for_project(&core, &pid).into()
         } else {
             "[]".into()
@@ -3827,7 +3720,7 @@ impl AppBackend {
 
     fn get_starmap_json(&self, starmap_id: QString) -> QString {
         let sid = starmap_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::get_starmap(&core, &sid).into()
         } else {
             "{}".into()
@@ -3839,7 +3732,7 @@ impl AppBackend {
         let d = description.to_string();
         let ac = accent_color.to_string();
         let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::create_starmap(&core, &t, &d, color_ref).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3857,7 +3750,7 @@ impl AppBackend {
         let d = description.to_string();
         let ac = accent_color.to_string();
         let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::create_child_starmap_legacy(&core, &pid, &t, &d, color_ref).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3867,7 +3760,7 @@ impl AppBackend {
     fn rename_starmap_json(&mut self, starmap_id: QString, new_title: QString) -> QString {
         let sid = starmap_id.to_string();
         let t = new_title.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::rename_starmap(&core, &sid, &t).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3876,7 +3769,7 @@ impl AppBackend {
 
     fn delete_starmap_json(&mut self, starmap_id: QString) -> QString {
         let sid = starmap_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::delete_starmap(&core, &sid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3885,7 +3778,7 @@ impl AppBackend {
 
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
         let sid = starmap_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::get_starmap_graph_and_layout(&core, &sid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3901,7 +3794,7 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let t = title.to_string();
         let k = kind.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::create_starmap_node(&core, &sid, &t, &k, x, y).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3917,7 +3810,7 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
         let p = patch_json.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::update_starmap_node(&core, &sid, &nid, &p).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3932,7 +3825,7 @@ impl AppBackend {
     fn delete_starmap_node_json(&mut self, starmap_id: QString, node_id: QString) -> QString {
         let sid = starmap_id.to_string();
         let nid = node_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::delete_starmap_node(&core, &sid, &nid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3950,7 +3843,7 @@ impl AppBackend {
         let to_id = to_node_id.to_string();
         let k = kind.to_string();
         let l = label.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::create_starmap_edge(&core, &sid, &from_id, &to_id, &k, &l).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3966,7 +3859,7 @@ impl AppBackend {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
         let p = patch_json.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::update_starmap_edge(&core, &sid, &eid, &p).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3981,7 +3874,7 @@ impl AppBackend {
     fn delete_starmap_edge_json(&mut self, starmap_id: QString, edge_id: QString) -> QString {
         let sid = starmap_id.to_string();
         let eid = edge_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::delete_starmap_edge(&core, &sid, &eid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -3996,7 +3889,7 @@ impl AppBackend {
     fn save_starmap_layout_json(&mut self, starmap_id: QString, layout_json: QString) -> QString {
         let sid = starmap_id.to_string();
         let lj = layout_json.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::save_starmap_layout(&core, &sid, &lj).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -4011,7 +3904,7 @@ impl AppBackend {
     fn bind_starmap_to_project_json(&mut self, starmap_id: QString, project_id: QString) -> QString {
         let sid = starmap_id.to_string();
         let pid = project_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::bind_starmap_to_project(&core, &sid, &pid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -4021,7 +3914,7 @@ impl AppBackend {
     fn set_main_starmap_json(&mut self, starmap_id: QString, project_id: QString) -> QString {
         let sid = starmap_id.to_string();
         let pid = project_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::set_main_starmap(&core, &sid, &pid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -4030,7 +3923,7 @@ impl AppBackend {
 
     fn get_main_starmap_json(&self, project_id: QString) -> QString {
         let pid = project_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::get_main_starmap(&core, &pid).into()
         } else {
             "{}".into()
@@ -4039,7 +3932,7 @@ impl AppBackend {
 
     fn unbind_starmap_json(&mut self, starmap_id: QString) -> QString {
         let sid = starmap_id.to_string();
-        if let Some(core) = self.core_facade() {
+        if let Some(core) = self.core_api() {
             starmap_bridge::unbind_starmap(&core, &sid).into()
         } else {
             serde_json::json!({"success": false, "message": "Core not initialized"}).to_string().into()
@@ -4182,7 +4075,6 @@ fn main() {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use std::fs;
 
     #[test]
     fn test_create_project_success() {
@@ -4193,13 +4085,9 @@ mod tests {
         backend.current_workspace = ws_path.clone();
         backend.current_has_workspace = true;
 
-        // Create workspace structure
-        fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
-        fs::create_dir_all(dir.path().join("projects")).unwrap();
-
-        // Need to initialize core explicitly since we fake the workspace
-        let core = WriterCore::new(&ws_path);
-        backend.core = Some(Rc::new(RefCell::new(core)));
+        WriterCoreApi::new(&ws_path)
+            .create_workspace_if_needed()
+            .unwrap();
 
         // Create 3 projects
         for i in 1..=3 {

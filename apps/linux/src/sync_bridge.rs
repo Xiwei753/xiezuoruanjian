@@ -6,16 +6,18 @@
 //!
 //! ```text
 //! QML SyncPage → sync_bridge::mask_sync_error() / sync_error_category()
-//!   → WriterCore / sync_service
+//!   → WriterCoreApi / sync_service
 //! ```
 //!
 //! ## 职责边界
 //!
 //! - **做**：错误消息脱敏（移除 Token）、错误分类（网络/认证/冲突等）、诊断状态判定
-//! - **不做**：实际同步操作（由 WriterCore::perform_sync 负责）
-//! - **不做**：同步配置管理（由 WriterCore::load_sync_config 负责）
+//! - **不做**：实际同步操作（由 WriterCoreApi::perform_sync 负责）
+//! - **不做**：同步配置管理（由 WriterCoreApi::load_sync_config 负责）
 
-use writer_core::sync_service::{SyncConfig, SyncSecrets, SyncDiagnosticsResult};
+use writer_core::api::types::SyncDiagnosticsResultDto;
+use writer_core::api::WriterCoreApi;
+use writer_core::sync_service::{SyncConfig, SyncSecrets};
 
 /// 同步任务结果封装。
 pub struct SyncTaskOutcome {
@@ -71,7 +73,7 @@ pub fn sync_error_category(msg: &str) -> String {
     "error".to_string()
 }
 
-pub fn determine_diagnostics_status(result: &SyncDiagnosticsResult) -> &'static str {
+pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> &'static str {
     if !result.success {
         match result.error_category.as_str() {
             "token_missing" => "configured_untested",
@@ -86,17 +88,19 @@ pub fn determine_diagnostics_status(result: &SyncDiagnosticsResult) -> &'static 
     }
 }
 
-pub fn format_diagnostics_message(result: &SyncDiagnosticsResult) -> String {
+pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
     let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
 
     msg.push_str(&format!("\n后端类型: {}", result.backend_type));
-    msg.push_str(&format!("\n应用内代理: {}", result.app_proxy_status));
+    msg.push_str(&format!("\nTCP 探测: {}", result.tcp_probe_status));
 
     if !result.remote_url_sanitized.is_empty() {
         msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
     }
     msg.push_str(&format!("\nTransport: {}", result.transport));
-    msg.push_str(&format!("\n代理配置: {}", result.app_proxy_status));
+    if let Some(mode) = result.chosen_network_mode.as_ref() {
+        msg.push_str(&format!("\n网络模式: {}", mode));
+    }
 
     msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
     msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
@@ -118,8 +122,8 @@ pub fn format_diagnostics_message(result: &SyncDiagnosticsResult) -> String {
 }
 
 pub fn save_sync_configs(path: &str, config: &SyncConfig, secrets: &SyncSecrets) -> Result<(), String> {
-    let core = writer_core::facade::WriterCore::new(path);
-    core.save_sync_config(config).map_err(|e| format!("保存同步配置失败: {}", e))?;
-    core.save_sync_secrets(secrets).map_err(|e| format!("保存同步凭证失败: {}", e))?;
+    let api = WriterCoreApi::new(path);
+    api.save_sync_config(config.clone().into()).map_err(|e| format!("保存同步配置失败: {}", e))?;
+    api.save_sync_secrets(secrets.clone().into()).map_err(|e| format!("保存同步凭证失败: {}", e))?;
     Ok(())
 }

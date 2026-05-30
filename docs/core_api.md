@@ -42,7 +42,11 @@
 - `move_chapter_to_trash(path: &Path, chapter_id: &str) -> Result<()>`
 - `process_writing_event(...) -> Result<bool, WriterError>`
 - `record_writing_event(...) -> Result<bool, WriterError>`
+- `record_writing_event_for_platform(...) -> Result<bool, WriterError>`：Linux/其他平台显式传入 `platform`，Android 兼容入口仍由 `record_writing_event` 固定为 `android`。
 - `flush_writing_stats() -> Result<bool, WriterError>`
+- `flush_recent_edits() -> Result<bool, WriterError>`
+- `list_starmaps_for_project(project_id: &str) -> Result<Vec<StarMapMetaDto>, WriterError>`
+- `get_starmap(starmap_id: &str) -> Result<StarMapMetaDto, WriterError>`
 - `add_starmap_embed(...) -> Result<StarMapEmbed, ...>`
 - `update_starmap_embed(...) -> Result<StarMapEmbed, ...>`
 - `delete_starmap_embed(...) -> Result<()>`

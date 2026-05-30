@@ -409,6 +409,36 @@ impl WriterCoreApi {
         ai_inserted_chars: i32,
         session_id: &str,
     ) -> ApiResult<bool> {
+        self.record_writing_event_for_platform(
+            device_id,
+            "android",
+            project_id,
+            volume_id,
+            chapter_id,
+            source,
+            inserted_chars,
+            deleted_chars,
+            pasted_chars,
+            ai_inserted_chars,
+            session_id,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_writing_event_for_platform(
+        &self,
+        device_id: &str,
+        platform: &str,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        source: &str,
+        inserted_chars: i32,
+        deleted_chars: i32,
+        pasted_chars: i32,
+        ai_inserted_chars: i32,
+        session_id: &str,
+    ) -> ApiResult<bool> {
         let inserted_chars = Self::non_negative_counter("inserted_chars", inserted_chars)?;
         let deleted_chars = Self::non_negative_counter("deleted_chars", deleted_chars)?;
         let pasted_chars = Self::non_negative_counter("pasted_chars", pasted_chars)?;
@@ -418,7 +448,7 @@ impl WriterCoreApi {
         self.core()
             .record_writing_event(
                 device_id,
-                "android",
+                platform,
                 project_id,
                 volume_id,
                 chapter_id,
@@ -436,6 +466,13 @@ impl WriterCoreApi {
     pub fn flush_writing_stats(&self) -> ApiResult<bool> {
         self.core()
             .flush_writing_stats()
+            .map(|_| true)
+            .map_err(WriterError::from)
+    }
+
+    pub fn flush_recent_edits(&self) -> ApiResult<bool> {
+        self.core()
+            .flush_recent_edits()
             .map(|_| true)
             .map_err(WriterError::from)
     }
@@ -669,6 +706,14 @@ impl WriterCoreApi {
         self.core().list_starmaps().map(|v| v.into_iter().map(Into::into).collect()).map_err(Into::into)
     }
 
+    pub fn list_starmaps_for_project(&self, project_id: &str) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
+        self.core().list_starmaps_for_project(project_id).map(|v| v.into_iter().map(Into::into).collect()).map_err(Into::into)
+    }
+
+    pub fn get_starmap(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core().get_starmap(starmap_id).map(Into::into).map_err(Into::into)
+    }
+
     pub fn create_starmap(&self, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
         self.core().create_starmap(title, desc, template_id).map(Into::into).map_err(Into::into)
     }
@@ -854,6 +899,40 @@ mod tests {
         let api = WriterCoreApi::new(temp_dir.path());
 
         assert!(api.flush_writing_stats().unwrap());
+    }
+
+    #[test]
+    fn flush_recent_edits_returns_true_on_success() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        assert!(api.flush_recent_edits().unwrap());
+    }
+
+    #[test]
+    fn record_writing_event_for_platform_returns_true_on_success() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let result = api
+            .record_writing_event_for_platform(
+                "dev-1",
+                "linux",
+                "proj1",
+                "vol1",
+                "chap1",
+                "human_typed",
+                10,
+                0,
+                0,
+                0,
+                "session-1",
+            )
+            .unwrap();
+
+        assert!(result);
     }
 
     #[test]
