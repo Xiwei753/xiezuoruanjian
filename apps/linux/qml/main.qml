@@ -62,6 +62,7 @@ ApplicationWindow {
     }
 
     property alias appState: appController.appState
+    readonly property bool rootHasWorkspace: workspaceBackend.has_workspace === true
 
     property string previousEditorText: ""
 
@@ -175,7 +176,7 @@ ApplicationWindow {
         Loader {
             id: starmapWorkspaceLoader
             anchors.fill: parent
-            active: appState.hasWorkspace && appController.inStarmap
+            active: rootHasWorkspace && appController.inStarmap
             sourceComponent: StarMapWorkspace {
                 dt: designTokens
                 backendRef: starmapBackend
@@ -191,7 +192,7 @@ ApplicationWindow {
         Loader {
             id: creativeHubLoader
             anchors.fill: parent
-            active: appState.hasWorkspace && appController.route === "hub"
+            active: rootHasWorkspace && appController.route === "hub"
             sourceComponent: CreativeHub {
                 dt: designTokens
                 backendRef: projectBackend
@@ -247,7 +248,7 @@ ApplicationWindow {
         Loader {
             id: writingWorkspaceLoader
             anchors.fill: parent
-            active: appState.hasWorkspace && appController.inWriting
+            active: rootHasWorkspace && appController.inWriting
             sourceComponent: WritingWorkspace {
                 dt: designTokens
                 backendRef: editorBackend
@@ -292,7 +293,7 @@ ApplicationWindow {
         // EmptyWorkspace: shown when no workspace
         EmptyWorkspace {
             anchors.fill: parent
-            visible: !appState.hasWorkspace
+            visible: !rootHasWorkspace
             backendRef: workspaceBackend
             appTheme: designTokens
             onCreateWorkspace: {
