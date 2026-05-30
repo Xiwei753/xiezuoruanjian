@@ -3,9 +3,11 @@
 `writer_core` Rust 库的跨平台暴露边界已经拆成四层：
 
 - Core domain：`workspace`、`project`、`volume`、`chapter`、`settings`、`sync_service`、`mind_map`、`starmap`、`writing_stats` 等模块负责真实业务和文件 I/O。
-- Facade：`facade::WriterCore` 聚合内部业务能力，是 Core 内部统一入口；它不承诺作为平台稳定 DTO 边界。
-- Core API：`api::WriterCoreApi`、`api::types`、`api::error` 是跨平台稳定暴露层，面向 UniFFI、Linux binding 和未来前端。
+- Facade：`facade::WriterCore` 聚合内部业务能力，是 **Core 内部协调层**；它不承诺作为平台稳定 DTO 边界，也不应该被外部直接调用。
+- Core API：`api::WriterCoreApi`、`api::types`、`api::error` 是**平台稳定入口**，面向 UniFFI、Linux binding、Android JNI 和未来前端。Android JNI 只能调用 `WriterCoreApi`。
 - UniFFI adapter：`app_service::WriterAppService` 只保留 Android 兼容的对象名和方法签名，负责接收 UniFFI 参数并委托 `WriterCoreApi`。
+
+> 注意：`sync_service` 的解耦拆分是后续阶段的任务，不在本次重构范围内。
 
 `api.udl` 只是 UniFFI 绑定声明，用于生成 Kotlin/外部语言桥接代码；业务 API 的事实来源是 Rust `api/` 模块及其文档边界，不是 UDL 文件本身。
 
