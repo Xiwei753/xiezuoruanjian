@@ -420,11 +420,13 @@ Rectangle {
                         anchors.fill: parent
                         anchors.margins: dt ? dt.sp32 : 32
 
-                        // Paper background - centered, max width
+                        // Paper background - centered, responsive max width
                         Rectangle {
                             id: paperBg
                             anchors.horizontalCenter: parent.horizontalCenter
-                            width: Math.min(parent.width, 820)
+                            property real editorWidthRatio: parent.width >= 1400 ? 0.78 : 1.0
+                            property int editorMaxWidth: parent.width >= 1600 ? 1280 : 960
+                            width: Math.min(parent.width, editorMaxWidth, Math.max(820, parent.width * editorWidthRatio))
                             height: parent.height
                             color: dt ? dt.editorBg : "#191C21"
                             radius: dt ? dt.radiusMd : 12

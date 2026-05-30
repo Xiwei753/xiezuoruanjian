@@ -295,7 +295,7 @@ ApplicationWindow {
                     inputDialog.actionType = "volume";
                     inputDialog.projectId = projectId;
                     inputDialog.volumeId = "";
-                    inputDialog.dialogTitle = qsTr("新建卷"));
+                    inputDialog.dialogTitle = qsTr("新建卷");
                     inputDialog.open();
                 }
 
@@ -303,7 +303,7 @@ ApplicationWindow {
                     inputDialog.actionType = "chapter";
                     inputDialog.projectId = projectId;
                     inputDialog.volumeId = volumeId;
-                    inputDialog.dialogTitle = qsTr("新建章节"));
+                    inputDialog.dialogTitle = qsTr("新建章节");
                     inputDialog.open();
                 }
             }
@@ -346,7 +346,7 @@ ApplicationWindow {
         property string actionType: ""
         property var contextData: ({})
 
-        title: qsTr("确认删除"))
+        title: qsTr("确认删除")
         modal: true
         width: 400
         height: 220
@@ -362,10 +362,10 @@ ApplicationWindow {
 
             Text {
                 text: {
-                    if (confirmDialog.actionType === "delete_project") return qsTr("您确定要删除作品「%1」及其所有分卷、章节吗？")).arg(confirmDialog.contextData.title);
-                    if (confirmDialog.actionType === "delete_volume") return qsTr("您确定要删除分卷「%1」及包含的所有章节吗？")).arg(confirmDialog.contextData.title);
-                    if (confirmDialog.actionType === "delete_chapter") return qsTr("您确定要删除章节「%1」吗？")).arg(confirmDialog.contextData.title);
-                    return qsTr("确定要删除吗？"));
+                    if (confirmDialog.actionType === "delete_project") return qsTr("您确定要删除作品「%1」及其所有分卷、章节吗？").arg(confirmDialog.contextData.title);
+                    if (confirmDialog.actionType === "delete_volume") return qsTr("您确定要删除分卷「%1」及包含的所有章节吗？").arg(confirmDialog.contextData.title);
+                    if (confirmDialog.actionType === "delete_chapter") return qsTr("您确定要删除章节「%1」吗？").arg(confirmDialog.contextData.title);
+                    return qsTr("确定要删除吗？");
                 }
                 color: designTokens.textPrimary
                 font.pixelSize: designTokens.body
@@ -380,13 +380,13 @@ ApplicationWindow {
                 spacing: designTokens.sp8
                 Item { Layout.fillWidth: true }
                 AppButton {
-                    text: qsTr("取消"))
+                    text: qsTr("取消")
                     theme: designTokens
                     variant: "text"
                     onClicked: confirmDialog.close()
                 }
                 AppButton {
-                    text: qsTr("删除"))
+                    text: qsTr("删除")
                     theme: designTokens
                     variant: "danger"
                     onClicked: {
@@ -401,7 +401,7 @@ ApplicationWindow {
     Dialog {
         id: errorDialog
         property string message: ""
-        title: qsTr("提示"))
+        title: qsTr("提示")
         modal: true
         width: 340
         height: 180
@@ -422,7 +422,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
             }
             AppButton {
-                text: qsTr("确定"))
+                text: qsTr("确定")
                 theme: designTokens
                 variant: "primary"
                 Layout.alignment: Qt.AlignRight
@@ -448,7 +448,7 @@ ApplicationWindow {
         active: false
         sourceComponent: Dialog {
             modal: true
-            title: qsTr("同步设置"))
+            title: qsTr("同步设置")
             width: Math.max(360, Math.min(window.width - 80, 720))
             height: Math.max(420, Math.min(window.height - 120, 560))
             x: (parent ? (parent.width - width) / 2 : 0)
@@ -498,7 +498,7 @@ ApplicationWindow {
             spacing: designTokens.sp12
 
             Text {
-                text: inputDialog.actionType === "volume" ? qsTr("卷名称")) : qsTr("章节名称"))
+                text: inputDialog.actionType === "volume" ? qsTr("卷名称") : qsTr("章节名称")
                 color: designTokens.textSecondary
                 font.pixelSize: designTokens.label
                 font.family: designTokens.fontFamily
@@ -508,7 +508,7 @@ ApplicationWindow {
                 id: inputField
                 Layout.fillWidth: true
                 theme: designTokens
-                placeholderText: inputDialog.actionType === "volume" ? qsTr("例如：第一卷")) : qsTr("例如：第一章"))
+                placeholderText: inputDialog.actionType === "volume" ? qsTr("例如：第一卷") : qsTr("例如：第一章")
                 onAccepted: confirmInputButton.clicked()
             }
             RowLayout {
@@ -516,7 +516,7 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 AppButton {
                     id: confirmInputButton
-                    text: qsTr("确定"))
+                    text: qsTr("确定")
                     theme: designTokens
                     variant: "primary"
                     onClicked: {
