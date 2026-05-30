@@ -18,7 +18,7 @@ Dialog {
     id: root
     modal: true
     width: 640
-    height: 620
+    height: Math.max(480, Math.min(720, settingsScroll.contentHeight + 120))
     x: (parent ? (parent.width - width) / 2 : 0)
     y: (parent ? (parent.height - height) / 2 : 0)
     property var theme: null

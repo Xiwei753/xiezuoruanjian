@@ -17,6 +17,7 @@ Slider {
     id: control
     property var theme: null
 
+    implicitWidth: 200
     implicitHeight: 32
 
     background: Rectangle {

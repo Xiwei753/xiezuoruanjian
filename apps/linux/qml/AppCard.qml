@@ -21,6 +21,7 @@ Item {
     property bool outlined: true
 
     implicitWidth: 200
+    implicitHeight: col.implicitHeight + control.padding * 2
 
     Rectangle {
         anchors.fill: parent

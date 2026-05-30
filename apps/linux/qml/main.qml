@@ -422,20 +422,11 @@ ApplicationWindow {
 
             header: null
 
-            contentItem: ScrollView {
-                id: syncDialogScroll
-                clip: true
-                topPadding: designTokens.sp16
-                bottomPadding: designTokens.sp16
-                leftPadding: designTokens.sp16
-                rightPadding: designTokens.sp16
-
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                ScrollBar.vertical.policy: ScrollBar.AsNeeded
-
+            contentItem: Item {
                 SyncPage {
                     id: syncPage
-                    width: syncDialogScroll.availableWidth
+                    anchors.fill: parent
+                    anchors.margins: designTokens.sp16
                     theme: designTokens
                     backendRef: backend
                     beforeSyncHook: function() {

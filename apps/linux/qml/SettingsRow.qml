@@ -23,24 +23,33 @@ Rectangle {
 
     color: rowHover.containsMouse && root.clickable ? (dt ? dt.surfaceContainer : "#F1F5F9") : "transparent"
     radius: dt ? dt.radiusMd : 12
-    implicitHeight: dt ? dt.settingsRowHeight : 64
+
+    readonly property int _verticalPadding: dt ? dt.sp12 : 12
+    readonly property int _controlMinHeight: dt ? dt.settingsControlHeight : 40
+    implicitHeight: Math.max(_controlMinHeight, textCol.implicitHeight) + _verticalPadding * 2
 
     RowLayout {
         id: row
         anchors.fill: parent
         anchors.leftMargin: dt ? dt.sp8 : 8
         anchors.rightMargin: dt ? dt.sp8 : 8
+        anchors.topMargin: root._verticalPadding
+        anchors.bottomMargin: root._verticalPadding
         spacing: dt ? dt.sp12 : 12
 
         ColumnLayout {
             id: textCol
             Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
             spacing: 2
             Text {
                 text: root.title
                 color: dt ? dt.textPrimary : "#E2E4E9"
                 font.pixelSize: dt ? dt.body : 14
                 font.family: dt ? dt.fontFamily : "sans-serif"
+                wrapMode: Text.NoWrap
+                elide: Text.ElideRight
+                Layout.fillWidth: true
             }
             Text {
                 text: root.description
@@ -48,6 +57,9 @@ Rectangle {
                 font.pixelSize: dt ? dt.caption : 12
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 visible: text.length > 0
+                wrapMode: Text.NoWrap
+                elide: Text.ElideRight
+                Layout.fillWidth: true
             }
         }
 
@@ -56,7 +68,7 @@ Rectangle {
             Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
             Layout.preferredWidth: children.length > 0 ? Math.max(1, children[0].implicitWidth || children[0].width || 0) : 0
             implicitWidth: Layout.preferredWidth
-            Layout.preferredHeight: dt ? dt.settingsControlHeight : 36
+            Layout.preferredHeight: children.length > 0 ? Math.max(root._controlMinHeight, children[0].implicitHeight || children[0].height || 0) : root._controlMinHeight
             implicitHeight: Layout.preferredHeight
         }
     }

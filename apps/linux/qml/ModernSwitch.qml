@@ -17,8 +17,8 @@ Item {
     property bool checked: false
     signal toggled(bool checked)
 
-    width: 52
-    height: 32
+    implicitWidth: 52
+    implicitHeight: 32
 
     Rectangle {
         anchors.centerIn: parent

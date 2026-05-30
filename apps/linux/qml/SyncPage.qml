@@ -211,7 +211,7 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(140, Math.min(220, (Window.window ? Window.window.height : 768) - 500))
+            Layout.preferredHeight: 180
             color: (root.backendRef && root.backendRef.sync_status === "conflict") ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.surfaceContainerLow : "#F6F8FB")
             border.color: (root.backendRef && root.backendRef.sync_status === "conflict") ? (theme ? theme.error : "#BA1A1A") : (theme ? theme.border : "#CBD5E1")
             border.width: (root.backendRef && root.backendRef.sync_status === "conflict") ? 2 : 1
@@ -222,6 +222,8 @@ Rectangle {
                 id: logScroll
                 anchors.fill: parent
                 anchors.margins: theme ? theme.sp12 : 12
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.policy: ScrollBar.AsNeeded
                 TextArea {
                     id: syncResultArea
                     width: logScroll.availableWidth
