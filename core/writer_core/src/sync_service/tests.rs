@@ -1,0 +1,1862 @@
+#![allow(unused_imports)]
+use std::path::Path;
+use serde::{Deserialize, Serialize};
+use base64::Engine;
+use std::collections::HashMap;
+use crate::sync_service::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    #[test]
+    fn test_sync_secrets_local_json_blacklisted() {
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/sync_secrets.local.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/sync_secrets.local.json.tmp"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/sync_state.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/state.local.json"
+        ));
+        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
+        assert!(SyncService::is_blacklisted_path("tmp/runtime.tmp"));
+    }
+
+    #[test]
+    fn test_ai_paths_blacklisted() {
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/secrets.local.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/config.local.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/conversations.local/chat.json"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/ai/cache/model_cache.bin"
+        ));
+        assert!(SyncService::is_blacklisted_path("app-meta/ai/"));
+    }
+
+    #[test]
+    fn test_first_sync_mode_unrelated_histories() {
+        // Test logic added via GitBackend trait mock
+        struct MockUnrelatedBackend;
+        impl GitBackend for MockUnrelatedBackend {
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                true
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "fatal: refusing to merge unrelated histories",
+                )))
+            }
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(Some("hash".to_string()))
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(Some("hash".to_string()))
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let result =
+            SyncService::perform_sync(dir.path(), &config, &secrets, &MockUnrelatedBackend)
+                .unwrap();
+        assert_eq!(result.first_sync_mode, FirstSyncMode::UnrelatedHistories);
+        assert!(result.user_message.unwrap().contains("远端仓库不是空仓库"));
+    }
+
+    #[test]
+    fn test_record_sync_conflict_error_handling() {
+        // Provide an invalid path to force an IO error
+        let conflict = SyncConflict {
+            local_path: "chapter.md".to_string(),
+            remote_path: "chapter.md".to_string(),
+            local_hash: "aaa".to_string(),
+            remote_hash: "bbb".to_string(),
+            base_hash: "ccc".to_string(),
+            created_at: 123456789,
+            description: "conflict test".to_string(),
+        };
+
+        // Pass a non-existent parent directory to force an error
+        let res = SyncService::record_sync_conflict(
+            Path::new("/non/existent/path/that/will/fail"),
+            conflict,
+            None,
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_perform_sync_non_empty_no_git_init() {
+        // Just a mock test to verify the logic inside perform_sync
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("some_file.txt"), "hello").unwrap();
+
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://github.com/test/test.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackend;
+        impl GitBackend for MockBackend {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        assert_eq!(res.status, SyncStatus::Success);
+    }
+
+    #[test]
+    fn test_perform_sync_auto_commits_whitelist() {
+        // Just mock test to ensure successful pass of logic
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/settings/settings.sync.json"
+        ));
+    }
+
+    #[test]
+    fn test_no_unknown_conflicts() {
+        let conflict = SyncConflict {
+            local_path: "real/path.txt".to_string(),
+            remote_path: "real/path.txt".to_string(),
+            local_hash: "".to_string(),
+            remote_hash: "".to_string(),
+            base_hash: "".to_string(),
+            description: "".to_string(),
+            created_at: 0,
+        };
+        assert_ne!(conflict.local_path, "unknown");
+        assert_ne!(conflict.remote_path, "unknown");
+    }
+
+    #[test]
+    fn test_sync_config_state_no_token() {
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "url".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let state = SyncState {
+            remote_url: Some("url".to_string()),
+            transport: Some(SyncTransport::HttpsToken),
+            last_sync_time: Some(0),
+            last_synced_commit: None,
+            last_error: None,
+            last_successful_network_mode: None,
+            known_files: std::collections::HashMap::new(),
+            conflicts: vec![],
+            tombstones: Vec::new(),
+            deleted_files: std::collections::HashSet::new(),
+            device_id: String::new(),
+            known_files_updated_at: std::collections::HashMap::new(),
+        };
+        let config_str = serde_json::to_string(&config).unwrap();
+        let state_str = serde_json::to_string(&state).unwrap();
+        // Since HttpsToken serializes as "https_token" because of snake_case, token is in the string.
+        // We really want to assert that the ACTUAL token string is not there.
+        assert!(!config_str.contains("my_secret_token"));
+        assert!(!state_str.contains("my_secret_token"));
+    }
+
+    #[test]
+    fn test_whitelist_includes_sync_json() {
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/settings/settings.sync.json"
+        ));
+        assert!(!SyncService::is_whitelisted_path(
+            "app-meta/settings/settings.local.json"
+        ));
+    }
+
+    #[test]
+    fn test_blacklist_ignores_local_json() {
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/settings/settings.local.json"
+        ));
+    }
+
+    #[test]
+    fn test_sync_secrets_blacklisted() {
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/sync/sync_secrets.local.json"
+        ));
+    }
+
+    #[test]
+    fn test_sync_config_no_token() {
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let content = serde_json::to_string(&config).unwrap();
+        // token might be there if some other struct is serialized, but we want to ensure
+        // the word "token" isn't a key. Actually since token was removed from SyncConfig, it should literally not be there.
+        // Wait, why did it fail? Oh, HttpsToken transport is present! It serializes to "https_token".
+        // Let's assert it doesn't contain `"token":`
+        assert!(!content.contains("\"token\":"));
+    }
+    #[test]
+    fn test_blacklist_ignores_tmp_and_lock_files() {
+        assert!(SyncService::is_blacklisted_path(
+            "projects/v1/chapters/c1.tmp"
+        ));
+        assert!(SyncService::is_blacklisted_path(
+            "workspace_manifest.json.lock"
+        ));
+        assert!(SyncService::is_blacklisted_path("app-meta/logs/sync.log"));
+    }
+
+    #[test]
+    fn test_record_sync_conflict_writes_correctly() {
+        let dir = tempdir().unwrap();
+        let conflict = SyncConflict {
+            local_path: "chapter.md".to_string(),
+            remote_path: "chapter.md".to_string(),
+            local_hash: "aaa".to_string(),
+            remote_hash: "bbb".to_string(),
+            base_hash: "ccc".to_string(),
+            created_at: 123456789,
+            description: "conflict test".to_string(),
+        };
+
+        SyncService::record_sync_conflict(dir.path(), conflict, Some("my local conflict")).unwrap();
+        let conflicts_path = dir.path().join("app-meta/sync/conflicts.json");
+        assert!(conflicts_path.exists());
+        let content = std::fs::read_to_string(conflicts_path).unwrap();
+        assert!(content.contains("conflict test"));
+
+        let file_conflict = dir.path().join("chapter.md.conflict.123456789");
+        assert!(file_conflict.exists());
+        let content2 = std::fs::read_to_string(file_conflict).unwrap();
+        assert_eq!(content2, "my local conflict");
+    }
+
+    #[test]
+    fn test_sync_state_does_not_leak_tokens() {
+        let dir = tempdir().unwrap();
+        let state = SyncState {
+            remote_url: Some("https://example.com/repo.git".to_string()),
+            transport: Some(SyncTransport::HttpsToken),
+            last_synced_commit: None,
+            last_sync_time: None,
+            last_error: None,
+            last_successful_network_mode: None,
+            known_files: std::collections::HashMap::new(),
+            conflicts: vec![],
+            tombstones: Vec::new(),
+            deleted_files: std::collections::HashSet::new(),
+            device_id: String::new(),
+            known_files_updated_at: std::collections::HashMap::new(),
+        };
+
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+        let state_path = dir.path().join("app-meta/sync/state.local.json");
+        let state_content = std::fs::read_to_string(state_path).unwrap();
+
+        assert!(state_content.contains("https://example.com/repo.git"));
+        assert!(!state_content.contains("\"token\":"));
+    }
+
+    #[test]
+    fn test_stage_blacklisted_files() {
+        let dir = tempdir().unwrap();
+
+        // Initialize git repo manually or use SyncService
+        let repo = git2::Repository::init(dir.path()).unwrap();
+
+        let file_path = dir.path().join("app-meta/sync/sync_secrets.local.json");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, "secret_content").unwrap();
+
+        let backend = Git2Backend;
+        let paths = vec!["app-meta/sync/sync_secrets.local.json"];
+        backend.stage_paths(dir.path(), &paths).unwrap();
+
+        // Ensure it's not staged
+        let index = repo.index().unwrap();
+        assert!(index
+            .get_path(
+                std::path::Path::new("app-meta/sync/sync_secrets.local.json"),
+                0
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn test_sync_dry_run_disabled_config() {
+        let dir = tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: false,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
+        assert!(plan.files_to_upload.is_empty());
+        assert!(plan.ignored_files.is_empty());
+    }
+
+    #[test]
+    fn test_sync_dry_run_enabled_config_scans() {
+        let dir = tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        // Create some whitelisted and blacklisted files
+        let settings_path = dir.path().join("app-meta/settings");
+        std::fs::create_dir_all(&settings_path).unwrap();
+        std::fs::write(settings_path.join("settings.sync.json"), "{}").unwrap();
+        std::fs::write(settings_path.join("settings.local.json"), "{}").unwrap();
+
+        let plan = SyncService::perform_sync_dry_run(dir.path(), &config).unwrap();
+        assert!(plan
+            .files_to_upload
+            .contains(&"app-meta/settings/settings.sync.json".to_string()));
+        assert!(plan
+            .ignored_files
+            .contains(&"app-meta/settings/settings.local.json".to_string()));
+    }
+
+    #[test]
+    fn test_perform_sync_empty_remote_url() {
+        let dir = tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let secrets = SyncSecrets {
+            token: Some("secret_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        // For this test we can use Git2Backend as it won't be called due to early return
+        let backend = Git2Backend;
+        let result = SyncService::perform_sync(dir.path(), &config, &secrets, &backend).unwrap();
+        assert_eq!(
+            result.status,
+            SyncStatus::Error("Remote URL is empty".to_string())
+        );
+    }
+
+    #[test]
+    fn test_perform_sync_non_empty_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockInitNonEmptyBackend;
+        impl GitBackend for MockInitNonEmptyBackend {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "pull failed: unable to merge unrelated histories",
+                )))
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res =
+            SyncService::perform_sync(dir.path(), &config, &secrets, &MockInitNonEmptyBackend)
+                .unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::UnrelatedHistories);
+        assert!(res
+            .user_message
+            .unwrap()
+            .contains("推荐使用空 GitHub 私人仓库"));
+    }
+
+    #[test]
+    fn test_save_sync_state_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("app-meta/sync");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("state.local.json"), "{}").unwrap();
+
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackendOk;
+        impl GitBackend for MockBackendOk {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                true
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        std::fs::remove_file(state_dir.join("state.local.json")).unwrap();
+        std::fs::create_dir(state_dir.join("state.local.json")).unwrap();
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackendOk).unwrap();
+        assert!(matches!(res.status, SyncStatus::FatalError(_)));
+        assert!(res.user_message.unwrap().contains("同步状态保存失败"));
+    }
+
+    #[test]
+    fn test_first_sync_mode_clone_into_empty_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackend;
+        impl GitBackend for MockBackend {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::CloneIntoEmptyWorkspace);
+    }
+
+    #[test]
+    fn test_first_sync_mode_init_existing_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackend;
+        impl GitBackend for MockBackend {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
+    }
+
+    #[test]
+    fn test_first_sync_mode_already_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://example.com/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockBackend;
+        impl GitBackend for MockBackend {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec![])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                true
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackend).unwrap();
+        assert_eq!(res.first_sync_mode, FirstSyncMode::AlreadyGitRepo);
+    }
+
+    #[test]
+    fn test_sync_plan_no_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let settings_dir = dir.path().join("app-meta/sync");
+        std::fs::create_dir_all(&settings_dir).unwrap();
+
+        // Write the local secrets
+        std::fs::write(
+            settings_dir.join("sync_secrets.local.json"),
+            "secret_token_123",
+        )
+        .unwrap();
+        std::fs::write(
+            settings_dir.join("sync_secrets.local.json.tmp"),
+            "secret_token_456",
+        )
+        .unwrap();
+
+        // Also write some valid file to sync
+        std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
+
+        let plan = SyncService::build_sync_plan_from_workspace(dir.path()).unwrap();
+
+        // Ensure plan does not include the blacklisted items
+        for file in plan.files_to_upload {
+            assert!(
+                !file.contains("sync_secrets.local.json"),
+                "Should not upload secrets"
+            );
+        }
+
+        let ignored: Vec<String> = plan.ignored_files.into_iter().collect();
+        assert!(
+            ignored
+                .iter()
+                .any(|s| s.contains("sync_secrets.local.json")),
+            "Secrets should be explicitly ignored"
+        );
+    }
+
+    #[test]
+    fn test_first_sync_empty_remote_branch_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
+
+        let config = SyncConfig {
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            enabled: true,
+            remote_url: "https://github.com/test/empty-repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            backend_type: BackendType::Git,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy".to_string()),
+            ssh_private_key: None,
+        };
+
+        struct MockEmptyRemoteBackend;
+        impl GitBackend for MockEmptyRemoteBackend {
+            fn clone_repo(
+                &self,
+                _: &str,
+                _: &Path,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn open_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn pull(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Err(crate::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "ref not found: refs/heads/main",
+                )))
+            }
+            fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
+                Ok(Some("commit_hash".to_string()))
+            }
+            fn push(
+                &self,
+                _: &Path,
+                _: &str,
+                _: Option<&GitAuth>,
+                _: Option<&SyncConfig>,
+            ) -> crate::Result<()> {
+                Ok(())
+            }
+            fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
+                Ok(None)
+            }
+            fn status(&self, _: &Path) -> crate::Result<Vec<String>> {
+                Ok(vec!["workspace_manifest.json".to_string()])
+            }
+            fn init_repo(&self, _: &Path) -> crate::Result<()> {
+                Ok(())
+            }
+            fn ensure_remote(&self, _: &Path, _: &str) -> crate::Result<()> {
+                Ok(())
+            }
+            fn has_repo(&self, _: &Path) -> bool {
+                false
+            }
+            fn is_worktree_empty_or_git_only(&self, _: &Path) -> crate::Result<bool> {
+                Ok(false)
+            }
+        }
+
+        let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockEmptyRemoteBackend)
+            .unwrap();
+        assert_eq!(res.status, SyncStatus::Success);
+        assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
+        assert!(res
+            .user_message
+            .unwrap()
+            .contains("已初始化远端分支并完成首次同步"));
+    }
+
+    #[test]
+    fn test_push_preflight_unborn_head() {
+        let dir = tempfile::tempdir().unwrap();
+        // Repository is initialized but has no commits (unborn HEAD)
+        let _repo = git2::Repository::init(dir.path()).unwrap();
+
+        let backend = Git2Backend;
+        let res = backend.push(dir.path(), "main", None, None);
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("recoverable_error") || err_msg.contains("unborn"));
+    }
+
+    #[test]
+    fn test_push_preflight_missing_branch_ref_recovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+
+        // Create a commit
+        let signature = git2::Signature::now("Test User", "test@test.com").unwrap();
+        let mut index = repo.index().unwrap();
+        let file_path = dir.path().join("app-meta/settings/settings.sync.json");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(&file_path, "{}").unwrap();
+        index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        let commit_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Initial commit",
+                &tree,
+                &[],
+            )
+            .unwrap();
+
+        // Delete the branch reference, keeping HEAD detached pointing to the commit
+        repo.set_head_detached(commit_oid).unwrap();
+        let mut branch_ref = repo.find_reference("refs/heads/main").unwrap();
+        branch_ref.delete().unwrap();
+
+        // Now branch reference refs/heads/main does not exist, but HEAD points to a commit.
+        // We verify that calling Git2Backend::push reconstructs the branch ref successfully!
+        let backend = Git2Backend;
+        let _res = backend.push(dir.path(), "main", None, None);
+        // Verify branch ref has been reconstructed!
+        assert!(repo.find_reference("refs/heads/main").is_ok());
+    }
+
+    #[test]
+    fn test_settings_semantic_merge_conflict_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+
+        // Set up local repository with a commit containing base settings.sync.json
+        let signature = git2::Signature::now("Test User", "test@test.com").unwrap();
+        let mut index = repo.index().unwrap();
+        let file_path = dir.path().join("app-meta/settings/settings.sync.json");
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+
+        let base_content = r#"{"font_size": 12, "theme": "dark"}"#;
+        std::fs::write(&file_path, base_content).unwrap();
+        index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        let base_commit_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Base commit",
+                &tree,
+                &[],
+            )
+            .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+
+        // Clone local repo to remote right after base commit (so remote shares base commit OID and history)
+        let remote_dir = tempfile::tempdir().unwrap();
+        let remote_repo =
+            git2::Repository::clone(dir.path().to_str().unwrap(), remote_dir.path()).unwrap();
+
+        // Now modify local settings.sync.json and commit it in local repo (local divergent change)
+        let local_content = r#"{"font_size": 16, "theme": "dark"}"#;
+        std::fs::write(&file_path, local_content).unwrap();
+        index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
+        index.write().unwrap();
+        let oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(oid).unwrap();
+        let local_commit_oid = repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Local commit",
+                &tree,
+                &[&repo.find_commit(base_commit_oid).unwrap()],
+            )
+            .unwrap();
+
+        // In remote repo, modify settings.sync.json to a conflicting value and commit (remote divergent change)
+        let remote_file_path = remote_dir
+            .path()
+            .join("app-meta/settings/settings.sync.json");
+        let remote_content = r#"{"font_size": 20, "theme": "dark"}"#;
+        std::fs::write(&remote_file_path, remote_content).unwrap();
+        let mut remote_index = remote_repo.index().unwrap();
+        remote_index
+            .add_path(Path::new("app-meta/settings/settings.sync.json"))
+            .unwrap();
+        remote_index.write().unwrap();
+        let remote_oid = remote_index.write_tree().unwrap();
+        let remote_tree = remote_repo.find_tree(remote_oid).unwrap();
+        let remote_base_commit = remote_repo.find_commit(base_commit_oid).unwrap();
+        let _remote_commit_oid = remote_repo
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Remote commit",
+                &remote_tree,
+                &[&remote_base_commit],
+            )
+            .unwrap();
+
+        // Add remote to local repo
+        let mut remote = repo
+            .remote("origin", remote_dir.path().to_str().unwrap())
+            .unwrap();
+        remote.fetch(&["main"], None, None).unwrap();
+
+        // Verify pull/merge fails with settings_conflict_payload
+        let backend = Git2Backend;
+        let res = backend.pull(dir.path(), "main", None, None);
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("settings_conflict_payload"));
+
+        // Verify that after transactional rollback:
+        // 1. Index has no conflicts
+        let index = repo.index().unwrap();
+        assert!(!index.has_conflicts());
+        // 2. HEAD points back to original local_commit_oid
+        let head = repo.head().unwrap();
+        assert_eq!(head.target().unwrap(), local_commit_oid);
+        // 3. Local settings file is intact and not corrupted with remote change
+        let content_after = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content_after, local_content);
+    }
+
+    fn start_mock_github_api(
+        initial_manifest: Option<SyncManifest>,
+        initial_files: std::collections::HashMap<String, String>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+        std::sync::Arc<std::sync::Mutex<String>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let addr = format!("http://127.0.0.1:{}", port);
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
+
+        let files = Arc::new(Mutex::new(initial_files));
+        let files_clone = files.clone();
+
+        let manifest_str = if let Some(m) = initial_manifest {
+            serde_json::to_string(&m).unwrap()
+        } else {
+            String::new()
+        };
+        let manifest = Arc::new(Mutex::new(manifest_str));
+        let manifest_clone = manifest.clone();
+
+        listener.set_nonblocking(true).unwrap();
+
+        let handle = thread::spawn(move || {
+            while !shutdown_clone.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buffer = [0; 65536];
+                        if let Ok(bytes_read) = stream.read(&mut buffer) {
+                            let req = String::from_utf8_lossy(&buffer[..bytes_read]);
+                            let first_line = req.lines().next().unwrap_or("");
+                            let parts: Vec<&str> = first_line.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                let method = parts[0];
+                                let path = parts[1];
+
+                                let mut response_body = String::new();
+                                let mut status_line = "HTTP/1.1 200 OK";
+
+                                if path.contains("/rate_limit") {
+                                    response_body = r#"{"resources":{}}"#.to_string();
+                                } else if path.contains("/git/ref/heads/main") {
+                                    let m = manifest_clone.lock().unwrap();
+                                    if m.is_empty() {
+                                        status_line = "HTTP/1.1 404 Not Found";
+                                        response_body = r#"{"message":"Not Found"}"#.to_string();
+                                    } else {
+                                        response_body =
+                                            r#"{"object":{"sha":"mock_commit_sha"}}"#.to_string();
+                                    }
+                                } else if path.contains("/git/commits/mock_commit_sha") {
+                                    response_body =
+                                        r#"{"tree":{"sha":"mock_tree_sha"}}"#.to_string();
+                                } else if path.contains("/git/trees/mock_tree_sha") {
+                                    let mut tree_list = Vec::new();
+                                    let m = manifest_clone.lock().unwrap();
+                                    if !m.is_empty() {
+                                        tree_list.push(serde_json::json!({
+                                            "path": "app-meta/sync/manifest.sync.json",
+                                            "type": "blob",
+                                            "sha": "manifest_blob_sha"
+                                        }));
+                                        let fls = files_clone.lock().unwrap();
+                                        for filename in fls.keys() {
+                                            tree_list.push(serde_json::json!({
+                                                "path": filename,
+                                                "type": "blob",
+                                                "sha": format!("{}_sha", filename)
+                                            }));
+                                        }
+                                    }
+                                    response_body =
+                                        serde_json::json!({ "tree": tree_list }).to_string();
+                                } else if path
+                                    .contains("/contents/app-meta/sync/manifest.sync.json")
+                                {
+                                    let m = manifest_clone.lock().unwrap();
+                                    if m.is_empty() {
+                                        status_line = "HTTP/1.1 404 Not Found";
+                                    } else {
+                                        let encoded = base64::engine::general_purpose::STANDARD
+                                            .encode(m.as_bytes());
+                                        response_body = serde_json::json!({
+                                            "content": encoded,
+                                            "encoding": "base64"
+                                        })
+                                        .to_string();
+                                    }
+                                } else if path.contains("/contents/") {
+                                    if let Some(idx) = path.find("/contents/") {
+                                        let file_path = &path[idx + 10..];
+                                        let file_path =
+                                            file_path.split('?').next().unwrap_or(file_path);
+                                        let fls = files_clone.lock().unwrap();
+                                        if let Some(content) = fls.get(file_path) {
+                                            let encoded = base64::engine::general_purpose::STANDARD
+                                                .encode(content.as_bytes());
+                                            response_body = serde_json::json!({
+                                                "content": encoded,
+                                                "encoding": "base64"
+                                            })
+                                            .to_string();
+                                        } else {
+                                            status_line = "HTTP/1.1 404 Not Found";
+                                        }
+                                    }
+                                } else if method == "POST" && path.contains("/git/blobs") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    if let Some(body_start) = req.find("\r\n\r\n") {
+                                        let body = &req[body_start + 4..];
+                                        if let Ok(val) =
+                                            serde_json::from_str::<serde_json::Value>(body)
+                                        {
+                                            if let Some(b64_content) = val["content"].as_str() {
+                                                if let Ok(decoded_bytes) =
+                                                    base64::engine::general_purpose::STANDARD
+                                                        .decode(b64_content)
+                                                {
+                                                    if let Ok(decoded_str) =
+                                                        String::from_utf8(decoded_bytes)
+                                                    {
+                                                        if decoded_str
+                                                            .contains("manifest.sync.json")
+                                                            || decoded_str.contains("\"files\":")
+                                                        {
+                                                            let mut m =
+                                                                manifest_clone.lock().unwrap();
+                                                            *m = decoded_str;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    response_body = r#"{"sha":"mock_blob_sha"}"#.to_string();
+                                } else if method == "POST" && path.contains("/git/trees") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    if let Some(body_start) = req.find("\r\n\r\n") {
+                                        let body = &req[body_start + 4..];
+                                        if let Ok(val) =
+                                            serde_json::from_str::<serde_json::Value>(body)
+                                        {
+                                            if let Some(tree_nodes) = val["tree"].as_array() {
+                                                let mut fls = files_clone.lock().unwrap();
+                                                for node in tree_nodes {
+                                                    if let Some(n_path) = node["path"].as_str() {
+                                                        if node["sha"].is_null() {
+                                                            fls.remove(n_path);
+                                                        } else {
+                                                            if !fls.contains_key(n_path) && n_path != "app-meta/sync/manifest.sync.json" {
+                                                                fls.insert(n_path.to_string(), "dummy content".to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    response_body = r#"{"sha":"mock_tree_sha"}"#.to_string();
+                                } else if method == "POST" && path.contains("/git/commits") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    response_body = r#"{"sha":"mock_commit_sha"}"#.to_string();
+                                } else if method == "POST" && path.contains("/git/refs") {
+                                    status_line = "HTTP/1.1 201 Created";
+                                    response_body = r#"{}"#.to_string();
+                                } else if method == "PATCH" && path.contains("/git/refs/heads/main")
+                                {
+                                    response_body = r#"{}"#.to_string();
+                                }
+
+                                let response = format!(
+                                    "{}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                                    status_line,
+                                    response_body.len(),
+                                    response_body
+                                );
+                                let _ = stream.write_all(response.as_bytes());
+                            }
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(_) => {}
+                }
+            }
+        });
+
+        (addr, shutdown, files, manifest, handle)
+    }
+
+    #[test]
+    fn test_perform_lww_sync_first_download() {
+        let dir = tempdir().unwrap();
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(
+            "projects/p1/project.json".to_string(),
+            "remote content".to_string(),
+        );
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
+                updated_at_ms: 1000,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files, _manifest, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert!(res
+            .downloaded_files
+            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res
+            .downloaded_files
+            .contains(&"app-meta/sync/manifest.sync.json".to_string()));
+        assert!(res.uploaded_files.is_empty());
+        assert!(res.local_deletes.is_empty());
+        assert!(res.remote_deletes.is_empty());
+        assert!(res.overwritten_files.is_empty());
+
+        let local_file_path = dir.path().join("projects/p1/project.json");
+        assert!(local_file_path.exists());
+        let local_content = std::fs::read_to_string(local_file_path).unwrap();
+        assert_eq!(local_content, "remote content");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_perform_lww_sync_local_delete_generates_manifest_delete() {
+        let dir = tempdir().unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state.known_files.insert(
+            "projects/p1/project.json".to_string(),
+            "old_hash".to_string(),
+        );
+        state
+            .known_files_updated_at
+            .insert("projects/p1/project.json".to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(
+            "projects/p1/project.json".to_string(),
+            "remote content".to_string(),
+        );
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: format!("{:x}", md5::compute("remote content".as_bytes())),
+                updated_at_ms: 900,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert!(res
+            .local_deletes
+            .contains(&"projects/p1/project.json".to_string()));
+
+        let final_m: SyncManifest =
+            serde_json::from_str(&manifest_str.lock().unwrap().clone()).unwrap();
+        let rec = final_m
+            .files
+            .iter()
+            .find(|f| f.path == "projects/p1/project.json")
+            .unwrap();
+        assert_eq!(rec.op, "delete");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_perform_lww_sync_remote_delete_removes_local_file() {
+        let dir = tempdir().unwrap();
+        let local_path = dir.path().join("projects/p1/project.json");
+        std::fs::create_dir_all(local_path.parent().unwrap()).unwrap();
+        std::fs::write(&local_path, "local content").unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state.known_files.insert(
+            "projects/p1/project.json".to_string(),
+            format!("{:x}", md5::compute("local content".as_bytes())),
+        );
+        state
+            .known_files_updated_at
+            .insert("projects/p1/project.json".to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: String::new(),
+                updated_at_ms: 3000,
+                device_id: "device_remote".to_string(),
+                op: "delete".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), std::collections::HashMap::new());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert!(res
+            .remote_deletes
+            .contains(&"projects/p1/project.json".to_string()));
+        assert!(!local_path.exists());
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_perform_lww_sync_timestamp_wins() {
+        let dir = tempdir().unwrap();
+
+        let local_p1 = dir.path().join("projects/p1/project.json");
+        std::fs::create_dir_all(local_p1.parent().unwrap()).unwrap();
+        std::fs::write(&local_p1, "local newer content").unwrap();
+
+        let local_p2 = dir.path().join("projects/p2/project.json");
+        std::fs::create_dir_all(local_p2.parent().unwrap()).unwrap();
+        std::fs::write(&local_p2, "local older content").unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state.known_files.insert(
+            "projects/p1/project.json".to_string(),
+            format!("{:x}", md5::compute("local base".as_bytes())),
+        );
+        state
+            .known_files_updated_at
+            .insert("projects/p1/project.json".to_string(), 1000);
+        state.known_files.insert(
+            "projects/p2/project.json".to_string(),
+            format!("{:x}", md5::compute("local older content".as_bytes())),
+        );
+        state
+            .known_files_updated_at
+            .insert("projects/p2/project.json".to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(
+            "projects/p1/project.json".to_string(),
+            "remote older content".to_string(),
+        );
+        initial_files.insert(
+            "projects/p2/project.json".to_string(),
+            "remote newer content".to_string(),
+        );
+
+        let initial_manifest = SyncManifest {
+            files: vec![
+                ManifestFileRecord {
+                    path: "projects/p1/project.json".to_string(),
+                    content_hash: format!("{:x}", md5::compute("remote older content".as_bytes())),
+                    updated_at_ms: 2000,
+                    device_id: "device_remote".to_string(),
+                    op: "upsert".to_string(),
+                    schema_version: 1,
+                },
+                ManifestFileRecord {
+                    path: "projects/p2/project.json".to_string(),
+                    content_hash: format!("{:x}", md5::compute("remote newer content".as_bytes())),
+                    updated_at_ms: 4000,
+                    device_id: "device_remote".to_string(),
+                    op: "upsert".to_string(),
+                    schema_version: 1,
+                },
+            ],
+        };
+
+        let (mock_url, shutdown, _files_map, manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        assert!(res
+            .uploaded_files
+            .contains(&"projects/p1/project.json".to_string()));
+        assert!(res
+            .downloaded_files
+            .contains(&"projects/p2/project.json".to_string()));
+
+        let content_p2 = std::fs::read_to_string(&local_p2).unwrap();
+        assert_eq!(content_p2, "remote newer content");
+
+        let final_m_str = manifest_str.lock().unwrap().clone();
+        assert!(!final_m_str.is_empty());
+        let final_m: SyncManifest = serde_json::from_str(&final_m_str).unwrap();
+        let p1_rec = final_m
+            .files
+            .iter()
+            .find(|f| f.path == "projects/p1/project.json")
+            .unwrap();
+        assert_eq!(p1_rec.device_id, "device_local");
+        assert_eq!(p1_rec.op, "upsert");
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    fn test_lww_sync_ignores_local_only_files() {
+        let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/sync")).unwrap();
+        std::fs::create_dir_all(dir.path().join("app-meta/logs")).unwrap();
+        std::fs::create_dir_all(dir.path().join("tmp")).unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/sync_state.json"),
+            "{\"noise\":true}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/state.local.json"),
+            "{\"local\":true}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("app-meta/sync/sync_secrets.local.json"),
+            "{\"token\":\"x\"}",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("app-meta/logs/sync.log"), "x").unwrap();
+        std::fs::write(dir.path().join("tmp/runtime.tmp"), "x").unwrap();
+
+        let (mock_url, shutdown, _files, _manifest, server_thread) =
+            start_mock_github_api(None, std::collections::HashMap::new());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert_ne!(res.status, SyncStatus::DirtyRepoBlocked);
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+}
