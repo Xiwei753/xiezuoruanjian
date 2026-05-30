@@ -32,8 +32,6 @@ Rectangle {
     y: targetTextArea ? targetTextArea.cursorRectangle.y : 0
 
 
-    }
-
     property bool isTyping: false
 
     Behavior on x {

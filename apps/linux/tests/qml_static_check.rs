@@ -25,6 +25,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
             let content = fs::read_to_string(&path).unwrap();
             let file_name = path.file_name().unwrap().to_str().unwrap();
 
+            let mut brace_count = 0;
+            let mut b_start = false;
+            let mut early_close_line = 0;
+            
             for (line_idx, line) in content.lines().enumerate() {
                 let line_num = line_idx + 1;
                 let trimmed = line.trim();
@@ -32,6 +36,21 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 // Ignore comments
                 if trimmed.starts_with("//") {
                     continue;
+                }
+
+                let mut char_iter = trimmed.chars().peekable();
+                let mut in_string = false;
+                while let Some(c) = char_iter.next() {
+                    if c == '"' { in_string = !in_string; }
+                    if in_string { continue; }
+                    if c == '/' && char_iter.peek() == Some(&'/') { break; }
+                    if c == '{' { brace_count += 1; b_start = true; }
+                    if c == '}' { 
+                        brace_count -= 1; 
+                        if b_start && brace_count == 0 && early_close_line == 0 {
+                            early_close_line = line_num;
+                        }
+                    }
                 }
 
                 // 1. Check for emojis (including basic Unicode ranges for emojis)
@@ -105,6 +124,46 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 if re_text.is_match(trimmed) || re_title.is_match(trimmed) || re_return.is_match(trimmed) || re_arg.is_match(trimmed) || re_assign.is_match(trimmed) {
                     eprintln!("{}:{}: Found potential syntax error double parenthesis in qsTr: {}", file_name, line_num, trimmed);
                     has_errors = true;
+                }
+            }
+            
+            if brace_count != 0 {
+                eprintln!("{}: Brace imbalance detected! Count: {}", file_name, brace_count);
+                has_errors = true;
+            }
+            if early_close_line > 0 && early_close_line < content.lines().count() {
+                for (line_idx, line) in content.lines().enumerate().skip(early_close_line) {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() && !trimmed.starts_with("//") && !trimmed.starts_with("/*") && !trimmed.starts_with("import ") {
+                        eprintln!("{}: Root object closed early at line {} but found code at line {}: {}", file_name, early_close_line, line_idx + 1, trimmed);
+                        has_errors = true;
+                        break;
+                    }
+                }
+            }
+            
+            if file_name == "WritingWorkspace.qml" {
+                let paperbg_matches: Vec<_> = content.match_indices("id: paperBg").collect();
+                if !paperbg_matches.is_empty() {
+                    let text_after = &content[paperbg_matches[0].0..];
+                    let mut b_count = 0;
+                    let mut b_s = false;
+                    let mut width_count = 0;
+                    for line in text_after.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("width:") && !trimmed.contains("border.width") { width_count += 1; }
+                        for c in line.chars() {
+                            if c == '{' { b_count += 1; b_s = true; }
+                            if c == '}' { b_count -= 1; }
+                        }
+                        if b_s && b_count == 0 {
+                            break;
+                        }
+                    }
+                    if width_count > 1 {
+                        eprintln!("{}: paperBg has multiple width properties! Count: {}", file_name, width_count);
+                        has_errors = true;
+                    }
                 }
             }
         }

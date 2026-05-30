@@ -454,8 +454,6 @@ Rectangle {
                             property real editorWidthRatio: parent.width >= 1400 ? 0.78 : 1.0
                             property int editorMaxWidth: parent.width >= 1600 ? 1280 : 960
                             property real baseResponsiveWidth: Math.min(parent.width, editorMaxWidth, Math.max(820, parent.width * editorWidthRatio))
-                            
-                            width: root.backendRef && root.backendRef.setting_linux_editor_width > 0 ? Math.min(parent.width, root.backendRef.setting_linux_editor_width) : baseResponsiveWidth
                             height: parent.height
                             color: dt ? dt.editorBg : "#191C21"
                             radius: dt ? dt.radiusMd : 12
@@ -562,8 +560,9 @@ Rectangle {
                                     onDoubleClicked: paperBg.resetEditorWidth()
                                 }
                             }
-                            
-                            ScrollView {
+                        }
+                        
+                        ScrollView {
                             id: editorScroll
                             anchors.fill: paperBg
                             anchors.margins: dt ? dt.sp20 : 20
