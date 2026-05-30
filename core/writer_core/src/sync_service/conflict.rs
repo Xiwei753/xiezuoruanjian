@@ -1,9 +1,8 @@
-#![allow(unused_imports)]
+use crate::sync_service::types::SyncConflictSummary;
+use crate::sync_service::service::SyncService;
+use crate::sync_service::types::SettingConflictDetail;
+use crate::sync_service::types::SyncConflict;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-use base64::Engine;
-use std::collections::HashMap;
-use crate::sync_service::*;
 
 pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
     let mut opts = git2::StatusOptions::new();

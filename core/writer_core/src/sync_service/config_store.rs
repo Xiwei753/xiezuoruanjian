@@ -1,9 +1,5 @@
-#![allow(unused_imports)]
+use crate::sync_service::types::SyncState;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-use base64::Engine;
-use std::collections::HashMap;
-use crate::sync_service::*;
 
 impl crate::sync_service::SyncService {
     pub fn is_blacklisted_path(rel_path: &str) -> bool {

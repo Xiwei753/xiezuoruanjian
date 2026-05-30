@@ -1,9 +1,4 @@
-#![allow(unused_imports)]
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-use base64::Engine;
-use std::collections::HashMap;
-use crate::sync_service::*;
 
 impl crate::sync_service::SyncService {
     pub(crate) fn compute_file_hash(path: &Path) -> std::io::Result<String> {

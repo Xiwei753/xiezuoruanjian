@@ -1,9 +1,9 @@
-#![allow(unused_imports)]
+use crate::sync_service::conflict::collect_index_conflicts;
+use crate::sync_service::conflict::build_conflict_summary;
+use crate::sync_service::types::SyncConfig;
+use crate::sync_service::types::SyncConflictSummary;
+use crate::sync_service::service::SyncService;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-use base64::Engine;
-use std::collections::HashMap;
-use crate::sync_service::*;
 
 pub enum GitAuth {
     HttpsToken { username: String, token: String },

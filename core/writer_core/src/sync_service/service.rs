@@ -1,9 +1,28 @@
-#![allow(unused_imports)]
+use crate::sync_service::conflict::build_conflict_summary;
+use crate::sync_service::types::SyncConfig;
+use crate::sync_service::git_backend::GitBackend;
+use crate::sync_service::git_backend::fetch_and_reset_local_repo;
+use crate::sync_service::github_backend::GitHubApiBackend;
+use crate::sync_service::conflict::collect_git_status_summary;
+use crate::sync_service::types::SyncManifest;
+use crate::sync_service::types::SyncResult;
+use crate::sync_service::types::SyncPlan;
+use crate::sync_service::types::ManifestFileRecord;
+use crate::sync_service::types::SyncConflict;
+use crate::sync_service::types::SyncStatus;
+use crate::sync_service::types::SyncSecrets;
+use crate::sync_service::types::SyncState;
+use crate::sync_service::url::sanitize_remote_url;
+use crate::sync_service::types::FirstSyncMode;
+use crate::sync_service::types::SyncFileEntry;
+use crate::sync_service::types::SettingConflictDetail;
+use crate::sync_service::diagnostics::get_user_friendly_error;
+use crate::sync_service::types::SyncTransport;
+use crate::sync_service::types::SyncKind;
+use crate::sync_service::git_backend::GitAuth;
+use crate::sync_service::types::SyncConflictSummary;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 use base64::Engine;
-use std::collections::HashMap;
-use crate::sync_service::*;
 
 pub struct SyncService {
     pub config: Option<SyncConfig>,

@@ -1,9 +1,6 @@
-#![allow(unused_imports)]
-use std::path::Path;
-use serde::{Deserialize, Serialize};
-use base64::Engine;
-use std::collections::HashMap;
-use crate::sync_service::*;
+use crate::sync_service::types::SyncTransport;
+use crate::sync_service::types::BackendType;
+use crate::sync_service::types::SyncConfig;
 
 pub struct ParsedRemoteUrl {
     pub sanitized_url: String,

@@ -24,9 +24,6 @@
 //! - 团队协作时的数据共享
 //! - 版本控制与历史追踪
 
-use base64::Engine;
-use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 
 pub mod types;
@@ -43,11 +40,11 @@ pub mod tests;
 
 pub use types::*;
 pub use url::*;
-pub use config_store::*;
-pub use diagnostics::*;
 pub use git_backend::*;
 pub use github_backend::*;
 pub use backends::*;
-pub use conflict::*;
 pub use service::*;
-pub use utils::*;
+pub(crate) use config_store::*;
+pub(crate) use diagnostics::*;
+pub(crate) use conflict::*;
+pub(crate) use utils::*;
