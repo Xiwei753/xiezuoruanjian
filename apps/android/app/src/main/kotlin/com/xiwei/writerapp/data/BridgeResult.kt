@@ -2,21 +2,20 @@ package com.xiwei.writerapp.data
 
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import com.xiwei.writerapp.model.BridgeError
-import com.xiwei.writerapp.model.BridgeErrorCode
 
 sealed class BridgeResult<out T> {
     data class Success<out T>(val data: T, val envelope: ResultEnvelope<T> = ResultEnvelope.success(data)) : BridgeResult<T>()
     data class Error(
-        val error: BridgeError,
-        val envelope: ResultEnvelope<Nothing> = ResultEnvelope.error(error)
+        val envelope: ResultEnvelope<Nothing>
     ) : BridgeResult<Nothing>() {
-        val message: String get() = error.message
-        val code: BridgeErrorCode get() = error.code
+        val message: String get() = envelope.userMessage ?: ""
+        val code: String? get() = envelope.errorCode
     }
     object NotLoaded : BridgeResult<Nothing>() {
-        val envelope: ResultEnvelope<Nothing> = ResultEnvelope.error(
-            BridgeError(BridgeErrorCode.Unknown, "Native bridge not loaded")
+        val envelope: ResultEnvelope<Nothing> = ResultEnvelope(
+            success = false,
+            errorCode = "NATIVE_NOT_LOADED",
+            userMessage = "Native bridge not loaded"
         )
     }
 }
@@ -42,11 +41,11 @@ data class ResultEnvelope<out T>(
             data = data
         )
 
-        fun error(error: BridgeError): ResultEnvelope<Nothing> = ResultEnvelope(
+        fun error(errorCode: String, userMessage: String): ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
-            errorCode = error.code.wireName,
-            userMessage = error.message,
-            rawError = error.message
+            errorCode = errorCode,
+            userMessage = userMessage,
+            rawError = userMessage
         )
     }
 }
@@ -61,10 +60,7 @@ internal inline fun <reified T> BridgeResult<String>.parseJsonResult(
             BridgeResult.Success(gson.fromJson<T>(data, type))
         } catch (e: Exception) {
             BridgeResult.Error(
-                BridgeError(
-                    BridgeErrorCode.JsonError,
-                    "解析 $label JSON 失败: ${e.message ?: e.javaClass.simpleName}"
-                )
+                ResultEnvelope.error("JSON_ERROR", "解析 $label JSON 失败: ${e.message ?: e.javaClass.simpleName}")
             )
         }
         is BridgeResult.Error -> this

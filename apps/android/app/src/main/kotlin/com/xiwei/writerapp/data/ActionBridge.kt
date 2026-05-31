@@ -17,7 +17,7 @@ class ActionBridge internal constructor(private val appService: AppServiceBridge
                     val actions: List<ActionDescriptor> = gson.fromJson(result.data, type)
                     BridgeResult.Success(actions)
                 } catch (e: Exception) {
-                    BridgeResult.Error(BridgeError(BridgeErrorCode.JsonError, "Failed to parse actions: ${e.message}"))
+                    BridgeResult.Error(ResultEnvelope.error("JSON_ERROR", "Failed to parse actions: ${e.message}"))
                 }
             }
             is BridgeResult.Error -> result
@@ -32,7 +32,7 @@ class ActionBridge internal constructor(private val appService: AppServiceBridge
                     val actionResult: ActionResult = gson.fromJson(result.data, ActionResult::class.java)
                     BridgeResult.Success(actionResult)
                 } catch (e: Exception) {
-                    BridgeResult.Error(BridgeError(BridgeErrorCode.JsonError, "Failed to parse action result: ${e.message}"))
+                    BridgeResult.Error(ResultEnvelope.error("JSON_ERROR", "Failed to parse action result: ${e.message}"))
                 }
             }
             is BridgeResult.Error -> result

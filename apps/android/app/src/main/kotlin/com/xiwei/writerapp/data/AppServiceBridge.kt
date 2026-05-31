@@ -4,8 +4,6 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.xiwei.writerapp.model.BackendType
-import com.xiwei.writerapp.model.BridgeError
-import com.xiwei.writerapp.model.BridgeErrorCode
 import com.xiwei.writerapp.model.ChapterMeta
 import com.xiwei.writerapp.model.ChapterOpenResult
 import com.xiwei.writerapp.model.ChapterSaveReceipt
@@ -60,10 +58,10 @@ class AppServiceBridge(workspacePath: String) {
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
             Log.e(TAG, "WriterException: ${e.message}", e)
-            BridgeResult.Error(BridgeError(e.toBridgeErrorCode(), e.message ?: "Unknown WriterException"))
+            BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown WriterException"))
         } catch (e: Exception) {
             Log.e(TAG, "Exception: ${e.message}", e)
-            BridgeResult.Error(BridgeError(BridgeErrorCode.Unknown, e.message ?: "Unknown error"))
+            BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
         }
     }
 
@@ -73,15 +71,11 @@ class AppServiceBridge(workspacePath: String) {
             val envelope = gson.fromJson<ResultEnvelope<T>>(envelopeJson, type)
             if (envelope.success) {
                 val data = envelope.data ?: return BridgeResult.Error(
-                    BridgeError(BridgeErrorCode.JsonError, "ResultEnvelope 缺少 data")
+                    ResultEnvelope.error("JSON_ERROR", "ResultEnvelope 缺少 data")
                 )
                 BridgeResult.Success(data, envelope)
             } else {
                 BridgeResult.Error(
-                    BridgeError(
-                        BridgeErrorCode.fromWire(envelope.errorCode),
-                        envelope.userMessage ?: "操作失败"
-                    ),
                     ResultEnvelope(
                         success = false,
                         errorCode = envelope.errorCode,
@@ -96,7 +90,7 @@ class AppServiceBridge(workspacePath: String) {
         } catch (e: Exception) {
             Log.e(TAG, "ResultEnvelope parse failed: ${e.message}", e)
             BridgeResult.Error(
-                BridgeError(BridgeErrorCode.JsonError, e.message ?: "ResultEnvelope 解析失败")
+                ResultEnvelope.error("JSON_ERROR", e.message ?: "ResultEnvelope 解析失败")
             )
         }
     }
@@ -109,7 +103,7 @@ class AppServiceBridge(workspacePath: String) {
             BridgeResult.NotLoaded
         } catch (e: Exception) {
             Log.e(TAG, "ResultEnvelope call failed: ${e.message}", e)
-            BridgeResult.Error(BridgeError(BridgeErrorCode.Unknown, e.message ?: "ResultEnvelope 调用失败"))
+            BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "ResultEnvelope 调用失败"))
         }
     }
 
@@ -363,18 +357,18 @@ class AppServiceBridge(workspacePath: String) {
     }
 }
 
-private fun WriterException.toBridgeErrorCode(): BridgeErrorCode = when (this) {
-    is WriterException.Io -> BridgeErrorCode.IoError
-    is WriterException.Json -> BridgeErrorCode.JsonError
-    is WriterException.InvalidWorkspace -> BridgeErrorCode.InvalidWorkspace
-    is WriterException.ProjectNotFound -> BridgeErrorCode.ProjectNotFound
-    is WriterException.VolumeNotFound -> BridgeErrorCode.VolumeNotFound
-    is WriterException.ChapterNotFound -> BridgeErrorCode.ChapterNotFound
-    is WriterException.EmptyOverwriteBlocked -> BridgeErrorCode.EmptyOverwriteBlocked
-    is WriterException.NotImplemented -> BridgeErrorCode.NotImplemented
-    is WriterException.RefuseToDeleteWorkspaceRoot -> BridgeErrorCode.RefuseDeleteWorkspaceRoot
-    is WriterException.InvalidDeleteTarget -> BridgeErrorCode.InvalidDeleteTarget
-    is WriterException.Other -> BridgeErrorCode.Other
+private fun WriterException.toWireErrorCode(): String = when (this) {
+    is WriterException.Io -> "IO_ERROR"
+    is WriterException.Json -> "JSON_ERROR"
+    is WriterException.InvalidWorkspace -> "INVALID_WORKSPACE"
+    is WriterException.ProjectNotFound -> "PROJECT_NOT_FOUND"
+    is WriterException.VolumeNotFound -> "VOLUME_NOT_FOUND"
+    is WriterException.ChapterNotFound -> "CHAPTER_NOT_FOUND"
+    is WriterException.EmptyOverwriteBlocked -> "EMPTY_OVERWRITE_BLOCKED"
+    is WriterException.NotImplemented -> "NOT_IMPLEMENTED"
+    is WriterException.RefuseToDeleteWorkspaceRoot -> "REFUSE_DELETE_WORKSPACE_ROOT"
+    is WriterException.InvalidDeleteTarget -> "INVALID_DELETE_TARGET"
+    is WriterException.Other -> "OTHER"
 }
 
 private fun ProjectDto.toModel() = Project(id, title, createdAt, updatedAt)

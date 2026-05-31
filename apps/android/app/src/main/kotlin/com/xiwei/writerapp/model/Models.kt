@@ -84,32 +84,6 @@ data class ChapterMeta(
     val note: String? = null
 )
 
-enum class BridgeErrorCode(val wireName: String) {
-    IoError("IO_ERROR"),
-    JsonError("JSON_ERROR"),
-    InvalidWorkspace("INVALID_WORKSPACE"),
-    ProjectNotFound("PROJECT_NOT_FOUND"),
-    VolumeNotFound("VOLUME_NOT_FOUND"),
-    ChapterNotFound("CHAPTER_NOT_FOUND"),
-    EmptyOverwriteBlocked("EMPTY_OVERWRITE_BLOCKED"),
-    NotImplemented("NOT_IMPLEMENTED"),
-    RefuseDeleteWorkspaceRoot("REFUSE_DELETE_WORKSPACE_ROOT"),
-    InvalidDeleteTarget("INVALID_DELETE_TARGET"),
-    Other("OTHER"),
-    Unknown("UNKNOWN");
-
-    companion object {
-        fun fromWire(value: String?): BridgeErrorCode {
-            return values().firstOrNull { it.wireName == value } ?: Unknown
-        }
-    }
-}
-
-data class BridgeError(
-    val code: BridgeErrorCode = BridgeErrorCode.Unknown,
-    val message: String
-)
-
 data class ChapterOpenResult(
     val meta: ChapterMeta,
     val content: String

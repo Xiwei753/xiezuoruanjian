@@ -14,7 +14,7 @@ import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.BridgeResult
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.CoreSettingsEvents
-import com.xiwei.writerapp.model.BridgeError
+import com.xiwei.writerapp.data.ResultEnvelope
 import com.xiwei.writerapp.model.LocalSettings
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -398,7 +398,7 @@ class SettingsActivity : AppCompatActivity() {
         saveCurrentState()
 
         Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(BridgeError(message = "Exception during dry run"))) {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during dry run"))) {
                 settingsRepository.performSyncDryRun(currentSyncConfig)
             }
             if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
@@ -443,7 +443,7 @@ class SettingsActivity : AppCompatActivity() {
         saveCurrentState()
 
         Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(BridgeError(message = "Exception during diagnostic run"))) {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during diagnostic run"))) {
                 settingsRepository.performSyncDiagnostics(currentSyncConfig)
             }
             if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
@@ -553,7 +553,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(BridgeError(message = "Exception during sync"))) {
+            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during sync"))) {
                 settingsRepository.performSync(currentSyncConfig)
             }
             if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {

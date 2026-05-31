@@ -318,7 +318,7 @@ class EditorViewModel(
                     }
                     is com.xiwei.writerapp.data.BridgeResult.Error -> {
                         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        if (result.code == com.xiwei.writerapp.model.BridgeErrorCode.EmptyOverwriteBlocked) {
+                        if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
                             if (!isAutoSave) {
                                 _events.send(EditorEvent.ShowSaveFailedDialog("已阻止空内容覆盖，请检查内容是否丢失。"))
                             } else {
