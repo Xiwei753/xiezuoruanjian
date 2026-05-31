@@ -136,10 +136,11 @@ Rectangle {
         // State is only updated after content is successfully loaded.
         var result = editorController.loadChapterContentWithIds(pId, vId, cId);
         if (result) {
-            editorController.projectId = result.projectId || pId;
-            editorController.volumeId = result.volumeId || vId;
-            editorController.chapterId = result.chapterId || cId;
-            editorController.chapterTitle = result.title || cTitle || "";
+            var d = result.data || {};
+            editorController.projectId = d.projectId || pId;
+            editorController.volumeId = d.volumeId || vId;
+            editorController.chapterId = d.chapterId || cId;
+            editorController.chapterTitle = d.title || cTitle || "";
         }
     }
 

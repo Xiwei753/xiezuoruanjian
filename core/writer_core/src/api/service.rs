@@ -947,6 +947,16 @@ impl WriterCoreApi {
         self.core().ai_available()
     }
 
+    pub fn list_registered_actions_json(&self) -> String {
+        let result: ApiResult<Vec<crate::api::types::ActionDescriptorDto>> = self.list_registered_actions();
+        ResultEnvelope::from_api_result(result).to_json_string()
+    }
+
+    pub fn execute_action_json(&self, action_id: &str, args_json: &str, context_json: &str) -> String {
+        let result: ApiResult<crate::api::types::ActionResultDto> = self.execute_action_ext(action_id, args_json, context_json);
+        ResultEnvelope::from_api_result(result).to_json_string()
+    }
+
     pub fn get_writing_stats_summary(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
         let value = self.core().get_writing_stats_summary(start_date, end_date).map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)

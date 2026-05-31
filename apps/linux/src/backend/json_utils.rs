@@ -50,16 +50,22 @@ pub(crate) fn serde_to_qjson_array(value: serde_json::Value) -> QJsonArray {
 pub(crate) fn bridge_error_object(message: &str, code: &str) -> QJsonObject {
     serde_to_qjson_object(serde_json::json!({
         "success": false,
-        "code": code,
-        "error": message,
-        "message": message
+        "errorCode": code,
+        "userMessage": message,
+        "rawError": message,
+        "warnings": [],
+        "changedPaths": [],
+        "changedEntities": []
     }))
 }
 
 pub(crate) fn bridge_success_object(data: serde_json::Value) -> QJsonObject {
     serde_to_qjson_object(serde_json::json!({
         "success": true,
-        "data": data
+        "data": data,
+        "warnings": [],
+        "changedPaths": [],
+        "changedEntities": []
     }))
 }
 

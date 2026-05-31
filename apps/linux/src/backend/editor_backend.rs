@@ -235,7 +235,11 @@ impl AppBackend {
                 Err(e) => {
                     let err_json = serde_json::json!({
                         "success": false,
-                        "message": e.to_string()
+                        "userMessage": e.to_string(),
+                        "rawError": e.to_string(),
+                        "warnings": [],
+                        "changedPaths": [],
+                        "changedEntities": [],
                     });
                     err_json.to_string().into()
                 }
@@ -243,7 +247,12 @@ impl AppBackend {
         } else {
             let err_json = serde_json::json!({
                 "success": false,
-                "message": "Core not initialized"
+                "errorCode": "INVALID_WORKSPACE",
+                "userMessage": "Core not initialized",
+                "rawError": "Core not initialized",
+                "warnings": [],
+                "changedPaths": [],
+                "changedEntities": [],
             });
             err_json.to_string().into()
         }

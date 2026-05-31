@@ -203,7 +203,7 @@ Rectangle {
                             starmapDescField.text = ""
                             loadStarmaps()
                         } else {
-                            console.warn("[WriterDebug] create_starmap failed:", result ? result.message : "empty result")
+                            console.warn("[WriterDebug] create_starmap failed:", result ? (result.userMessage || result.message || JSON.stringify(result)) : "empty result")
                         }
                     }
                 }

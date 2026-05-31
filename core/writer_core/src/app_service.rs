@@ -461,4 +461,21 @@ impl WriterAppService {
     ) -> Result<String, WriterError> {
         self.api.find_starmap_references_json(&target_starmap_id)
     }
+
+    pub fn list_registered_actions_json(&self) -> String {
+        self.api.list_registered_actions_json()
+    }
+
+    pub fn execute_action_json(
+        &self,
+        action_id: String,
+        args_json: String,
+        context_json: String,
+    ) -> String {
+        self.api.execute_action_json(&action_id, &args_json, &context_json)
+    }
+
+    pub fn ai_available(&self) -> bool {
+        self.api.ai_available()
+    }
 }

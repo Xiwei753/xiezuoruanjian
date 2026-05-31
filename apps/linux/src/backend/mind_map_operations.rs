@@ -3,17 +3,23 @@
 // =============================================================================
 
 use super::*;
+use writer_core::api::{WriterCoreApi, WriterError};
+
+fn envelope_not_initialized() -> QString {
+    WriterCoreApi::envelope_json::<serde_json::Value>(Err(WriterError::InvalidWorkspace)).into()
+}
+
+fn envelope_err(e: WriterError) -> QString {
+    WriterCoreApi::envelope_json::<serde_json::Value>(Err(e)).into()
+}
 
 impl AppBackend {
     pub(crate) fn get_mind_map_snapshot_json(&self, project_id: QString) -> QString {
         let pid = project_id.to_string();
         if let Some(api) = self.core_api() {
-            match api.get_mind_map_snapshot(&pid) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.get_mind_map_snapshot(&pid)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -21,24 +27,18 @@ impl AppBackend {
         let pid = project_id.to_string();
         let t = title.to_string();
         if let Some(api) = self.core_api() {
-            match api.create_mind_map_graph(&pid, &t) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.create_mind_map_graph(&pid, &t)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
     pub(crate) fn list_mind_map_graphs_json(&self, project_id: QString) -> QString {
         let pid = project_id.to_string();
         if let Some(api) = self.core_api() {
-            match api.list_mind_map_graphs(&pid) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.list_mind_map_graphs(&pid)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -46,12 +46,9 @@ impl AppBackend {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         if let Some(api) = self.core_api() {
-            match api.set_default_mind_map_graph(&pid, &gid) {
-                Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.set_default_mind_map_graph(&pid, &gid)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -62,16 +59,13 @@ impl AppBackend {
 
         let node: writer_core::api::types::MindMapGraphNodeDto = match serde_json::from_str(&nj) {
             Ok(n) => n,
-            Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid node JSON: {}", e) }).to_string().into(),
+            Err(e) => return envelope_err(WriterError::Json(e.to_string())),
         };
 
         if let Some(api) = self.core_api() {
-            match api.create_mind_map_node(&pid, &gid, node) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.create_mind_map_node(&pid, &gid, node)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -91,16 +85,13 @@ impl AppBackend {
 
         let patch: NodePatch = match serde_json::from_str(&pj) {
             Ok(p) => p,
-            Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid patch JSON: {}", e) }).to_string().into(),
+            Err(e) => return envelope_err(WriterError::Json(e.to_string())),
         };
 
         if let Some(api) = self.core_api() {
-            match api.update_mind_map_node(&pid, &gid, &nid, writer_core::api::types::MindMapNodePatchDto { title: patch.title, kind: patch.kind, payload: patch.payload.map(Some), tags: patch.tags }) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.update_mind_map_node(&pid, &gid, &nid, writer_core::api::types::MindMapNodePatchDto { title: patch.title, kind: patch.kind, payload: patch.payload.map(Some), tags: patch.tags })).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -110,12 +101,9 @@ impl AppBackend {
         let nid = node_id.to_string();
 
         if let Some(api) = self.core_api() {
-            match api.delete_mind_map_node(&pid, &gid, &nid, cascade) {
-                Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.delete_mind_map_node(&pid, &gid, &nid, cascade)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -126,16 +114,13 @@ impl AppBackend {
 
         let edge: writer_core::api::types::MindMapGraphEdgeDto = match serde_json::from_str(&ej) {
             Ok(e) => e,
-            Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid edge JSON: {}", e) }).to_string().into(),
+            Err(e) => return envelope_err(WriterError::Json(e.to_string())),
         };
 
         if let Some(api) = self.core_api() {
-            match api.create_mind_map_edge(&pid, &gid, edge) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.create_mind_map_edge(&pid, &gid, edge)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -154,16 +139,13 @@ impl AppBackend {
 
         let patch: EdgePatch = match serde_json::from_str(&pj) {
             Ok(p) => p,
-            Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid patch JSON: {}", e) }).to_string().into(),
+            Err(e) => return envelope_err(WriterError::Json(e.to_string())),
         };
 
         if let Some(api) = self.core_api() {
-            match api.update_mind_map_edge(&pid, &gid, &eid, writer_core::api::types::MindMapEdgePatchDto { kind: patch.kind, label: patch.label.map(Some), payload: patch.payload.map(Some) }) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.update_mind_map_edge(&pid, &gid, &eid, writer_core::api::types::MindMapEdgePatchDto { kind: patch.kind, label: patch.label.map(Some), payload: patch.payload.map(Some) })).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -173,12 +155,9 @@ impl AppBackend {
         let eid = edge_id.to_string();
 
         if let Some(api) = self.core_api() {
-            match api.delete_mind_map_edge(&pid, &gid, &eid) {
-                Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.delete_mind_map_edge(&pid, &gid, &eid)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -189,16 +168,13 @@ impl AppBackend {
 
         let anchor: writer_core::api::types::MindMapAnchorDto = match serde_json::from_str(&aj) {
             Ok(a) => a,
-            Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid anchor JSON: {}", e) }).to_string().into(),
+            Err(e) => return envelope_err(WriterError::Json(e.to_string())),
         };
 
         if let Some(api) = self.core_api() {
-            match api.create_mind_map_anchor(&pid, &gid, anchor) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.create_mind_map_anchor(&pid, &gid, anchor)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -210,12 +186,9 @@ impl AppBackend {
         let lk = link_kind.to_string();
 
         if let Some(api) = self.core_api() {
-            match api.bind_mind_map_node_to_anchor(&pid, &gid, &nid, &aid, &lk) {
-                Ok(data) => serde_json::json!({ "success": true, "data": data, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.bind_mind_map_node_to_anchor(&pid, &gid, &nid, &aid, &lk)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 
@@ -226,16 +199,13 @@ impl AppBackend {
 
         let layout: writer_core::api::types::MindMapLayoutDto = match serde_json::from_str(&lj) {
             Ok(l) => l,
-            Err(e) => return serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("Invalid layout JSON: {}", e) }).to_string().into(),
+            Err(e) => return envelope_err(WriterError::Json(e.to_string())),
         };
 
         if let Some(api) = self.core_api() {
-            match api.save_mind_map_layout(&pid, &gid, layout) {
-                Ok(_) => serde_json::json!({ "success": true, "data": true, "error": serde_json::Value::Null }).to_string().into(),
-                Err(e) => serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": format!("{}", e) }).to_string().into(),
-            }
+            WriterCoreApi::envelope_json(api.save_mind_map_layout(&pid, &gid, layout)).into()
         } else {
-            serde_json::json!({ "success": false, "data": serde_json::Value::Null, "error": "Core not initialized" }).to_string().into()
+            envelope_not_initialized()
         }
     }
 }

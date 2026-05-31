@@ -39,26 +39,37 @@ impl AppBackend {
             return match core.open_chapter(&p, &v, &c) {
                 Ok(content) => serde_json::json!({
                     "success": true,
-                    "content": content.content,
-                    "title": content.meta.title,
-                    "projectId": p,
-                    "volumeId": v,
-                    "chapterId": c,
-                    "meta": content.meta,
+                    "data": {
+                        "content": content.content,
+                        "title": content.meta.title,
+                        "projectId": p,
+                        "volumeId": v,
+                        "chapterId": c,
+                        "meta": content.meta,
+                    },
+                    "warnings": [],
+                    "changedPaths": [],
+                    "changedEntities": [],
                 }).to_string().into(),
                 Err(e) => serde_json::json!({
                     "success": false,
-                    "code": "CORE_ERROR",
-                    "error": format!("读取章节失败: {}", e),
-                    "message": format!("读取章节失败: {}", e),
+                    "errorCode": "CORE_ERROR",
+                    "userMessage": format!("读取章节失败: {}", e),
+                    "rawError": format!("{}", e),
+                    "warnings": [],
+                    "changedPaths": [],
+                    "changedEntities": [],
                 }).to_string().into(),
             };
         }
         serde_json::json!({
             "success": false,
-            "code": "INVALID_WORKSPACE",
-            "error": "后端未初始化",
-            "message": "后端未初始化",
+            "errorCode": "INVALID_WORKSPACE",
+            "userMessage": "后端未初始化",
+            "rawError": "Core not initialized",
+            "warnings": [],
+            "changedPaths": [],
+            "changedEntities": [],
         }).to_string().into()
     }
 

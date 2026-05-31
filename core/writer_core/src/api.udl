@@ -406,4 +406,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     string find_starmap_references_json(string target_starmap_id);
+
+    string list_registered_actions_json();
+
+    string execute_action_json(string action_id, string args_json, string context_json);
+
+    boolean ai_available();
 };

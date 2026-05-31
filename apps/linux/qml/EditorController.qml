@@ -275,9 +275,9 @@ QtObject {
             }
             return true;
         } else {
-            if (result && result.code === "EMPTY_OVERWRITE_BLOCKED") {
-                logWriterWarning("empty_save_blocked", "blocked by core: " + (result.message || ""));
-                controller.emptySaveBlocked(result.message || qsTr("检测到异常空内容覆盖，已阻止保存。"));
+            if (result && result.errorCode === "EMPTY_OVERWRITE_BLOCKED") {
+                logWriterWarning("empty_save_blocked", "blocked by core: " + (result.userMessage || ""));
+                controller.emptySaveBlocked(result.userMessage || qsTr("检测到异常空内容覆盖，已阻止保存。"));
             }
             return false;
         }
@@ -294,12 +294,12 @@ QtObject {
         var result = backendRef.open_chapter(pId, vId, cId);
 
         if (!result.success) {
-            console.error("[WriterDebug] Failed to open chapter:", result.error);
+            console.error("[WriterDebug] Failed to open chapter:", result.userMessage || result.rawError);
             isLoadingChapter = false;
             return null;
         }
 
-        var content = normalizePlainText(result.content || "");
+        var content = normalizePlainText(result.data ? result.data.content || "" : "");
 
         // Use PlainText mode: line spacing/indent are applied via QTextDocument
         // block formats in DocumentHandler, not via HTML.

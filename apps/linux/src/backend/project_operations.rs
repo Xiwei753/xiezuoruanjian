@@ -240,7 +240,7 @@ impl AppBackend {
                     let final_res = serde_json::json!({
                         "success": true,
                         "data": { "project": proj },
-                        "message": format!("作品「{}」创建成功", proj.title),
+                        "userMessage": format!("作品「{}」创建成功", proj.title),
                         "state": state_val,
                         "changedEntities": ["ProjectList", "WorkspaceTree"]
                     });
@@ -283,7 +283,7 @@ impl AppBackend {
         }
         let final_res = serde_json::json!({
             "success": true,
-            "message": "创建卷成功",
+            "userMessage": "创建卷成功",
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()
@@ -306,7 +306,7 @@ impl AppBackend {
         }
         let final_res = serde_json::json!({
             "success": true,
-            "message": "创建章节成功",
+            "userMessage": "创建章节成功",
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()
@@ -333,7 +333,7 @@ impl AppBackend {
         self.debug_log("tree", "select_item_success", &format!("[actionId={}] selection completed", action_id_str));
         let final_res = serde_json::json!({
             "success": true,
-            "message": "选择成功",
+            "userMessage": "选择成功",
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()
@@ -355,7 +355,7 @@ impl AppBackend {
         };
         let final_res = serde_json::json!({
             "success": success,
-            "message": msg,
+            "userMessage": msg,
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()
@@ -377,7 +377,7 @@ impl AppBackend {
         };
         let final_res = serde_json::json!({
             "success": success,
-            "message": msg,
+            "userMessage": msg,
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()
@@ -399,7 +399,7 @@ impl AppBackend {
         };
         let final_res = serde_json::json!({
             "success": success,
-            "message": msg,
+            "userMessage": msg,
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()

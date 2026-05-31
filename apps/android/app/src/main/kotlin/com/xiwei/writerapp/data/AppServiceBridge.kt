@@ -347,6 +347,20 @@ class AppServiceBridge(workspacePath: String) {
     fun findStarmapReferences(targetStarmapId: String): BridgeResult<String> = wrapResult {
         service.findStarmapReferencesJson(targetStarmapId)
     }
+
+    fun listRegisteredActions(): BridgeResult<String> = wrapResult {
+        service.listRegisteredActionsJson()
+    }
+
+    fun executeAction(actionId: String, argsJson: String, contextJson: String): BridgeResult<String> = wrapResult {
+        service.executeActionJson(actionId, argsJson, contextJson)
+    }
+
+    fun aiAvailable(): Boolean = try {
+        service.aiAvailable()
+    } catch (_: Throwable) {
+        false
+    }
 }
 
 private fun WriterException.toBridgeErrorCode(): BridgeErrorCode = when (this) {

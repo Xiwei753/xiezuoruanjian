@@ -342,7 +342,7 @@ ScrollView {
                         onClicked: {
                             if (workspaceDiagText.text.length > 0 && root.backendRef) {
                                 var result = JSON.parse(root.backendRef.copy_text_to_clipboard(workspaceDiagText.text))
-                                workspaceDiagText.text = result.success ? qsTr("诊断已复制") : (qsTr("复制失败: ") + result.message)
+                                workspaceDiagText.text = result.success ? qsTr("诊断已复制") : (qsTr("复制失败: ") + (result.userMessage || result.message || ""))
                             }
                         }
                         contentItem: AppText {

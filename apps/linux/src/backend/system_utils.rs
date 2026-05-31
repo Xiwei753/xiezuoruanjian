@@ -60,8 +60,11 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
     let mk_success = |backend: &str| -> serde_json::Value {
         serde_json::json!({
             "success": true,
-            "backend": backend,
-            "message": format!("已复制 (backend={})", backend),
+            "data": { "backend": backend },
+            "userMessage": format!("已复制 (backend={})", backend),
+            "warnings": [],
+            "changedPaths": [],
+            "changedEntities": [],
         })
     };
 
@@ -119,7 +122,11 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
 
     serde_json::json!({
         "success": false,
-        "backend": "none",
-        "message": "复制失败：未找到可用的剪贴板后端。请安装 wl-copy (Wayland)、xclip 或 xsel (X11)。",
+        "errorCode": "CLIPBOARD_UNAVAILABLE",
+        "userMessage": "复制失败：未找到可用的剪贴板后端。请安装 wl-copy (Wayland)、xclip 或 xsel (X11)。",
+        "rawError": "No clipboard backend available",
+        "warnings": [],
+        "changedPaths": [],
+        "changedEntities": [],
     })
 }

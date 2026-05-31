@@ -26,7 +26,6 @@ class SettingsRepository(context: Context) {
     private val appContext = context.applicationContext
     private val settingsBridge = BridgeProvider.getSettingsBridge(context)
     private val syncBridge = BridgeProvider.getSyncBridge(context)
-    private val nativeStatusBridge = BridgeProvider.getNativeStatusBridge(context)
 
     fun getLocalSettings(): LocalSettings {
         return when (val result = settingsBridge.getLocalSettings()) {
@@ -155,11 +154,11 @@ class SettingsRepository(context: Context) {
     }
 
     fun aiAvailable(): Boolean {
-        return nativeStatusBridge.aiAvailable()
+        return BridgeProvider.getAiStatus(context)
     }
 
     fun workspaceDir(): String {
-        return nativeStatusBridge.workspaceDir
+        return WorkspaceManager.getWorkspaceDir(context).absolutePath
     }
 
     fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> {

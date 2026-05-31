@@ -51,14 +51,6 @@ data class ResultEnvelope<out T>(
     }
 }
 
-internal fun <T> NativeResult<T>.toBridgeResult(): BridgeResult<T> {
-    return when (this) {
-        is NativeResult.Success -> BridgeResult.Success(data)
-        is NativeResult.Error -> BridgeResult.Error(bridgeError)
-        NativeResult.NotLoaded -> BridgeResult.NotLoaded
-    }
-}
-
 internal inline fun <reified T> BridgeResult<String>.parseJsonResult(
     gson: Gson,
     label: String
