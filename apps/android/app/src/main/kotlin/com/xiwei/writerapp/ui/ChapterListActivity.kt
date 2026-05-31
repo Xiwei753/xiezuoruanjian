@@ -2,6 +2,7 @@ package com.xiwei.writerapp.ui
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import android.view.LayoutInflater
@@ -57,6 +58,7 @@ class ChapterListActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val TAG = "ChapterListActivity"
         private const val type_VOLUME_HEADER = 0
         private const val type_CHAPTER = 1
         private const val type_EMPTY_HINT = 2
@@ -132,7 +134,7 @@ class ChapterListActivity : AppCompatActivity() {
                     tvStatsChapters.text = "章: ${stats.chapterCount}"
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.w(TAG, "Failed to load project stats", e)
             }
         }
     }
@@ -515,7 +517,7 @@ class ChapterListActivity : AppCompatActivity() {
                         try {
                             startActivity(intent)
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e(TAG, "Failed to open editor", e)
                             android.widget.Toast.makeText(this@ChapterListActivity, "无法打开编辑器: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                         }
                     }

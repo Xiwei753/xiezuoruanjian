@@ -39,6 +39,9 @@ import java.io.File
 import android.content.Context
 import android.content.pm.PackageManager
 import android.Manifest
+import android.util.Log
+
+private const val TAG = "NativeCoreBridge"
 
 /// JNI 调用结果密封类，仅限 legacy adapter 和领域 Bridge 内部使用。
 internal sealed class NativeResult<out T> {
@@ -79,12 +82,16 @@ internal class NativeCoreBridge(context: Context) {
             System.loadLibrary("writer_core_jni")
             isLoaded = true
         } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
+            logNativeError(e)
             isLoaded = false
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             isLoaded = false
         }
+    }
+
+    private fun logNativeError(e: Throwable) {
+        Log.e(TAG, "Native bridge call failed", e)
     }
 
     // Native methods
@@ -175,7 +182,7 @@ internal class NativeCoreBridge(context: Context) {
         try {
             createWorkspace(workspaceDir)
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
         }
     }
 
@@ -186,7 +193,7 @@ internal class NativeCoreBridge(context: Context) {
         return try {
             validateWorkspace(workspaceDir)
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             false
         }
     }
@@ -204,7 +211,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -225,7 +232,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -246,7 +253,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -267,7 +274,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -288,7 +295,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -309,7 +316,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -330,7 +337,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -351,7 +358,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -372,7 +379,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -393,7 +400,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -414,7 +421,7 @@ internal class NativeCoreBridge(context: Context) {
                 nativeError(response)
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -453,7 +460,7 @@ internal class NativeCoreBridge(context: Context) {
                 nativeError(response)
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -483,7 +490,7 @@ internal class NativeCoreBridge(context: Context) {
                 nativeError(response)
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -519,7 +526,7 @@ internal class NativeCoreBridge(context: Context) {
                 source, insertedChars, deletedChars, pastedChars, aiInsertedChars, sessionId
             )
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             false
         }
     }
@@ -529,7 +536,7 @@ internal class NativeCoreBridge(context: Context) {
         try {
             flushWritingStatsNative(workspaceDir)
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
         }
     }
 
@@ -546,7 +553,7 @@ internal class NativeCoreBridge(context: Context) {
             val summary = gson.fromJson(json, WritingStatsSummary::class.java)
             NativeResult.Success(summary)
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
             NativeResult.Error(e.message ?: "Exception occurred")
         }
@@ -565,7 +572,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -586,7 +593,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -607,7 +614,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -628,7 +635,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -653,7 +660,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
             return NativeResult.Error(e.message ?: "Exception occurred")
         }
@@ -676,7 +683,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -697,7 +704,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -718,7 +725,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -739,7 +746,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -769,7 +776,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            logNativeError(e)
             return NativeResult.Error("Exception calling performSyncDiagnostics: ${e.message}")
         }
     }
@@ -791,7 +798,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -816,7 +823,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) {
                 return NativeResult.NotLoaded
             }
@@ -985,7 +992,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
             return NativeResult.Error(e.message ?: "Exception occurred")
         }
@@ -1256,7 +1263,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
             return NativeResult.Error(e.message ?: "Exception occurred")
         }
@@ -1281,7 +1288,7 @@ internal class NativeCoreBridge(context: Context) {
                 NativeResult.Error(response.error ?: "Unknown error")
             }
         } catch (e: Throwable) {
-            e.printStackTrace()
+            logNativeError(e)
             if (e is UnsatisfiedLinkError) return NativeResult.NotLoaded
             return NativeResult.Error(e.message ?: "Exception occurred")
         }

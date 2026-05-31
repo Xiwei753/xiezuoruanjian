@@ -158,7 +158,7 @@ pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
     }
 }
 
-use sync_bridge::{SyncTaskOutcome, mask_sync_error, sync_error_category, determine_diagnostics_status, format_diagnostics_message, save_sync_configs};
+use sync_bridge::{SyncTaskOutcome, mask_sync_error, sync_error_category, sync_error_category_from_code, determine_diagnostics_status, format_diagnostics_message, save_sync_configs};
 
 fn try_kreadconfig(cmd: &str) -> Option<String> {
     let output = std::process::Command::new(cmd)

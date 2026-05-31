@@ -713,7 +713,7 @@ impl WriterCore {
         })
     }
 
-    /// Write content to a chapter (atomic).
+    /// Write content to a chapter using the core atomic-replace storage path.
     pub fn write_chapter(
         &self,
         project_id: &str,

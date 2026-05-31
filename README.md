@@ -6,7 +6,7 @@
 
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
 - `apps/android`: 原生 Kotlin Android 客户端。作为当前的主客户端。主业务入口为 `AppServiceBridge + UniFFI`，领域 Bridge/Repository/ViewModel/UI 只做平台适配；`NativeCoreBridge` 仅保留为 legacy JSON/JNI 兼容 fallback。Stats/MindMap/StarMap 的残留 JSON 只能封闭在领域 Bridge 内，不是 UI 契约。
-- `apps/linux`: 原生 Linux 客户端站位（骨架），未来使用 Qt/C++。同样必须通过 bindings 调用 Rust 核心。
+- `apps/linux`: 原生 Rust + Qt6/QML Linux 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 
 > 注：原有的 Flutter 客户端由于其架构冲突已彻底移除。有关历史信息，可参阅 `docs/legacy/flutter_removed.md`。
@@ -44,7 +44,7 @@ cargo test
 
 ### Linux 客户端
 
-由于尚未实现完整的构建脚本，可以使用以下命令运行：
+Linux 客户端统一使用 Qt6。CI、`apps/linux/build.rs` 和目录 README 都以 Qt6 为唯一构建链路；不要混入 Qt5 QML/plugin 路径。
 
 ```bash
 cargo run -p linux

@@ -130,7 +130,7 @@ ApplicationWindow {
         interval: 1500
         repeat: false
         onTriggered: {
-            if (workspaceBackend && syncBackend && workspaceBackend.has_workspace && syncBackend.sync_enabled && syncBackend.sync_auto_sync && syncBackend.sync_remote_url && syncBackend.has_sync_token) {
+            if (syncBackend) {
                 syncBackend.request_auto_sync("auto_sync_on_workspace_open");
             }
         }
@@ -141,7 +141,7 @@ ApplicationWindow {
         interval: 1200
         repeat: false
         onTriggered: {
-            if (workspaceBackend && syncBackend && workspaceBackend.has_workspace && syncBackend.sync_enabled && syncBackend.sync_auto_sync && syncBackend.sync_remote_url && syncBackend.has_sync_token) {
+            if (syncBackend) {
                 syncBackend.maybe_auto_sync_on_foreground();
             }
         }

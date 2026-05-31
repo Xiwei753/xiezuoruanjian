@@ -35,7 +35,24 @@ pub fn mask_sync_error(msg: &str) -> String {
     writer_core::sync_service::redact_secrets_from_message(msg, None, None)
 }
 
-/// 根据错误消息内容分类错误类型（用于 UI 展示不同的错误提示）。
+/// 将 core 返回的强类型错误分类映射为 UI 状态码。
+pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str) -> String {
+    match category.unwrap_or("") {
+        "none" | "" => sync_error_category(fallback_msg),
+        "token_missing" => "configured_untested".to_string(),
+        "empty_url" => "not_configured".to_string(),
+        "missing_permission" => "permission_missing".to_string(),
+        "repo_not_found_or_no_permission" | "github_unauthorized" | "github_forbidden" => "auth_failed".to_string(),
+        "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => "network_failed".to_string(),
+        "branch_missing" | "remote_branch_missing" => "branch_missing".to_string(),
+        "non_fast_forward" => "non_fast_forward".to_string(),
+        "conflict" | "checkout_conflict" | "local_blocking_file" => "conflict".to_string(),
+        "unrelated_histories" => "unrelated_histories".to_string(),
+        _ => "error".to_string(),
+    }
+}
+
+/// 根据遗留错误消息内容分类错误类型。仅作为 core 未提供 error_category 时的 fallback。
 pub fn sync_error_category(msg: &str) -> String {
     let lower = msg.to_lowercase();
     if lower.contains("token") && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided")) {
@@ -76,6 +93,39 @@ pub fn sync_error_category(msg: &str) -> String {
         return "network_failed".to_string();
     }
     "error".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_error_category_from_code;
+
+    #[test]
+    fn typed_sync_error_category_takes_precedence() {
+        assert_eq!(
+            sync_error_category_from_code(Some("repo_not_found_or_no_permission"), "unhelpful"),
+            "auth_failed"
+        );
+        assert_eq!(
+            sync_error_category_from_code(Some("dns_failed"), "unhelpful"),
+            "network_failed"
+        );
+        assert_eq!(
+            sync_error_category_from_code(Some("local_blocking_file"), "unhelpful"),
+            "conflict"
+        );
+    }
+
+    #[test]
+    fn typed_sync_error_category_falls_back_when_missing() {
+        assert_eq!(
+            sync_error_category_from_code(None, "repository not found"),
+            "auth_failed"
+        );
+        assert_eq!(
+            sync_error_category_from_code(Some(""), "timeout while connecting"),
+            "network_failed"
+        );
+    }
 }
 
 pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> &'static str {

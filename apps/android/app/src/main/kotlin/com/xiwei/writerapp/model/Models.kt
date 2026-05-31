@@ -303,6 +303,7 @@ data class SyncResult(
     val conflicts: List<SyncConflict> = emptyList(),
     @SerializedName("commit_hash") val commitHash: String? = null,
     val error: String? = null,
+    @SerializedName("error_category") val errorCategory: String? = null,
     @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
     @SerializedName("user_message") val userMessage: String? = null,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,

@@ -10,12 +10,9 @@
 - **ProjectBackend** (`project_backend.rs`)：负责新建项目、分卷等非频繁保存类的管理动作。
 - **EditorBackend** (`editor_backend.rs`)：负责编辑区状态展示，将纯文本通过 QTextDocument 进行传递。
 - **SettingsBackend** (`settings_backend.rs`)：负责在界面层消费强类型的 settings schema，控制外观和字体参数。
-- **SyncBackend** (`sync_backend.rs`)：**高危异步模块**。
-  - 核心实现了基于 `operation_id` 标志的异步结果验证。
-  - 通过 `perform_sync` / `perform_sync_diagnostics` 返回生成的唯一 UUID。
-  - 在异步回调中校验结果的 operation_id，丢弃过期或竞争性异步事件，杜绝多任务同时触发时对界面同步输出区的竞态覆盖。
+- **SyncBackend** (`sync_backend.rs`)：**高危异步模块**。核心实现了基于 `operation_id` 标志的异步结果验证，通过 `perform_sync` / `perform_sync_diagnostics` 返回生成的唯一 UUID，并在异步回调中丢弃过期结果，杜绝多任务同时触发时对界面同步输出区的竞态覆盖。同步错误优先消费 core 返回的 `error_category`，只有旧路径缺失分类时才退回字符串匹配。
 - **StarMapBackend** (`starmap_backend.rs`)：星图关系的桥接层。
 
 ## 架构红线
 
-- 后端各文件**绝对禁止**进行复杂的 UI 日志文字拼接，异步结果一律格式化为标准 JSON (如 `SyncOperationState`) 塞回 UI，由前端自行本地化渲染。
+- 后端各文件禁止新增 UI 业务分支。异步结果通过标准 JSON (如 `SyncOperationState`) 回传给 QML；当前同步状态文案仍在后端集中生成以保持旧 UI 契约稳定，后续本地化迁移必须保持同一结构化状态通道。

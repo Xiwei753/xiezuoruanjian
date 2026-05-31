@@ -3,11 +3,11 @@ package com.xiwei.writerapp
 /**
  * WriterApp — Android 应用入口类
  *
- * 负责应用生命周期管理，监听前后台切换以触发自动同步。
+ * 负责应用生命周期管理，监听前台切换以补充触发自动同步。
  *
  * ## 架构定位
  * - 继承 Application，实现 LifecycleObserver
- * - 监听应用前后台切换事件，控制 AutoSyncScheduler 的启停
+ * - 监听应用前台切换事件，触发 AutoSyncScheduler 配置 WorkManager
  *
  * ## 职责边界
  * - **做**：初始化应用、管理自动同步调度器的生命周期
@@ -19,8 +19,8 @@ package com.xiwei.writerapp
  *
  * ## 使用场景
  * - 应用启动时自动初始化
- * - 应用进入前台时启动自动同步
- * - 应用进入后台时停止自动同步
+ * - 应用进入前台时调度一次即时检查
+ * - 周期自动同步由 WorkManager 持久调度，退后台后不取消
  */
 
 import android.app.Application

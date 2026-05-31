@@ -202,6 +202,7 @@ dictionary SyncResultDto {
     sequence<SyncConflictDto> conflicts;
     string? commit_hash;
     string? error;
+    string? error_category;
     string first_sync_mode;
     string? user_message;
     string? chosen_network_mode;

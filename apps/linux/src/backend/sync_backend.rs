@@ -875,7 +875,7 @@ impl AppBackend {
                     Ok(result) => {
                         if let Some(e) = result.error.as_deref() {
                             if matches!(result.status.as_str(), "success" | "latest_wins_applied" | "no_changes" | "branch_missing_recovered") {
-                                let cat = sync_error_category(e);
+                                let cat = sync_error_category_from_code(result.error_category.as_deref(), e);
                                 debug_log_static("sync", "sync_error_prevented_success", &format!("status={}, masked error={}", result.status, mask_sync_error(e)));
                                 return SyncTaskOutcome {
                                     operation_id: op_id_capture.clone(),
@@ -984,7 +984,7 @@ impl AppBackend {
                             }
                             "error" => {
                                 let e = result.error.as_deref().unwrap_or("未知错误");
-                                let cat = sync_error_category(e);
+                                let cat = sync_error_category_from_code(result.error_category.as_deref(), e);
                                 let m = if cat == "conflict" {
                                     debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(e)));
                                     format!(

@@ -560,6 +560,7 @@ impl AppBackend {
                                 };
                                 match push_result {
                                     Ok(push_res) => {
+                                        let category = push_res.error_category.clone();
                                         let err = push_res.error.unwrap_or_default();
                                         if let Some(se) = save_outcome {
                                             return SyncTaskOutcome {
@@ -568,7 +569,7 @@ impl AppBackend {
                                             };
                                         }
                                         return SyncTaskOutcome {
-                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&err),
+                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category_from_code(category.as_deref(), &err),
                                             action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&err)),
                                         };
                                     }
@@ -601,7 +602,7 @@ impl AppBackend {
                     } else {
                         let err = result.error.unwrap_or_default();
                         SyncTaskOutcome {
-                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&err),
+                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category_from_code(result.error_category.as_deref(), &err),
                             action_result: format!("克隆失败: {}", mask_sync_error(&err)),
                         }
                     }
@@ -663,7 +664,7 @@ impl AppBackend {
                         }
                     } else {
                         let err = result.error.unwrap_or_default();
-                        let cat = sync_error_category(&err);
+                        let cat = sync_error_category_from_code(result.error_category.as_deref(), &err);
                         let action_result = if cat == "conflict" {
                             debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err)));
                             format!(

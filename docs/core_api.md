@@ -57,7 +57,7 @@
 - `find_starmap_references(...) -> Result<Vec<StarMapReference>>`
 
 ### 文件操作
-所有写操作（`save_chapter`、`save_*_settings`）必须使用原子写入（写入临时文件、`fsync/flush`，然后原子 `rename`）。
+所有写操作（`save_chapter`、`save_*_settings`）必须使用 core 的原子替换写入路径：写入临时文件、flush、`fsync` 临时文件，然后 `rename` 替换目标文件。该机制避免目标文件半写入；目录项持久化仍受平台和文件系统语义影响，不宣称跨设备断电的绝对耐久性。
 
 章节写入有防止静默数据丢失的保护机制。在写入章节之前，Core 会读取现有的 `chapter.md`。如果现有内容非空，而普通保存尝试写入空或仅空白的内容，Core 会以 `Error::EmptyOverwriteBlocked` / `EMPTY_OVERWRITE_BLOCKED` 拒绝写入，并保持原文件不变。如需 intentional 清空，必须使用 `clear_chapter_content`、`clear_chapter_content_verified`，或在平台层已确认“用户主动清空”时调用 `save_chapter_content_with_options(..., allow_empty_overwrite=true)` / `save_chapter_verified_with_allow_empty_overwrite(..., true)`；自动保存和普通写入路径不得在未确认用户主动清空时打开该开关。
 
@@ -80,7 +80,7 @@ Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来�
 - GitHub API 同步采用 `app-meta/sync/manifest.sync.json` 作为 LWW 清单。清单文件由 Core 管理，不作为普通用户文件计入 `downloaded_files` / `uploaded_files`。
 - `ManifestFileRecord` 字段包括 `path`、`content_hash`、`updated_at_ms`、`deleted_at_ms`、`device_id`、`op`、`schema_version`。`deleted_at_ms` 为可选 tombstone 时间戳；旧清单缺少该字段时按 `updated_at_ms` 兼容读取。
 - GitHub API 写入使用 Contents API 串行执行：更新文件时带当前远端 blob `sha`，删除文件时带当前远端 blob `sha`；遇到 `409` 会重新读取 `sha` 并重试一次。此路径不调用 Git Database API 写提交，也不调用本地 `fetch/reset`。
-- `SyncResultDto` 的 `uploaded_files`、`downloaded_files`、`local_deletes`、`remote_deletes`、`overwritten_files`、`ignored_files` 为 UI 展示的权威计数来源；`error` 非空时客户端不得显示同步成功，即使状态字符串异常地表示成功。
+- `SyncResultDto` 的 `uploaded_files`、`downloaded_files`、`local_deletes`、`remote_deletes`、`overwritten_files`、`ignored_files` 为 UI 展示的权威计数来源；`error_category` 为同步错误分类的权威来源，客户端仅在该字段为空时退回消息文本分类；`error` 非空时客户端不得显示同步成功，即使状态字符串异常地表示成功。
 - `perform_sync_diagnostics` 在 `github_api` 后端返回 `backend_type = "github_api"`，避免 UI 将 GitHub API 模式误判为传统 Git。
 
 ### Android Bridge 入口

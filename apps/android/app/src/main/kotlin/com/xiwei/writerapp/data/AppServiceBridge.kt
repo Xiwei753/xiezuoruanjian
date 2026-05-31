@@ -487,6 +487,7 @@ private fun SyncResultDto.toModel() = SyncResult(
     conflicts = conflicts.map { it.toModel() },
     commitHash = commitHash,
     error = error,
+    errorCategory = errorCategory,
     firstSyncMode = firstSyncMode.toFirstSyncMode(),
     userMessage = userMessage,
     chosenNetworkMode = chosenNetworkMode,

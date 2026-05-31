@@ -3643,6 +3643,7 @@ data class SyncResultDto (
     var `conflicts`: List<SyncConflictDto>, 
     var `commitHash`: kotlin.String?, 
     var `error`: kotlin.String?, 
+    var `errorCategory`: kotlin.String?,
     var `firstSyncMode`: kotlin.String, 
     var `userMessage`: kotlin.String?, 
     var `chosenNetworkMode`: kotlin.String?, 
@@ -3668,6 +3669,7 @@ public object FfiConverterTypeSyncResultDto: FfiConverterRustBuffer<SyncResultDt
             FfiConverterSequenceTypeSyncConflictDto.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
@@ -3686,6 +3688,7 @@ public object FfiConverterTypeSyncResultDto: FfiConverterRustBuffer<SyncResultDt
             FfiConverterSequenceTypeSyncConflictDto.allocationSize(value.`conflicts`) +
             FfiConverterOptionalString.allocationSize(value.`commitHash`) +
             FfiConverterOptionalString.allocationSize(value.`error`) +
+            FfiConverterOptionalString.allocationSize(value.`errorCategory`) +
             FfiConverterString.allocationSize(value.`firstSyncMode`) +
             FfiConverterOptionalString.allocationSize(value.`userMessage`) +
             FfiConverterOptionalString.allocationSize(value.`chosenNetworkMode`) +
@@ -3703,6 +3706,7 @@ public object FfiConverterTypeSyncResultDto: FfiConverterRustBuffer<SyncResultDt
             FfiConverterSequenceTypeSyncConflictDto.write(value.`conflicts`, buf)
             FfiConverterOptionalString.write(value.`commitHash`, buf)
             FfiConverterOptionalString.write(value.`error`, buf)
+            FfiConverterOptionalString.write(value.`errorCategory`, buf)
             FfiConverterString.write(value.`firstSyncMode`, buf)
             FfiConverterOptionalString.write(value.`userMessage`, buf)
             FfiConverterOptionalString.write(value.`chosenNetworkMode`, buf)
@@ -4383,5 +4387,3 @@ public object FfiConverterSequenceTypeVolumeDto: FfiConverterRustBuffer<List<Vol
     )
     }
     
-
-

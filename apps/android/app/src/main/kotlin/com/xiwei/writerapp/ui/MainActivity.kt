@@ -21,11 +21,17 @@ import com.google.android.material.floatingactionbutton.ExtendedFloatingActionBu
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.SettingsRepository
 import com.xiwei.writerapp.data.WorkspaceRepository
+import com.xiwei.writerapp.data.WorkspaceUseCase
 import com.xiwei.writerapp.model.Project
 import com.xiwei.writerapp.model.RecentEdit
 import com.xiwei.writerapp.model.LocalSettings
 import androidx.appcompat.app.AppCompatDelegate
 import android.os.Build
+import android.util.Log
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * MainActivity — 应用主界面
@@ -70,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statsController: StatsController
 
     private lateinit var workspaceRepository: WorkspaceRepository
+    private lateinit var workspaceUseCase: WorkspaceUseCase
     private lateinit var settingsRepository: SettingsRepository
     private var projects = listOf<Project>()
     private var recentEdits = listOf<RecentEdit>()
@@ -181,6 +188,7 @@ class MainActivity : AppCompatActivity() {
 
         ErrorUtil.safeRun(this) {
             workspaceRepository = WorkspaceRepository(this)
+            workspaceUseCase = WorkspaceUseCase(workspaceRepository)
         }
 
         adapter = ProjectAdapter()
@@ -223,55 +231,63 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncMonetColor() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
-                val hexColor = String.format("#%06X", 0xFFFFFF and colorInt)
+            lifecycleScope.launch {
+                try {
+                    val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
+                    val hexColor = String.format("#%06X", 0xFFFFFF and colorInt)
 
-                if (::settingsRepository.isInitialized) {
-                    val syncable = settingsRepository.getSyncableSettings()
-                    if (syncable.monetColor != hexColor) {
-                        settingsRepository.saveSyncableSettings(syncable.copy(monetColor = hexColor))
+                    if (::settingsRepository.isInitialized) {
+                        withContext(Dispatchers.IO) {
+                            val syncable = settingsRepository.getSyncableSettings()
+                            if (syncable.monetColor != hexColor) {
+                                settingsRepository.saveSyncableSettings(syncable.copy(monetColor = hexColor))
+                            }
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Failed to extract Monet color", e)
                 }
-            } catch (e: Exception) {
-                System.err.println("Failed to extract Monet color: ${e.message}")
             }
         }
     }
 
     private fun loadRecentEdits() {
-        recentEdits = ErrorUtil.safeRun(this, emptyList()) {
-            if (::workspaceRepository.isInitialized) {
-                workspaceRepository.getRecentEdits().take(3) // Only show top 3 on main screen
-            } else {
-                emptyList()
+        lifecycleScope.launch {
+            recentEdits = ErrorUtil.safeRunSuspend(this@MainActivity, emptyList()) {
+                if (::workspaceUseCase.isInitialized) {
+                    workspaceUseCase.getRecentEdits(3)
+                } else {
+                    emptyList()
+                }
             }
-        }
 
-        if (recentEdits.isEmpty()) {
-            recentEditsLayout.visibility = View.GONE
-        } else {
-            recentEditsLayout.visibility = View.VISIBLE
-            recentAdapter.notifyDataSetChanged()
+            if (recentEdits.isEmpty()) {
+                recentEditsLayout.visibility = View.GONE
+            } else {
+                recentEditsLayout.visibility = View.VISIBLE
+                recentAdapter.notifyDataSetChanged()
+            }
         }
     }
 
     private fun loadProjects() {
-        projects = ErrorUtil.safeRun(this, emptyList()) {
-            if (::workspaceRepository.isInitialized) {
-                workspaceRepository.getProjects()
-            } else {
-                emptyList()
+        lifecycleScope.launch {
+            projects = ErrorUtil.safeRunSuspend(this@MainActivity, emptyList()) {
+                if (::workspaceUseCase.isInitialized) {
+                    workspaceUseCase.getProjects()
+                } else {
+                    emptyList()
+                }
             }
-        }
 
-        if (projects.isEmpty()) {
-            projectRecyclerView.visibility = View.GONE
-            emptyStateLayout.visibility = View.VISIBLE
-        } else {
-            projectRecyclerView.visibility = View.VISIBLE
-            emptyStateLayout.visibility = View.GONE
-            adapter.notifyDataSetChanged()
+            if (projects.isEmpty()) {
+                projectRecyclerView.visibility = View.GONE
+                emptyStateLayout.visibility = View.VISIBLE
+            } else {
+                projectRecyclerView.visibility = View.VISIBLE
+                emptyStateLayout.visibility = View.GONE
+                adapter.notifyDataSetChanged()
+            }
         }
     }
 
@@ -286,8 +302,10 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.action_create) { _, _ ->
                 val title = editText.text.toString().trim()
                 if (title.isNotEmpty()) {
-                    ErrorUtil.safeRun(this) {
-                        workspaceRepository.createProject(title)
+                    lifecycleScope.launch {
+                        ErrorUtil.safeRunSuspend(this@MainActivity) {
+                            workspaceUseCase.createProject(title)
+                        }
                         loadProjects()
                     }
                 }
@@ -345,8 +363,10 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.action_ok) { _, _ ->
                 val newTitle = editText.text.toString().trim()
                 if (newTitle.isNotEmpty() && newTitle != project.title) {
-                    ErrorUtil.safeRun(this) {
-                        workspaceRepository.renameProject(project.id, newTitle)
+                    lifecycleScope.launch {
+                        ErrorUtil.safeRunSuspend(this@MainActivity) {
+                            workspaceUseCase.renameProject(project.id, newTitle)
+                        }
                         loadProjects()
                     }
                 }
@@ -360,8 +380,10 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.confirm_delete_project)
             .setMessage("确定要删除作品 \"${project.title}\" 吗？此操作无法恢复。")
             .setPositiveButton(R.string.action_delete) { _, _ ->
-                ErrorUtil.safeRun(this) {
-                    workspaceRepository.deleteProject(project.id)
+                lifecycleScope.launch {
+                    ErrorUtil.safeRunSuspend(this@MainActivity) {
+                        workspaceUseCase.deleteProject(project.id)
+                    }
                     loadProjects()
                 }
             }
@@ -376,8 +398,10 @@ class MainActivity : AppCompatActivity() {
         orderedIds[position] = orderedIds[position - 1]
         orderedIds[position - 1] = temp
 
-        ErrorUtil.safeRun(this) {
-            workspaceRepository.reorderProjects(orderedIds)
+        lifecycleScope.launch {
+            ErrorUtil.safeRunSuspend(this@MainActivity) {
+                workspaceUseCase.reorderProjects(orderedIds)
+            }
             loadProjects()
         }
     }
@@ -389,8 +413,10 @@ class MainActivity : AppCompatActivity() {
         orderedIds[position] = orderedIds[position + 1]
         orderedIds[position + 1] = temp
 
-        ErrorUtil.safeRun(this) {
-            workspaceRepository.reorderProjects(orderedIds)
+        lifecycleScope.launch {
+            ErrorUtil.safeRunSuspend(this@MainActivity) {
+                workspaceUseCase.reorderProjects(orderedIds)
+            }
             loadProjects()
         }
     }

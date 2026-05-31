@@ -22,6 +22,7 @@
 - 依赖 `core/writer_core` Rust 核心库
 - 需要 Qt 6 开发环境，Linux 二进制不应再链接 `libQt5Core` / `libQt5Qml` / `libQt5Quick`
 - 需要支持 C++17 的 C++ 编译器；Linux Qt 绑定会在 `build.rs` 中强制给 `cpp_build` 传入 `-std=c++17`
+- GitHub Actions 也只安装 Qt6 依赖；本地和 CI 不再维护 Qt5 构建链路
 
 ## 使用说明
 

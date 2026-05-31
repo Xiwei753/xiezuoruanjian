@@ -1,9 +1,12 @@
 package com.xiwei.writerapp.data
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+
+private const val TAG = "WorkspaceManager"
 
 /**
  * WorkspaceManager — 工作区目录管理
@@ -59,7 +62,7 @@ object WorkspaceManager {
                 }
             }
         } catch (e: IOException) {
-            e.printStackTrace()
+            Log.w(TAG, "Failed to copy workspace asset", e)
         }
     }
 }

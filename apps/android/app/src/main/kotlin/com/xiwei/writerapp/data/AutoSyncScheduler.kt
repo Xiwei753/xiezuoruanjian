@@ -1,124 +1,105 @@
 package com.xiwei.writerapp.data
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
+import android.util.Log
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequest
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.xiwei.writerapp.model.SyncConfig
 import com.xiwei.writerapp.model.SyncSecrets
+import java.util.concurrent.TimeUnit
 
-/**
- * AutoSyncScheduler — 自动同步调度器
- *
- * 根据用户设置的同步间隔，自动触发后台同步任务。
- *
- * ## 架构定位
- * - WriterApp → AutoSyncScheduler → SettingsRepository → SyncBridge → Rust Core
- *
- * ## 职责边界
- * - **做**：定时检查同步配置、触发自动同步、网络状态检测
- * - **不做**：实际同步操作（由 Rust Core 负责）
- *
- * ## 使用场景
- * - 应用进入前台时启动调度
- * - 应用进入后台时停止调度
- * - 根据 sync_interval_seconds 定时触发同步
- */
 class AutoSyncScheduler(context: Context) {
-    private val settingsRepository = SettingsRepository(context)
-    private val handler = Handler(Looper.getMainLooper())
-    private var scheduled = false
+    private val appContext = context.applicationContext
 
     fun start() {
-        if (scheduled) return
-        scheduled = true
-        handler.postDelayed({
-            scheduled = false
-            try {
-                performAutoSyncIfNeeded("app_foreground")
-            } catch (_: Exception) {
-            }
-        }, 1500L)
+        scheduleFromSettings(appContext)
+        enqueueForegroundCheck(appContext)
     }
 
     fun stop() {
-        scheduled = false
-        handler.removeCallbacksAndMessages(null)
+        // Periodic WorkManager jobs are intentionally not stopped on background.
     }
 
-    private fun performAutoSyncIfNeeded(reason: String) {
-        val config = try {
-            settingsRepository.loadSyncConfig()
-        } catch (_: Exception) {
-            return
-        }
-        val secrets = try {
-            settingsRepository.loadSyncSecrets()
-        } catch (_: Exception) {
-            return
-        }
+    companion object {
+        private const val TAG = "AutoSyncScheduler"
+        private const val UNIQUE_PERIODIC_WORK = "writer_auto_sync_periodic"
+        private const val UNIQUE_FOREGROUND_WORK = "writer_auto_sync_foreground"
+        private const val DEFAULT_INTERVAL_SECONDS = 300L
 
-        if (!shouldSync(config, secrets)) return
-
-        val state = try {
-            settingsRepository.loadSyncState()
-        } catch (_: Exception) {
-            return
-        }
-
-        val elapsed = if (state.lastSyncTime != null && state.lastSyncTime > 0) {
-            (System.currentTimeMillis() / 1000) - state.lastSyncTime
-        } else {
-            null
-        }
-
-        val interval = when {
-            config.syncIntervalSeconds != null && config.syncIntervalSeconds > 0 -> config.syncIntervalSeconds.toLong()
-            else -> 300L
-        }
-
-        if (elapsed != null && elapsed < interval) return
-
-        if (!SyncSession.lock.compareAndSet(false, true)) return
-
-        val taskId = SyncSession.currentTaskId.incrementAndGet()
-
-        Thread {
-            try {
-                val result = settingsRepository.performSync(config)
-                if (SyncSession.currentTaskId.get() == taskId) {
-                    when (result) {
-                        is BridgeResult.Error -> {
-                            System.err.println("AutoSync failed: ${result.message}")
-                        }
-                        BridgeResult.NotLoaded -> {
-                            System.err.println("AutoSync: native core not loaded")
-                        }
-                        is BridgeResult.Success -> {
-                            val syncResult = result.data
-                            val ok = syncResult.status == com.xiwei.writerapp.model.SyncStatus.Success ||
-                                syncResult.status == com.xiwei.writerapp.model.SyncStatus.NoChanges ||
-                                syncResult.status == com.xiwei.writerapp.model.SyncStatus.LatestWinsApplied ||
-                                syncResult.status == com.xiwei.writerapp.model.SyncStatus.BranchMissingRecovered
-                            if (ok) {
-                                SyncChangeBus.notifyChanged()
-                                System.out.println("AutoSync success: reason=$reason")
-                            }
-                        }
-                    }
-                }
+        fun scheduleFromSettings(context: Context) {
+            val appContext = context.applicationContext
+            val settingsRepository = SettingsRepository(appContext)
+            val config = try {
+                settingsRepository.loadSyncConfig()
             } catch (e: Exception) {
-                System.err.println("AutoSync exception: ${e.message}")
-            } finally {
-                SyncSession.lock.set(false)
+                Log.w(TAG, "Unable to load sync config for scheduling", e)
+                cancel(appContext)
+                return
             }
-        }.start()
-    }
+            val secrets = try {
+                settingsRepository.loadSyncSecrets()
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to load sync secrets for scheduling", e)
+                cancel(appContext)
+                return
+            }
 
-    private fun shouldSync(config: SyncConfig, secrets: SyncSecrets): Boolean {
-        if (config.enabled != true) return false
-        if (config.autoSync != true) return false
-        if (config.remoteUrl.isNullOrEmpty()) return false
-        if (secrets.token.isNullOrEmpty()) return false
-        return true
+            if (!shouldSync(config, secrets)) {
+                cancel(appContext)
+                return
+            }
+
+            val intervalMinutes = ((config.syncIntervalSeconds ?: DEFAULT_INTERVAL_SECONDS).toLong())
+                .coerceAtLeast(PeriodicWorkRequest.MIN_PERIODIC_INTERVAL_MILLIS / 1000)
+                .let { TimeUnit.SECONDS.toMinutes(it).coerceAtLeast(15L) }
+            val request = PeriodicWorkRequestBuilder<AutoSyncWorker>(intervalMinutes, TimeUnit.MINUTES)
+                .setConstraints(networkConstraints())
+                .build()
+
+            WorkManager.getInstance(appContext).enqueueUniquePeriodicWork(
+                UNIQUE_PERIODIC_WORK,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request
+            )
+        }
+
+        fun enqueueForegroundCheck(context: Context) {
+            val request = OneTimeWorkRequestBuilder<AutoSyncWorker>()
+                .setInitialDelay(1500L, TimeUnit.MILLISECONDS)
+                .setConstraints(networkConstraints())
+                .build()
+
+            WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
+                UNIQUE_FOREGROUND_WORK,
+                ExistingWorkPolicy.REPLACE,
+                request
+            )
+        }
+
+        fun cancel(context: Context) {
+            val workManager = WorkManager.getInstance(context.applicationContext)
+            workManager.cancelUniqueWork(UNIQUE_PERIODIC_WORK)
+            workManager.cancelUniqueWork(UNIQUE_FOREGROUND_WORK)
+        }
+
+        private fun networkConstraints(): Constraints {
+            return Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+        }
+
+        internal fun shouldSync(config: SyncConfig, secrets: SyncSecrets): Boolean {
+            if (config.enabled != true) return false
+            if (config.autoSync != true) return false
+            if (config.remoteUrl.isNullOrEmpty()) return false
+            if (secrets.token.isNullOrEmpty()) return false
+            return true
+        }
     }
 }

@@ -43,19 +43,28 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            qtbase5-dev \
-            qtdeclarative5-dev \
-            qtquickcontrols2-5-dev \
-            libqt5svg5-dev \
-            qml-module-qtquick2 \
-            qml-module-qtquick-controls2 \
-            qml-module-qtquick-layouts \
-            qml-module-qtquick-window2 \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            qml6-module-qtquick \
+            qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts \
+            qml6-module-qtquick-window \
             build-essential \
             pkg-config \
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev
+
+      - name: Test writer core
+        run: cargo test -p writer_core
+
+      - name: Security audit Rust dependencies
+        run: cargo install cargo-audit --locked && cargo audit
+
+      - name: Test Linux contracts
+        run: cargo test -p linux
 
       - name: Build Linux no-ai
         run: cargo build -p linux --release
@@ -93,19 +102,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            qtbase5-dev \
-            qtdeclarative5-dev \
-            qtquickcontrols2-5-dev \
-            libqt5svg5-dev \
-            qml-module-qtquick2 \
-            qml-module-qtquick-controls2 \
-            qml-module-qtquick-layouts \
-            qml-module-qtquick-window2 \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            qml6-module-qtquick \
+            qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts \
+            qml6-module-qtquick-window \
             build-essential \
             pkg-config \
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev
+
+      - name: Test writer core
+        run: cargo test -p writer_core --features ai
+
+      - name: Test Linux contracts
+        run: cargo test -p linux --features ai
 
       - name: Build Linux ai
         run: cargo build -p linux --release --features ai

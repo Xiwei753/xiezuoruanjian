@@ -41,6 +41,16 @@ jobs:
       - name: Make build script executable
         run: chmod +x tools/build_android.sh
 
+      - name: Test Rust core
+        run: cargo test -p writer_core
+
+      - name: Security audit Rust dependencies
+        run: cargo install cargo-audit --locked && cargo audit
+
+      - name: Test Android unit tests
+        working-directory: apps/android
+        run: ./gradlew testNoAiReleaseUnitTest --tests com.xiwei.writerapp.model.SyncConfigNormalizeTest
+
       - name: Decode Android Keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -106,6 +116,13 @@ jobs:
 
       - name: Make build script executable
         run: chmod +x tools/build_android.sh
+
+      - name: Test Rust core
+        run: cargo test -p writer_core --features ai
+
+      - name: Test Android unit tests
+        working-directory: apps/android
+        run: ./gradlew testAiReleaseUnitTest --tests com.xiwei.writerapp.model.SyncConfigNormalizeTest
 
       - name: Decode Android Keystore
         env:
