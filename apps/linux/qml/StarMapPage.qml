@@ -120,7 +120,7 @@ Rectangle {
                             color: dt ? dt.surfaceVariant : "#DFE3EB"
                             border.color: dt ? dt.border : "#2A2E36"
                             border.width: 1
-                            Text {
+                            AppText {
                                 anchors.centerIn: parent
                                 text: modelData.title || ""
                                 color: dt ? dt.onSurfaceVariant : "#42474E"
@@ -157,7 +157,7 @@ Rectangle {
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
 
-            Text {
+            AppText {
                 text: qsTr("新建星图")
                 color: dt ? dt.onSurface : "#E2E2E5"
                 font.pixelSize: dt ? dt.subtitle : 18
@@ -236,7 +236,7 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
-            Text { text: qsTr("重命名星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            AppText { text: qsTr("重命名星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
             AppTextField { id: renameField; Layout.fillWidth: true; theme: dt; text: renameStarmapDialog.currentTitle; placeholderText: qsTr("星图名称"); onAccepted: renameStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true
@@ -260,7 +260,7 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
-            Text { text: qsTr("新建子星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            AppText { text: qsTr("新建子星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
             AppTextField { id: childTitleField; Layout.fillWidth: true; theme: dt; placeholderText: qsTr("子星图名称"); onAccepted: createChildStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true

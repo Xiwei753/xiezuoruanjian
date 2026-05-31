@@ -53,7 +53,7 @@ Rectangle {
             color: getKindColor(root.kind)
             radius: 4
 
-            Text {
+            AppText {
                 anchors.centerIn: parent
                 text: root.kind
                 color: "white"
@@ -62,7 +62,7 @@ Rectangle {
             }
         }
 
-        Text {
+        AppText {
             Layout.fillWidth: true
             Layout.fillHeight: true
             text: root.title

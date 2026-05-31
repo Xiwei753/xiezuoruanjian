@@ -47,7 +47,7 @@ ComboBox {
         return -1
     }
 
-    contentItem: Text {
+    contentItem: AppText {
         text: control.displayText
         color: control.enabled
             ? (control.theme ? control.theme.textPrimary : "#E2E2E5")
@@ -94,7 +94,7 @@ ComboBox {
 
     delegate: ItemDelegate {
         width: control.width
-        contentItem: Text {
+        contentItem: AppText {
             text: modelData
             color: control.highlightedIndex === index
                 ? (control.theme ? control.theme.onPrimaryContainer : control.palette.highlightedText)

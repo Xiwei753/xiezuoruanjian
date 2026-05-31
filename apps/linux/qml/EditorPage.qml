@@ -47,7 +47,7 @@ Rectangle {
         clip: true
 
         // Placeholder
-        Text {
+        AppText {
             anchors.centerIn: parent
             text: qsTr("请在左侧选择或创建一个章节")
             color: root.appTheme ? root.appTheme.textSecondary : "#8C9198"

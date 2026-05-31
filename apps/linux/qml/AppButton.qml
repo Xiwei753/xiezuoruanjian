@@ -40,7 +40,7 @@ Button {
 
     TextMetrics { id: tm; text: control.text; font.pixelSize: control.theme ? control.theme.label : 13 }
 
-    contentItem: Text {
+    contentItem: AppText {
         text: control.text
         color: control.contentColor
         font.pixelSize: control.theme ? control.theme.label : 13

@@ -43,7 +43,7 @@ Item {
             anchors.rightMargin: dt ? dt.sp12 : 12
             spacing: dt ? dt.sp8 : 8
 
-            Text {
+            AppText {
                 Layout.fillWidth: true
                 text: root.currentText
                 color: dt ? dt.textPrimary : "#E2E4E9"
@@ -52,7 +52,7 @@ Item {
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
             }
-            Text {
+            AppText {
                 text: "v"
                 color: dt ? dt.textMuted : "#606470"
                 font.pixelSize: dt ? dt.fontXs : 11
@@ -98,7 +98,7 @@ Item {
                            ? (dt ? dt.primaryContainer : "#CCE5FF")
                            : "transparent"
 
-                    Text {
+                    AppText {
                         Layout.alignment: Qt.AlignVCenter
                         anchors.left: parent.left
                         anchors.leftMargin: dt ? dt.sp10 : 10

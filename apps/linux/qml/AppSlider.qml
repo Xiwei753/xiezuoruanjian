@@ -39,7 +39,7 @@ Item {
             visible: root.label.length > 0 || root.valueText.length > 0
             spacing: root.theme ? root.theme.sp12 : 12
 
-            Text {
+            AppText {
                 Layout.fillWidth: true
                 text: root.label
                 color: root.theme ? root.theme.textPrimary : "#E2E4E9"
@@ -48,7 +48,7 @@ Item {
                 wrapMode: Text.Wrap
             }
 
-            Text {
+            AppText {
                 text: root.valueText
                 color: root.theme ? root.theme.textSecondary : "#9CA0AB"
                 font.pixelSize: root.theme ? root.theme.caption : 12
@@ -101,7 +101,7 @@ Item {
             }
         }
 
-        Text {
+        AppText {
             Layout.fillWidth: true
             text: root.description
             color: root.theme ? root.theme.textSecondary : "#9CA0AB"

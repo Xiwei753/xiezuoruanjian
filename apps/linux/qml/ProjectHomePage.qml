@@ -116,7 +116,7 @@ Rectangle {
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp12 : 12
 
-            Text {
+            AppText {
                 text: qsTr("重命名作品")
                 color: dt ? dt.onSurface : "#E2E2E5"
                 font.pixelSize: dt ? dt.subtitle : 18

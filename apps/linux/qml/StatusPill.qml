@@ -49,7 +49,7 @@ Rectangle {
             opacity: 0.8
         }
 
-        Text {
+        AppText {
             text: control.text
             visible: control.text.length > 0
             color: control.contentColor

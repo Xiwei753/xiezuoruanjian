@@ -42,7 +42,7 @@ Item {
         anchors.rightMargin: control.theme ? control.theme.sp8 : 8
         spacing: control.theme ? control.theme.sp8 : 8
 
-        Text {
+        AppText {
             text: control.icon
             font.pixelSize: control.theme ? control.theme.fontMd : 13
             Layout.preferredWidth: 20
@@ -50,7 +50,7 @@ Item {
             visible: !control.compact
         }
 
-        Text {
+        AppText {
             text: control.text
             color: {
                 if (control.active) return control.theme ? control.theme.onPrimaryContainer : "#001E31"

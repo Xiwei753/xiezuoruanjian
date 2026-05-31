@@ -37,7 +37,7 @@ Dialog {
             anchors.margins: root.theme ? root.theme.sp24 : 24
             spacing: root.theme ? root.theme.sp16 : 16
 
-            Text {
+            AppText {
                 Layout.fillWidth: true
                 text: root.heading
                 visible: text.length > 0

@@ -66,7 +66,7 @@ ScrollView {
                         actionResultText.text = qsTr("解析 Action 列表失败: ") + e
                     }
                 }
-                contentItem: Text {
+                contentItem: AppText {
                     text: parent.text
                     color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
                     font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
@@ -89,7 +89,7 @@ ScrollView {
                     actionListRepeater.model = []
                     actionResultText.text = ""
                 }
-                contentItem: Text {
+                contentItem: AppText {
                     text: parent.text
                     color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                     font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
@@ -185,7 +185,7 @@ ScrollView {
                                     actionResultText.text = qsTr("解析结果失败: ") + result
                                 }
                             }
-                            contentItem: Text {
+                            contentItem: AppText {
                                 text: parent.text
                                 color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
                                 font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
@@ -234,7 +234,7 @@ ScrollView {
                                     actionResultText.text = qsTr("解析结果失败: ") + result
                                 }
                             }
-                            contentItem: Text {
+                            contentItem: AppText {
                                 text: parent.text
                                 color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
                                 font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
@@ -320,7 +320,7 @@ ScrollView {
                                 workspaceDiagText.text = qsTr("解析诊断失败: ") + e
                             }
                         }
-                        contentItem: Text {
+                        contentItem: AppText {
                             text: parent.text
                             color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
                             font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
@@ -341,7 +341,7 @@ ScrollView {
                                 workspaceDiagText.text = result.success ? qsTr("诊断已复制") : (qsTr("复制失败: ") + result.message)
                             }
                         }
-                        contentItem: Text {
+                        contentItem: AppText {
                             text: parent.text
                             color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                             font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12

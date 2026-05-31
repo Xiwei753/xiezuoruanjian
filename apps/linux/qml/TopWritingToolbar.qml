@@ -52,20 +52,20 @@ Rectangle {
                 id: fontRow
                 anchors.centerIn: parent
                 spacing: dt ? dt.sp4 : 4
-                Text {
+                AppText {
                     text: "A"
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                     font.weight: Font.Bold
                 }
-                Text {
+                AppText {
                     text: Math.round(root.currentFontSize) + "px"
                     color: dt ? dt.textPrimary : "#E2E2E5"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
-                Text {
+                AppText {
                     text: "\u25BE"
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
@@ -96,19 +96,19 @@ Rectangle {
                 id: layoutRow
                 anchors.centerIn: parent
                 spacing: dt ? dt.sp4 : 4
-                Text {
+                AppText {
                     text: "\u2630"
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
-                Text {
+                AppText {
                     text: qsTr("排版设置")
                     color: dt ? dt.textPrimary : "#E2E2E5"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
-                Text {
+                AppText {
                     text: "\u25BE"
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
@@ -140,7 +140,7 @@ Rectangle {
                 id: formatRow
                 anchors.centerIn: parent
                 spacing: dt ? dt.sp4 : 4
-                Text {
+                AppText {
                     text: qsTr("一键排版")
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
@@ -172,7 +172,7 @@ Rectangle {
                 id: starRow
                 anchors.centerIn: parent
                 spacing: dt ? dt.sp4 : 4
-                Text {
+                AppText {
                     text: qsTr("星图")
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
@@ -202,7 +202,7 @@ Rectangle {
                 id: statsRow
                 anchors.centerIn: parent
                 spacing: dt ? dt.sp4 : 4
-                Text {
+                AppText {
                     text: qsTr("统计")
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
@@ -222,7 +222,7 @@ Rectangle {
         Item { Layout.preferredWidth: dt ? dt.sp8 : 8 }
 
         // Save status
-        Text {
+        AppText {
             text: root.saveStatus || ""
             color: dt ? dt.textSecondary : "#8C9198"
             font.pixelSize: dt ? dt.caption : 12
@@ -249,7 +249,7 @@ Rectangle {
         contentItem: ColumnLayout {
             spacing: dt ? dt.sp12 : 12
 
-            Text {
+            AppText {
                 text: qsTr("字号")
                 color: dt ? dt.textPrimary : "#E2E4E9"
                 font.pixelSize: dt ? dt.subtitle : 18
@@ -272,7 +272,7 @@ Rectangle {
                                (dt ? dt.primaryContainer : "#CCE5FF") :
                                presetHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
-                        Text {
+                        AppText {
                             anchors.centerIn: parent
                             text: modelData
                             color: Math.round(root.currentFontSize) === modelData ?
@@ -302,7 +302,7 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: dt ? dt.sp8 : 8
 
-                Text {
+                AppText {
                     text: "10"
                     color: dt ? dt.textMuted : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
@@ -319,14 +319,14 @@ Rectangle {
                     onMoved: root.fontSizeChanged(value)
                 }
 
-                Text {
+                AppText {
                     text: "40"
                     color: dt ? dt.textMuted : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
                 }
             }
 
-            Text {
+            AppText {
                 text: Math.round(root.currentFontSize) + " px"
                 color: dt ? dt.textSecondary : "#9CA0AB"
                 font.pixelSize: dt ? dt.fontSm : 12
@@ -353,7 +353,7 @@ Rectangle {
         contentItem: ColumnLayout {
             spacing: dt ? dt.sp12 : 12
 
-            Text {
+            AppText {
                 text: qsTr("排版设置")
                 color: dt ? dt.textPrimary : "#E2E4E9"
                 font.pixelSize: dt ? dt.subtitle : 18
@@ -364,7 +364,7 @@ Rectangle {
             // Line spacing
             ColumnLayout {
                 spacing: dt ? dt.sp6 : 6
-                Text {
+                AppText {
                     text: qsTr("行距")
                     color: dt ? dt.textSecondary : "#9CA0AB"
                     font.pixelSize: dt ? dt.fontSm : 12
@@ -389,7 +389,7 @@ Rectangle {
                                    (dt ? dt.primaryContainer : "#CCE5FF") :
                                    lsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
-                            Text {
+                            AppText {
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ?
@@ -423,12 +423,12 @@ Rectangle {
                 Column {
                     Layout.fillWidth: true
                     spacing: 2
-                    Text {
+                    AppText {
                         text: qsTr("首行缩进")
                         color: dt ? dt.textPrimary : "#E2E2E5"
                         font.pixelSize: dt ? dt.fontMd : 14
                     }
-                    Text {
+                    AppText {
                         text: qsTr("段落开头缩进两个字符")
                         color: dt ? dt.textMuted : "#8C9198"
                         font.pixelSize: dt ? dt.fontXs : 11

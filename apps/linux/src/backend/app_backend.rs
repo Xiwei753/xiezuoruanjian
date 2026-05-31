@@ -224,7 +224,7 @@ pub struct AppBackend {
     current_sync_proxy_port: u16,
     current_sync_username: String,
     current_sync_token: String,
-    current_sync_action_result: String,
+    current_sync_operation_state: String,
     current_sync_status: String,
     current_sync_in_progress: bool,
     current_last_sync_time: i64,
@@ -822,7 +822,7 @@ mod tests {
         backend.perform_sync_dry_run();
 
         assert_eq!(backend.current_sync_status, "error");
-        assert!(backend.current_sync_action_result.contains("未配置远程仓库 URL"));
+        assert!(backend.current_sync_operation_state.contains("未配置远程仓库 URL"));
     }
 }
 

@@ -69,7 +69,7 @@ Dialog {
             anchors.fill: parent
             anchors.leftMargin: dt ? dt.sp24 : 24
             anchors.rightMargin: dt ? dt.sp16 : 16
-            Text { text: qsTr("设置"); color: dt ? dt.textPrimary : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
+            AppText { text: qsTr("设置"); color: dt ? dt.textPrimary : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
             ToolbarButton { text: qsTr("关闭"); theme: root.dt; onClicked: root.close() }
         }
     }

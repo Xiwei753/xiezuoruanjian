@@ -40,7 +40,7 @@ Dialog {
         anchors.margins: theme ? theme.sp24 : 24
         spacing: theme ? theme.sp16 : 16
 
-        Text {
+        AppText {
             text: qsTr("新建作品")
             color: theme ? theme.textPrimary : "#E2E2E5"
             font.pixelSize: theme ? theme.subtitle : 18
@@ -48,7 +48,7 @@ Dialog {
             font.weight: Font.DemiBold
         }
 
-        Text {
+        AppText {
             text: qsTr("请输入作品名称：")
             color: theme ? theme.onSurfaceVariant : "#42474E"
             font.pixelSize: theme ? theme.body : 14

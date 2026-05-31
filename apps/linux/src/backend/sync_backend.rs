@@ -3,6 +3,13 @@ use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
+
+// -----------------------------------------------------------------------------
+// [架构注释]: SyncBackend 作为同步功能的桥接层 (Adapter)。
+// 其职责是：接收来自 QML 层的指令 -> 调用 core/writer_core 中的领域接口 -> 将核心结果封装为结构化的 `sync_operation_state` JSON 格式返回给 QML。
+// 严禁在此处拼接 UI 展示文案，确保 Core 层与 UI 层的彻底分离。
+// -----------------------------------------------------------------------------
+
 pub struct SyncBackend {
     base: qt_base_class!(trait QObject),
     sync_enabled: qt_property!(bool; READ sync_enabled WRITE set_sync_enabled NOTIFY sync_config_changed),
@@ -17,7 +24,7 @@ pub struct SyncBackend {
     sync_proxy_port: qt_property!(u16; READ sync_proxy_port WRITE set_sync_proxy_port NOTIFY sync_config_changed),
     sync_username: qt_property!(QString; READ sync_username WRITE set_sync_username NOTIFY sync_config_changed),
     has_sync_token: qt_property!(bool; READ has_sync_token NOTIFY sync_config_changed),
-    sync_action_result: qt_property!(QString; READ sync_action_result NOTIFY sync_action_completed),
+    sync_operation_state: qt_property!(QString; READ sync_operation_state NOTIFY sync_action_completed),
     sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
     sync_in_progress: qt_property!(bool; READ sync_in_progress NOTIFY sync_status_changed),
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
@@ -79,7 +86,7 @@ impl SyncBackend {
     fn sync_username(&self) -> QString { self.with_app("".into(), |app| app.sync_username()) }
     fn set_sync_username(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_username(val)); self.sync_config_changed(); }
     fn has_sync_token(&self) -> bool { self.with_app(false, |app| app.has_sync_token()) }
-    fn sync_action_result(&self) -> QString { self.with_app("".into(), |app| app.sync_action_result()) }
+    fn sync_operation_state(&self) -> QString { self.with_app("".into(), |app| app.sync_operation_state()) }
     fn sync_status(&self) -> QString { self.with_app("not_configured".into(), |app| app.sync_status()) }
     fn sync_in_progress(&self) -> bool { self.with_app(false, |app| app.sync_in_progress()) }
     fn set_sync_status(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_status(val)); self.sync_status_changed(); }
@@ -114,7 +121,7 @@ impl AppBackend {
         self.current_sync_status = outcome.sync_status.clone();
         self.current_sync_in_progress = false;
         self.current_last_sync_time = Self::now_epoch_seconds();
-        self.current_sync_action_result = outcome.action_result.clone();
+        self.current_sync_operation_state = outcome.action_result.clone();
         self.sync_status_changed();
         self.sync_action_completed();
 
@@ -151,7 +158,7 @@ impl AppBackend {
         if chapter_deleted {
             self.current_save_status = "当前章节已在其他设备删除，已刷新列表。".to_string();
             self.save_status_changed();
-            self.current_sync_action_result.push_str("\n\n当前章节已在其他设备删除，已刷新列表。");
+            self.current_sync_operation_state.push_str("\n\n当前章节已在其他设备删除，已刷新列表。");
             self.sync_action_completed();
         }
 
@@ -345,8 +352,16 @@ impl AppBackend {
     }
 
 // AppBackend::sync_action_result
-    pub(crate) fn sync_action_result(&self) -> QString {
-        self.current_sync_action_result.clone().into()
+    pub(crate) fn sync_operation_state(&self) -> QString {
+        let summary = self.current_sync_operation_state.clone();
+        let status = self.current_sync_status.clone();
+
+        let json_str = format!(
+            "{{\"operation_id\": \"\", \"operation_kind\": \"sync\", \"status\": \"{}\", \"summary\": \"{}\", \"details\": \"\"}}",
+            status.replace("\"", "\\\""),
+            summary.replace("\"", "\\\"").replace("\n", "\\n")
+        );
+        json_str.into()
     }
 
 // AppBackend::perform_sync_diagnostics
@@ -354,7 +369,7 @@ impl AppBackend {
         self.debug_log("sync", "perform_sync_diagnostics_start", "");
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
-            self.current_sync_action_result = "请先打开工作区".to_string();
+            self.current_sync_operation_state = "请先打开工作区".to_string();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_diagnostics_failed", "workspace_empty");
             return;
@@ -362,7 +377,7 @@ impl AppBackend {
 
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
-        self.current_sync_action_result = "正在诊断...".to_string();
+        self.current_sync_operation_state = "正在诊断...".to_string();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -541,14 +556,14 @@ impl AppBackend {
 
         if let Some(msg) = error_msg {
             self.set_error(&msg);
-            self.current_sync_action_result = msg.clone();
+            self.current_sync_operation_state = msg.clone();
             self.sync_action_completed();
             self.debug_error("sync", "save_sync_config_failed", &msg);
             return false;
         }
 
         self.refresh_sync_status_from_config();
-        self.current_sync_action_result = "配置保存成功".to_string();
+        self.current_sync_operation_state = "配置保存成功".to_string();
         self.sync_action_completed();
         let token_present = !self.current_sync_token.is_empty();
         let masked_url = mask_sync_error(&self.current_sync_remote_url);
@@ -564,14 +579,14 @@ impl AppBackend {
     pub(crate) fn perform_sync_dry_run(&mut self) {
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
-            self.current_sync_action_result = "请先打开工作区".to_string();
+            self.current_sync_operation_state = "请先打开工作区".to_string();
             self.sync_action_completed();
             return;
         }
 
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_action_result = "同步检查失败: 未配置远程仓库 URL".to_string();
+            self.current_sync_operation_state = "同步检查失败: 未配置远程仓库 URL".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
             return;
@@ -579,7 +594,7 @@ impl AppBackend {
 
         if self.current_sync_token.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_action_result = "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
+            self.current_sync_operation_state = "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
             return;
@@ -592,7 +607,7 @@ impl AppBackend {
 
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
-        self.current_sync_action_result = "正在检查同步计划...".to_string();
+        self.current_sync_operation_state = "正在检查同步计划...".to_string();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -711,7 +726,7 @@ impl AppBackend {
         if self.current_sync_in_progress {
             self.debug_log("sync", "perform_sync_skipped", "sync already running");
             if trigger == "manual" {
-                self.current_sync_action_result = "同步正在进行中，请稍候。".to_string();
+                self.current_sync_operation_state = "同步正在进行中，请稍候。".to_string();
                 self.sync_action_completed();
             }
             return;
@@ -725,7 +740,7 @@ impl AppBackend {
         );
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
-            self.current_sync_action_result = "请先打开工作区".to_string();
+            self.current_sync_operation_state = "请先打开工作区".to_string();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "workspace_empty");
             return;
@@ -733,7 +748,7 @@ impl AppBackend {
 
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_action_result = "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
+            self.current_sync_operation_state = "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
@@ -742,7 +757,7 @@ impl AppBackend {
 
         if self.current_sync_token.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_action_result = "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
+            self.current_sync_operation_state = "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "token_empty");
@@ -755,7 +770,7 @@ impl AppBackend {
         }
 
         self.flush_writing_stats();
-        self.current_sync_action_result = if silent_success {
+        self.current_sync_operation_state = if silent_success {
             "后台同步中...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件".to_string()
         } else {
             "正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件".to_string()

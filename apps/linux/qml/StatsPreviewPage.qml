@@ -87,7 +87,7 @@ Rectangle {
                     title: qsTr("速度曲线")
                     Layout.fillWidth: true
                     Layout.columnSpan: dashboard.wide ? 2 : 1
-                    Text { text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: dt ? dt.textPrimary : "#E2E2E5" }
+                    AppText { text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: dt ? dt.textPrimary : "#E2E2E5" }
                 }
 
                 DashboardSection {
@@ -96,7 +96,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Repeater {
                         model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: qsTr("暂无数据"), typed_chars: 0 }]
-                        delegate: Text { text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt ? dt.textSecondary : "#8C9198" }
+                        delegate: AppText { text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt ? dt.textSecondary : "#8C9198" }
                     }
                 }
             }
@@ -113,7 +113,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Repeater {
                         model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                        delegate: Text { text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E2E5" }
+                        delegate: AppText { text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E2E5" }
                     }
                 }
 
@@ -123,7 +123,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Repeater {
                         model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                        delegate: Text { text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E2E5" }
+                        delegate: AppText { text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E2E5" }
                     }
                 }
             }

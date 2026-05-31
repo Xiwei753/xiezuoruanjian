@@ -418,7 +418,7 @@ Item {
 
 
 
-    Text {
+    AppText {
         anchors.centerIn: parent
         text: qsTr("还没有节点，点击新增节点开始构建星图")
         color: dt ? dt.textSecondary : "#9CA0AB"
@@ -438,7 +438,7 @@ Item {
         visible: errorMessage.length > 0
         z: 100
 
-        Text {
+        AppText {
             anchors.centerIn: parent
             text: errorMessage
             color: "white"
@@ -540,7 +540,7 @@ Item {
         MenuItem {
             id: bgMenuItem1
             text: qsTr("新建节点")
-            contentItem: Text {
+            contentItem: AppText {
                 text: bgMenuItem1.text
                 color: bgMenuItem1.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.textPrimary : "#E2E4E9")
                 font.pixelSize: 13
@@ -570,7 +570,7 @@ Item {
         MenuItem {
             id: nodeMenuItem1
             text: qsTr("重命名")
-            contentItem: Text {
+            contentItem: AppText {
                 text: nodeMenuItem1.text
                 color: nodeMenuItem1.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.textPrimary : "#E2E4E9")
                 font.pixelSize: 13
@@ -591,7 +591,7 @@ Item {
         MenuItem {
             id: nodeMenuItem2
             text: qsTr("删除节点")
-            contentItem: Text {
+            contentItem: AppText {
                 text: nodeMenuItem2.text
                 color: nodeMenuItem2.hovered ? "#FF4D4D" : (dt ? dt.textPrimary : "#E2E4E9")
                 font.pixelSize: 13
@@ -624,7 +624,7 @@ Item {
         MenuItem {
             id: edgeMenuItem1
             text: qsTr("重命名连线")
-            contentItem: Text {
+            contentItem: AppText {
                 text: edgeMenuItem1.text
                 color: edgeMenuItem1.hovered ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.textPrimary : "#E2E4E9")
                 font.pixelSize: 13
@@ -645,7 +645,7 @@ Item {
         MenuItem {
             id: edgeMenuItem2
             text: qsTr("删除连线")
-            contentItem: Text {
+            contentItem: AppText {
                 text: edgeMenuItem2.text
                 color: edgeMenuItem2.hovered ? "#FF4D4D" : (dt ? dt.textPrimary : "#E2E4E9")
                 font.pixelSize: 13
@@ -693,7 +693,7 @@ Item {
                 anchors.margins: 20
                 spacing: 16
 
-                Text {
+                AppText {
                     text: renameDialog.targetType === "node" ? qsTr("修改节点标题") : qsTr("修改连线标签")
                     font.pixelSize: 16
                     font.bold: true
@@ -728,7 +728,7 @@ Item {
                         id: cancelBtn
                         text: qsTr("取消")
                         onClicked: renameDialog.close()
-                        contentItem: Text {
+                        contentItem: AppText {
                             text: cancelBtn.text
                             color: dt ? dt.textSecondary : "#9CA0AB"
                             font.pixelSize: 13
@@ -744,7 +744,7 @@ Item {
                         id: confirmBtn
                         text: qsTr("确定")
                         onClicked: renameDialog.confirm()
-                        contentItem: Text {
+                        contentItem: AppText {
                             text: confirmBtn.text
                             color: "white"
                             font.bold: true
