@@ -224,6 +224,88 @@ enum WriterError {
     "Other"
 };
 
+enum PlatformDto {
+    "Linux",
+    "Android",
+};
+
+dictionary DateRangeDto {
+    string start_date;
+    string end_date;
+};
+
+dictionary WritingStatsSummaryDto {
+    DateRangeDto range;
+    u64 total_human_typed_chars;
+    u64 total_pasted_chars;
+    u64 total_deleted_chars;
+    u64 total_ai_inserted_chars;
+    i64 total_net_delta_chars;
+    u64 total_active_seconds;
+    u32 total_sessions;
+    u32 days_count;
+};
+
+dictionary ProjectStatsRecordDto {
+    string project_id;
+    u64 human_typed_chars;
+    u64 pasted_chars;
+    u64 deleted_chars;
+    u64 ai_inserted_chars;
+    i64 net_delta_chars;
+    u64 active_seconds;
+};
+
+dictionary ProjectStatsSummaryDto {
+    DateRangeDto range;
+    sequence<ProjectStatsRecordDto> projects;
+};
+
+dictionary ChapterStatsRecordDto {
+    string chapter_id;
+    u64 human_typed_chars;
+    u64 pasted_chars;
+    u64 deleted_chars;
+    u64 ai_inserted_chars;
+    i64 net_delta_chars;
+    u64 active_seconds;
+};
+
+dictionary ChapterStatsSummaryDto {
+    DateRangeDto range;
+    sequence<ChapterStatsRecordDto> chapters;
+};
+
+dictionary DeviceStatsRecordDto {
+    string device_id;
+    PlatformDto platform;
+    u64 human_typed_chars;
+    u64 pasted_chars;
+    u64 deleted_chars;
+    u64 ai_inserted_chars;
+    i64 net_delta_chars;
+    u64 active_seconds;
+    u32 sessions_count;
+};
+
+dictionary DeviceStatsSummaryDto {
+    DateRangeDto range;
+    sequence<DeviceStatsRecordDto> devices;
+};
+
+dictionary SpeedCurvePointDto {
+    i64 start_ms;
+    i64 end_ms;
+    u32 chars_typed;
+    float chars_per_minute;
+};
+
+dictionary SpeedCurveSummaryDto {
+    DateRangeDto range;
+    u32 bucket_minutes;
+    sequence<SpeedCurvePointDto> buckets;
+};
+
 interface WriterAppService {
     constructor(string workspace_path);
 
@@ -340,19 +422,19 @@ interface WriterAppService {
     SyncResultDto perform_sync(SyncConfigDto config);
 
     [Throws=WriterError]
-    string get_writing_stats_summary_json(string start_date, string end_date);
+    WritingStatsSummaryDto get_writing_stats_summary(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_stats_by_project_json(string start_date, string end_date);
+    ProjectStatsSummaryDto get_writing_stats_by_project(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_stats_by_chapter_json(string start_date, string end_date);
+    ChapterStatsSummaryDto get_writing_stats_by_chapter(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_stats_by_device_json(string start_date, string end_date);
+    DeviceStatsSummaryDto get_writing_stats_by_device(string start_date, string end_date);
 
     [Throws=WriterError]
-    string get_writing_speed_curve_json(string start_date, string end_date, u32 bucket_minutes);
+    SpeedCurveSummaryDto get_writing_speed_curve(string start_date, string end_date, u32 bucket_minutes);
 
     u32 calculate_word_count(string text);
 

@@ -90,7 +90,7 @@ impl StatsApi {
             "total_net_delta_chars": total_net_delta,
             "total_active_seconds": total_active_seconds,
             "total_sessions": total_sessions,
-            "days_count": daily_stats.len(),
+            "days_count": daily_stats.len() as u32,
         }))
     }
 

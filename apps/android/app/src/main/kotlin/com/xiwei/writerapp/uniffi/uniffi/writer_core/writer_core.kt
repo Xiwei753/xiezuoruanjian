@@ -917,15 +917,15 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_starmap_graph_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,`bucketMinutes`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,`bucketMinutes`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_list_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1161,15 +1161,15 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_list_chapters(
     ): Short
@@ -1334,19 +1334,19 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph_json() != 63746.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve_json() != 38227.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve() != 22637.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter_json() != 7491.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter() != 42154.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device_json() != 21323.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device() != 60687.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project_json() != 41510.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project() != 39783.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary_json() != 51836.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary() != 65245.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_list_chapters() != 34372.toShort()) {
@@ -1958,15 +1958,15 @@ public interface WriterAppServiceInterface {
     
     fun `getStarmapGraphJson`(`starmapId`: kotlin.String): kotlin.String
     
-    fun `getWritingSpeedCurveJson`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String
+    fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): SpeedCurveSummaryDto
     
-    fun `getWritingStatsByChapterJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+    fun `getWritingStatsByChapter`(`startDate`: kotlin.String, `endDate`: kotlin.String): ChapterStatsSummaryDto
     
-    fun `getWritingStatsByDeviceJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+    fun `getWritingStatsByDevice`(`startDate`: kotlin.String, `endDate`: kotlin.String): DeviceStatsSummaryDto
     
-    fun `getWritingStatsByProjectJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+    fun `getWritingStatsByProject`(`startDate`: kotlin.String, `endDate`: kotlin.String): ProjectStatsSummaryDto
     
-    fun `getWritingStatsSummaryJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+    fun `getWritingStatsSummary`(`startDate`: kotlin.String, `endDate`: kotlin.String): WritingStatsSummaryDto
     
     fun `listChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String): List<ChapterMetaDto>
     
@@ -2428,11 +2428,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `getWritingSpeedCurveJson`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): SpeedCurveSummaryDto {
+            return FfiConverterTypeSpeedCurveSummaryDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),FfiConverterUInt.lower(`bucketMinutes`),_status)
 }
     }
@@ -2441,11 +2441,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `getWritingStatsByChapterJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `getWritingStatsByChapter`(`startDate`: kotlin.String, `endDate`: kotlin.String): ChapterStatsSummaryDto {
+            return FfiConverterTypeChapterStatsSummaryDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
@@ -2454,11 +2454,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `getWritingStatsByDeviceJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `getWritingStatsByDevice`(`startDate`: kotlin.String, `endDate`: kotlin.String): DeviceStatsSummaryDto {
+            return FfiConverterTypeDeviceStatsSummaryDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
@@ -2467,11 +2467,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `getWritingStatsByProjectJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `getWritingStatsByProject`(`startDate`: kotlin.String, `endDate`: kotlin.String): ProjectStatsSummaryDto {
+            return FfiConverterTypeProjectStatsSummaryDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
@@ -2480,11 +2480,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `getWritingStatsSummaryJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `getWritingStatsSummary`(`startDate`: kotlin.String, `endDate`: kotlin.String): WritingStatsSummaryDto {
+            return FfiConverterTypeWritingStatsSummaryDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
@@ -3199,6 +3199,214 @@ public object FfiConverterTypeChapterSaveReceiptDto: FfiConverterRustBuffer<Chap
 
 
 
+data class ChapterStatsRecordDto (
+    var `chapterId`: kotlin.String, 
+    var `humanTypedChars`: kotlin.ULong, 
+    var `pastedChars`: kotlin.ULong, 
+    var `deletedChars`: kotlin.ULong, 
+    var `aiInsertedChars`: kotlin.ULong, 
+    var `netDeltaChars`: kotlin.Long, 
+    var `activeSeconds`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChapterStatsRecordDto: FfiConverterRustBuffer<ChapterStatsRecordDto> {
+    override fun read(buf: ByteBuffer): ChapterStatsRecordDto {
+        return ChapterStatsRecordDto(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChapterStatsRecordDto) = (
+            FfiConverterString.allocationSize(value.`chapterId`) +
+            FfiConverterULong.allocationSize(value.`humanTypedChars`) +
+            FfiConverterULong.allocationSize(value.`pastedChars`) +
+            FfiConverterULong.allocationSize(value.`deletedChars`) +
+            FfiConverterULong.allocationSize(value.`aiInsertedChars`) +
+            FfiConverterLong.allocationSize(value.`netDeltaChars`) +
+            FfiConverterULong.allocationSize(value.`activeSeconds`)
+    )
+
+    override fun write(value: ChapterStatsRecordDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`chapterId`, buf)
+            FfiConverterULong.write(value.`humanTypedChars`, buf)
+            FfiConverterULong.write(value.`pastedChars`, buf)
+            FfiConverterULong.write(value.`deletedChars`, buf)
+            FfiConverterULong.write(value.`aiInsertedChars`, buf)
+            FfiConverterLong.write(value.`netDeltaChars`, buf)
+            FfiConverterULong.write(value.`activeSeconds`, buf)
+    }
+}
+
+
+
+data class ChapterStatsSummaryDto (
+    var `range`: DateRangeDto, 
+    var `chapters`: List<ChapterStatsRecordDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChapterStatsSummaryDto: FfiConverterRustBuffer<ChapterStatsSummaryDto> {
+    override fun read(buf: ByteBuffer): ChapterStatsSummaryDto {
+        return ChapterStatsSummaryDto(
+            FfiConverterTypeDateRangeDto.read(buf),
+            FfiConverterSequenceTypeChapterStatsRecordDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChapterStatsSummaryDto) = (
+            FfiConverterTypeDateRangeDto.allocationSize(value.`range`) +
+            FfiConverterSequenceTypeChapterStatsRecordDto.allocationSize(value.`chapters`)
+    )
+
+    override fun write(value: ChapterStatsSummaryDto, buf: ByteBuffer) {
+            FfiConverterTypeDateRangeDto.write(value.`range`, buf)
+            FfiConverterSequenceTypeChapterStatsRecordDto.write(value.`chapters`, buf)
+    }
+}
+
+
+
+data class DateRangeDto (
+    var `startDate`: kotlin.String, 
+    var `endDate`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDateRangeDto: FfiConverterRustBuffer<DateRangeDto> {
+    override fun read(buf: ByteBuffer): DateRangeDto {
+        return DateRangeDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DateRangeDto) = (
+            FfiConverterString.allocationSize(value.`startDate`) +
+            FfiConverterString.allocationSize(value.`endDate`)
+    )
+
+    override fun write(value: DateRangeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`startDate`, buf)
+            FfiConverterString.write(value.`endDate`, buf)
+    }
+}
+
+
+
+data class DeviceStatsRecordDto (
+    var `deviceId`: kotlin.String, 
+    var `platform`: PlatformDto, 
+    var `humanTypedChars`: kotlin.ULong, 
+    var `pastedChars`: kotlin.ULong, 
+    var `deletedChars`: kotlin.ULong, 
+    var `aiInsertedChars`: kotlin.ULong, 
+    var `netDeltaChars`: kotlin.Long, 
+    var `activeSeconds`: kotlin.ULong, 
+    var `sessionsCount`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDeviceStatsRecordDto: FfiConverterRustBuffer<DeviceStatsRecordDto> {
+    override fun read(buf: ByteBuffer): DeviceStatsRecordDto {
+        return DeviceStatsRecordDto(
+            FfiConverterString.read(buf),
+            FfiConverterTypePlatformDto.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DeviceStatsRecordDto) = (
+            FfiConverterString.allocationSize(value.`deviceId`) +
+            FfiConverterTypePlatformDto.allocationSize(value.`platform`) +
+            FfiConverterULong.allocationSize(value.`humanTypedChars`) +
+            FfiConverterULong.allocationSize(value.`pastedChars`) +
+            FfiConverterULong.allocationSize(value.`deletedChars`) +
+            FfiConverterULong.allocationSize(value.`aiInsertedChars`) +
+            FfiConverterLong.allocationSize(value.`netDeltaChars`) +
+            FfiConverterULong.allocationSize(value.`activeSeconds`) +
+            FfiConverterUInt.allocationSize(value.`sessionsCount`)
+    )
+
+    override fun write(value: DeviceStatsRecordDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`deviceId`, buf)
+            FfiConverterTypePlatformDto.write(value.`platform`, buf)
+            FfiConverterULong.write(value.`humanTypedChars`, buf)
+            FfiConverterULong.write(value.`pastedChars`, buf)
+            FfiConverterULong.write(value.`deletedChars`, buf)
+            FfiConverterULong.write(value.`aiInsertedChars`, buf)
+            FfiConverterLong.write(value.`netDeltaChars`, buf)
+            FfiConverterULong.write(value.`activeSeconds`, buf)
+            FfiConverterUInt.write(value.`sessionsCount`, buf)
+    }
+}
+
+
+
+data class DeviceStatsSummaryDto (
+    var `range`: DateRangeDto, 
+    var `devices`: List<DeviceStatsRecordDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDeviceStatsSummaryDto: FfiConverterRustBuffer<DeviceStatsSummaryDto> {
+    override fun read(buf: ByteBuffer): DeviceStatsSummaryDto {
+        return DeviceStatsSummaryDto(
+            FfiConverterTypeDateRangeDto.read(buf),
+            FfiConverterSequenceTypeDeviceStatsRecordDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DeviceStatsSummaryDto) = (
+            FfiConverterTypeDateRangeDto.allocationSize(value.`range`) +
+            FfiConverterSequenceTypeDeviceStatsRecordDto.allocationSize(value.`devices`)
+    )
+
+    override fun write(value: DeviceStatsSummaryDto, buf: ByteBuffer) {
+            FfiConverterTypeDateRangeDto.write(value.`range`, buf)
+            FfiConverterSequenceTypeDeviceStatsRecordDto.write(value.`devices`, buf)
+    }
+}
+
+
+
 data class LocalSettingsDto (
     var `themeMode`: kotlin.String?, 
     var `locale`: kotlin.String?, 
@@ -3415,6 +3623,90 @@ public object FfiConverterTypeProjectStatsDto: FfiConverterRustBuffer<ProjectSta
 
 
 
+data class ProjectStatsRecordDto (
+    var `projectId`: kotlin.String, 
+    var `humanTypedChars`: kotlin.ULong, 
+    var `pastedChars`: kotlin.ULong, 
+    var `deletedChars`: kotlin.ULong, 
+    var `aiInsertedChars`: kotlin.ULong, 
+    var `netDeltaChars`: kotlin.Long, 
+    var `activeSeconds`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProjectStatsRecordDto: FfiConverterRustBuffer<ProjectStatsRecordDto> {
+    override fun read(buf: ByteBuffer): ProjectStatsRecordDto {
+        return ProjectStatsRecordDto(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProjectStatsRecordDto) = (
+            FfiConverterString.allocationSize(value.`projectId`) +
+            FfiConverterULong.allocationSize(value.`humanTypedChars`) +
+            FfiConverterULong.allocationSize(value.`pastedChars`) +
+            FfiConverterULong.allocationSize(value.`deletedChars`) +
+            FfiConverterULong.allocationSize(value.`aiInsertedChars`) +
+            FfiConverterLong.allocationSize(value.`netDeltaChars`) +
+            FfiConverterULong.allocationSize(value.`activeSeconds`)
+    )
+
+    override fun write(value: ProjectStatsRecordDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`projectId`, buf)
+            FfiConverterULong.write(value.`humanTypedChars`, buf)
+            FfiConverterULong.write(value.`pastedChars`, buf)
+            FfiConverterULong.write(value.`deletedChars`, buf)
+            FfiConverterULong.write(value.`aiInsertedChars`, buf)
+            FfiConverterLong.write(value.`netDeltaChars`, buf)
+            FfiConverterULong.write(value.`activeSeconds`, buf)
+    }
+}
+
+
+
+data class ProjectStatsSummaryDto (
+    var `range`: DateRangeDto, 
+    var `projects`: List<ProjectStatsRecordDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeProjectStatsSummaryDto: FfiConverterRustBuffer<ProjectStatsSummaryDto> {
+    override fun read(buf: ByteBuffer): ProjectStatsSummaryDto {
+        return ProjectStatsSummaryDto(
+            FfiConverterTypeDateRangeDto.read(buf),
+            FfiConverterSequenceTypeProjectStatsRecordDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ProjectStatsSummaryDto) = (
+            FfiConverterTypeDateRangeDto.allocationSize(value.`range`) +
+            FfiConverterSequenceTypeProjectStatsRecordDto.allocationSize(value.`projects`)
+    )
+
+    override fun write(value: ProjectStatsSummaryDto, buf: ByteBuffer) {
+            FfiConverterTypeDateRangeDto.write(value.`range`, buf)
+            FfiConverterSequenceTypeProjectStatsRecordDto.write(value.`projects`, buf)
+    }
+}
+
+
+
 data class RecentEditDto (
     var `projectId`: kotlin.String, 
     var `volumeId`: kotlin.String, 
@@ -3450,6 +3742,82 @@ public object FfiConverterTypeRecentEditDto: FfiConverterRustBuffer<RecentEditDt
             FfiConverterString.write(value.`volumeId`, buf)
             FfiConverterString.write(value.`chapterId`, buf)
             FfiConverterString.write(value.`timestamp`, buf)
+    }
+}
+
+
+
+data class SpeedCurvePointDto (
+    var `startMs`: kotlin.Long, 
+    var `endMs`: kotlin.Long, 
+    var `charsTyped`: kotlin.UInt, 
+    var `charsPerMinute`: kotlin.Float
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSpeedCurvePointDto: FfiConverterRustBuffer<SpeedCurvePointDto> {
+    override fun read(buf: ByteBuffer): SpeedCurvePointDto {
+        return SpeedCurvePointDto(
+            FfiConverterLong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterFloat.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SpeedCurvePointDto) = (
+            FfiConverterLong.allocationSize(value.`startMs`) +
+            FfiConverterLong.allocationSize(value.`endMs`) +
+            FfiConverterUInt.allocationSize(value.`charsTyped`) +
+            FfiConverterFloat.allocationSize(value.`charsPerMinute`)
+    )
+
+    override fun write(value: SpeedCurvePointDto, buf: ByteBuffer) {
+            FfiConverterLong.write(value.`startMs`, buf)
+            FfiConverterLong.write(value.`endMs`, buf)
+            FfiConverterUInt.write(value.`charsTyped`, buf)
+            FfiConverterFloat.write(value.`charsPerMinute`, buf)
+    }
+}
+
+
+
+data class SpeedCurveSummaryDto (
+    var `range`: DateRangeDto, 
+    var `bucketMinutes`: kotlin.UInt, 
+    var `buckets`: List<SpeedCurvePointDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSpeedCurveSummaryDto: FfiConverterRustBuffer<SpeedCurveSummaryDto> {
+    override fun read(buf: ByteBuffer): SpeedCurveSummaryDto {
+        return SpeedCurveSummaryDto(
+            FfiConverterTypeDateRangeDto.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterSequenceTypeSpeedCurvePointDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SpeedCurveSummaryDto) = (
+            FfiConverterTypeDateRangeDto.allocationSize(value.`range`) +
+            FfiConverterUInt.allocationSize(value.`bucketMinutes`) +
+            FfiConverterSequenceTypeSpeedCurvePointDto.allocationSize(value.`buckets`)
+    )
+
+    override fun write(value: SpeedCurveSummaryDto, buf: ByteBuffer) {
+            FfiConverterTypeDateRangeDto.write(value.`range`, buf)
+            FfiConverterUInt.write(value.`bucketMinutes`, buf)
+            FfiConverterSequenceTypeSpeedCurvePointDto.write(value.`buckets`, buf)
     }
 }
 
@@ -4015,6 +4383,66 @@ public object FfiConverterTypeVolumeDto: FfiConverterRustBuffer<VolumeDto> {
 
 
 
+data class WritingStatsSummaryDto (
+    var `range`: DateRangeDto, 
+    var `totalHumanTypedChars`: kotlin.ULong, 
+    var `totalPastedChars`: kotlin.ULong, 
+    var `totalDeletedChars`: kotlin.ULong, 
+    var `totalAiInsertedChars`: kotlin.ULong, 
+    var `totalNetDeltaChars`: kotlin.Long, 
+    var `totalActiveSeconds`: kotlin.ULong, 
+    var `totalSessions`: kotlin.UInt, 
+    var `daysCount`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWritingStatsSummaryDto: FfiConverterRustBuffer<WritingStatsSummaryDto> {
+    override fun read(buf: ByteBuffer): WritingStatsSummaryDto {
+        return WritingStatsSummaryDto(
+            FfiConverterTypeDateRangeDto.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterLong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WritingStatsSummaryDto) = (
+            FfiConverterTypeDateRangeDto.allocationSize(value.`range`) +
+            FfiConverterULong.allocationSize(value.`totalHumanTypedChars`) +
+            FfiConverterULong.allocationSize(value.`totalPastedChars`) +
+            FfiConverterULong.allocationSize(value.`totalDeletedChars`) +
+            FfiConverterULong.allocationSize(value.`totalAiInsertedChars`) +
+            FfiConverterLong.allocationSize(value.`totalNetDeltaChars`) +
+            FfiConverterULong.allocationSize(value.`totalActiveSeconds`) +
+            FfiConverterUInt.allocationSize(value.`totalSessions`) +
+            FfiConverterUInt.allocationSize(value.`daysCount`)
+    )
+
+    override fun write(value: WritingStatsSummaryDto, buf: ByteBuffer) {
+            FfiConverterTypeDateRangeDto.write(value.`range`, buf)
+            FfiConverterULong.write(value.`totalHumanTypedChars`, buf)
+            FfiConverterULong.write(value.`totalPastedChars`, buf)
+            FfiConverterULong.write(value.`totalDeletedChars`, buf)
+            FfiConverterULong.write(value.`totalAiInsertedChars`, buf)
+            FfiConverterLong.write(value.`totalNetDeltaChars`, buf)
+            FfiConverterULong.write(value.`totalActiveSeconds`, buf)
+            FfiConverterUInt.write(value.`totalSessions`, buf)
+            FfiConverterUInt.write(value.`daysCount`, buf)
+    }
+}
+
+
+
 
 enum class AiActionType {
     
@@ -4041,6 +4469,36 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
     override fun allocationSize(value: AiActionType) = 4UL
 
     override fun write(value: AiActionType, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class PlatformDto {
+    
+    LINUX,
+    ANDROID;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePlatformDto: FfiConverterRustBuffer<PlatformDto> {
+    override fun read(buf: ByteBuffer) = try {
+        PlatformDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PlatformDto) = 4UL
+
+    override fun write(value: PlatformDto, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -4377,6 +4835,62 @@ public object FfiConverterSequenceTypeChapterMetaDto: FfiConverterRustBuffer<Lis
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeChapterStatsRecordDto: FfiConverterRustBuffer<List<ChapterStatsRecordDto>> {
+    override fun read(buf: ByteBuffer): List<ChapterStatsRecordDto> {
+        val len = buf.getInt()
+        return List<ChapterStatsRecordDto>(len) {
+            FfiConverterTypeChapterStatsRecordDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChapterStatsRecordDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChapterStatsRecordDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChapterStatsRecordDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChapterStatsRecordDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeDeviceStatsRecordDto: FfiConverterRustBuffer<List<DeviceStatsRecordDto>> {
+    override fun read(buf: ByteBuffer): List<DeviceStatsRecordDto> {
+        val len = buf.getInt()
+        return List<DeviceStatsRecordDto>(len) {
+            FfiConverterTypeDeviceStatsRecordDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DeviceStatsRecordDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDeviceStatsRecordDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DeviceStatsRecordDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDeviceStatsRecordDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeNetworkProbeResultDto: FfiConverterRustBuffer<List<NetworkProbeResultDto>> {
     override fun read(buf: ByteBuffer): List<NetworkProbeResultDto> {
         val len = buf.getInt()
@@ -4433,6 +4947,34 @@ public object FfiConverterSequenceTypeProjectDto: FfiConverterRustBuffer<List<Pr
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeProjectStatsRecordDto: FfiConverterRustBuffer<List<ProjectStatsRecordDto>> {
+    override fun read(buf: ByteBuffer): List<ProjectStatsRecordDto> {
+        val len = buf.getInt()
+        return List<ProjectStatsRecordDto>(len) {
+            FfiConverterTypeProjectStatsRecordDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ProjectStatsRecordDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeProjectStatsRecordDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ProjectStatsRecordDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeProjectStatsRecordDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeRecentEditDto: FfiConverterRustBuffer<List<RecentEditDto>> {
     override fun read(buf: ByteBuffer): List<RecentEditDto> {
         val len = buf.getInt()
@@ -4451,6 +4993,34 @@ public object FfiConverterSequenceTypeRecentEditDto: FfiConverterRustBuffer<List
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeRecentEditDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSpeedCurvePointDto: FfiConverterRustBuffer<List<SpeedCurvePointDto>> {
+    override fun read(buf: ByteBuffer): List<SpeedCurvePointDto> {
+        val len = buf.getInt()
+        return List<SpeedCurvePointDto>(len) {
+            FfiConverterTypeSpeedCurvePointDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SpeedCurvePointDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSpeedCurvePointDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SpeedCurvePointDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSpeedCurvePointDto.write(it, buf)
         }
     }
 }

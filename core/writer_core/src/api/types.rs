@@ -2018,7 +2018,7 @@ pub struct WritingStatsSummaryDto {
     pub total_net_delta_chars: i64,
     pub total_active_seconds: u64,
     pub total_sessions: u32,
-    pub days_count: usize,
+    pub days_count: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

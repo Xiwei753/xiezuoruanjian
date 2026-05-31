@@ -263,46 +263,46 @@ impl WriterAppService {
         self.api.perform_sync(config)
     }
 
-    pub fn get_writing_stats_summary_json(
+    pub fn get_writing_stats_summary(
         &self,
         start_date: String,
         end_date: String,
-    ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_summary_json(&start_date, &end_date)
+    ) -> Result<crate::api::types::WritingStatsSummaryDto, WriterError> {
+        self.api.get_writing_stats_summary(&start_date, &end_date)
     }
 
-    pub fn get_writing_stats_by_project_json(
+    pub fn get_writing_stats_by_project(
         &self,
         start_date: String,
         end_date: String,
-    ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_by_project_json(&start_date, &end_date)
+    ) -> Result<crate::api::types::ProjectStatsSummaryDto, WriterError> {
+        self.api.get_writing_stats_by_project(&start_date, &end_date)
     }
 
-    pub fn get_writing_stats_by_chapter_json(
+    pub fn get_writing_stats_by_chapter(
         &self,
         start_date: String,
         end_date: String,
-    ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_by_chapter_json(&start_date, &end_date)
+    ) -> Result<crate::api::types::ChapterStatsSummaryDto, WriterError> {
+        self.api.get_writing_stats_by_chapter(&start_date, &end_date)
     }
 
-    pub fn get_writing_stats_by_device_json(
+    pub fn get_writing_stats_by_device(
         &self,
         start_date: String,
         end_date: String,
-    ) -> Result<String, WriterError> {
-        self.api.get_writing_stats_by_device_json(&start_date, &end_date)
+    ) -> Result<crate::api::types::DeviceStatsSummaryDto, WriterError> {
+        self.api.get_writing_stats_by_device(&start_date, &end_date)
     }
 
-    pub fn get_writing_speed_curve_json(
+    pub fn get_writing_speed_curve(
         &self,
         start_date: String,
         end_date: String,
         bucket_minutes: u32,
-    ) -> Result<String, WriterError> {
+    ) -> Result<crate::api::types::SpeedCurveSummaryDto, WriterError> {
         self.api
-            .get_writing_speed_curve_json(&start_date, &end_date, bucket_minutes)
+            .get_writing_speed_curve(&start_date, &end_date, bucket_minutes)
     }
 
     pub fn calculate_word_count(&self, text: String) -> u32 {

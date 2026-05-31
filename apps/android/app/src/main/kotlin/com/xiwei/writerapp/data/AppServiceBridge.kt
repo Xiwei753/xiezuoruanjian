@@ -7,11 +7,17 @@ import com.xiwei.writerapp.model.BackendType
 import com.xiwei.writerapp.model.ChapterMeta
 import com.xiwei.writerapp.model.ChapterOpenResult
 import com.xiwei.writerapp.model.ChapterSaveReceipt
+import com.xiwei.writerapp.model.ChapterWritingStatsItem
+import com.xiwei.writerapp.model.ChapterWritingStatsSummary
+import com.xiwei.writerapp.model.DeviceWritingStatsItem
+import com.xiwei.writerapp.model.DeviceWritingStatsSummary
 import com.xiwei.writerapp.model.FirstSyncMode
 import com.xiwei.writerapp.model.LocalSettings
 import com.xiwei.writerapp.model.NetworkProbeResult
 import com.xiwei.writerapp.model.Project
 import com.xiwei.writerapp.model.ProjectStats
+import com.xiwei.writerapp.model.ProjectWritingStatsItem
+import com.xiwei.writerapp.model.ProjectWritingStatsSummary
 import com.xiwei.writerapp.model.SyncConfig
 import com.xiwei.writerapp.model.SyncConflict
 import com.xiwei.writerapp.model.SyncDiagnosticsResult
@@ -23,13 +29,26 @@ import com.xiwei.writerapp.model.SyncStatus
 import com.xiwei.writerapp.model.SyncTransport
 import com.xiwei.writerapp.model.SyncableSettings
 import com.xiwei.writerapp.model.Volume
+import com.xiwei.writerapp.model.WritingSpeedBucket
+import com.xiwei.writerapp.model.WritingSpeedCurve
+import com.xiwei.writerapp.model.WritingStatsRange
+import com.xiwei.writerapp.model.WritingStatsSummary
 import uniffi.writer_core.ChapterContentDto
 import uniffi.writer_core.ChapterMetaDto
 import uniffi.writer_core.ChapterSaveReceiptDto
+import uniffi.writer_core.ChapterStatsRecordDto
+import uniffi.writer_core.ChapterStatsSummaryDto
+import uniffi.writer_core.DateRangeDto
+import uniffi.writer_core.DeviceStatsRecordDto
+import uniffi.writer_core.DeviceStatsSummaryDto
 import uniffi.writer_core.LocalSettingsDto
 import uniffi.writer_core.NetworkProbeResultDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
+import uniffi.writer_core.ProjectStatsRecordDto
+import uniffi.writer_core.ProjectStatsSummaryDto
+import uniffi.writer_core.SpeedCurvePointDto
+import uniffi.writer_core.SpeedCurveSummaryDto
 import uniffi.writer_core.SyncConfigDto
 import uniffi.writer_core.SyncConflictDto
 import uniffi.writer_core.SyncDiagnosticsResultDto
@@ -41,6 +60,7 @@ import uniffi.writer_core.SyncableSettingsDto
 import uniffi.writer_core.VolumeDto
 import uniffi.writer_core.WriterAppService
 import uniffi.writer_core.WriterException
+import uniffi.writer_core.WritingStatsSummaryDto
 
 class AppServiceBridge(workspacePath: String) {
     private val service: WriterAppService by lazy { WriterAppService(workspacePath) }
@@ -258,24 +278,24 @@ class AppServiceBridge(workspacePath: String) {
         service.performSync(config.toDto()).toModel()
     }
 
-    fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsSummaryJson(startDate, endDate)
+    fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<WritingStatsSummary> = wrapResult {
+        service.getWritingStatsSummary(startDate, endDate).toModel()
     }
 
-    fun getWritingStatsByProject(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsByProjectJson(startDate, endDate)
+    fun getWritingStatsByProject(startDate: String, endDate: String): BridgeResult<ProjectWritingStatsSummary> = wrapResult {
+        service.getWritingStatsByProject(startDate, endDate).toModel()
     }
 
-    fun getWritingStatsByChapter(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsByChapterJson(startDate, endDate)
+    fun getWritingStatsByChapter(startDate: String, endDate: String): BridgeResult<ChapterWritingStatsSummary> = wrapResult {
+        service.getWritingStatsByChapter(startDate, endDate).toModel()
     }
 
-    fun getWritingStatsByDevice(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsByDeviceJson(startDate, endDate)
+    fun getWritingStatsByDevice(startDate: String, endDate: String): BridgeResult<DeviceWritingStatsSummary> = wrapResult {
+        service.getWritingStatsByDevice(startDate, endDate).toModel()
     }
 
-    fun getWritingSpeedCurve(startDate: String, endDate: String, bucketMinutes: Int): BridgeResult<String> = wrapResult {
-        service.getWritingSpeedCurveJson(startDate, endDate, bucketMinutes.toUInt())
+    fun getWritingSpeedCurve(startDate: String, endDate: String, bucketMinutes: Int): BridgeResult<WritingSpeedCurve> = wrapResult {
+        service.getWritingSpeedCurve(startDate, endDate, bucketMinutes.toUInt()).toModel()
     }
 
     fun recordWritingEvent(deviceId: String, projectId: String, volumeId: String, chapterId: String, source: String, insertedChars: Int, deletedChars: Int, pastedChars: Int, aiInsertedChars: Int, sessionId: String): BridgeResult<Boolean> = wrapResult {
@@ -617,3 +637,76 @@ private fun String?.toFirstSyncMode(): FirstSyncMode = when (this) {
     "none" -> FirstSyncMode.None
     else -> FirstSyncMode.None
 }
+
+private fun DateRangeDto.toModel() = WritingStatsRange(
+    startDate = startDate,
+    endDate = endDate
+)
+
+private fun WritingStatsSummaryDto.toModel() = WritingStatsSummary(
+    range = range.toModel(),
+    totalHumanTypedChars = totalHumanTypedChars.toLong(),
+    totalActiveSeconds = totalActiveSeconds.toLong(),
+    totalSessions = totalSessions.toInt(),
+    daysCount = daysCount.toInt()
+)
+
+private fun ProjectStatsRecordDto.toModel() = ProjectWritingStatsItem(
+    projectId = projectId,
+    humanTypedChars = humanTypedChars.toLong(),
+    pastedChars = pastedChars.toLong(),
+    deletedChars = deletedChars.toLong(),
+    aiInsertedChars = aiInsertedChars.toLong(),
+    netDeltaChars = netDeltaChars,
+    activeSeconds = activeSeconds.toLong()
+)
+
+private fun ProjectStatsSummaryDto.toModel() = ProjectWritingStatsSummary(
+    range = range.toModel(),
+    projects = projects.map { it.toModel() }
+)
+
+private fun ChapterStatsRecordDto.toModel() = ChapterWritingStatsItem(
+    chapterId = chapterId,
+    humanTypedChars = humanTypedChars.toLong(),
+    pastedChars = pastedChars.toLong(),
+    deletedChars = deletedChars.toLong(),
+    aiInsertedChars = aiInsertedChars.toLong(),
+    netDeltaChars = netDeltaChars,
+    activeSeconds = activeSeconds.toLong()
+)
+
+private fun ChapterStatsSummaryDto.toModel() = ChapterWritingStatsSummary(
+    range = range.toModel(),
+    chapters = chapters.map { it.toModel() }
+)
+
+private fun DeviceStatsRecordDto.toModel() = DeviceWritingStatsItem(
+    deviceId = deviceId,
+    platform = platform.name,
+    humanTypedChars = humanTypedChars.toLong(),
+    pastedChars = pastedChars.toLong(),
+    deletedChars = deletedChars.toLong(),
+    aiInsertedChars = aiInsertedChars.toLong(),
+    netDeltaChars = netDeltaChars,
+    activeSeconds = activeSeconds.toLong(),
+    sessionsCount = sessionsCount.toInt()
+)
+
+private fun DeviceStatsSummaryDto.toModel() = DeviceWritingStatsSummary(
+    range = range.toModel(),
+    devices = devices.map { it.toModel() }
+)
+
+private fun SpeedCurvePointDto.toModel() = WritingSpeedBucket(
+    startMs = startMs,
+    endMs = endMs,
+    charsTyped = charsTyped.toLong(),
+    charsPerMinute = charsPerMinute.toDouble()
+)
+
+private fun SpeedCurveSummaryDto.toModel() = WritingSpeedCurve(
+    range = range.toModel(),
+    bucketMinutes = bucketMinutes.toInt(),
+    buckets = buckets.map { it.toModel() }
+)
