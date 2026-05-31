@@ -485,13 +485,89 @@ Rectangle {
                     // Paper background - adapts to available space up to 820px, leaving a small side gap
                     Rectangle {
                         id: paperBg
-                        width: Math.min(parent.width, 820)
+                        width: settingsBackend && settingsBackend.setting_linux_editor_width > 0 ?
+                               Math.min(parent.width, settingsBackend.setting_linux_editor_width) :
+                               Math.min(parent.width, 820)
                         height: parent.height
                         anchors.horizontalCenter: parent.horizontalCenter
                         color: dt ? dt.editorBg : "#191C21"
                         radius: dt ? dt.radiusMd : 12
                         border.color: dt ? dt.border : "#2A2E36"
                         border.width: 1
+                    }
+
+                    // Left drag resize handle
+                    MouseArea {
+                        id: leftResizeHandle
+                        width: dt ? dt.sp8 : 8
+                        anchors.left: paperBg.left
+                        anchors.leftMargin: -(width / 2)
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        cursorShape: Qt.SizeHorCursor
+                        hoverEnabled: true
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 2
+                            height: parent.height
+                            color: parent.containsMouse || parent.pressed ? (dt ? dt.primary : "#006497") : "transparent"
+                            opacity: parent.pressed ? 0.9 : 0.4
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                        }
+
+                        property real startX: 0
+                        property real startWidth: 0
+
+                        onPressed: function(mouse) {
+                            startX = mouse.x;
+                            startWidth = paperBg.width;
+                        }
+
+                        onPositionChanged: function(mouse) {
+                            if (pressed && settingsBackend) {
+                                var dx = mouse.x - startX;
+                                var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
+                                settingsBackend.setting_linux_editor_width = newWidth;
+                            }
+                        }
+                    }
+
+                    // Right drag resize handle
+                    MouseArea {
+                        id: rightResizeHandle
+                        width: dt ? dt.sp8 : 8
+                        anchors.right: paperBg.right
+                        anchors.rightMargin: -(width / 2)
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        cursorShape: Qt.SizeHorCursor
+                        hoverEnabled: true
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 2
+                            height: parent.height
+                            color: parent.containsMouse || parent.pressed ? (dt ? dt.primary : "#006497") : "transparent"
+                            opacity: parent.pressed ? 0.9 : 0.4
+                            Behavior on color { ColorAnimation { duration: 120 } }
+                        }
+
+                        property real startX: 0
+                        property real startWidth: 0
+
+                        onPressed: function(mouse) {
+                            startX = mouse.x;
+                            startWidth = paperBg.width;
+                        }
+
+                        onPositionChanged: function(mouse) {
+                            if (pressed && settingsBackend) {
+                                var dx = mouse.x - startX;
+                                var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
+                                settingsBackend.setting_linux_editor_width = newWidth;
+                            }
+                        }
                     }
                     
                     ScrollView {

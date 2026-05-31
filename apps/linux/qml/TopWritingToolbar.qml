@@ -491,7 +491,7 @@ Rectangle {
         id: layoutPopover
         y: root.height + (dt ? dt.sp8 : 8)
         x: 180
-        width: 220
+        width: 240
         padding: dt ? dt.sp12 : 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
@@ -511,6 +511,60 @@ Rectangle {
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
             }
+
+            // Editor width slider
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: dt ? dt.sp4 : 4
+
+                AppText {
+                    text: qsTr("正文宽度")
+                    color: dt ? dt.textSecondary : "#9CA0AB"
+                    font.pixelSize: dt ? dt.fontSm : 12
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: dt ? dt.sp8 : 8
+
+                    AppText {
+                        text: "480"
+                        color: dt ? dt.textMuted : "#8C9198"
+                        font.pixelSize: dt ? dt.fontXs : 11
+                    }
+
+                    AppSlider {
+                        id: widthSlider
+                        Layout.fillWidth: true
+                        theme: dt
+                        from: 480
+                        to: 1200
+                        stepSize: 10
+                        value: settingsBackend && settingsBackend.setting_linux_editor_width > 0 ? settingsBackend.setting_linux_editor_width : 820
+                        onMoved: {
+                            if (settingsBackend) {
+                                settingsBackend.setting_linux_editor_width = value;
+                            }
+                        }
+                    }
+
+                    AppText {
+                        text: "1200"
+                        color: dt ? dt.textMuted : "#8C9198"
+                        font.pixelSize: dt ? dt.fontXs : 11
+                    }
+                }
+
+                AppText {
+                    text: Math.round(widthSlider.value) + " px"
+                    color: dt ? dt.textSecondary : "#9CA0AB"
+                    font.pixelSize: dt ? dt.fontSm : 12
+                    Layout.alignment: Qt.AlignHCenter
+                }
+            }
+
+            // Divider
+            Rectangle { Layout.fillWidth: true; height: 1; color: dt ? dt.border : "#2A2E36" }
 
             // First line indent
             RowLayout {
