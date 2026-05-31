@@ -59,7 +59,7 @@ Rectangle {
                 Row {
                     spacing: dt ? dt.sp10 : 10
                     Layout.alignment: Qt.AlignVCenter
-                    Text {
+                    AppText {
                         text: "Writer"
                         color: dt ? dt.primary : "#006497"
                         font.pixelSize: dt ? dt.fontXl : 18
@@ -88,7 +88,7 @@ Rectangle {
                                    (dt ? dt.primaryContainer : "#CCE5FF") :
                                    navHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
-                            Text {
+                            AppText {
                                 id: navLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
@@ -143,7 +143,7 @@ Rectangle {
                                 Layout.alignment: Qt.AlignVCenter
                             }
 
-                            Text {
+                            AppText {
                                 text: {
                                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
                                     if (s === "success") return qsTr("已同步");
@@ -176,7 +176,7 @@ Rectangle {
                         radius: dt ? dt.radiusPill : 999
                         color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
-                        Text {
+                        AppText {
                             id: settingsText
                             anchors.centerIn: parent
                             text: qsTr("设置")
@@ -204,7 +204,7 @@ Rectangle {
                             id: switchRow
                             anchors.centerIn: parent
                             spacing: dt ? dt.sp6 : 6
-                            Text {
+                            AppText {
                                 text: qsTr("切换工作区")
                                 color: dt ? dt.onSurfaceVariant : "#8C9198"
                                 font.pixelSize: dt ? dt.caption : 12

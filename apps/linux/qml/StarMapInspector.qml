@@ -40,7 +40,7 @@ Rectangle {
             visible: selectedNode !== null || selectedEdge !== null
         }
 
-        Text {
+        AppText {
             text: qsTr("请在左侧选择节点或连线")
             color: dt ? dt.textSecondary : "#9CA0AB"
             visible: selectedNode === null && selectedEdge === null

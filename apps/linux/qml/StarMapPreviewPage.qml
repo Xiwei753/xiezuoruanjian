@@ -33,14 +33,14 @@ Rectangle {
             radius: dt ? dt.radiusCard : 18
             color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
 
-            Text {
+            AppText {
                 anchors.centerIn: parent
                 text: "\u2B50"
                 font.pixelSize: 36
             }
         }
 
-        Text {
+        AppText {
             text: qsTr("星图")
             color: dt ? dt.textPrimary : "#E2E2E5"
             font.pixelSize: dt ? dt.fontTitle : 26
@@ -48,7 +48,7 @@ Rectangle {
             Layout.alignment: Qt.AlignHCenter
         }
 
-        Text {
+        AppText {
             text: qsTr("构建你的创作宇宙，可视化人物关系与故事脉络")
             color: dt ? dt.textSecondary : "#8C9198"
             font.pixelSize: dt ? dt.fontMd : 14
@@ -85,7 +85,7 @@ Rectangle {
                         radius: dt ? dt.radiusSm : 8
                         color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
 
-                        Text {
+                        AppText {
                             anchors.centerIn: parent
                             text: modelData.icon
                             font.pixelSize: 18
@@ -95,20 +95,20 @@ Rectangle {
                     Column {
                         Layout.fillWidth: true
                         spacing: 2
-                        Text {
+                        AppText {
                             text: modelData.label
                             color: dt ? dt.textPrimary : "#E2E2E5"
                             font.pixelSize: dt ? dt.fontMd : 14
                             font.weight: Font.Medium
                         }
-                        Text {
+                        AppText {
                             text: modelData.desc
                             color: dt ? dt.textMuted : "#8C9198"
                             font.pixelSize: dt ? dt.fontXs : 11
                         }
                     }
 
-                    Text {
+                    AppText {
                         text: "\u2192"
                         color: dt ? dt.textMuted : "#8C9198"
                         font.pixelSize: dt ? dt.fontLg : 16
@@ -118,7 +118,7 @@ Rectangle {
         }
 
         // Placeholder hint
-        Text {
+        AppText {
             text: qsTr("完整星图渲染将在后续版本实现")
             color: dt ? dt.textMuted : "#8C9198"
             font.pixelSize: dt ? dt.fontXs : 11

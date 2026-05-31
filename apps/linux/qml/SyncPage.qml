@@ -49,13 +49,13 @@ Item {
         target: root.backendRef
         function onSync_action_completed() {
             if (typeof window !== "undefined" && typeof window.debugLog === "function") {
-                var resLen = root.backendRef ? root.backendRef.sync_action_result.length : 0
+                var resLen = root.backendRef ? root.backendRef.sync_operation_state.length : 0
                 window.debugLog("sync", "action_completed_callback", "resultLength=" + resLen)
             }
-            if (root.backendRef) syncResultArea.text = root.backendRef.sync_action_result
+            if (root.backendRef) { try { var obj = JSON.parse(root.backendRef.sync_operation_state); syncResultArea.text = obj.summary || ""; } catch(e) { syncResultArea.text = root.backendRef.sync_operation_state; } }
         }
         function onSync_status_changed() {
-            var resLen = root.backendRef ? root.backendRef.sync_action_result.length : 0
+            var resLen = root.backendRef ? root.backendRef.sync_operation_state.length : 0
             var now = Date.now()
             var shouldLog = true
             if (resLen === root.lastSyncResultLen && now - root.lastSyncStatusLogTime < 5000) shouldLog = false
@@ -66,7 +66,7 @@ Item {
                     window.debugLog("sync", "status_changed_callback", "resultLength=" + resLen)
                 }
             }
-            if (root.backendRef) syncResultArea.text = root.backendRef.sync_action_result
+            if (root.backendRef) { try { var obj = JSON.parse(root.backendRef.sync_operation_state); syncResultArea.text = obj.summary || ""; } catch(e) { syncResultArea.text = root.backendRef.sync_operation_state; } }
         }
     }
 
@@ -85,14 +85,14 @@ Item {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: theme ? theme.sp4 : 4
-                Text {
+                AppText {
                     text: qsTr("同步设置")
                     color: theme ? theme.onBackground : "#E2E2E5"
                     font.pixelSize: theme ? theme.title : 24
                     font.family: theme ? theme.fontFamily : "sans-serif"
                     font.weight: Font.Bold
                 }
-                Text {
+                AppText {
                     text: qsTr("配置远端仓库并查看同步状态")
                     color: theme ? theme.onSurfaceVariant : "#8C9198"
                     font.pixelSize: theme ? theme.body : 14
@@ -221,7 +221,7 @@ Item {
             border.width: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? 2 : 1
             radius: theme ? theme.radiusLg : 16
             clip: true
-            visible: (root.backendRef && (root.backendRef.sync_action_result !== "" || root.backendRef.sync_status === "syncing" || root.isFailureStatus(root.backendRef.sync_status)))
+            visible: (root.backendRef && (root.backendRef.sync_operation_state !== "" || root.backendRef.sync_status === "syncing" || root.isFailureStatus(root.backendRef.sync_status)))
 
             ScrollView {
                 id: logScroll
@@ -232,7 +232,7 @@ Item {
                 TextArea {
                     id: syncResultArea
                     width: logScroll.availableWidth
-                    text: root.backendRef ? root.backendRef.sync_action_result : ""
+                    text: { if (!root.backendRef) return ""; try { var obj = JSON.parse(root.backendRef.sync_operation_state); return obj.summary || ""; } catch(e) { return root.backendRef.sync_operation_state; } }
                     color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.onDangerContainer : "#410002") : (theme ? theme.onSurfaceVariant : "#42474E")
                     font.family: "monospace"
                     font.pixelSize: theme ? theme.caption : 12

@@ -29,8 +29,8 @@ Rectangle {
         anchors.margins: dt ? dt.sp12 : 12
         spacing: dt ? dt.sp6 : 6
 
-        Text { text: root.title; color: dt ? dt.onSurfaceVariant : "#42474E"; font.pixelSize: dt ? dt.label : 13; font.family: dt ? dt.fontFamily : "sans-serif" }
-        Text { text: root.value; color: root.tone; font.pixelSize: dt ? dt.title : 24; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold }
-        Text { text: root.caption; color: dt ? dt.textMuted : "#74787F"; font.pixelSize: dt ? dt.caption : 12; font.family: dt ? dt.fontFamily : "sans-serif" }
+        AppText { text: root.title; color: dt ? dt.onSurfaceVariant : "#42474E"; font.pixelSize: dt ? dt.label : 13; font.family: dt ? dt.fontFamily : "sans-serif" }
+        AppText { text: root.value; color: root.tone; font.pixelSize: dt ? dt.title : 24; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold }
+        AppText { text: root.caption; color: dt ? dt.textMuted : "#74787F"; font.pixelSize: dt ? dt.caption : 12; font.family: dt ? dt.fontFamily : "sans-serif" }
     }
 }

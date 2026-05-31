@@ -361,7 +361,7 @@ ApplicationWindow {
             anchors.margins: designTokens.sp24
             spacing: designTokens.sp16
 
-            Text {
+            AppText {
                 text: {
                     if (confirmDialog.actionType === "delete_project") return qsTr("您确定要删除作品「%1」及其所有分卷、章节吗？").arg(confirmDialog.contextData.title);
                     if (confirmDialog.actionType === "delete_volume") return qsTr("您确定要删除分卷「%1」及包含的所有章节吗？").arg(confirmDialog.contextData.title);
@@ -415,7 +415,7 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.margins: designTokens.sp24
             spacing: designTokens.sp16
-            Text {
+            AppText {
                 text: errorDialog.message
                 color: designTokens.textPrimary
                 font.pixelSize: designTokens.body
@@ -501,7 +501,7 @@ ApplicationWindow {
             anchors.margins: designTokens.sp24
             spacing: designTokens.sp12
 
-            Text {
+            AppText {
                 text: inputDialog.actionType === "volume" ? qsTr("卷名称") : qsTr("章节名称")
                 color: designTokens.textSecondary
                 font.pixelSize: designTokens.label

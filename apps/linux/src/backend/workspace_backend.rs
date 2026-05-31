@@ -401,7 +401,7 @@ impl AppBackend {
         let path_obj = std::path::Path::new(&path_str);
         if !path_obj.exists() || !path_obj.is_dir() {
             self.set_error("所选目录不存在或不是目录");
-            self.current_sync_action_result = "所选目录不存在或不是目录".to_string();
+            self.current_sync_operation_state = "所选目录不存在或不是目录".to_string();
             self.sync_action_completed();
             return;
         }
@@ -409,7 +409,7 @@ impl AppBackend {
         let remote_url_str = remote_url.to_string();
         if remote_url_str.is_empty() {
             self.set_error("远程仓库地址不能为空");
-            self.current_sync_action_result = "远程仓库地址不能为空".to_string();
+            self.current_sync_operation_state = "远程仓库地址不能为空".to_string();
             self.sync_action_completed();
             return;
         }
@@ -422,7 +422,7 @@ impl AppBackend {
 
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
-        self.current_sync_action_result = "正在初始化...".to_string();
+        self.current_sync_operation_state = "正在初始化...".to_string();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {

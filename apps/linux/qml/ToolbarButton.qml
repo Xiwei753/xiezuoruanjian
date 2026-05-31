@@ -23,7 +23,7 @@ Button {
 
     TextMetrics { id: tm; text: control.text; font.pixelSize: control.theme ? control.theme.fontSm : 12 }
 
-    contentItem: Text {
+    contentItem: AppText {
         text: control.text
         color: control.active ? (control.theme ? control.theme.onPrimaryContainer : "#001E31") : (control.hovered ? (control.theme ? control.theme.primary : "#006497") : (control.theme ? control.theme.onSurfaceVariant : "#42474E"))
         font.pixelSize: control.theme ? control.theme.label : 13

@@ -80,7 +80,7 @@ Rectangle {
                                    (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") :
                                    hoverArea.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
 
-                            Text {
+                            AppText {
                                 id: tabLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
@@ -109,7 +109,7 @@ Rectangle {
                         radius: 12
                         color: closeHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
 
-                        Text {
+                        AppText {
                             anchors.centerIn: parent
                             text: "\u2715"
                             color: dt ? dt.textMuted : "#606470"
@@ -169,14 +169,14 @@ Rectangle {
                             color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
                             Layout.alignment: Qt.AlignHCenter
 
-                            Text {
+                            AppText {
                                 anchors.centerIn: parent
                                 text: "\u2699"
                                 font.pixelSize: 28
                             }
                         }
 
-                        Text {
+                        AppText {
                             text: qsTr("写作设定")
                             color: dt ? dt.textPrimary : "#E2E4E9"
                             font.pixelSize: dt ? dt.fontLg : 16
@@ -184,7 +184,7 @@ Rectangle {
                             Layout.alignment: Qt.AlignHCenter
                         }
 
-                        Text {
+                        AppText {
                             text: qsTr("字号、行距、主题等设置")
                             color: dt ? dt.textMuted : "#606470"
                             font.pixelSize: dt ? dt.fontSm : 12
@@ -202,13 +202,13 @@ Rectangle {
                                 id: openSettingsBtn
                                 anchors.centerIn: parent
                                 spacing: dt ? dt.sp6 : 6
-                                Text {
+                                AppText {
                                     text: "\u2699"
                                     font.pixelSize: dt ? dt.fontSm : 12
                                     color: "#FFFFFF"
                                     Layout.alignment: Qt.AlignVCenter
                                 }
-                                Text {
+                                AppText {
                                     text: qsTr("打开设置")
                                     color: "#FFFFFF"
                                     font.pixelSize: dt ? dt.fontSm : 12
@@ -238,19 +238,19 @@ Rectangle {
                         anchors.centerIn: parent
                         spacing: dt ? dt.sp16 : 16
 
-                        Text {
+                        AppText {
                             text: "\uD83E\uDD16"
                             font.pixelSize: 32
                             Layout.alignment: Qt.AlignHCenter
                         }
-                        Text {
+                        AppText {
                             text: qsTr("AI 助手")
                             color: dt ? dt.textPrimary : "#E2E4E9"
                             font.pixelSize: dt ? dt.fontLg : 16
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
-                        Text {
+                        AppText {
                             text: qsTr("AI 功能将在后续版本实现")
                             color: dt ? dt.textMuted : "#606470"
                             font.pixelSize: dt ? dt.fontSm : 12

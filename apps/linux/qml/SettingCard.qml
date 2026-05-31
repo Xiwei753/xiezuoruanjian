@@ -30,7 +30,7 @@ Rectangle {
         anchors.margins: dt ? dt.sp20 : 20
         spacing: dt ? dt.sp16 : 16
 
-        Text {
+        AppText {
             text: root.title
             color: dt ? dt.accent : "#7B8CDE"
             font.pixelSize: dt ? dt.fontMd : 14

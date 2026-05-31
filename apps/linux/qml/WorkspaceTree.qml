@@ -100,7 +100,7 @@ Rectangle {
                     anchors.rightMargin: 8
                     spacing: 8
 
-                    Text {
+                    AppText {
                         text: {
                             if (model.type === "project") return "[P]";
                             if (model.type === "volume") return "■";
@@ -111,7 +111,7 @@ Rectangle {
                         font.pixelSize: 14
                     }
 
-                    Text {
+                    AppText {
                         Layout.fillWidth: true
                         text: model.title || ""
                         color: delegateRect.isSelected ? (root.theme ? root.theme.onPrimaryContainer : "#CCE5FF") : (root.theme ? root.theme.textPrimary : "#E2E2E5")
@@ -144,7 +144,7 @@ Rectangle {
         }
     }
 
-    Text {
+    AppText {
         anchors.centerIn: parent
         visible: treeModel.count === 0
         text: qsTr("暂无作品")
@@ -166,7 +166,7 @@ Rectangle {
             id: menuCreateVolume
             text: qsTr("新建卷")
             visible: contextMenu.itemData && contextMenu.itemData.type === "project"
-            contentItem: Text {
+            contentItem: AppText {
                 text: menuCreateVolume.text
                 color: theme ? theme.textPrimary : "#E2E2E5"
                 font.pixelSize: theme ? theme.label : 13
@@ -187,7 +187,7 @@ Rectangle {
             id: menuCreateChapter
             text: qsTr("新建章节")
             visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
-            contentItem: Text {
+            contentItem: AppText {
                 text: menuCreateChapter.text
                 color: theme ? theme.textPrimary : "#E2E2E5"
                 font.pixelSize: theme ? theme.label : 13
@@ -210,7 +210,7 @@ Rectangle {
         MenuItem {
             id: menuRename
             text: qsTr("重命名")
-            contentItem: Text {
+            contentItem: AppText {
                 text: menuRename.text
                 color: theme ? theme.textPrimary : "#E2E2E5"
                 font.pixelSize: theme ? theme.label : 13
@@ -238,7 +238,7 @@ Rectangle {
         MenuItem {
             id: menuDelete
             text: qsTr("删除")
-            contentItem: Text {
+            contentItem: AppText {
                 text: menuDelete.text
                 color: theme ? theme.error : "#FFB4AB"
                 font.pixelSize: theme ? theme.label : 13

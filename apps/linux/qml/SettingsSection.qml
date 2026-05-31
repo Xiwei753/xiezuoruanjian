@@ -34,7 +34,7 @@ Rectangle {
         anchors.margins: root._sectionPadding
         spacing: dt ? dt.sp12 : 12
 
-        Text {
+        AppText {
             text: root.title
             color: dt ? dt.textPrimary : "#E2E4E9"
             font.pixelSize: dt ? dt.subtitle : 18

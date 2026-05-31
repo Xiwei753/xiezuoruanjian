@@ -52,7 +52,7 @@ Rectangle {
                 }
                 Layout.alignment: Qt.AlignTop
 
-                Text {
+                AppText {
                     anchors.centerIn: parent
                     text: "\u2B50"
                     font.pixelSize: isChild ? 14 : 18
@@ -63,7 +63,7 @@ Rectangle {
                 Layout.fillWidth: true
                 spacing: 2
 
-                Text {
+                AppText {
                     text: starmapData.title || qsTr("未命名星图")
                     color: dt ? dt.textPrimary : "#E2E4E9"
                     font.pixelSize: dt ? (root.isChild ? dt.fontSm : dt.fontMd) : 14
@@ -73,7 +73,7 @@ Rectangle {
                     maximumLineCount: 1
                 }
 
-                Text {
+                AppText {
                     text: {
                         if (starmapData.isMainForProject) return qsTr("主星图");
                         if (starmapData.projectId) return qsTr("已绑定");
@@ -103,13 +103,13 @@ Rectangle {
                     spacing: 1
                     visible: !root.isChild || index < 2
 
-                    Text {
+                    AppText {
                         text: modelData.value
                         color: dt ? dt.textPrimary : "#E2E4E9"
                         font.pixelSize: dt ? (root.isChild ? dt.fontSm : dt.fontMd) : 14
                         font.weight: Font.Bold
                     }
-                    Text {
+                    AppText {
                         text: modelData.label
                         color: dt ? dt.textMuted : "#606470"
                         font.pixelSize: dt ? dt.fontXs : 11
@@ -136,13 +136,13 @@ Rectangle {
                     id: childCountRow
                     anchors.centerIn: parent
                     spacing: dt ? dt.sp4 : 4
-                    Text {
+                    AppText {
                         text: "\u25BC"
                         color: dt ? dt.accentText : "#3D4D9E"
                         font.pixelSize: dt ? dt.fontXs : 11
                         Layout.alignment: Qt.AlignVCenter
                     }
-                    Text {
+                    AppText {
                         text: (starmapData.childStarmapCount || 0) + " " + qsTr("子星图")
                         color: dt ? dt.accentText : "#3D4D9E"
                         font.pixelSize: dt ? dt.fontXs : 11
@@ -153,7 +153,7 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
-            Text {
+            AppText {
                 text: {
                     if (!starmapData.updatedAt) return "";
                     var d = new Date(starmapData.updatedAt);

@@ -28,7 +28,7 @@ Item {
             Layout.fillWidth: true
             spacing: dt ? dt.sp6 : 6
 
-            Text {
+            AppText {
                 text: root.title
                 color: dt ? dt.onBackground : "#E2E2E5"
                 font.pixelSize: dt ? dt.fontTitle : 26
@@ -36,7 +36,7 @@ Item {
                 font.weight: Font.Bold
             }
 
-            Text {
+            AppText {
                 text: root.subtitle
                 color: dt ? dt.textSecondary : "#9CA0AB"
                 font.pixelSize: dt ? dt.body : 14

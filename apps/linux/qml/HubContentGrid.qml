@@ -62,20 +62,20 @@ Item {
             anchors.centerIn: parent
             spacing: dt ? dt.sp8 : 8
 
-            Text {
+            AppText {
                 text: root.emptyIcon
                 font.pixelSize: 36
                 visible: text.length > 0
                 anchors.horizontalCenter: parent.horizontalCenter
             }
-            Text {
+            AppText {
                 text: root.emptyTitle
                 color: dt ? dt.textPrimary : "#E2E2E5"
                 font.pixelSize: dt ? dt.fontXl : 18
                 font.weight: Font.DemiBold
                 anchors.horizontalCenter: parent.horizontalCenter
             }
-            Text {
+            AppText {
                 text: root.emptySubtitle
                 color: dt ? dt.textSecondary : "#8C9198"
                 font.pixelSize: dt ? dt.fontMd : 14

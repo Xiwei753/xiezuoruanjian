@@ -83,14 +83,14 @@ Rectangle {
             anchors.fill: parent
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp16 : 16
-            Text {
+            AppText {
                 text: qsTr("保存被阻止")
                 color: dt ? dt.textPrimary : "#E2E2E5"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
             }
-            Text {
+            AppText {
                 id: emptySaveDialogText
                 Layout.fillWidth: true
                 text: qsTr("检测到异常空内容覆盖，已阻止保存。")
@@ -205,7 +205,7 @@ Rectangle {
                                 radius: dt ? dt.radiusPill : 999
                                 color: backHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
-                                Text {
+                                AppText {
                                     anchors.centerIn: parent
                                     text: "\u2190"
                                     color: dt ? dt.textSecondary : "#8C9198"
@@ -221,7 +221,7 @@ Rectangle {
                                 }
                             }
 
-                            Text {
+                            AppText {
                                 text: root.projectTitle || qsTr("作品")
                                 color: dt ? dt.textPrimary : "#E2E2E5"
                                 font.pixelSize: dt ? dt.fontMd : 14
@@ -275,7 +275,7 @@ Rectangle {
                                             opacity: 0.6
                                         }
 
-                                        Text {
+                                        AppText {
                                             text: model.itemTitle || ""
                                             color: delegateBg.isSelected ?
                                                    (dt ? dt.onPrimaryContainer : "#CCE5FF") :
@@ -294,7 +294,7 @@ Rectangle {
                                             radius: 10
                                             color: addChapterHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
 
-                                            Text {
+                                            AppText {
                                                 anchors.centerIn: parent
                                                 text: "+"
                                                 color: dt ? dt.primary : "#006497"
@@ -350,13 +350,13 @@ Rectangle {
                         RowLayout {
                             anchors.centerIn: parent
                             spacing: dt ? dt.sp4 : 4
-                            Text {
+                            AppText {
                                 text: "+"
                                 color: dt ? dt.primary : "#006497"
                                 font.pixelSize: dt ? dt.fontMd : 14
                                 font.weight: Font.Bold
                             }
-                            Text {
+                            AppText {
                                 text: qsTr("新建卷")
                                 color: dt ? dt.primary : "#006497"
                                 font.pixelSize: dt ? dt.label : 13
@@ -392,7 +392,7 @@ Rectangle {
                             id: createVolumeMenuItem
                             text: qsTr("新建卷")
                             visible: treeContextMenu.itemType === "project"
-                            contentItem: Text {
+                            contentItem: AppText {
                                 text: createVolumeMenuItem.text
                                 color: dt ? dt.textPrimary : "#E2E2E5"
                                 font.pixelSize: dt ? dt.label : 13
@@ -408,7 +408,7 @@ Rectangle {
                             id: createChapterMenuItem
                             text: qsTr("新建章节")
                             visible: treeContextMenu.itemType === "volume"
-                            contentItem: Text {
+                            contentItem: AppText {
                                 text: createChapterMenuItem.text
                                 color: dt ? dt.textPrimary : "#E2E2E5"
                                 font.pixelSize: dt ? dt.label : 13
@@ -676,7 +676,7 @@ Rectangle {
                             opacity: 0.1
                             Layout.alignment: Qt.AlignHCenter
                         }
-                        Text {
+                        AppText {
                             text: qsTr("选择一个章节开始写作")
                             color: dt ? dt.textSecondary : "#8C9198"
                             font.pixelSize: dt ? dt.fontLg : 16
@@ -701,7 +701,7 @@ Rectangle {
                             radius: dt ? dt.radiusPill : 999
                             color: drawerBtnHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
 
-                            Text {
+                            AppText {
                                 anchors.centerIn: parent
                                 text: "\u25C0" // Left arrow to indicate it opens from the right
                                 color: dt ? dt.textMuted : "#8C9198"
