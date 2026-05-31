@@ -158,8 +158,7 @@ Rectangle {
         // Left sidebar: volume/chapter tree
         Rectangle {
             id: sidebarRect
-            property real currentSidebarWidth: root.backendRef && root.backendRef.setting_linux_sidebar_width > 0 ? root.backendRef.setting_linux_sidebar_width : 240
-            SplitView.preferredWidth: currentSidebarWidth
+            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_linux_sidebar_width > 0 ? root.backendRef.setting_linux_sidebar_width : 240
             SplitView.minimumWidth: 180
             SplitView.maximumWidth: 420
             color: dt ? dt.sidebar : "#14161B"
@@ -178,8 +177,7 @@ Rectangle {
             }
 
             onWidthChanged: {
-                if (width > 0 && width !== currentSidebarWidth) {
-                    currentSidebarWidth = width;
+                if (width > 0) {
                     sidebarDebounceTimer.restart();
                 }
             }
@@ -467,17 +465,17 @@ Rectangle {
                 // Centered paper container
                 Item {
                     anchors.fill: parent
-                    anchors.leftMargin: dt ? dt.sp32 : 32
-                    anchors.rightMargin: root.drawerOpen ? (dt ? dt.sp32 : 32) : (dt ? dt.sp32 + 24 : 56)
-                    anchors.topMargin: dt ? dt.sp32 : 32
-                    anchors.bottomMargin: dt ? dt.sp32 : 32
+                    anchors.leftMargin: dt ? dt.sp8 : 8
+                    anchors.rightMargin: dt ? dt.sp8 : 8
+                    anchors.topMargin: dt ? dt.sp8 : 8
+                    anchors.bottomMargin: dt ? dt.sp8 : 8
 
-                    // Paper background - adapts to available space with left/right anchors, leaving a small side gap
+                    // Paper background - adapts to available space up to 820px, leaving a small side gap
                     Rectangle {
                         id: paperBg
-                        anchors.left: parent.left
-                        anchors.right: parent.right
+                        width: Math.min(parent.width, 820)
                         height: parent.height
+                        anchors.horizontalCenter: parent.horizontalCenter
                         color: dt ? dt.editorBg : "#191C21"
                         radius: dt ? dt.radiusMd : 12
                         border.color: dt ? dt.border : "#2A2E36"
@@ -526,6 +524,11 @@ Rectangle {
 
                             cursorVisible: false
                             cursorDelegate: Component { Item {} }
+                            onCursorVisibleChanged: {
+                                if (cursorVisible) {
+                                    cursorVisible = false;
+                                }
+                            }
 
                             text: ""
 

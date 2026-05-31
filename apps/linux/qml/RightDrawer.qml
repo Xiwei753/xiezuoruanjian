@@ -27,18 +27,12 @@ Rectangle {
     signal openSettings()
 
     color: "transparent"
-    width: isOpen ? 320 : 0
     clip: true
     visible: isOpen
 
-    Behavior on width { NumberAnimation { duration: dt ? dt.animNormal : 200; easing.type: Easing.InOutQuad } }
-
     Rectangle {
         id: drawerPanel
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.right: parent.right
-        width: 320
+        anchors.fill: parent
         color: dt ? dt.surface : "#1A1D23"
         border.color: dt ? dt.border : "#2A2E36"
         border.width: 1
