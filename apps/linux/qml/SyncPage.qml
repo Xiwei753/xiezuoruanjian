@@ -27,7 +27,7 @@ Item {
 
     // Remove color since root is now an Item
     function statusKind() {
-        var s = root.backendRef ? root.backendRef.sync_status : ""
+        var s = appBackend ? appBackend.sync_status : ""
         if (s === "success") return "success"
         if (s === "syncing") return "warning"
         if (root.isFailureStatus(s)) return "error"
@@ -39,35 +39,35 @@ Item {
     }
 
     function statusText() {
-        var s = root.backendRef ? root.backendRef.sync_status : ""
+        var s = appBackend ? appBackend.sync_status : ""
         if (s === "success") return qsTr("已同步")
         if (s === "syncing") return qsTr("同步中")
         if (s === "conflict") return qsTr("存在冲突")
         if (root.isFailureStatus(s)) return qsTr("同步失败")
-        if (root.backendRef && root.backendRef.sync_enabled) return qsTr("已配置")
+        if (appBackend && appBackend.sync_enabled) return qsTr("已配置")
         return qsTr("未配置")
     }
 
     Connections {
-        target: root.backendRef
+        target: appBackend
         function onSync_action_completed() {
             if (typeof window !== "undefined" && typeof window.debugLog === "function") {
-                var resLen = root.backendRef ? root.backendRef.sync_operation_state.length : 0
+                var resLen = appBackend ? appBackend.sync_operation_state.length : 0
                 window.debugLog("sync", "action_completed_callback", "resultLength=" + resLen)
             }
-            if (root.backendRef) {
+            if (appBackend) {
                 try {
-                    var obj = JSON.parse(root.backendRef.sync_operation_state);
+                    var obj = JSON.parse(appBackend.sync_operation_state);
                     if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
                         syncResultArea.text = obj.summary || "";
                     }
                 } catch(e) {
-                    syncResultArea.text = root.backendRef.sync_operation_state;
+                    syncResultArea.text = appBackend.sync_operation_state;
                 }
             }
         }
         function onSync_status_changed() {
-            var resLen = root.backendRef ? root.backendRef.sync_operation_state.length : 0
+            var resLen = appBackend ? appBackend.sync_operation_state.length : 0
             var now = Date.now()
             var shouldLog = true
             if (resLen === root.lastSyncResultLen && now - root.lastSyncStatusLogTime < 5000) shouldLog = false
@@ -78,14 +78,14 @@ Item {
                     window.debugLog("sync", "status_changed_callback", "resultLength=" + resLen)
                 }
             }
-            if (root.backendRef) {
+            if (appBackend) {
                 try {
-                    var obj = JSON.parse(root.backendRef.sync_operation_state);
+                    var obj = JSON.parse(appBackend.sync_operation_state);
                     if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
                         syncResultArea.text = obj.summary || "";
                     }
                 } catch(e) {
-                    syncResultArea.text = root.backendRef.sync_operation_state;
+                    syncResultArea.text = appBackend.sync_operation_state;
                 }
             }
         }
@@ -197,7 +197,7 @@ Item {
                 text: qsTr("执行同步")
                 theme: root.theme
                 variant: "secondary"
-                enabled: !(root.backendRef && root.backendRef.sync_in_progress)
+                enabled: !(appBackend && appBackend.sync_in_progress)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
                     syncResultArea.text = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
@@ -214,7 +214,7 @@ Item {
                 text: qsTr("运行诊断")
                 theme: root.theme
                 variant: "secondary"
-                enabled: !(root.backendRef && root.backendRef.sync_in_progress)
+                enabled: !(appBackend && appBackend.sync_in_progress)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")
@@ -246,12 +246,12 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 180
-            color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.surfaceContainerLow : "#F6F8FB")
-            border.color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.error : "#BA1A1A") : (theme ? theme.border : "#CBD5E1")
-            border.width: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? 2 : 1
+            color: (appBackend && root.isFailureStatus(appBackend.sync_status)) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.surfaceContainerLow : "#F6F8FB")
+            border.color: (appBackend && root.isFailureStatus(appBackend.sync_status)) ? (theme ? theme.error : "#BA1A1A") : (theme ? theme.border : "#CBD5E1")
+            border.width: (appBackend && root.isFailureStatus(appBackend.sync_status)) ? 2 : 1
             radius: theme ? theme.radiusLg : 16
             clip: true
-            visible: (root.backendRef && (root.backendRef.sync_operation_state !== "" || root.backendRef.sync_status === "syncing" || root.isFailureStatus(root.backendRef.sync_status)))
+            visible: (appBackend && (appBackend.sync_operation_state !== "" || appBackend.sync_status === "syncing" || root.isFailureStatus(appBackend.sync_status)))
 
             ScrollView {
                 id: logScroll
@@ -263,7 +263,7 @@ Item {
                     id: syncResultArea
                     width: logScroll.availableWidth
                     text: ""
-                    color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.onSurfaceVariant : "#42474E")
+                    color: (appBackend && root.isFailureStatus(appBackend.sync_status)) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.onSurfaceVariant : "#42474E")
                     font.family: "monospace"
                     font.pixelSize: theme ? theme.caption : 12
                     readOnly: true
@@ -275,12 +275,12 @@ Item {
     }
 
     Component.onCompleted: {
-        if (root.backendRef) {
+        if (appBackend) {
             try {
-                var obj = JSON.parse(root.backendRef.sync_operation_state);
+                var obj = JSON.parse(appBackend.sync_operation_state);
                 syncResultArea.text = obj.summary || "";
             } catch(e) {
-                syncResultArea.text = root.backendRef.sync_operation_state;
+                syncResultArea.text = appBackend.sync_operation_state;
             }
         }
     }
