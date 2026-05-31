@@ -47,17 +47,27 @@ Rectangle {
     }
 
     function cursorX() {
-        if (!targetTextArea) return 0;
+        if (!targetTextArea || !overlayItem) return 0;
         var rect = targetTextArea.cursorRectangle;
-        var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
-        return pt.x;
+        if (!rect) return 0;
+        try {
+            var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
+            return pt ? pt.x : 0;
+        } catch (e) {
+            return 0;
+        }
     }
 
     function cursorY() {
-        if (!targetTextArea) return 0;
+        if (!targetTextArea || !overlayItem) return 0;
         var rect = targetTextArea.cursorRectangle;
-        var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
-        return pt.y;
+        if (!rect) return 0;
+        try {
+            var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
+            return pt ? pt.y : 0;
+        } catch (e) {
+            return 0;
+        }
     }
 
     Behavior on x {
