@@ -52,11 +52,11 @@ QtObject {
 
     // Autosave timer
     property var autoSaveTimer: Timer {
-        interval: backendRef ? backendRef.setting_auto_save_delay_ms : 1500
+        interval: settingsBackend ? settingsBackend.setting_auto_save_delay_ms : 1500
         repeat: false
         onTriggered: {
             if (!backendRef || !controller.chapterId || !controller.projectId || !controller.volumeId) return;
-            if (!backendRef.setting_auto_save_enabled) return;
+            if (!settingsBackend || !settingsBackend.setting_auto_save_enabled) return;
             if (controller.saveGuardActive()) {
                 controller.pendingAutoSaveAfterGuard = true;
                 return;
@@ -72,7 +72,7 @@ QtObject {
             controller.isApplyingSettings = false;
             if (!controller.pendingAutoSaveAfterGuard) return;
             controller.pendingAutoSaveAfterGuard = false;
-            if (!controller.backendRef || !controller.backendRef.setting_auto_save_enabled) return;
+            if (!settingsBackend || !settingsBackend.setting_auto_save_enabled) return;
             if (!controller.chapterId || !controller.projectId || !controller.volumeId) return;
 
             var read = controller.readEditorPlainText();
@@ -88,8 +88,8 @@ QtObject {
     property DocumentHandler docHandler: DocumentHandler {
         id: docHandler
         document: targetTextArea ? targetTextArea.textDocument : null
-        line_spacing: backendRef ? backendRef.setting_line_spacing : 1.5
-        text_indent: (backendRef && backendRef.setting_auto_indent_enabled) ? Math.round((backendRef.setting_font_size || 16) * 2) : 0
+        line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
+        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
         text_color: dt ? dt.editorTextHex : "#E2E2E5"
     }
 
@@ -137,7 +137,7 @@ QtObject {
             controller.reportStatsIfChanged(plainText);
             if (controller.chapterId && controller.backendRef) {
                 controller.backendRef.calculate_word_count(plainText);
-                if (controller.backendRef.setting_auto_save_enabled) {
+                if (settingsBackend && settingsBackend.setting_auto_save_enabled) {
                     controller.autoSaveTimer.restart();
                 }
             }

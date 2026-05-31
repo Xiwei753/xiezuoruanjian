@@ -79,12 +79,57 @@ Rectangle {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                     if (fontPopover.visible) fontPopover.close(); else fontPopover.open();
+                    lineSpacingPopover.close();
                     layoutPopover.close();
                 }
             }
         }
 
-        // Layout button (triggers popover)
+        // Line Spacing button (triggers lineSpacingPopover)
+        Rectangle {
+            width: spacingRow.implicitWidth + (dt ? dt.sp12 : 12)
+            height: 32
+            radius: dt ? dt.radiusPill : 999
+            color: lineSpacingPopover.visible || spacingHover.containsMouse ?
+                   (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
+
+            Row {
+                id: spacingRow
+                anchors.centerIn: parent
+                spacing: dt ? dt.sp4 : 4
+                AppText {
+                    text: "\u2630"
+                    color: dt ? dt.textSecondary : "#8C9198"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
+                }
+                AppText {
+                    text: Number(root.currentLineSpacing).toFixed(1) + "x"
+                    color: dt ? dt.textPrimary : "#E2E2E5"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
+                }
+                AppText {
+                    text: "\u25BE"
+                    color: dt ? dt.textSecondary : "#8C9198"
+                    font.pixelSize: dt ? dt.fontXs : 11
+                }
+            }
+
+            MouseArea {
+                id: spacingHover
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    if (lineSpacingPopover.visible) lineSpacingPopover.close(); else lineSpacingPopover.open();
+                    fontPopover.close();
+                    layoutPopover.close();
+                }
+            }
+        }
+
+        // Paragraph Layout button (triggers layoutPopover)
         Rectangle {
             width: layoutRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
@@ -97,13 +142,14 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt ? dt.sp4 : 4
                 AppText {
-                    text: "\u2630"
+                    text: "\u21E5"
                     color: dt ? dt.textSecondary : "#8C9198"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
+                    font.weight: Font.Bold
                 }
                 AppText {
-                    text: qsTr("排版设置")
+                    text: qsTr("段落")
                     color: dt ? dt.textPrimary : "#E2E2E5"
                     font.pixelSize: dt ? dt.label : 13
                     font.family: dt ? dt.fontFamily : "sans-serif"
@@ -123,6 +169,7 @@ Rectangle {
                 onClicked: {
                     if (layoutPopover.visible) layoutPopover.close(); else layoutPopover.open();
                     fontPopover.close();
+                    lineSpacingPopover.close();
                 }
             }
         }
@@ -335,11 +382,115 @@ Rectangle {
         }
     }
 
+    // === Line Spacing Popover ===
+    Popup {
+        id: lineSpacingPopover
+        y: root.height + (dt ? dt.sp8 : 8)
+        x: 100
+        width: 200
+        padding: dt ? dt.sp12 : 12
+        closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+        background: Rectangle {
+            radius: dt ? dt.radiusXl : 24
+            color: dt ? dt.surface : "#1A1D23"
+            border.color: dt ? dt.border : "#2A2E36"
+            border.width: 1
+        }
+
+        contentItem: ColumnLayout {
+            spacing: dt ? dt.sp12 : 12
+
+            AppText {
+                text: qsTr("行距倍数")
+                color: dt ? dt.textPrimary : "#E2E4E9"
+                font.pixelSize: dt ? dt.subtitle : 18
+                font.family: dt ? dt.fontFamily : "sans-serif"
+                font.weight: Font.DemiBold
+            }
+
+            // Quick presets
+            Flow {
+                Layout.fillWidth: true
+                spacing: dt ? dt.sp6 : 6
+
+                Repeater {
+                    model: [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
+                    Rectangle {
+                        width: 40; height: 32
+                        radius: dt ? dt.radiusPill : 999
+                        color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
+                               (dt ? dt.primaryContainer : "#CCE5FF") :
+                               presetHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+
+                        AppText {
+                            anchors.centerIn: parent
+                            text: Number(modelData).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")
+                            color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
+                                   (dt ? dt.selectedText : "#CCE5FF") :
+                                   (dt ? dt.textSecondary : "#8C9198")
+                            font.pixelSize: dt ? dt.label : 13
+                            font.family: dt ? dt.fontFamily : "sans-serif"
+                            font.weight: Math.abs(root.currentLineSpacing - modelData) < 0.01 ? Font.DemiBold : Font.Normal
+                        }
+
+                        MouseArea {
+                            id: presetHover
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                root.lineSpacingChanged(modelData)
+                                lineSpacingPopover.close()
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Slider
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: dt ? dt.sp8 : 8
+
+                AppText {
+                    text: "1.0"
+                    color: dt ? dt.textMuted : "#8C9198"
+                    font.pixelSize: dt ? dt.fontXs : 11
+                }
+
+                AppSlider {
+                    id: lineSpacingSlider
+                    Layout.fillWidth: true
+                    theme: dt
+                    from: 1.0
+                    to: 3.0
+                    stepSize: 0.1
+                    value: root.currentLineSpacing
+                    onMoved: root.lineSpacingChanged(value)
+                }
+
+                AppText {
+                    text: "3.0"
+                    color: dt ? dt.textMuted : "#8C9198"
+                    font.pixelSize: dt ? dt.fontXs : 11
+                }
+            }
+
+            AppText {
+                text: Number(root.currentLineSpacing).toFixed(1) + " x"
+                color: dt ? dt.textSecondary : "#9CA0AB"
+                font.pixelSize: dt ? dt.fontSm : 12
+                Layout.alignment: Qt.AlignHCenter
+            }
+        }
+    }
+
     // === Layout Popover ===
     Popup {
         id: layoutPopover
         y: root.height + (dt ? dt.sp8 : 8)
-        x: 110
+        x: 180
         width: 220
         padding: dt ? dt.sp12 : 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
@@ -354,66 +505,12 @@ Rectangle {
             spacing: dt ? dt.sp12 : 12
 
             AppText {
-                text: qsTr("排版设置")
+                text: qsTr("段落设置")
                 color: dt ? dt.textPrimary : "#E2E4E9"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
             }
-
-            // Line spacing
-            ColumnLayout {
-                spacing: dt ? dt.sp6 : 6
-                AppText {
-                    text: qsTr("行距")
-                    color: dt ? dt.textSecondary : "#9CA0AB"
-                    font.pixelSize: dt ? dt.fontSm : 12
-                }
-
-                Flow {
-                    Layout.fillWidth: true
-                    spacing: dt ? dt.sp6 : 6
-
-                    Repeater {
-                        model: [
-                            { label: "1.25", value: 1.25 },
-                            { label: "1.5", value: 1.5 },
-                            { label: "1.75", value: 1.75 },
-                            { label: "2.0", value: 2.0 }
-                        ]
-
-                        Rectangle {
-                            width: 44; height: 32
-                            radius: dt ? dt.radiusPill : 999
-                            color: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ?
-                                   (dt ? dt.primaryContainer : "#CCE5FF") :
-                                   lsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
-
-                            AppText {
-                                anchors.centerIn: parent
-                                text: modelData.label
-                                color: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ?
-                                       (dt ? dt.selectedText : "#CCE5FF") :
-                                       (dt ? dt.textSecondary : "#8C9198")
-                                font.pixelSize: dt ? dt.label : 13
-                                font.family: dt ? dt.fontFamily : "sans-serif"
-                                font.weight: Math.abs(root.currentLineSpacing - modelData.value) < 0.01 ? Font.DemiBold : Font.Normal
-                            }
-
-                            MouseArea {
-                                id: lsHover
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.lineSpacingChanged(modelData.value)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Divider
-            Rectangle { Layout.fillWidth: true; height: 1; color: dt ? dt.border : "#2A2E36" }
 
             // First line indent
             RowLayout {

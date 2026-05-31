@@ -143,6 +143,16 @@ Rectangle {
         }
     }
 
+    function reloadActiveChapter() {
+        if (editorController.projectId && editorController.volumeId && editorController.chapterId) {
+            editorController.loadChapterContentWithIds(
+                editorController.projectId,
+                editorController.volumeId,
+                editorController.chapterId
+            );
+        }
+    }
+
     color: dt ? dt.bg : "#111318"
 
     SplitView {
@@ -434,23 +444,23 @@ Rectangle {
                 Layout.fillWidth: true
                 dt: root.dt
                 backendRef: root.backendRef
-                currentFontSize: root.backendRef ? root.backendRef.setting_font_size : 16
-                currentLineSpacing: root.backendRef ? root.backendRef.setting_line_spacing : 1.5
-                firstLineIndent: root.backendRef ? root.backendRef.setting_auto_indent_enabled : false
+                currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
+                currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
+                firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
                 saveStatus: editorController.saveStatus
                 onFontSizeChanged: function(size) {
-                    if (root.backendRef) {
-                        root.backendRef.setting_font_size = size;
+                    if (settingsBackend) {
+                        settingsBackend.setting_font_size = size;
                     }
                 }
                 onLineSpacingChanged: function(spacing) {
-                    if (root.backendRef) {
-                        root.backendRef.setting_line_spacing = spacing;
+                    if (settingsBackend) {
+                        settingsBackend.setting_line_spacing = spacing;
                     }
                 }
                 onFirstLineIndentToggled: {
-                    if (root.backendRef) {
-                        root.backendRef.setting_auto_indent_enabled = !root.backendRef.setting_auto_indent_enabled;
+                    if (settingsBackend) {
+                        settingsBackend.setting_auto_indent_enabled = !settingsBackend.setting_auto_indent_enabled;
                     }
                 }
                 onFormatOneClick: editorController.formatText()
@@ -646,6 +656,10 @@ Rectangle {
             // Path changed visually, do NOT load chapter content to avoid infinite loop.
             // Just update title if needed
         }
+    }
+
+    Connections {
+        target: settingsBackend
         function onSettings_changed() {
             editorController.applyCurrentSettings();
         }

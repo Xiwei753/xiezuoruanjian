@@ -172,6 +172,19 @@ ApplicationWindow {
     }
 
     Connections {
+        target: appBackend
+        function onWorkspace_content_changed() {
+            appController.refreshState(qsTr("刷新工作区内容失败"));
+            if (appController.inWriting && writingWorkspaceLoader.item) {
+                writingWorkspaceLoader.item.reloadActiveChapter();
+            }
+        }
+        function onWorkspace_state_changed() {
+            appController.refreshState(qsTr("刷新工作区状态失败"));
+        }
+    }
+
+    Connections {
         target: editorBackend
         function onClear_editor() {
             if (writingWorkspaceLoader.item) {
