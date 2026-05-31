@@ -295,9 +295,6 @@ impl From<crate::sync_service::SyncConfig> for SyncConfigDto {
             backend_type: match c.backend_type {
                 crate::sync_service::BackendType::Git => "git".to_string(),
                 crate::sync_service::BackendType::GithubApi => "github_api".to_string(),
-                crate::sync_service::BackendType::WebDav => "webdav".to_string(),
-                crate::sync_service::BackendType::S3 => "s3".to_string(),
-                crate::sync_service::BackendType::LocalFolder => "local_folder".to_string(),
             },
             remote_url: c.remote_url,
             transport: match c.transport {
@@ -325,8 +322,6 @@ impl From<SyncConfigDto> for crate::sync_service::SyncConfig {
             backend_type: match c.backend_type.as_str() {
                 "git" => crate::sync_service::BackendType::Git,
                 "github_api" => crate::sync_service::BackendType::GithubApi,
-                "webdav" => crate::sync_service::BackendType::WebDav,
-                "s3" => crate::sync_service::BackendType::S3,
                 _ => crate::sync_service::BackendType::GithubApi,
             },
             remote_url: c.remote_url,

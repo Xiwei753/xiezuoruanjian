@@ -56,9 +56,6 @@ impl crate::sync_service::SyncService {
         result.backend_type = match config.backend_type {
             BackendType::Git => "git".to_string(),
             BackendType::GithubApi => "github_api".to_string(),
-            BackendType::WebDav => "webdav".to_string(),
-            BackendType::S3 => "s3".to_string(),
-            BackendType::LocalFolder => "local_folder".to_string(),
         };
 
         result.android_has_internet_permission = config.android_has_internet_permission;

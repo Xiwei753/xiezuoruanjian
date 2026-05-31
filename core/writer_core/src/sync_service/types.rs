@@ -7,9 +7,6 @@ pub enum BackendType {
     Git,
     #[default]
     GithubApi,
-    WebDav,
-    S3,
-    LocalFolder,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

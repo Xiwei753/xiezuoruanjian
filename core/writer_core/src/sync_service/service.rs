@@ -18,6 +18,47 @@ use crate::sync_service::scanner;
 use crate::sync_service::lww;
 use std::path::Path;
 
+fn map_git_error(e: crate::Error) -> crate::Error {
+    if let crate::Error::Io(io_err) = &e {
+        let msg = io_err.to_string();
+        if msg.contains("unsupported proxy protocol")
+            || msg.contains("failed to resolve address")
+            || msg.contains("SOCKS5")
+        {
+            return crate::Error::Io(std::io::Error::other(format!(
+                "代理不可用/端口不通: {}",
+                msg
+            )));
+        }
+    }
+    e
+}
+
+fn classify_error(e_str: &str) -> SyncStatus {
+    let lower = e_str.to_lowercase();
+    if lower.contains("recoverable_error") {
+        SyncStatus::RecoverableError(
+            e_str.replace("recoverable_error:", "").trim().to_string(),
+        )
+    } else if lower.contains("fatal_error") {
+        SyncStatus::FatalError(e_str.replace("fatal_error:", "").trim().to_string())
+    } else if lower.contains("auth")
+        || lower.contains("token")
+        || lower.contains("credential")
+        || lower.contains("proxy")
+        || lower.contains("resolve")
+        || lower.contains("network")
+        || lower.contains("unborn")
+        || lower.contains("timeout")
+        || lower.contains("connect")
+        || lower.contains("could not resolve")
+    {
+        SyncStatus::RecoverableError(e_str.to_string())
+    } else {
+        SyncStatus::FatalError(e_str.to_string())
+    }
+}
+
 pub struct SyncService {
     pub config: Option<SyncConfig>,
     pub status: SyncStatus,
@@ -88,6 +129,306 @@ impl SyncService {
 
 }
 
+enum PullOutcome {
+    Continue { pull_branch_missing: bool },
+    Return(SyncResult),
+}
+
+fn handle_pull_error(
+    e: crate::Error,
+    workspace_path: &Path,
+    result: &SyncResult,
+    first_sync_mode: FirstSyncMode,
+) -> PullOutcome {
+    let e_str = e.to_string();
+
+    if e_str.contains("settings_conflict_payload:") {
+        let payload_str = e_str
+            .split("settings_conflict_payload:")
+            .nth(1)
+            .unwrap_or("")
+            .trim();
+        let details: Option<Vec<SettingConflictDetail>> =
+            serde_json::from_str(payload_str).ok();
+        let mut res = SyncResult::error(
+            SyncStatus::Conflict,
+            first_sync_mode,
+            Some("同步冲突，已停止，未覆盖任何文件".to_string()),
+            "Settings semantic merge conflict".to_string(),
+        );
+        res.settings_conflicts = details;
+        let summary = SyncConflictSummary {
+            status: "conflict".to_string(),
+            local_dirty: true,
+            remote_changed: true,
+            conflicted_files: vec!["app-meta/settings/settings.sync.json".to_string()],
+            blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。"
+                .to_string(),
+            safe_next_steps: vec![
+                "手动检查本地与远端设置。".to_string(),
+                "重新保存设置以覆盖或重新同步。".to_string(),
+            ],
+        };
+        res.conflict_summary = Some(summary);
+        return PullOutcome::Return(res);
+    }
+
+    if e_str.contains("checkout_conflict_payload:") {
+        let payload_str = e_str
+            .split("checkout_conflict_payload:")
+            .nth(1)
+            .unwrap_or("")
+            .trim();
+        let summary: Option<SyncConflictSummary> = serde_json::from_str(payload_str).ok();
+
+        let mut res = SyncResult::error(
+            SyncStatus::Conflict,
+            first_sync_mode,
+            Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
+            "Pull failed due to conflict.".to_string(),
+        );
+        res.conflict_summary = summary;
+        return PullOutcome::Return(res);
+    }
+
+    let e_str_lower = e_str.to_lowercase();
+    if e_str_lower.contains("checkout_conflict")
+        || e_str_lower.contains("local_blocking_file")
+        || e_str_lower.contains("conflict prevents checkout")
+    {
+        let mut res = SyncResult::error(
+            SyncStatus::Conflict,
+            first_sync_mode,
+            Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
+            format!("Pull failed: {}", e),
+        );
+        if let Ok(repo) = git2::Repository::open(workspace_path) {
+            let fetch_commit_id = repo
+                .find_reference("FETCH_HEAD")
+                .ok()
+                .and_then(|r| r.target());
+            let summary = build_conflict_summary(
+                &repo,
+                fetch_commit_id,
+                "本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。",
+            );
+            res.conflict_summary = Some(summary);
+        }
+        return PullOutcome::Return(res);
+    }
+    if e_str_lower.contains("unrelated")
+        || e_str_lower.contains("merge")
+        || e_str_lower.contains("no common ancestor")
+    {
+        let status = classify_error(&e.to_string());
+        let user_msg = if first_sync_mode == FirstSyncMode::InitExistingWorkspace {
+            "远端仓库不是空仓库，且和本地作品历史不一致。推荐使用空 GitHub 私人仓库。"
+        } else {
+            "远端仓库不是空仓库，且和本地作品历史不一致。请使用空 GitHub 私人仓库，或手动处理后再同步。"
+        };
+
+        return PullOutcome::Return(SyncResult::error(
+            status,
+            FirstSyncMode::UnrelatedHistories,
+            Some(user_msg.to_string()),
+            format!("Pull failed: {}", e),
+        ));
+    }
+    if e_str_lower.contains("ref not found")
+        || e_str_lower.contains("couldn't find remote ref")
+        || (e_str_lower.contains("remote branch") && e_str_lower.contains("not found"))
+    {
+        if first_sync_mode != FirstSyncMode::InitExistingWorkspace
+            && first_sync_mode != FirstSyncMode::AlreadyGitRepo
+        {
+            return PullOutcome::Return(SyncResult::error(
+                classify_error(&e.to_string()),
+                first_sync_mode,
+                Some("拉取失败，远程分支不存在。".to_string()),
+                format!("Pull failed: {}", e),
+            ));
+        }
+        return PullOutcome::Continue { pull_branch_missing: true };
+    } else if e.to_string().contains("SyncConflict_Detected") {
+        return handle_merge_conflict(workspace_path, result, first_sync_mode);
+    } else {
+        return PullOutcome::Return(SyncResult::error(
+            classify_error(&e.to_string()),
+            first_sync_mode,
+            Some(get_user_friendly_error(
+                &(format!("Pull failed: {}", e)).to_string(),
+            )),
+            format!("Pull failed: {}", e),
+        ));
+    }
+}
+
+fn handle_merge_conflict(
+    workspace_path: &Path,
+    result: &SyncResult,
+    _first_sync_mode: FirstSyncMode,
+) -> PullOutcome {
+    let mut result = result.clone();
+    result.status = SyncStatus::Conflict;
+    result.error = Some("Sync Conflict: automatic merge failed".to_string());
+
+    let repo = match git2::Repository::open(workspace_path) {
+        Ok(r) => r,
+        Err(e) => {
+            result.status = classify_error(&e.to_string());
+            result.error = Some(e.to_string());
+            return PullOutcome::Return(result);
+        }
+    };
+
+    let index = match repo.index() {
+        Ok(i) => i,
+        Err(e) => {
+            result.status = classify_error(&e.to_string());
+            result.error = Some(e.to_string());
+            return PullOutcome::Return(result);
+        }
+    };
+
+    if index.has_conflicts() {
+        let conflicts = match index.conflicts() {
+            Ok(c) => c,
+            Err(e) => {
+                result.status = classify_error(&e.to_string());
+                result.error = Some(e.to_string());
+                return PullOutcome::Return(result);
+            }
+        };
+
+        for c in conflicts.flatten() {
+            let mut best_path = None;
+            if let Some(our) = &c.our {
+                best_path = Some(String::from_utf8_lossy(&our.path).to_string());
+            } else if let Some(their) = &c.their {
+                best_path = Some(String::from_utf8_lossy(&their.path).to_string());
+            } else if let Some(ancestor) = &c.ancestor {
+                best_path = Some(String::from_utf8_lossy(&ancestor.path).to_string());
+            }
+
+            let real_path = match best_path {
+                Some(p) => p,
+                None => {
+                    result.status = SyncStatus::Conflict;
+                    result.error = Some("Sync Conflict: unknown path".to_string());
+                    result.user_message =
+                        Some("存在无法识别路径的冲突文件，需要手动处理。".to_string());
+                    continue;
+                }
+            };
+
+            let local_path = real_path.clone();
+            let remote_path = real_path.clone();
+
+            let sync_conflict = SyncConflict {
+                local_path,
+                remote_path,
+                local_hash: c
+                    .our
+                    .as_ref()
+                    .map(|o| o.id.to_string())
+                    .unwrap_or_default(),
+                remote_hash: c
+                    .their
+                    .as_ref()
+                    .map(|o| o.id.to_string())
+                    .unwrap_or_default(),
+                base_hash: c
+                    .ancestor
+                    .as_ref()
+                    .map(|o| o.id.to_string())
+                    .unwrap_or_default(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+                description: "Git pull resulted in merge conflicts.".to_string(),
+            };
+
+            let mut local_content = None;
+            if let Some(our) = c.our {
+                if let Ok(blob) = repo.find_blob(our.id) {
+                    if let Ok(content_str) = std::str::from_utf8(blob.content()) {
+                        local_content = Some(content_str.to_string());
+                    }
+                }
+            }
+
+            if !SyncService::is_blacklisted_path(&sync_conflict.local_path)
+                && SyncService::is_whitelisted_path(&sync_conflict.local_path)
+            {
+                if let Err(e) = SyncService::record_sync_conflict(
+                    workspace_path,
+                    sync_conflict.clone(),
+                    local_content.as_deref(),
+                ) {
+                    let err_msg = format!("Failed to record sync conflict: {}", e);
+                    result.error = match result.error {
+                        Some(ref mut err) => {
+                            err.push_str(&format!(" | {}", err_msg));
+                            Some(err.clone())
+                        }
+                        None => Some(err_msg),
+                    };
+                }
+                result.conflicts.push(sync_conflict);
+            }
+        }
+    }
+
+    if let Err(e) = repo.cleanup_state() {
+        let err_msg = format!("Cleanup state failed: {}", e);
+        result.error = match result.error {
+            Some(ref mut err) => {
+                err.push_str(&format!(" | {}", err_msg));
+                Some(err.clone())
+            }
+            None => Some(err_msg),
+        };
+    }
+
+    let (local_dirty, _) = collect_git_status_summary(&repo);
+    let fetch_commit_id = repo
+        .find_reference("FETCH_HEAD")
+        .ok()
+        .and_then(|r| r.target());
+    let mut remote_changed = false;
+    if let Some(remote_oid) = fetch_commit_id {
+        if let Ok(head) = repo.head() {
+            if let Some(local_oid) = head.target() {
+                if local_oid != remote_oid {
+                    remote_changed = true;
+                }
+            }
+        }
+    }
+
+    let conflicted_files = result
+        .conflicts
+        .iter()
+        .map(|c| c.local_path.clone())
+        .collect::<Vec<_>>();
+
+    result.conflict_summary = Some(SyncConflictSummary {
+        status: "conflict".to_string(),
+        local_dirty,
+        remote_changed,
+        conflicted_files,
+        blocked_reason: "自动合并失败，本地和远端都修改了同一批同步文件。".to_string(),
+        safe_next_steps: vec![
+            "备份当前工作区。".to_string(),
+            "运行诊断确认网络/认证没问题。".to_string(),
+            "手动处理冲突后重新同步。".to_string(),
+        ],
+    });
+
+    PullOutcome::Return(result)
+}
+
 impl SyncService {
     pub fn perform_sync(
         workspace_path: &Path,
@@ -114,47 +455,6 @@ impl SyncService {
 
         let parsed = sanitize_remote_url(&config.remote_url);
         let sanitized_url = parsed.sanitized_url;
-
-        let map_git_error = |e: crate::Error| -> crate::Error {
-            if let crate::Error::Io(io_err) = &e {
-                let msg = io_err.to_string();
-                if msg.contains("unsupported proxy protocol")
-                    || msg.contains("failed to resolve address")
-                    || msg.contains("SOCKS5")
-                {
-                    return crate::Error::Io(std::io::Error::other(format!(
-                        "代理不可用/端口不通: {}",
-                        msg
-                    )));
-                }
-            }
-            e
-        };
-
-        let classify_error = |e_str: &str| -> SyncStatus {
-            let lower = e_str.to_lowercase();
-            if lower.contains("recoverable_error") {
-                SyncStatus::RecoverableError(
-                    e_str.replace("recoverable_error:", "").trim().to_string(),
-                )
-            } else if lower.contains("fatal_error") {
-                SyncStatus::FatalError(e_str.replace("fatal_error:", "").trim().to_string())
-            } else if lower.contains("auth")
-                || lower.contains("token")
-                || lower.contains("credential")
-                || lower.contains("proxy")
-                || lower.contains("resolve")
-                || lower.contains("network")
-                || lower.contains("unborn")
-                || lower.contains("timeout")
-                || lower.contains("connect")
-                || lower.contains("could not resolve")
-            {
-                SyncStatus::RecoverableError(e_str.to_string())
-            } else {
-                SyncStatus::FatalError(e_str.to_string())
-            }
-        };
 
         let token_from_parsed = parsed.extracted_token;
         let token = secrets
@@ -323,284 +623,14 @@ impl SyncService {
             .map_err(map_git_error)
             .err();
         if let Some(e) = pull_failed {
-            let e_str = e.to_string();
-
-            if e_str.contains("settings_conflict_payload:") {
-                let payload_str = e_str
-                    .split("settings_conflict_payload:")
-                    .nth(1)
-                    .unwrap_or("")
-                    .trim();
-                let details: Option<Vec<SettingConflictDetail>> =
-                    serde_json::from_str(payload_str).ok();
-                let mut res = SyncResult::error(
-                    SyncStatus::Conflict,
-                    result.first_sync_mode,
-                    Some("同步冲突，已停止，未覆盖任何文件".to_string()),
-                    "Settings semantic merge conflict".to_string(),
-                );
-                res.settings_conflicts = details;
-                let summary = SyncConflictSummary {
-                    status: "conflict".to_string(),
-                    local_dirty: true,
-                    remote_changed: true,
-                    conflicted_files: vec!["app-meta/settings/settings.sync.json".to_string()],
-                    blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。"
-                        .to_string(),
-                    safe_next_steps: vec![
-                        "手动检查本地与远端设置。".to_string(),
-                        "重新保存设置以覆盖或重新同步。".to_string(),
-                    ],
-                };
-                res.conflict_summary = Some(summary);
-                return Ok(res);
-            }
-
-            if e_str.contains("checkout_conflict_payload:") {
-                let payload_str = e_str
-                    .split("checkout_conflict_payload:")
-                    .nth(1)
-                    .unwrap_or("")
-                    .trim();
-                let summary: Option<SyncConflictSummary> = serde_json::from_str(payload_str).ok();
-
-                let mut res = SyncResult::error(
-                    SyncStatus::Conflict,
-                    result.first_sync_mode,
-                    Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
-                    "Pull failed due to conflict.".to_string(),
-                );
-                res.conflict_summary = summary;
-                return Ok(res);
-            }
-
-            let e_str_lower = e_str.to_lowercase();
-            if e_str_lower.contains("checkout_conflict")
-                || e_str_lower.contains("local_blocking_file")
-                || e_str_lower.contains("conflict prevents checkout")
-            {
-                let mut res = SyncResult::error(
-                    SyncStatus::Conflict,
-                    result.first_sync_mode,
-                    Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
-                    format!("Pull failed: {}", e),
-                );
-                if let Ok(repo) = git2::Repository::open(workspace_path) {
-                    let fetch_commit_id = repo
-                        .find_reference("FETCH_HEAD")
-                        .ok()
-                        .and_then(|r| r.target());
-                    let summary = build_conflict_summary(
-                        &repo,
-                        fetch_commit_id,
-                        "本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。",
-                    );
-                    res.conflict_summary = Some(summary);
-                }
-                return Ok(res);
-            }
-            if e_str_lower.contains("unrelated")
-                || e_str_lower.contains("merge")
-                || e_str_lower.contains("no common ancestor")
-            {
-                let status = classify_error(&e.to_string());
-                let user_msg = if result.first_sync_mode == FirstSyncMode::InitExistingWorkspace {
-                    "远端仓库不是空仓库，且和本地作品历史不一致。推荐使用空 GitHub 私人仓库。"
-                } else {
-                    "远端仓库不是空仓库，且和本地作品历史不一致。请使用空 GitHub 私人仓库，或手动处理后再同步。"
-                };
-
-                return Ok(SyncResult::error(
-                    status,
-                    FirstSyncMode::UnrelatedHistories,
-                    Some(user_msg.to_string()),
-                    format!("Pull failed: {}", e),
-                ));
-            }
-            if e_str_lower.contains("ref not found")
-                || e_str_lower.contains("couldn't find remote ref")
-                || (e_str_lower.contains("remote branch") && e_str_lower.contains("not found"))
-            {
-                if result.first_sync_mode != FirstSyncMode::InitExistingWorkspace
-                    && result.first_sync_mode != FirstSyncMode::AlreadyGitRepo
-                {
-                    return Ok(SyncResult::error(
-                        classify_error(&e.to_string()),
-                        result.first_sync_mode,
-                        Some("拉取失败，远程分支不存在。".to_string()),
-                        format!("Pull failed: {}", e),
-                    ));
-                }
-                pull_branch_missing = true;
-                result.user_message = Some("远程分支不存在，首次同步将创建该分支。".to_string());
-            } else if e.to_string().contains("SyncConflict_Detected") {
-                result.status = SyncStatus::Conflict;
-                result.error = Some("Sync Conflict: automatic merge failed".to_string());
-
-                let repo = match git2::Repository::open(workspace_path) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        result.status = classify_error(&e.to_string());
-                        result.error = Some(e.to_string());
-                        return Ok(result);
-                    }
-                };
-
-                let index = match repo.index() {
-                    Ok(i) => i,
-                    Err(e) => {
-                        result.status = classify_error(&e.to_string());
-                        result.error = Some(e.to_string());
-                        return Ok(result);
-                    }
-                };
-
-                if index.has_conflicts() {
-                    let conflicts = match index.conflicts() {
-                        Ok(c) => c,
-                        Err(e) => {
-                            result.status = classify_error(&e.to_string());
-                            result.error = Some(e.to_string());
-                            return Ok(result);
-                        }
-                    };
-
-                    for c in conflicts.flatten() {
-                        let mut best_path = None;
-                        if let Some(our) = &c.our {
-                            best_path = Some(String::from_utf8_lossy(&our.path).to_string());
-                        } else if let Some(their) = &c.their {
-                            best_path = Some(String::from_utf8_lossy(&their.path).to_string());
-                        } else if let Some(ancestor) = &c.ancestor {
-                            best_path = Some(String::from_utf8_lossy(&ancestor.path).to_string());
-                        }
-
-                        let real_path = match best_path {
-                            Some(p) => p,
-                            None => {
-                                result.status = SyncStatus::Conflict;
-                                result.error = Some("Sync Conflict: unknown path".to_string());
-                                result.user_message =
-                                    Some("存在无法识别路径的冲突文件，需要手动处理。".to_string());
-                                continue;
-                            }
-                        };
-
-                        let local_path = real_path.clone();
-                        let remote_path = real_path.clone();
-
-                        let sync_conflict = SyncConflict {
-                            local_path,
-                            remote_path,
-                            local_hash: c
-                                .our
-                                .as_ref()
-                                .map(|o| o.id.to_string())
-                                .unwrap_or_default(),
-                            remote_hash: c
-                                .their
-                                .as_ref()
-                                .map(|o| o.id.to_string())
-                                .unwrap_or_default(),
-                            base_hash: c
-                                .ancestor
-                                .as_ref()
-                                .map(|o| o.id.to_string())
-                                .unwrap_or_default(),
-                            created_at: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs() as i64,
-                            description: "Git pull resulted in merge conflicts.".to_string(),
-                        };
-
-                        let mut local_content = None;
-                        if let Some(our) = c.our {
-                            if let Ok(blob) = repo.find_blob(our.id) {
-                                if let Ok(content_str) = std::str::from_utf8(blob.content()) {
-                                    local_content = Some(content_str.to_string());
-                                }
-                            }
-                        }
-
-                        if !Self::is_blacklisted_path(&sync_conflict.local_path)
-                            && Self::is_whitelisted_path(&sync_conflict.local_path)
-                        {
-                            if let Err(e) = SyncService::record_sync_conflict(
-                                workspace_path,
-                                sync_conflict.clone(),
-                                local_content.as_deref(),
-                            ) {
-                                let err_msg = format!("Failed to record sync conflict: {}", e);
-                                result.error = match result.error {
-                                    Some(ref mut err) => {
-                                        err.push_str(&format!(" | {}", err_msg));
-                                        Some(err.clone())
-                                    }
-                                    None => Some(err_msg),
-                                };
-                            }
-                            result.conflicts.push(sync_conflict);
-                        }
+            match handle_pull_error(e, workspace_path, &result, result.first_sync_mode.clone()) {
+                PullOutcome::Continue { pull_branch_missing: missing } => {
+                    if missing {
+                        pull_branch_missing = true;
+                        result.user_message = Some("远程分支不存在，首次同步将创建该分支。".to_string());
                     }
                 }
-
-                if let Err(e) = repo.cleanup_state() {
-                    let err_msg = format!("Cleanup state failed: {}", e);
-                    result.error = match result.error {
-                        Some(ref mut err) => {
-                            err.push_str(&format!(" | {}", err_msg));
-                            Some(err.clone())
-                        }
-                        None => Some(err_msg),
-                    };
-                }
-
-                let (local_dirty, _) = collect_git_status_summary(&repo);
-                let fetch_commit_id = repo
-                    .find_reference("FETCH_HEAD")
-                    .ok()
-                    .and_then(|r| r.target());
-                let mut remote_changed = false;
-                if let Some(remote_oid) = fetch_commit_id {
-                    if let Ok(head) = repo.head() {
-                        if let Some(local_oid) = head.target() {
-                            if local_oid != remote_oid {
-                                remote_changed = true;
-                            }
-                        }
-                    }
-                }
-
-                let conflicted_files = result
-                    .conflicts
-                    .iter()
-                    .map(|c| c.local_path.clone())
-                    .collect::<Vec<_>>();
-
-                result.conflict_summary = Some(SyncConflictSummary {
-                    status: "conflict".to_string(),
-                    local_dirty,
-                    remote_changed,
-                    conflicted_files,
-                    blocked_reason: "自动合并失败，本地和远端都修改了同一批同步文件。".to_string(),
-                    safe_next_steps: vec![
-                        "备份当前工作区。".to_string(),
-                        "运行诊断确认网络/认证没问题。".to_string(),
-                        "手动处理冲突后重新同步。".to_string(),
-                    ],
-                });
-
-                return Ok(result);
-            } else {
-                return Ok(SyncResult::error(
-                    classify_error(&e.to_string()),
-                    result.first_sync_mode,
-                    Some(get_user_friendly_error(
-                        &(format!("Pull failed: {}", e)).to_string(),
-                    )),
-                    format!("Pull failed: {}", e),
-                ));
+                PullOutcome::Return(res) => return Ok(res),
             }
         }
 

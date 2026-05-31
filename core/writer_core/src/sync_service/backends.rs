@@ -1,12 +1,10 @@
 use crate::sync_service::types::SyncDiagnosticsResult;
 use crate::sync_service::types::SyncConfig;
 use crate::sync_service::github_backend::GitHubApiBackend;
-use crate::sync_service::types::SyncStatus;
 use crate::sync_service::service::SyncService;
 use crate::sync_service::git_backend::Git2Backend;
 use crate::sync_service::types::SyncSecrets;
 use crate::sync_service::types::BackendType;
-use crate::sync_service::types::FirstSyncMode;
 use crate::sync_service::types::SyncResult;
 use std::path::Path;
 
@@ -76,131 +74,10 @@ impl SyncBackend for GitSyncBackend {
     }
 }
 
-pub struct WebDavBackend;
-
-impl SyncBackend for WebDavBackend {
-    fn diagnose(
-        &self,
-        _config: &SyncConfig,
-        _secrets: &SyncSecrets,
-    ) -> crate::Result<SyncDiagnosticsResult> {
-        let mut result = SyncDiagnosticsResult::new();
-        result.user_message = "WebDAV 后端尚未实现。".to_string();
-        result.error_category = "backend_not_implemented".to_string();
-        Ok(result)
-    }
-    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("WebDAV 后端的 pull 操作尚未实现。".to_string()),
-            "WebDAV pull not implemented".to_string(),
-        ))
-    }
-    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("WebDAV 后端的 push 操作尚未实现。".to_string()),
-            "WebDAV push not implemented".to_string(),
-        ))
-    }
-    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("WebDAV 后端的 sync 操作尚未实现。".to_string()),
-            "WebDAV sync not implemented".to_string(),
-        ))
-    }
-}
-
-pub struct LocalFolderBackend;
-
-impl SyncBackend for LocalFolderBackend {
-    fn diagnose(
-        &self,
-        _config: &SyncConfig,
-        _secrets: &SyncSecrets,
-    ) -> crate::Result<SyncDiagnosticsResult> {
-        let mut result = SyncDiagnosticsResult::new();
-        result.user_message =
-            "LocalFolder 后端尚未实现。此后端用于配合 Syncthing 等外部同步工具。".to_string();
-        result.error_category = "backend_not_implemented".to_string();
-        Ok(result)
-    }
-    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("LocalFolder 后端的 pull 操作尚未实现。".to_string()),
-            "LocalFolder pull not implemented".to_string(),
-        ))
-    }
-    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("LocalFolder 后端的 push 操作尚未实现。".to_string()),
-            "LocalFolder push not implemented".to_string(),
-        ))
-    }
-    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("LocalFolder 后端的 sync 操作尚未实现。".to_string()),
-            "LocalFolder sync not implemented".to_string(),
-        ))
-    }
-}
-
-pub struct S3Backend;
-
-impl SyncBackend for S3Backend {
-    fn diagnose(
-        &self,
-        _config: &SyncConfig,
-        _secrets: &SyncSecrets,
-    ) -> crate::Result<SyncDiagnosticsResult> {
-        let mut result = SyncDiagnosticsResult::new();
-        result.user_message = "S3 后端尚未实现。".to_string();
-        result.error_category = "backend_not_implemented".to_string();
-        Ok(result)
-    }
-    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("S3 后端的 pull 操作尚未实现。".to_string()),
-            "S3 pull not implemented".to_string(),
-        ))
-    }
-    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("S3 后端的 push 操作尚未实现。".to_string()),
-            "S3 push not implemented".to_string(),
-        ))
-    }
-    fn sync(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            Some("S3 后端的 sync 操作尚未实现。".to_string()),
-            "S3 sync not implemented".to_string(),
-        ))
-    }
-}
-
 pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
     match backend_type {
         BackendType::Git => Box::new(GitSyncBackend),
         BackendType::GithubApi => Box::new(GitHubApiBackend),
-        BackendType::WebDav => Box::new(WebDavBackend),
-        BackendType::S3 => Box::new(S3Backend),
-        BackendType::LocalFolder => Box::new(LocalFolderBackend),
     }
 }
 
