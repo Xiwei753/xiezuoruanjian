@@ -315,7 +315,11 @@ ScrollView {
                             var diag = root.backendRef.get_workspace_diagnostics()
                             try {
                                 var obj = JSON.parse(diag)
-                                workspaceDiagText.text = JSON.stringify(obj, null, 2)
+                                if (obj.success) {
+                                    workspaceDiagText.text = JSON.stringify(obj.data, null, 2)
+                                } else {
+                                    workspaceDiagText.text = qsTr("诊断失败: ") + (obj.userMessage || obj.errorCode || qsTr("未知错误"))
+                                }
                             } catch(e) {
                                 workspaceDiagText.text = qsTr("解析诊断失败: ") + e
                             }

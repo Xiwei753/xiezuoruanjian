@@ -11,12 +11,12 @@
 
 | Capability | Core domain / facade | Core API | Android current 入口 | Android legacy 残留 | Linux current 入口 | Linux legacy 残留 | 是否对齐 | 风险级别 | 下一步 |
 |---|---|---|---|---|---|---|---|---|---|
-| 创建/打开工作区 | `validate_workspace` | `WriterCoreApi::create_workspace`, `validate_workspace` | `WorkspaceBridge -> AppServiceBridge` | `NativeCoreBridge`, 旧 JSON/JNI fallback | `WriterCoreApi` | 无 | 否 | P1 | Linux 已移除直接文件系统判断，改为全权调用 Core API，需统一封装 ResultEnvelope |
+| 创建/打开工作区 | `validate_workspace` | `WriterCoreApi::create_workspace`, `validate_workspace`, `get_workspace_diagnostics_envelope_json` | `WorkspaceBridge -> AppServiceBridge` | `NativeCoreBridge`, 旧 JSON/JNI fallback | `WriterCoreApi` | 无 | 部分 | P1 | Linux 打开/诊断已统一 ResultEnvelope；继续补齐 UniFFI typed envelope |
 
 **小结**：
-- Linux backend 已修复直接文件 I/O，目前通过 API 与 Core 对接。
+- Linux backend 已修复打开/恢复工作区的直接文件 I/O；工作区诊断也改为由 Core 探测 manifest、projects、app-meta、可写性和 `createProjectAvailable`，Linux/QML 只展示 envelope 数据。
 - Android 已有 `BridgeResult` / JNI fallback 的 `ResultEnvelope` 基础包装，但 UniFFI Capability 仍未全量返回 envelope。
-- 需要继续统一使用 ResultEnvelope 返回验证和创建结果。
+- 需要继续统一 Android UniFFI typed 返回和 Linux 其余同步入口的 ResultEnvelope。
 
 ## 2. ProjectCapability
 
@@ -129,4 +129,5 @@
    - `api::ResultEnvelope`、Android `BridgeResult` 包装和 JNI fallback 序列化基础层已落地。
    - 继续在 UniFFI 与 Linux Backend 的所有接口中，用标准化的 JSON/DTO 结构体替代现有各种散落的特化 JSON 拼接。
 5. **P1-3：Android JNI / Linux backend 薄适配器化**
-   - 清除所有的业务判断（如 `workspace_path.is_empty()` 判断、权限判定提示），全权由 Core 拒绝并返回错误码。
+   - Linux workspace 打开/诊断已去除平台文件探测；继续清理 GitHub 初始化同步流程中的目录内容判断、冲突消息拼装和配置保存分支。
+   - Android legacy JNI 仍只允许 fallback，继续缩小 `NativeCoreBridge` 暴露面，禁止新业务接入。

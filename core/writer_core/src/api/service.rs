@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -70,6 +71,113 @@ impl WriterCoreApi {
 
     pub fn validate_workspace(&self) -> ApiResult<bool> {
         self.core().validate_workspace().map_err(Into::into)
+    }
+
+    pub fn get_workspace_diagnostics(
+        &self,
+        has_workspace: bool,
+        tree_count: u64,
+    ) -> ApiResult<WorkspaceDiagnosticsDto> {
+        let path_obj = self.workspace_path.as_path();
+        let has_path = !self.workspace_path.as_os_str().is_empty();
+        let path_exists = has_path && path_obj.exists();
+        let is_dir = has_path && path_obj.is_dir();
+        let manifest_path = if has_path {
+            path_obj.join("workspace_manifest.json")
+        } else {
+            PathBuf::new()
+        };
+        let projects_path = if has_path {
+            path_obj.join("projects")
+        } else {
+            PathBuf::new()
+        };
+        let app_meta_path = if has_path {
+            path_obj.join("app-meta")
+        } else {
+            PathBuf::new()
+        };
+        let manifest_exists = has_path && manifest_path.exists();
+        let projects_dir_exists = has_path && projects_path.is_dir();
+        let app_meta_exists = has_path && app_meta_path.exists();
+        let validate_workspace = if is_dir {
+            self.validate_workspace().unwrap_or(false)
+        } else {
+            false
+        };
+        let core_initialized = has_workspace && has_path;
+        let last_workspace_path = crate::app_config::get_last_workspace_path().unwrap_or_default();
+        let (writable, writable_error) = Self::probe_workspace_writable(path_obj, is_dir);
+        let create_project_available = has_workspace
+            && core_initialized
+            && validate_workspace
+            && path_exists
+            && is_dir
+            && manifest_exists
+            && projects_dir_exists
+            && writable;
+
+        Ok(WorkspaceDiagnosticsDto {
+            has_workspace,
+            workspace_path: self.workspace_path.to_string_lossy().to_string(),
+            core_initialized,
+            path_exists,
+            is_dir,
+            manifest_path: manifest_path.to_string_lossy().to_string(),
+            manifest_exists,
+            projects_path: projects_path.to_string_lossy().to_string(),
+            projects_dir_exists,
+            app_meta_exists,
+            writable,
+            writable_error,
+            validate_workspace,
+            tree_count,
+            last_workspace_path,
+            create_project_available,
+        })
+    }
+
+    pub fn get_workspace_diagnostics_envelope_json(
+        &self,
+        has_workspace: bool,
+        tree_count: u64,
+    ) -> String {
+        Self::envelope_json(self.get_workspace_diagnostics(has_workspace, tree_count))
+    }
+
+    fn probe_workspace_writable(path: &Path, is_dir: bool) -> (bool, String) {
+        if !is_dir {
+            return (false, "path does not exist or is not a directory".to_string());
+        }
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let test_file = path.join(format!(
+            ".writer_write_test_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&test_file)
+        {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(b"test") {
+                    let _ = std::fs::remove_file(&test_file);
+                    return (false, error.to_string());
+                }
+                drop(file);
+                let remove_result = std::fs::remove_file(&test_file);
+                if let Err(error) = remove_result {
+                    return (false, error.to_string());
+                }
+                (true, String::new())
+            }
+            Err(error) => (false, error.to_string()),
+        }
     }
 
     pub fn get_recent_edits(&self) -> ApiResult<Vec<RecentEditDto>> {
@@ -957,6 +1065,40 @@ mod tests {
         let api = WriterCoreApi::new(temp_dir.path());
 
         assert!(api.flush_recent_edits().unwrap());
+    }
+
+    #[test]
+    fn workspace_diagnostics_reports_core_owned_state() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let diagnostics = api.get_workspace_diagnostics(true, 3).unwrap();
+
+        assert!(diagnostics.has_workspace);
+        assert!(diagnostics.path_exists);
+        assert!(diagnostics.is_dir);
+        assert!(diagnostics.manifest_exists);
+        assert!(diagnostics.projects_dir_exists);
+        assert!(diagnostics.writable);
+        assert!(diagnostics.validate_workspace);
+        assert_eq!(diagnostics.tree_count, 3);
+        assert!(diagnostics.create_project_available);
+    }
+
+    #[test]
+    fn workspace_diagnostics_envelope_uses_camel_case_fields() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let json = api.get_workspace_diagnostics_envelope_json(true, 0);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["success"], true);
+        assert_eq!(value["data"]["pathExists"], true);
+        assert_eq!(value["data"]["createProjectAvailable"], true);
+        assert!(value["data"].get("path_exists").is_none());
     }
 
     #[test]

@@ -29,7 +29,7 @@ package com.xiwei.writerapp.data
 //!
 //! - @Deprecated("Legacy JSON/JNI fallback. 主业务入口必须使用 AppServiceBridge + UniFFI；仅 legacy 状态/动作路径可通过 BridgeProvider 触达。")
 //! - `isLoaded` 标记 native 库是否加载成功，所有方法在调用前检查此标记
-//! - 旧兼容包装为 `{ "success": true/false, "data": ..., "code": ..., "error": ... }`
+//! - JNI 兼容入口读取标准 ResultEnvelope；旧字段 `code` / `error` 仅作为历史 fallback。
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
@@ -170,7 +170,7 @@ internal class NativeCoreBridge(context: Context) {
         @SerializedName("error") private val legacyError: String? = null
     ) {
         val code: String? get() = errorCode ?: legacyCode
-        val error: String? get() = userMessage ?: legacyError ?: rawError
+        val error: String? get() = userMessage ?: legacyError ?: errorCode
     }
 
     private data class RustChapterContent(

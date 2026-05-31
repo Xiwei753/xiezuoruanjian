@@ -45,7 +45,7 @@ import uniffi.writer_core.WriterAppService
 import uniffi.writer_core.WriterException
 
 class AppServiceBridge(workspacePath: String) {
-    private val service: WriterAppService = WriterAppService(workspacePath)
+    private val service: WriterAppService by lazy { WriterAppService(workspacePath) }
     private val gson = Gson()
 
     companion object {
@@ -55,6 +55,9 @@ class AppServiceBridge(workspacePath: String) {
     private inline fun <T> wrapResult(block: () -> T): BridgeResult<T> {
         return try {
             BridgeResult.Success(block())
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Writer native library is not loaded", e)
+            BridgeResult.NotLoaded
         } catch (e: WriterException) {
             Log.e(TAG, "WriterException: ${e.message}", e)
             BridgeResult.Error(BridgeError(e.toBridgeErrorCode(), e.message ?: "Unknown WriterException"))
@@ -95,6 +98,18 @@ class AppServiceBridge(workspacePath: String) {
             BridgeResult.Error(
                 BridgeError(BridgeErrorCode.JsonError, e.message ?: "ResultEnvelope 解析失败")
             )
+        }
+    }
+
+    private inline fun <reified T> envelopeJsonCall(block: () -> String): BridgeResult<T> {
+        return try {
+            envelopeJsonResult(block())
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Writer native library is not loaded", e)
+            BridgeResult.NotLoaded
+        } catch (e: Exception) {
+            Log.e(TAG, "ResultEnvelope call failed: ${e.message}", e)
+            BridgeResult.Error(BridgeError(BridgeErrorCode.Unknown, e.message ?: "ResultEnvelope 调用失败"))
         }
     }
 
@@ -194,21 +209,28 @@ class AppServiceBridge(workspacePath: String) {
         service.updateChapterNote(projectId, volumeId, chapterId, note)
     }
 
-    fun calculateWordCount(text: String): Int = service.calculateWordCount(text).toInt()
+    fun calculateWordCount(text: String): Int {
+        return try {
+            service.calculateWordCount(text).toInt()
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Writer native library is not loaded", e)
+            text.length
+        }
+    }
 
     fun loadLocalSettings(): BridgeResult<LocalSettings> = wrapResult {
         service.loadLocalSettings().toModel()
     }
 
     fun saveLocalSettings(settings: LocalSettings): BridgeResult<Boolean> =
-        envelopeJsonResult(service.saveLocalSettingsEnvelopeJson(settings.toDto()))
+        envelopeJsonCall { service.saveLocalSettingsEnvelopeJson(settings.toDto()) }
 
     fun loadSyncableSettings(): BridgeResult<SyncableSettings> = wrapResult {
         service.loadSyncableSettings().toModel()
     }
 
     fun saveSyncableSettings(settings: SyncableSettings): BridgeResult<Boolean> =
-        envelopeJsonResult(service.saveSyncableSettingsEnvelopeJson(settings.toDto()))
+        envelopeJsonCall { service.saveSyncableSettingsEnvelopeJson(settings.toDto()) }
 
     fun loadSyncConfig(): BridgeResult<SyncConfig> = wrapResult {
         service.loadSyncConfig().toModel()

@@ -138,7 +138,7 @@ impl WorkspaceBackend {
         crate::backend::app_backend::debug_log_static("workspace", "workspace_state_updated", &format!("has_workspace={}", has));
         self.pending_github_init_path_changed();
     }
-    fn get_workspace_diagnostics(&self) -> QString { self.with_app("{}".into(), |app| app.get_workspace_diagnostics()) }
+    fn get_workspace_diagnostics(&self) -> QString { self.with_app(backend_link_broken_json(), |app| app.get_workspace_diagnostics()) }
     fn open_workspace_dir(&mut self) { self.with_app_mut((), |app| app.open_workspace_dir()); }
 }
 
@@ -158,63 +158,12 @@ impl AppBackend {
 
 // AppBackend::get_workspace_diagnostics
     pub(crate) fn get_workspace_diagnostics(&self) -> QString {
-        use std::path::Path;
-        let ws_path = &self.current_workspace;
-        let path_obj = Path::new(ws_path);
-        let path_exists = path_obj.exists();
-        let is_dir = path_obj.is_dir();
-        let manifest_path = path_obj.join("workspace_manifest.json");
-        let manifest_exists = manifest_path.exists();
-        let projects_path = path_obj.join("projects");
-        let projects_dir_exists = projects_path.exists();
-        let app_meta_exists = path_obj.join("app-meta").exists();
-        let validate_workspace = if path_exists && path_obj.is_dir() {
-            WriterCoreApi::new(ws_path).validate_workspace().unwrap_or(false)
-        } else {
-            false
-        };
-        let core_initialized = self.current_has_workspace && !self.current_workspace.is_empty();
-        let last_workspace = writer_core::app_config::get_last_workspace_path().unwrap_or_default();
-        // Real writable test: try to create and delete a temp file
-        let (writable, writable_error) = if path_exists && path_obj.is_dir() {
-            let test_file = path_obj.join(".writer_write_test");
-            match std::fs::write(&test_file, b"test") {
-                Ok(()) => {
-                    let _ = std::fs::remove_file(&test_file);
-                    (true, String::new())
-                }
-                Err(e) => (false, format!("{}", e)),
-            }
-        } else {
-            (false, "path does not exist or is not a directory".to_string())
-        };
-        let create_project_available = self.current_has_workspace
-            && core_initialized
-            && validate_workspace
-            && path_exists
-            && is_dir
-            && manifest_exists
-            && projects_dir_exists
-            && writable;
-        let diag = serde_json::json!({
-            "hasWorkspace": self.current_has_workspace,
-            "workspacePath": ws_path,
-            "coreInitialized": core_initialized,
-            "pathExists": path_exists,
-            "isDir": is_dir,
-            "manifestPath": manifest_path.to_string_lossy(),
-            "manifestExists": manifest_exists,
-            "projectsPath": projects_path.to_string_lossy(),
-            "projectsDirExists": projects_dir_exists,
-            "appMetaExists": app_meta_exists,
-            "writable": writable,
-            "writableError": writable_error,
-            "validateWorkspace": validate_workspace,
-            "treeCount": self.cached_tree.len(),
-            "lastWorkspacePath": last_workspace,
-            "createProjectAvailable": create_project_available,
-        });
-        diag.to_string().into()
+        WriterCoreApi::new(&self.current_workspace)
+            .get_workspace_diagnostics_envelope_json(
+                self.current_has_workspace,
+                self.cached_tree.len() as u64,
+            )
+            .into()
     }
 
 // AppBackend::try_restore_last_workspace
@@ -222,26 +171,23 @@ impl AppBackend {
         self.debug_log("workspace", "try_restore_last_workspace_start", "");
         if let Some(path) = writer_core::app_config::get_last_workspace_path() {
             self.debug_log("workspace", "try_restore_last_workspace_path_found", &format!("path={}", path));
-            let path_obj = std::path::Path::new(&path);
-            if path_obj.exists() && path_obj.is_dir() {
-                let api = WriterCoreApi::new(&path);
-                let val_res = api.validate_workspace().unwrap_or(false);
-                self.debug_log("workspace", "try_restore_last_workspace_validate", &format!("path={}, is_valid={}", path, val_res));
-                if val_res {
-                    self.current_workspace = path.clone();
-                    self.current_has_workspace = true;
-                    self.current_save_status = "已保存".to_string();
-                    self.save_status_changed();
-                    self.reload_tree();
-                    self.load_sync_config();
-                    self.load_local_settings();
-                    self.ai_available_changed();
-                    self.workspace_opened();
-                    self.workspace_content_changed();
-                    self.workspace_state_changed();
-                    self.debug_log("workspace", "try_restore_last_workspace_success", &format!("path={}", path));
-                    return;
-                }
+            let api = WriterCoreApi::new(&path);
+            let val_res = api.validate_workspace().unwrap_or(false);
+            self.debug_log("workspace", "try_restore_last_workspace_validate", &format!("path={}, is_valid={}", path, val_res));
+            if val_res {
+                self.current_workspace = path.clone();
+                self.current_has_workspace = true;
+                self.current_save_status = "已保存".to_string();
+                self.save_status_changed();
+                self.reload_tree();
+                self.load_sync_config();
+                self.load_local_settings();
+                self.ai_available_changed();
+                self.workspace_opened();
+                self.workspace_content_changed();
+                self.workspace_state_changed();
+                self.debug_log("workspace", "try_restore_last_workspace_success", &format!("path={}", path));
+                return;
             }
             // Restore failed: clear the invalid lastWorkspacePath to avoid being stuck
             self.debug_warn("workspace", "try_restore_last_workspace_failed_clearing", &format!("path={}", path));
