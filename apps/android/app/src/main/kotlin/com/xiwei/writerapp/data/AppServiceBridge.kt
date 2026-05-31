@@ -310,69 +310,69 @@ class AppServiceBridge(workspacePath: String) {
         service.flushWritingStats()
     }
 
-    fun getMindMapSnapshot(projectId: String): BridgeResult<String> = wrapResult {
-        service.getMindmapSnapshotJson(projectId)
+    fun getMindMapSnapshot(projectId: String): BridgeResult<uniffi.writer_core.MindMapSnapshotDto> = wrapResult {
+        service.getMindmapSnapshot(projectId)
     }
 
-    fun listStarMaps(): BridgeResult<String> = wrapResult {
-        service.listStarmapsJson()
+    fun listStarMaps(): BridgeResult<List<uniffi.writer_core.StarMapMetaDto>> = wrapResult {
+        service.listStarmaps()
     }
 
-    fun getStarMapGraph(starmapId: String): BridgeResult<String> = wrapResult {
-        service.getStarmapGraphJson(starmapId)
+    fun getStarMapGraph(starmapId: String): BridgeResult<uniffi.writer_core.StarMapGraphDto> = wrapResult {
+        service.getStarmapGraph(starmapId)
     }
 
-    fun createStarMap(title: String, desc: String): BridgeResult<String> = wrapResult {
-        service.createStarmapJson(title, desc)
+    fun createStarMap(title: String, desc: String): BridgeResult<uniffi.writer_core.StarMapMetaDto> = wrapResult {
+        service.createStarmap(title, desc)
     }
 
-    fun addStarMapNode(starmapId: String, nodeJson: String): BridgeResult<String> = wrapResult {
-        service.addStarmapNodeJson(starmapId, nodeJson)
+    fun addStarMapNode(starmapId: String, nodeJson: String, x: Float, y: Float): BridgeResult<uniffi.writer_core.StarMapNodeDto> = wrapResult {
+        service.addStarmapNode(starmapId, nodeJson, x, y)
     }
 
     fun saveStarMapLayout(starmapId: String, layoutJson: String): BridgeResult<Boolean> = wrapResult {
-        service.saveStarmapLayoutJson(starmapId, layoutJson)
+        service.saveStarmapLayout(starmapId, layoutJson)
     }
 
-    fun addStarmapEmbed(starmapId: String, embedJson: String): BridgeResult<String> = wrapResult {
-        service.addStarmapEmbedJson(starmapId, embedJson)
+    fun addStarmapEmbed(starmapId: String, embedJson: String): BridgeResult<uniffi.writer_core.StarMapEmbedDto> = wrapResult {
+        service.addStarmapEmbed(starmapId, embedJson)
     }
 
-    fun updateStarmapEmbed(starmapId: String, instanceId: String, patchJson: String): BridgeResult<String> = wrapResult {
-        service.updateStarmapEmbedJson(starmapId, instanceId, patchJson)
+    fun updateStarmapEmbed(starmapId: String, instanceId: String, patchJson: String): BridgeResult<uniffi.writer_core.StarMapEmbedDto> = wrapResult {
+        service.updateStarmapEmbed(starmapId, instanceId, patchJson)
     }
 
     fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = wrapResult {
         service.deleteStarmapEmbed(starmapId, instanceId)
     }
 
-    fun addStarmapLink(starmapId: String, linkJson: String): BridgeResult<String> = wrapResult {
-        service.addStarmapLinkJson(starmapId, linkJson)
+    fun addStarmapLink(starmapId: String, linkJson: String): BridgeResult<uniffi.writer_core.StarMapLinkDto> = wrapResult {
+        service.addStarmapLink(starmapId, linkJson)
     }
 
-    fun updateStarmapLink(starmapId: String, linkId: String, patchJson: String): BridgeResult<String> = wrapResult {
-        service.updateStarmapLinkJson(starmapId, linkId, patchJson)
+    fun updateStarmapLink(starmapId: String, linkId: String, patchJson: String): BridgeResult<uniffi.writer_core.StarMapLinkDto> = wrapResult {
+        service.updateStarmapLink(starmapId, linkId, patchJson)
     }
 
     fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = wrapResult {
         service.deleteStarmapLink(starmapId, linkId)
     }
 
-    fun findStarmapReferences(targetStarmapId: String): BridgeResult<String> = wrapResult {
-        service.findStarmapReferencesJson(targetStarmapId)
+    fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<uniffi.writer_core.StarMapReferenceDto>> = wrapResult {
+        service.findStarmapReferences(targetStarmapId)
     }
 
-    fun listRegisteredActions(): BridgeResult<String> = wrapResult {
-        service.listRegisteredActionsJson()
+    fun listRegisteredActions(): BridgeResult<List<uniffi.writer_core.ActionDescriptorDto>> = wrapResult {
+        service.listRegisteredActions()
     }
 
-    fun executeAction(actionId: String, argsJson: String, contextJson: String): BridgeResult<String> = wrapResult {
-        service.executeActionJson(actionId, argsJson, contextJson)
+    fun executeAction(actionId: String, argsJson: String, contextJson: String): BridgeResult<uniffi.writer_core.ActionResultDto> = wrapResult {
+        service.executeAction(actionId, argsJson, contextJson)
     }
 
     fun aiAvailable(): Boolean = try {
         service.aiAvailable()
-    } catch (_: Throwable) {
+    } catch (e: UnsatisfiedLinkError) {
         false
     }
 }

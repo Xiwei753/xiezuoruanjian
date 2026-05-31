@@ -634,7 +634,7 @@ pub struct MindMapSnapshotNodeDto {
     pub height: f32,
     pub radius: f32,
     pub collapsed: bool,
-    pub anchor_count: usize,
+    pub anchor_count: u32,
     pub broken_link: bool,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -684,7 +684,7 @@ impl From<crate::mind_map::MindMapSnapshotNode> for MindMapSnapshotNodeDto {
             height: n.height,
             radius: n.radius,
             collapsed: n.collapsed,
-            anchor_count: n.anchor_count,
+            anchor_count: n.anchor_count as u32,
             broken_link: n.broken_link,
             tags: n.tags,
         }
@@ -752,7 +752,7 @@ pub struct MindMapGraphNodeDto {
     pub id: String,
     pub title: String,
     pub kind: MindMapNodeKindDto,
-    pub payload: Option<serde_json::Value>,
+    pub payload: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     pub created_at: u64,
@@ -765,7 +765,7 @@ impl From<crate::mind_map::MindMapGraphNode> for MindMapGraphNodeDto {
             id: n.id,
             title: n.title,
             kind: n.kind.into(),
-            payload: n.payload,
+            payload: n.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
             tags: n.tags,
             created_at: n.created_at,
             updated_at: n.updated_at,
@@ -779,7 +779,7 @@ impl From<MindMapGraphNodeDto> for crate::mind_map::MindMapGraphNode {
             id: d.id,
             title: d.title,
             kind: d.kind.into(),
-            payload: d.payload,
+            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             tags: d.tags,
             created_at: d.created_at,
             updated_at: d.updated_at,
@@ -795,7 +795,7 @@ pub struct MindMapGraphEdgeDto {
     pub to: String,
     pub kind: MindMapEdgeKindDto,
     pub label: Option<String>,
-    pub payload: Option<serde_json::Value>,
+    pub payload: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -808,7 +808,7 @@ impl From<crate::mind_map::MindMapGraphEdge> for MindMapGraphEdgeDto {
             to: e.to,
             kind: e.kind.into(),
             label: e.label,
-            payload: e.payload,
+            payload: e.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
             created_at: e.created_at,
             updated_at: e.updated_at,
         }
@@ -823,7 +823,7 @@ impl From<MindMapGraphEdgeDto> for crate::mind_map::MindMapGraphEdge {
             to: d.to,
             kind: d.kind.into(),
             label: d.label,
-            payload: d.payload,
+            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             created_at: d.created_at,
             updated_at: d.updated_at,
         }
@@ -836,8 +836,8 @@ pub struct MindMapAnchorDto {
     pub id: String,
     pub project_id: String,
     pub chapter_id: String,
-    pub start_offset: usize,
-    pub end_offset: usize,
+    pub start_offset: u32,
+    pub end_offset: u32,
     pub selected_text: String,
     pub prefix_text: String,
     pub suffix_text: String,
@@ -852,8 +852,8 @@ impl From<crate::mind_map::MindMapAnchor> for MindMapAnchorDto {
             id: a.id,
             project_id: a.project_id,
             chapter_id: a.chapter_id,
-            start_offset: a.start_offset,
-            end_offset: a.end_offset,
+            start_offset: a.start_offset as u32,
+            end_offset: a.end_offset as u32,
             selected_text: a.selected_text,
             prefix_text: a.prefix_text,
             suffix_text: a.suffix_text,
@@ -870,8 +870,8 @@ impl From<MindMapAnchorDto> for crate::mind_map::MindMapAnchor {
             id: d.id,
             project_id: d.project_id,
             chapter_id: d.chapter_id,
-            start_offset: d.start_offset,
-            end_offset: d.end_offset,
+            start_offset: d.start_offset as usize,
+            end_offset: d.end_offset as usize,
             selected_text: d.selected_text,
             prefix_text: d.prefix_text,
             suffix_text: d.suffix_text,
@@ -1015,7 +1015,7 @@ impl From<crate::mind_map::edit::MindMapGraphsList> for MindMapGraphsListDto {
 pub struct MindMapNodePatchDto {
     pub title: Option<String>,
     pub kind: Option<MindMapNodeKindDto>,
-    pub payload: Option<Option<serde_json::Value>>,
+    pub payload: Option<Option<String>>,
     pub tags: Option<Vec<String>>,
 }
 
@@ -1024,7 +1024,7 @@ impl From<MindMapNodePatchDto> for crate::mind_map::edit::MindMapGraphNodePatch 
         Self {
             title: d.title,
             kind: d.kind.map(Into::into),
-            payload: d.payload,
+            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
             tags: d.tags,
         }
     }
@@ -1035,7 +1035,7 @@ impl From<MindMapNodePatchDto> for crate::mind_map::edit::MindMapGraphNodePatch 
 pub struct MindMapEdgePatchDto {
     pub kind: Option<MindMapEdgeKindDto>,
     pub label: Option<Option<String>>,
-    pub payload: Option<Option<serde_json::Value>>,
+    pub payload: Option<Option<String>>,
 }
 
 impl From<MindMapEdgePatchDto> for crate::mind_map::edit::MindMapGraphEdgePatch {
@@ -1043,7 +1043,7 @@ impl From<MindMapEdgePatchDto> for crate::mind_map::edit::MindMapGraphEdgePatch 
         Self {
             kind: d.kind.map(Into::into),
             label: d.label,
-            payload: d.payload,
+            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
         }
     }
 }
@@ -1165,7 +1165,7 @@ pub struct StarMapNodeDto {
     pub id: String,
     pub title: String,
     pub kind: StarMapNodeKindDto,
-    pub payload: Option<serde_json::Value>,
+    pub payload: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -1190,7 +1190,7 @@ impl From<crate::starmap::types::StarMapNode> for StarMapNodeDto {
             id: n.id,
             title: n.title,
             kind: n.kind.into(),
-            payload: n.payload,
+            payload: n.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
             tags: n.tags,
             content: n.content.into(),
             anchors: n.anchors.into_iter().map(Into::into).collect(),
@@ -1210,7 +1210,7 @@ impl From<StarMapNodeDto> for crate::starmap::types::StarMapNode {
             id: d.id,
             title: d.title,
             kind: d.kind.into(),
-            payload: d.payload,
+            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             tags: d.tags,
             content: d.content.into(),
             anchors: d.anchors.into_iter().map(Into::into).collect(),
@@ -1224,54 +1224,86 @@ impl From<StarMapNodeDto> for crate::starmap::types::StarMapNode {
     }
 }
 
-// Map the enums identically to avoid copying the whole tree
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-#[serde(tag = "type", rename_all = "camelCase")]
-#[derive(PartialEq)]
-pub enum StarMapNodeContentDto {
-    #[default]
-    Empty,
-    Inline {
-        summary: Option<String>,
-        body: Option<String>,
-    },
-    ChapterRef {
-        project_id: String,
-        volume_id: Option<String>,
-        chapter_id: String,
-        range_start: Option<u32>,
-        range_end: Option<u32>,
-    },
-    EntityRef {
-        entity_type: String,
-        entity_id: String,
-    },
-    ExternalRef {
-        uri: String,
-        label: Option<String>,
-    },
+// Flattened struct (was tagged enum StarMapNodeContentDto)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapNodeContentDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub summary: Option<String>,
+    pub body: Option<String>,
+    pub project_id: Option<String>,
+    pub volume_id: Option<String>,
+    pub chapter_id: Option<String>,
+    pub range_start: Option<u32>,
+    pub range_end: Option<u32>,
+    pub entity_type: Option<String>,
+    pub entity_id: Option<String>,
+    pub uri: Option<String>,
+    pub label: Option<String>,
 }
 
 impl From<crate::starmap::semantic::StarMapNodeContent> for StarMapNodeContentDto {
     fn from(c: crate::starmap::semantic::StarMapNodeContent) -> Self {
         match c {
-            crate::starmap::semantic::StarMapNodeContent::Empty => Self::Empty,
-            crate::starmap::semantic::StarMapNodeContent::Inline { summary, body } => Self::Inline { summary, body },
-            crate::starmap::semantic::StarMapNodeContent::ChapterRef { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRef { project_id, volume_id, chapter_id, range_start, range_end },
-            crate::starmap::semantic::StarMapNodeContent::EntityRef { entity_type, entity_id } => Self::EntityRef { entity_type, entity_id },
-            crate::starmap::semantic::StarMapNodeContent::ExternalRef { uri, label } => Self::ExternalRef { uri, label },
+            crate::starmap::semantic::StarMapNodeContent::Empty => Self {
+                kind: "empty".to_string(),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapNodeContent::Inline { summary, body } => Self {
+                kind: "inline".to_string(),
+                summary,
+                body,
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapNodeContent::ChapterRef { project_id, volume_id, chapter_id, range_start, range_end } => Self {
+                kind: "chapterRef".to_string(),
+                project_id: Some(project_id),
+                volume_id,
+                chapter_id: Some(chapter_id),
+                range_start,
+                range_end,
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapNodeContent::EntityRef { entity_type, entity_id } => Self {
+                kind: "entityRef".to_string(),
+                entity_type: Some(entity_type),
+                entity_id: Some(entity_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapNodeContent::ExternalRef { uri, label } => Self {
+                kind: "externalRef".to_string(),
+                uri: Some(uri),
+                label,
+                ..Default::default()
+            },
         }
     }
 }
 
 impl From<StarMapNodeContentDto> for crate::starmap::semantic::StarMapNodeContent {
     fn from(d: StarMapNodeContentDto) -> Self {
-        match d {
-            StarMapNodeContentDto::Empty => Self::Empty,
-            StarMapNodeContentDto::Inline { summary, body } => Self::Inline { summary, body },
-            StarMapNodeContentDto::ChapterRef { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRef { project_id, volume_id, chapter_id, range_start, range_end },
-            StarMapNodeContentDto::EntityRef { entity_type, entity_id } => Self::EntityRef { entity_type, entity_id },
-            StarMapNodeContentDto::ExternalRef { uri, label } => Self::ExternalRef { uri, label },
+        match d.kind.as_str() {
+            "inline" => Self::Inline {
+                summary: d.summary,
+                body: d.body,
+            },
+            "chapterRef" => Self::ChapterRef {
+                project_id: d.project_id.unwrap_or_default(),
+                volume_id: d.volume_id,
+                chapter_id: d.chapter_id.unwrap_or_default(),
+                range_start: d.range_start,
+                range_end: d.range_end,
+            },
+            "entityRef" => Self::EntityRef {
+                entity_type: d.entity_type.unwrap_or_default(),
+                entity_id: d.entity_id.unwrap_or_default(),
+            },
+            "externalRef" => Self::ExternalRef {
+                uri: d.uri.unwrap_or_default(),
+                label: d.label,
+            },
+            _ => Self::Empty,
         }
     }
 }
@@ -1399,7 +1431,6 @@ pub enum StarMapOpenBehaviorDto {
     WritingMode,
     JumpToAnchor,
     EnterPortal,
-    #[serde(other)]
     Custom,
 }
 
@@ -1503,58 +1534,106 @@ impl From<StarMapDeepTargetDto> for crate::starmap::semantic::StarMapDeepTarget 
     }
 }
 
+// Flattened struct (was tagged enum StarMapPathSegmentDto)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum StarMapPathSegmentDto {
-    EnterChild { starmap_id: String },
-    EnterNode { node_id: String },
+#[serde(rename_all = "camelCase")]
+pub struct StarMapPathSegmentDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub starmap_id: Option<String>,
+    pub node_id: Option<String>,
 }
 
 impl From<crate::starmap::semantic::StarMapPathSegment> for StarMapPathSegmentDto {
     fn from(s: crate::starmap::semantic::StarMapPathSegment) -> Self {
         match s {
-            crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id } => Self::EnterChild { starmap_id },
-            crate::starmap::semantic::StarMapPathSegment::EnterNode { node_id } => Self::EnterNode { node_id },
+            crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id } => Self {
+                kind: "enterChild".to_string(),
+                starmap_id: Some(starmap_id),
+                node_id: None,
+            },
+            crate::starmap::semantic::StarMapPathSegment::EnterNode { node_id } => Self {
+                kind: "enterNode".to_string(),
+                starmap_id: None,
+                node_id: Some(node_id),
+            },
         }
     }
 }
 
 impl From<StarMapPathSegmentDto> for crate::starmap::semantic::StarMapPathSegment {
     fn from(d: StarMapPathSegmentDto) -> Self {
-        match d {
-            StarMapPathSegmentDto::EnterChild { starmap_id } => Self::EnterChild { starmap_id },
-            StarMapPathSegmentDto::EnterNode { node_id } => Self::EnterNode { node_id },
+        match d.kind.as_str() {
+            "enterChild" => Self::EnterChild {
+                starmap_id: d.starmap_id.unwrap_or_default(),
+            },
+            _ => Self::EnterNode {
+                node_id: d.node_id.unwrap_or_default(),
+            },
         }
     }
 }
 
+// Flattened struct (was tagged enum StarMapEdgeEndpointDto)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum StarMapEdgeEndpointDto {
-    Node { node_id: String },
-    Anchor { node_id: String, anchor_id: String },
-    Starmap,
-    DeepTarget { target: StarMapDeepTargetDto },
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEdgeEndpointDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub node_id: Option<String>,
+    pub anchor_id: Option<String>,
+    pub target: Option<StarMapDeepTargetDto>,
 }
 
 impl From<crate::starmap::types::StarMapEdgeEndpoint> for StarMapEdgeEndpointDto {
     fn from(e: crate::starmap::types::StarMapEdgeEndpoint) -> Self {
         match e {
-            crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => Self::Node { node_id },
-            crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
-            crate::starmap::types::StarMapEdgeEndpoint::Starmap => Self::Starmap,
-            crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target } => Self::DeepTarget { target: target.into() },
+            crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => Self {
+                kind: "node".to_string(),
+                node_id: Some(node_id),
+                anchor_id: None,
+                target: None,
+            },
+            crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, anchor_id } => Self {
+                kind: "anchor".to_string(),
+                node_id: Some(node_id),
+                anchor_id: Some(anchor_id),
+                target: None,
+            },
+            crate::starmap::types::StarMapEdgeEndpoint::Starmap => Self {
+                kind: "starmap".to_string(),
+                node_id: None,
+                anchor_id: None,
+                target: None,
+            },
+            crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target } => Self {
+                kind: "deepTarget".to_string(),
+                node_id: None,
+                anchor_id: None,
+                target: Some(target.into()),
+            },
         }
     }
 }
 
 impl From<StarMapEdgeEndpointDto> for crate::starmap::types::StarMapEdgeEndpoint {
     fn from(d: StarMapEdgeEndpointDto) -> Self {
-        match d {
-            StarMapEdgeEndpointDto::Node { node_id } => Self::Node { node_id },
-            StarMapEdgeEndpointDto::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
-            StarMapEdgeEndpointDto::Starmap => Self::Starmap,
-            StarMapEdgeEndpointDto::DeepTarget { target } => Self::DeepTarget { target: target.into() },
+        match d.kind.as_str() {
+            "anchor" => Self::Anchor {
+                node_id: d.node_id.unwrap_or_default(),
+                anchor_id: d.anchor_id.unwrap_or_default(),
+            },
+            "starmap" => Self::Starmap,
+            "deepTarget" => Self::DeepTarget {
+                target: d.target.map(Into::into).unwrap_or_else(|| crate::starmap::semantic::StarMapDeepTarget {
+                    starmap_id: String::new(),
+                    path: vec![],
+                    target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+                }),
+            },
+            _ => Self::Node {
+                node_id: d.node_id.unwrap_or_default(),
+            },
         }
     }
 }
@@ -1567,7 +1646,7 @@ pub struct StarMapEdgeDto {
     pub to: Option<String>,
     pub kind: StarMapEdgeKindDto,
     pub label: Option<String>,
-    pub payload: Option<serde_json::Value>,
+    pub payload: Option<String>,
     #[serde(default)]
     pub from_target: Option<StarMapDeepTargetDto>,
     #[serde(default)]
@@ -1588,7 +1667,7 @@ impl From<crate::starmap::types::StarMapEdge> for StarMapEdgeDto {
             to: e.to,
             kind: e.kind.into(),
             label: e.label,
-            payload: e.payload,
+            payload: e.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
             from_target: e.from_target.map(Into::into),
             to_target: e.to_target.map(Into::into),
             from_endpoint: e.from_endpoint.map(Into::into),
@@ -1607,7 +1686,7 @@ impl From<StarMapEdgeDto> for crate::starmap::types::StarMapEdge {
             to: d.to,
             kind: d.kind.into(),
             label: d.label,
-            payload: d.payload,
+            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             from_target: d.from_target.map(Into::into),
             to_target: d.to_target.map(Into::into),
             from_endpoint: d.from_endpoint.map(Into::into),
@@ -1897,7 +1976,7 @@ impl From<StarMapReferenceDto> for crate::starmap::StarMapReference {
 pub struct StarMapNodePatchDto {
     pub title: Option<String>,
     pub kind: Option<StarMapNodeKindDto>,
-    pub payload: Option<Option<serde_json::Value>>,
+    pub payload: Option<Option<String>>,
     pub tags: Option<Vec<String>>,
     pub content: Option<StarMapNodeContentDto>,
     pub anchors: Option<Vec<StarMapAnchorDto>>,
@@ -1912,7 +1991,7 @@ impl From<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
         Self {
             title: d.title,
             kind: d.kind.map(Into::into),
-            payload: d.payload,
+            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
             tags: d.tags,
             content: d.content.map(Into::into),
             anchors: d.anchors.map(|v| v.into_iter().map(Into::into).collect()),
@@ -1929,7 +2008,7 @@ impl From<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
 pub struct StarMapEdgePatchDto {
     pub kind: Option<StarMapEdgeKindDto>,
     pub label: Option<Option<String>>,
-    pub payload: Option<Option<serde_json::Value>>,
+    pub payload: Option<Option<String>>,
     pub from_target: Option<Option<StarMapDeepTargetDto>>,
     pub to_target: Option<Option<StarMapDeepTargetDto>>,
     pub from_endpoint: Option<Option<StarMapEdgeEndpointDto>>,
@@ -1941,7 +2020,7 @@ impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
         Self {
             kind: d.kind.map(Into::into),
             label: d.label,
-            payload: d.payload,
+            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
             from_target: d.from_target.map(|v| v.map(Into::into)),
             to_target: d.to_target.map(|v| v.map(Into::into)),
             from_endpoint: d.from_endpoint.map(|v| v.map(Into::into)),
@@ -2101,7 +2180,7 @@ pub struct SpeedCurveSummaryDto {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum MindMapNodeKindDto {
-    Project, Volume, Chapter, TextAnchor, Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, #[serde(other)] Custom,
+    Project, Volume, Chapter, TextAnchor, Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, Custom,
 }
 
 impl From<crate::mind_map::MindMapNodeKind> for MindMapNodeKindDto {
@@ -2153,7 +2232,7 @@ impl From<MindMapNodeKindDto> for crate::mind_map::MindMapNodeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum MindMapEdgeKindDto {
-    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, #[serde(other)] Custom,
+    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, Custom,
 }
 
 impl From<crate::mind_map::MindMapEdgeKind> for MindMapEdgeKindDto {
@@ -2199,7 +2278,7 @@ impl From<MindMapEdgeKindDto> for crate::mind_map::MindMapEdgeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum MindMapLayoutKindDto {
-    AutoRadial, HorizontalTree, Freeform, Timeline, Relationship, #[serde(other)] Custom,
+    AutoRadial, HorizontalTree, Freeform, Timeline, Relationship, Custom,
 }
 
 impl From<crate::mind_map::LayoutKind> for MindMapLayoutKindDto {
@@ -2231,7 +2310,7 @@ impl From<MindMapLayoutKindDto> for crate::mind_map::LayoutKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapNodeKindDto {
-    Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, Chapter, #[serde(other)] Custom,
+    Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, Chapter, Custom,
 }
 
 impl From<crate::starmap::types::StarMapNodeKind> for StarMapNodeKindDto {
@@ -2277,7 +2356,7 @@ impl From<StarMapNodeKindDto> for crate::starmap::types::StarMapNodeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapEdgeKindDto {
-    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, #[serde(other)] Custom,
+    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, Custom,
 }
 
 impl From<crate::starmap::types::StarMapEdgeKind> for StarMapEdgeKindDto {
@@ -2323,7 +2402,7 @@ impl From<StarMapEdgeKindDto> for crate::starmap::types::StarMapEdgeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapLayoutKindDto {
-    Freeform, AutoRadial, #[serde(other)] Custom,
+    Freeform, AutoRadial, Custom,
 }
 
 impl From<crate::starmap::types::StarMapLayoutKind> for StarMapLayoutKindDto {
@@ -2346,54 +2425,158 @@ impl From<StarMapLayoutKindDto> for crate::starmap::types::StarMapLayoutKind {
     }
 }
 
+// Flattened struct (was tagged enum StarMapAnchorTargetDto)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum StarMapAnchorTargetDto {
-    ChapterRange { project_id: Option<String>, volume_id: Option<String>, chapter_id: String, range_start: Option<u32>, range_end: Option<u32> },
-    Project { project_id: String },
-    Volume { project_id: Option<String>, volume_id: String },
-    Chapter { project_id: Option<String>, volume_id: Option<String>, chapter_id: String },
-    Character { entity_id: String },
-    Item { entity_id: String },
-    Location { entity_id: String },
-    Event { entity_id: String },
-    Starmap { starmap_id: String },
-    External { uri: String },
-    Custom { payload: serde_json::Value },
+#[serde(rename_all = "camelCase")]
+pub struct StarMapAnchorTargetDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub project_id: Option<String>,
+    pub volume_id: Option<String>,
+    pub chapter_id: Option<String>,
+    pub range_start: Option<u32>,
+    pub range_end: Option<u32>,
+    pub entity_id: Option<String>,
+    pub entity_type: Option<String>,
+    pub starmap_id: Option<String>,
+    pub uri: Option<String>,
+    pub payload: Option<String>,
 }
 
 impl From<crate::starmap::semantic::StarMapAnchorTarget> for StarMapAnchorTargetDto {
     fn from(t: crate::starmap::semantic::StarMapAnchorTarget) -> Self {
         match t {
-            crate::starmap::semantic::StarMapAnchorTarget::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
-            crate::starmap::semantic::StarMapAnchorTarget::Project { project_id } => Self::Project { project_id },
-            crate::starmap::semantic::StarMapAnchorTarget::Volume { project_id, volume_id } => Self::Volume { project_id, volume_id },
-            crate::starmap::semantic::StarMapAnchorTarget::Chapter { project_id, volume_id, chapter_id } => Self::Chapter { project_id, volume_id, chapter_id },
-            crate::starmap::semantic::StarMapAnchorTarget::Character { entity_id } => Self::Character { entity_id },
-            crate::starmap::semantic::StarMapAnchorTarget::Item { entity_id } => Self::Item { entity_id },
-            crate::starmap::semantic::StarMapAnchorTarget::Location { entity_id } => Self::Location { entity_id },
-            crate::starmap::semantic::StarMapAnchorTarget::Event { entity_id } => Self::Event { entity_id },
-            crate::starmap::semantic::StarMapAnchorTarget::Starmap { starmap_id } => Self::Starmap { starmap_id },
-            crate::starmap::semantic::StarMapAnchorTarget::External { uri } => Self::External { uri },
-            crate::starmap::semantic::StarMapAnchorTarget::Custom { payload } => Self::Custom { payload },
+            crate::starmap::semantic::StarMapAnchorTarget::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self {
+                kind: "chapterRange".to_string(),
+                project_id,
+                volume_id,
+                chapter_id: Some(chapter_id),
+                range_start,
+                range_end,
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Project { project_id } => Self {
+                kind: "project".to_string(),
+                project_id: Some(project_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Volume { project_id, volume_id } => Self {
+                kind: "volume".to_string(),
+                project_id,
+                volume_id: Some(volume_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Chapter { project_id, volume_id, chapter_id } => Self {
+                kind: "chapter".to_string(),
+                project_id,
+                volume_id,
+                chapter_id: Some(chapter_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Character { entity_id } => Self {
+                kind: "character".to_string(),
+                entity_id: Some(entity_id),
+                entity_type: Some("character".to_string()),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Item { entity_id } => Self {
+                kind: "item".to_string(),
+                entity_id: Some(entity_id),
+                entity_type: Some("item".to_string()),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Location { entity_id } => Self {
+                kind: "location".to_string(),
+                entity_id: Some(entity_id),
+                entity_type: Some("location".to_string()),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Event { entity_id } => Self {
+                kind: "event".to_string(),
+                entity_id: Some(entity_id),
+                entity_type: Some("event".to_string()),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Starmap { starmap_id } => Self {
+                kind: "starmap".to_string(),
+                starmap_id: Some(starmap_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::External { uri } => Self {
+                kind: "external".to_string(),
+                uri: Some(uri),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapAnchorTarget::Custom { payload } => Self {
+                kind: "custom".to_string(),
+                payload: Some(serde_json::to_string(&payload).unwrap_or_default()),
+                ..Default::default()
+            },
         }
     }
 }
 
 impl From<StarMapAnchorTargetDto> for crate::starmap::semantic::StarMapAnchorTarget {
-    fn from(dto: StarMapAnchorTargetDto) -> Self {
-        match dto {
-            StarMapAnchorTargetDto::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
-            StarMapAnchorTargetDto::Project { project_id } => Self::Project { project_id },
-            StarMapAnchorTargetDto::Volume { project_id, volume_id } => Self::Volume { project_id, volume_id },
-            StarMapAnchorTargetDto::Chapter { project_id, volume_id, chapter_id } => Self::Chapter { project_id, volume_id, chapter_id },
-            StarMapAnchorTargetDto::Character { entity_id } => Self::Character { entity_id },
-            StarMapAnchorTargetDto::Item { entity_id } => Self::Item { entity_id },
-            StarMapAnchorTargetDto::Location { entity_id } => Self::Location { entity_id },
-            StarMapAnchorTargetDto::Event { entity_id } => Self::Event { entity_id },
-            StarMapAnchorTargetDto::Starmap { starmap_id } => Self::Starmap { starmap_id },
-            StarMapAnchorTargetDto::External { uri } => Self::External { uri },
-            StarMapAnchorTargetDto::Custom { payload } => Self::Custom { payload },
+    fn from(d: StarMapAnchorTargetDto) -> Self {
+        match d.kind.as_str() {
+            "project" => Self::Project {
+                project_id: d.project_id.unwrap_or_default(),
+            },
+            "volume" => Self::Volume {
+                project_id: d.project_id,
+                volume_id: d.volume_id.unwrap_or_default(),
+            },
+            "chapter" => Self::Chapter {
+                project_id: d.project_id,
+                volume_id: d.volume_id,
+                chapter_id: d.chapter_id.unwrap_or_default(),
+            },
+            "character" => Self::Character {
+                entity_id: d.entity_id.unwrap_or_default(),
+            },
+            "item" => Self::Item {
+                entity_id: d.entity_id.unwrap_or_default(),
+            },
+            "location" => Self::Location {
+                entity_id: d.entity_id.unwrap_or_default(),
+            },
+            "event" => Self::Event {
+                entity_id: d.entity_id.unwrap_or_default(),
+            },
+            "starmap" => Self::Starmap {
+                starmap_id: d.starmap_id.unwrap_or_default(),
+            },
+            "external" => Self::External {
+                uri: d.uri.unwrap_or_default(),
+            },
+            "custom" => Self::Custom {
+                payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)).unwrap_or(serde_json::Value::Null),
+            },
+            _ => Self::ChapterRange {
+                project_id: d.project_id,
+                volume_id: d.volume_id,
+                chapter_id: d.chapter_id.unwrap_or_default(),
+                range_start: d.range_start,
+                range_end: d.range_end,
+            },
+        }
+    }
+}
+
+impl Default for StarMapAnchorTargetDto {
+    fn default() -> Self {
+        Self {
+            kind: "chapterRange".to_string(),
+            project_id: None,
+            volume_id: None,
+            chapter_id: None,
+            range_start: None,
+            range_end: None,
+            entity_id: None,
+            entity_type: None,
+            starmap_id: None,
+            uri: None,
+            payload: None,
         }
     }
 }
@@ -2402,7 +2585,7 @@ impl From<StarMapAnchorTargetDto> for crate::starmap::semantic::StarMapAnchorTar
 #[serde(rename_all = "camelCase")]
 pub enum StarMapAnchorRoleDto {
     #[default]
-    Source, Destination, Reference, #[serde(other)] Custom,
+    Source, Destination, Reference, Custom,
 }
 
 impl From<crate::starmap::semantic::StarMapAnchorRole> for StarMapAnchorRoleDto {
@@ -2481,42 +2664,123 @@ impl From<StarMapPortalPreviewPolicyDto> for crate::starmap::semantic::StarMapPo
     }
 }
 
+// Flattened struct (was tagged enum StarMapTargetDetailDto)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum StarMapTargetDetailDto {
-    Starmap, Node { node_id: String }, Anchor { node_id: String, anchor_id: String }, ChapterRange { project_id: Option<String>, volume_id: Option<String>, chapter_id: String, range_start: Option<u32>, range_end: Option<u32> }, Entity { entity_type: String, entity_id: String }, External { uri: String },
+#[serde(rename_all = "camelCase")]
+pub struct StarMapTargetDetailDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub node_id: Option<String>,
+    pub anchor_id: Option<String>,
+    pub project_id: Option<String>,
+    pub volume_id: Option<String>,
+    pub chapter_id: Option<String>,
+    pub range_start: Option<u32>,
+    pub range_end: Option<u32>,
+    pub entity_type: Option<String>,
+    pub entity_id: Option<String>,
+    pub uri: Option<String>,
 }
 
 impl From<crate::starmap::semantic::StarMapTargetDetail> for StarMapTargetDetailDto {
     fn from(d: crate::starmap::semantic::StarMapTargetDetail) -> Self {
         match d {
-            crate::starmap::semantic::StarMapTargetDetail::Starmap => Self::Starmap,
-            crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => Self::Node { node_id },
-            crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
-            crate::starmap::semantic::StarMapTargetDetail::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
-            crate::starmap::semantic::StarMapTargetDetail::Entity { entity_type, entity_id } => Self::Entity { entity_type, entity_id },
-            crate::starmap::semantic::StarMapTargetDetail::External { uri } => Self::External { uri },
+            crate::starmap::semantic::StarMapTargetDetail::Starmap => Self {
+                kind: "starmap".to_string(),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapTargetDetail::Node { node_id } => Self {
+                kind: "node".to_string(),
+                node_id: Some(node_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapTargetDetail::Anchor { node_id, anchor_id } => Self {
+                kind: "anchor".to_string(),
+                node_id: Some(node_id),
+                anchor_id: Some(anchor_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapTargetDetail::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self {
+                kind: "chapterRange".to_string(),
+                project_id,
+                volume_id,
+                chapter_id: Some(chapter_id),
+                range_start,
+                range_end,
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapTargetDetail::Entity { entity_type, entity_id } => Self {
+                kind: "entity".to_string(),
+                entity_type: Some(entity_type),
+                entity_id: Some(entity_id),
+                ..Default::default()
+            },
+            crate::starmap::semantic::StarMapTargetDetail::External { uri } => Self {
+                kind: "external".to_string(),
+                uri: Some(uri),
+                ..Default::default()
+            },
         }
     }
 }
 
 impl From<StarMapTargetDetailDto> for crate::starmap::semantic::StarMapTargetDetail {
-    fn from(dto: StarMapTargetDetailDto) -> Self {
-        match dto {
-            StarMapTargetDetailDto::Starmap => Self::Starmap,
-            StarMapTargetDetailDto::Node { node_id } => Self::Node { node_id },
-            StarMapTargetDetailDto::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
-            StarMapTargetDetailDto::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end },
-            StarMapTargetDetailDto::Entity { entity_type, entity_id } => Self::Entity { entity_type, entity_id },
-            StarMapTargetDetailDto::External { uri } => Self::External { uri },
+    fn from(d: StarMapTargetDetailDto) -> Self {
+        match d.kind.as_str() {
+            "node" => Self::Node {
+                node_id: d.node_id.unwrap_or_default(),
+            },
+            "anchor" => Self::Anchor {
+                node_id: d.node_id.unwrap_or_default(),
+                anchor_id: d.anchor_id.unwrap_or_default(),
+            },
+            "chapterRange" => Self::ChapterRange {
+                project_id: d.project_id,
+                volume_id: d.volume_id,
+                chapter_id: d.chapter_id.unwrap_or_default(),
+                range_start: d.range_start,
+                range_end: d.range_end,
+            },
+            "entity" => Self::Entity {
+                entity_type: d.entity_type.unwrap_or_default(),
+                entity_id: d.entity_id.unwrap_or_default(),
+            },
+            "external" => Self::External {
+                uri: d.uri.unwrap_or_default(),
+            },
+            _ => Self::Starmap,
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+impl Default for StarMapTargetDetailDto {
+    fn default() -> Self {
+        Self {
+            kind: "starmap".to_string(),
+            node_id: None,
+            anchor_id: None,
+            project_id: None,
+            volume_id: None,
+            chapter_id: None,
+            range_start: None,
+            range_end: None,
+            entity_type: None,
+            entity_id: None,
+            uri: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapSourceKindDto {
-    Human, Import, Plugin, Ai, System, #[default] #[serde(other)] Unknown,
+    Human, Import, Plugin, Ai, System, Unknown,
+}
+
+impl Default for StarMapSourceKindDto {
+    fn default() -> Self {
+        Self::Unknown
+    }
 }
 
 impl From<crate::starmap::semantic::StarMapSourceKind> for StarMapSourceKindDto {
@@ -2545,10 +2809,16 @@ impl From<StarMapSourceKindDto> for crate::starmap::semantic::StarMapSourceKind 
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapReviewStatusDto {
-    Accepted, Draft, NeedsReview, Rejected, #[default] #[serde(other)] Unknown,
+    Accepted, Draft, NeedsReview, Rejected, Unknown,
+}
+
+impl Default for StarMapReviewStatusDto {
+    fn default() -> Self {
+        Self::Unknown
+    }
 }
 
 impl From<crate::starmap::semantic::StarMapReviewStatus> for StarMapReviewStatusDto {
@@ -2575,30 +2845,49 @@ impl From<StarMapReviewStatusDto> for crate::starmap::semantic::StarMapReviewSta
     }
 }
 
+// Flattened struct (was tagged enum StarMapEndpointDto)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum StarMapEndpointDto {
-    Node { node_id: String },
-    Anchor { node_id: String, anchor_id: String },
-    Starmap,
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEndpointDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub node_id: Option<String>,
+    pub anchor_id: Option<String>,
 }
 
 impl From<crate::starmap::types::StarMapEndpoint> for StarMapEndpointDto {
     fn from(e: crate::starmap::types::StarMapEndpoint) -> Self {
         match e {
-            crate::starmap::types::StarMapEndpoint::Node { node_id } => Self::Node { node_id },
-            crate::starmap::types::StarMapEndpoint::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
-            crate::starmap::types::StarMapEndpoint::Starmap => Self::Starmap,
+            crate::starmap::types::StarMapEndpoint::Node { node_id } => Self {
+                kind: "node".to_string(),
+                node_id: Some(node_id),
+                anchor_id: None,
+            },
+            crate::starmap::types::StarMapEndpoint::Anchor { node_id, anchor_id } => Self {
+                kind: "anchor".to_string(),
+                node_id: Some(node_id),
+                anchor_id: Some(anchor_id),
+            },
+            crate::starmap::types::StarMapEndpoint::Starmap => Self {
+                kind: "starmap".to_string(),
+                node_id: None,
+                anchor_id: None,
+            },
         }
     }
 }
 
 impl From<StarMapEndpointDto> for crate::starmap::types::StarMapEndpoint {
     fn from(dto: StarMapEndpointDto) -> Self {
-        match dto {
-            StarMapEndpointDto::Node { node_id } => Self::Node { node_id },
-            StarMapEndpointDto::Anchor { node_id, anchor_id } => Self::Anchor { node_id, anchor_id },
-            StarMapEndpointDto::Starmap => Self::Starmap,
+        match dto.kind.as_str() {
+            "anchor" => Self::Anchor {
+                node_id: dto.node_id.unwrap_or_default(),
+                anchor_id: dto.anchor_id.unwrap_or_default(),
+            },
+            "starmap" => Self::Starmap,
+            _ => Self::Node {
+                node_id: dto.node_id.unwrap_or_default(),
+            },
         }
     }
 }
@@ -2703,8 +2992,8 @@ pub struct ActionDescriptorDto {
     pub confirm_required: bool,
     pub undoable: bool,
     pub platforms: Vec<String>,
-    pub input_schema: Option<serde_json::Value>,
-    pub ui_schema: Option<serde_json::Value>,
+    pub input_schema: Option<String>,
+    pub ui_schema: Option<String>,
 }
 
 impl From<crate::action_registry::ActionDescriptor> for ActionDescriptorDto {
@@ -2719,8 +3008,8 @@ impl From<crate::action_registry::ActionDescriptor> for ActionDescriptorDto {
             confirm_required: d.confirm_required,
             undoable: d.undoable,
             platforms: d.platforms,
-            input_schema: d.input_schema,
-            ui_schema: d.ui_schema,
+            input_schema: d.input_schema.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            ui_schema: d.ui_schema.map(|v| serde_json::to_string(&v).unwrap_or_default()),
         }
     }
 }
@@ -2737,8 +3026,8 @@ impl From<ActionDescriptorDto> for crate::action_registry::ActionDescriptor {
             confirm_required: dto.confirm_required,
             undoable: dto.undoable,
             platforms: dto.platforms,
-            input_schema: dto.input_schema,
-            ui_schema: dto.ui_schema,
+            input_schema: dto.input_schema.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            ui_schema: dto.ui_schema.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
         }
     }
 }
@@ -2748,8 +3037,8 @@ impl From<ActionDescriptorDto> for crate::action_registry::ActionDescriptor {
 pub struct ActionResultDto {
     pub success: bool,
     pub message: Option<String>,
-    pub data: Option<serde_json::Value>,
-    pub proposed_ui: Option<serde_json::Value>,
+    pub data: Option<String>,
+    pub proposed_ui: Option<String>,
     pub requires_confirmation: Option<bool>,
 }
 
@@ -2758,8 +3047,8 @@ impl From<crate::action_registry::ActionResult> for ActionResultDto {
         Self {
             success: r.success,
             message: r.message,
-            data: r.data,
-            proposed_ui: r.proposed_ui,
+            data: r.data.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            proposed_ui: r.proposed_ui.map(|v| serde_json::to_string(&v).unwrap_or_default()),
             requires_confirmation: r.requires_confirmation,
         }
     }
@@ -2770,8 +3059,8 @@ impl From<ActionResultDto> for crate::action_registry::ActionResult {
         Self {
             success: dto.success,
             message: dto.message,
-            data: dto.data,
-            proposed_ui: dto.proposed_ui,
+            data: dto.data.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            proposed_ui: dto.proposed_ui.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             requires_confirmation: dto.requires_confirmation,
         }
     }

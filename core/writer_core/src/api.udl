@@ -306,6 +306,541 @@ dictionary SpeedCurveSummaryDto {
     sequence<SpeedCurvePointDto> buckets;
 };
 
+// ============================================================
+// MindMap types
+// ============================================================
+
+dictionary MindMapSnapshotDto {
+    string project_id;
+    string layout_kind;
+    sequence<MindMapSnapshotNodeDto> nodes;
+    sequence<MindMapSnapshotEdgeDto> edges;
+    MindMapBoundsDto bounds;
+    u64 generated_at;
+};
+
+dictionary MindMapSnapshotNodeDto {
+    string id;
+    string title;
+    MindMapNodeKindDto kind;
+    float x;
+    float y;
+    float width;
+    float height;
+    float radius;
+    boolean collapsed;
+    u32 anchor_count;
+    boolean broken_link;
+    sequence<string> tags;
+};
+
+dictionary MindMapSnapshotEdgeDto {
+    string id;
+    string from;
+    string to;
+    string kind;
+    string? label;
+};
+
+dictionary MindMapBoundsDto {
+    float min_x;
+    float min_y;
+    float max_x;
+    float max_y;
+};
+
+dictionary MindMapGraphDto {
+    u32 schema_version;
+    string id;
+    string project_id;
+    string title;
+    sequence<MindMapGraphNodeDto> nodes;
+    sequence<MindMapGraphEdgeDto> edges;
+    sequence<MindMapAnchorDto> anchors;
+    sequence<MindMapLinkDto> links;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary MindMapGraphNodeDto {
+    string id;
+    string title;
+    MindMapNodeKindDto kind;
+    string? payload;
+    sequence<string> tags;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary MindMapGraphEdgeDto {
+    string id;
+    string from;
+    string to;
+    MindMapEdgeKindDto kind;
+    string? label;
+    string? payload;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary MindMapAnchorDto {
+    string id;
+    string project_id;
+    string chapter_id;
+    u32 start_offset;
+    u32 end_offset;
+    string selected_text;
+    string prefix_text;
+    string suffix_text;
+    string checksum;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary MindMapLinkDto {
+    string id;
+    string node_id;
+    string anchor_id;
+    string kind;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary MindMapLayoutDto {
+    MindMapLayoutKindDto kind;
+    sequence<MindMapLayoutNodeDto> nodes;
+};
+
+dictionary MindMapLayoutNodeDto {
+    string node_id;
+    float x;
+    float y;
+    float width;
+    float height;
+    float radius;
+    boolean collapsed;
+    i32 z_index;
+};
+
+dictionary MindMapGraphMetadataDto {
+    string id;
+    string title;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary MindMapGraphsListDto {
+    string? default_graph_id;
+    sequence<MindMapGraphMetadataDto> graphs;
+};
+
+enum MindMapNodeKindDto {
+    "Project",
+    "Volume",
+    "Chapter",
+    "TextAnchor",
+    "Character",
+    "Event",
+    "Location",
+    "Item",
+    "Concept",
+    "Theme",
+    "Note",
+    "Organization",
+    "Timeline",
+    "Plot",
+    "Foreshadowing",
+    "Custom",
+};
+
+enum MindMapEdgeKindDto {
+    "Contains",
+    "References",
+    "AppearsIn",
+    "Causes",
+    "RelatedTo",
+    "LocatedAt",
+    "CharacterRelation",
+    "Timeline",
+    "Foreshadows",
+    "Resolves",
+    "DependsOn",
+    "ConflictsWith",
+    "Custom",
+};
+
+enum MindMapLayoutKindDto {
+    "AutoRadial",
+    "HorizontalTree",
+    "Freeform",
+    "Timeline",
+    "Relationship",
+    "Custom",
+};
+
+// ============================================================
+// StarMap types
+// ============================================================
+
+dictionary StarMapMetaDto {
+    string starmap_id;
+    string title;
+    string description;
+    string? project_id;
+    string? parent_starmap_id;
+    boolean is_main_for_project;
+    string accent_color;
+    u64 created_at;
+    u64 updated_at;
+    u32 node_count;
+    u32 edge_count;
+    u32 linked_chapter_count;
+    u32 child_starmap_count;
+};
+
+dictionary StarMapGraphDto {
+    u32 schema_version;
+    string id;
+    string starmap_id;
+    string title;
+    sequence<StarMapNodeDto> nodes;
+    sequence<StarMapEdgeDto> edges;
+    sequence<StarMapEmbedDto> embeds;
+    sequence<StarMapLinkDto> links;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapNodeDto {
+    string id;
+    string title;
+    StarMapNodeKindDto kind;
+    string? payload;
+    sequence<string> tags;
+    StarMapNodeContentDto content;
+    sequence<StarMapAnchorDto> anchors;
+    StarMapPortalDto? portal;
+    StarMapDisplayPolicyDto display_policy;
+    StarMapOpenBehaviorDto open_behavior;
+    StarMapProvenanceDto provenance;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapNodeContentDto {
+    string kind;
+    string? summary;
+    string? body;
+    string? project_id;
+    string? volume_id;
+    string? chapter_id;
+    u32? range_start;
+    u32? range_end;
+    string? entity_type;
+    string? entity_id;
+    string? uri;
+    string? label;
+};
+
+dictionary StarMapAnchorDto {
+    string anchor_id;
+    StarMapAnchorTargetDto target;
+    string? label;
+    StarMapAnchorRoleDto role;
+};
+
+dictionary StarMapAnchorTargetDto {
+    string kind;
+    string? project_id;
+    string? volume_id;
+    string? chapter_id;
+    u32? range_start;
+    u32? range_end;
+    string? entity_id;
+    string? entity_type;
+    string? starmap_id;
+    string? uri;
+    string? payload;
+};
+
+dictionary StarMapPortalDto {
+    string target_starmap_id;
+    StarMapDeepTargetDto? deep_target;
+    StarMapPortalModeDto mode;
+    StarMapPortalPreviewPolicyDto preview_policy;
+};
+
+dictionary StarMapDisplayPolicyDto {
+    float importance;
+    float min_visible_scale;
+    float title_scale;
+    float summary_scale;
+    float detail_scale;
+    u32 max_preview_chars;
+    float min_readable_px;
+};
+
+dictionary StarMapProvenanceDto {
+    StarMapSourceKindDto source;
+    string? source_id;
+    string? generated_by;
+    string? prompt_id;
+    StarMapReviewStatusDto review_status;
+    string? created_from_anchor;
+};
+
+dictionary StarMapDeepTargetDto {
+    string starmap_id;
+    sequence<StarMapPathSegmentDto> path;
+    StarMapTargetDetailDto target;
+};
+
+dictionary StarMapPathSegmentDto {
+    string kind;
+    string? starmap_id;
+    string? node_id;
+};
+
+dictionary StarMapEdgeEndpointDto {
+    string kind;
+    string? node_id;
+    string? anchor_id;
+    StarMapDeepTargetDto? target;
+};
+
+dictionary StarMapEdgeDto {
+    string id;
+    string? from;
+    string? to;
+    StarMapEdgeKindDto kind;
+    string? label;
+    string? payload;
+    StarMapDeepTargetDto? from_target;
+    StarMapDeepTargetDto? to_target;
+    StarMapEdgeEndpointDto? from_endpoint;
+    StarMapEdgeEndpointDto? to_endpoint;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapEmbedPlacementDto {
+    float x;
+    float y;
+    float width;
+    float height;
+    float scale;
+    i32 z_index;
+    boolean collapsed;
+};
+
+dictionary StarMapEmbedViewportDto {
+    float scale;
+    float offset_x;
+    float offset_y;
+};
+
+dictionary StarMapEmbedDto {
+    string instance_id;
+    string target_starmap_id;
+    string? label;
+    StarMapDisplayPolicyDto display_policy;
+    StarMapOpenBehaviorDto open_behavior;
+    StarMapEmbedPlacementDto placement;
+    StarMapEmbedViewportDto target_viewport;
+    string? source_node_id;
+    StarMapEndpointDto? host_endpoint;
+    StarMapProvenanceDto provenance;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapLinkDto {
+    string link_id;
+    StarMapEndpointDto source;
+    StarMapDeepTargetDto target;
+    string? label;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapLayoutDto {
+    StarMapLayoutKindDto kind;
+    sequence<StarMapLayoutNodeDto> nodes;
+};
+
+dictionary StarMapLayoutNodeDto {
+    string node_id;
+    float x;
+    float y;
+    float width;
+    float height;
+    float radius;
+    boolean collapsed;
+    i32 z_index;
+    float scale;
+    float depth;
+    float focus_weight;
+    string? orbit_group;
+};
+
+dictionary StarMapReferenceDto {
+    string host_starmap_id;
+    string host_title;
+    string ref_type;
+    string ref_id;
+    string target_starmap_id;
+};
+
+dictionary StarMapTargetDetailDto {
+    string kind;
+    string? node_id;
+    string? anchor_id;
+    string? project_id;
+    string? volume_id;
+    string? chapter_id;
+    u32? range_start;
+    u32? range_end;
+    string? entity_type;
+    string? entity_id;
+    string? uri;
+};
+
+dictionary StarMapEndpointDto {
+    string kind;
+    string? node_id;
+    string? anchor_id;
+};
+
+dictionary StarMapViewportDto {
+    float scale;
+    float offset_x;
+    float offset_y;
+    float width;
+    float height;
+};
+
+enum StarMapNodeKindDto {
+    "Character",
+    "Event",
+    "Location",
+    "Item",
+    "Concept",
+    "Theme",
+    "Note",
+    "Organization",
+    "Timeline",
+    "Plot",
+    "Foreshadowing",
+    "Chapter",
+    "Custom",
+};
+
+enum StarMapEdgeKindDto {
+    "Contains",
+    "References",
+    "AppearsIn",
+    "Causes",
+    "RelatedTo",
+    "LocatedAt",
+    "CharacterRelation",
+    "Timeline",
+    "Foreshadows",
+    "Resolves",
+    "DependsOn",
+    "ConflictsWith",
+    "Custom",
+};
+
+enum StarMapLayoutKindDto {
+    "Freeform",
+    "AutoRadial",
+    "Custom",
+};
+
+enum StarMapAnchorRoleDto {
+    "Source",
+    "Destination",
+    "Reference",
+    "Custom",
+};
+
+enum StarMapPortalModeDto {
+    "EnterChild",
+    "PreviewInline",
+    "ReferenceOnly",
+};
+
+enum StarMapPortalPreviewPolicyDto {
+    "Auto",
+    "Always",
+    "Never",
+};
+
+enum StarMapOpenBehaviorDto {
+    "Inspector",
+    "ExpandCard",
+    "WritingMode",
+    "JumpToAnchor",
+    "EnterPortal",
+    "Custom",
+};
+
+enum StarMapSourceKindDto {
+    "Human",
+    "Import",
+    "Plugin",
+    "Ai",
+    "System",
+    "Unknown",
+};
+
+enum StarMapReviewStatusDto {
+    "Accepted",
+    "Draft",
+    "NeedsReview",
+    "Rejected",
+    "Unknown",
+};
+
+// ============================================================
+// Action types
+// ============================================================
+
+enum ActionKindDto {
+    "Query",
+    "Preview",
+    "Mutation",
+};
+
+enum ActionRiskLevelDto {
+    "SafeRead",
+    "SafeWrite",
+    "ContentWrite",
+    "Dangerous",
+};
+
+dictionary ActionDescriptorDto {
+    string id;
+    string title;
+    string description;
+    string category;
+    ActionKindDto kind;
+    ActionRiskLevelDto risk_level;
+    boolean confirm_required;
+    boolean undoable;
+    sequence<string> platforms;
+    string? input_schema;
+    string? ui_schema;
+};
+
+dictionary ActionResultDto {
+    boolean success;
+    string? message;
+    string? data;
+    string? proposed_ui;
+    boolean? requires_confirmation;
+};
+
 interface WriterAppService {
     constructor(string workspace_path);
 
@@ -447,51 +982,55 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean flush_writing_stats();
 
+    // MindMap typed methods
     [Throws=WriterError]
-    string get_mindmap_snapshot_json(string project_id);
+    MindMapSnapshotDto get_mindmap_snapshot(string project_id);
 
     [Throws=WriterError]
-    boolean save_mindmap_graph_json(string project_id, string graph_json);
+    boolean save_mindmap_graph(string project_id, string graph_json);
+
+    // StarMap typed methods
+    [Throws=WriterError]
+    sequence<StarMapMetaDto> list_starmaps();
 
     [Throws=WriterError]
-    string list_starmaps_json();
+    StarMapMetaDto create_starmap(string title, string desc);
 
     [Throws=WriterError]
-    string create_starmap_json(string title, string desc);
+    StarMapGraphDto get_starmap_graph(string starmap_id);
 
     [Throws=WriterError]
-    string get_starmap_graph_json(string starmap_id);
+    StarMapNodeDto add_starmap_node(string starmap_id, string node_json, float x, float y);
 
     [Throws=WriterError]
-    string add_starmap_node_json(string starmap_id, string node_json);
+    boolean save_starmap_layout(string starmap_id, string layout_json);
 
     [Throws=WriterError]
-    boolean save_starmap_layout_json(string starmap_id, string layout_json);
+    StarMapEmbedDto add_starmap_embed(string starmap_id, string embed_json);
 
     [Throws=WriterError]
-    string add_starmap_embed_json(string starmap_id, string embed_json);
-
-    [Throws=WriterError]
-    string update_starmap_embed_json(string starmap_id, string instance_id, string patch_json);
+    StarMapEmbedDto update_starmap_embed(string starmap_id, string instance_id, string patch_json);
 
     [Throws=WriterError]
     boolean delete_starmap_embed(string starmap_id, string instance_id);
 
     [Throws=WriterError]
-    string add_starmap_link_json(string starmap_id, string link_json);
+    StarMapLinkDto add_starmap_link(string starmap_id, string link_json);
 
     [Throws=WriterError]
-    string update_starmap_link_json(string starmap_id, string link_id, string patch_json);
+    StarMapLinkDto update_starmap_link(string starmap_id, string link_id, string patch_json);
 
     [Throws=WriterError]
     boolean delete_starmap_link(string starmap_id, string link_id);
 
     [Throws=WriterError]
-    string find_starmap_references_json(string target_starmap_id);
+    sequence<StarMapReferenceDto> find_starmap_references(string target_starmap_id);
 
-    string list_registered_actions_json();
+    [Throws=WriterError]
+    sequence<ActionDescriptorDto> list_registered_actions();
 
-    string execute_action_json(string action_id, string args_json, string context_json);
+    [Throws=WriterError]
+    ActionResultDto execute_action(string action_id, string args_json, string context_json);
 
     boolean ai_available();
 };

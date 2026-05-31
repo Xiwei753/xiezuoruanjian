@@ -871,11 +871,11 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_writer_core_fn_constructor_writerappservice_new(`workspacePath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_embed_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`embedJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`embedJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_link_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_node_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`nodeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_node(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`nodeJson`: RustBuffer.ByValue,`x`: Float,`y`: Float,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_ai_available(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -887,7 +887,7 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_project(`ptr`: Pointer,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_starmap_json(`ptr`: Pointer,`title`: RustBuffer.ByValue,`desc`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_create_starmap(`ptr`: Pointer,`title`: RustBuffer.ByValue,`desc`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -903,19 +903,19 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_delete_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_execute_action_json(`ptr`: Pointer,`actionId`: RustBuffer.ByValue,`argsJson`: RustBuffer.ByValue,`contextJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_execute_action(`ptr`: Pointer,`actionId`: RustBuffer.ByValue,`argsJson`: RustBuffer.ByValue,`contextJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_find_starmap_references_json(`ptr`: Pointer,`targetStarmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_find_starmap_references(`ptr`: Pointer,`targetStarmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_project_stats(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_starmap_graph_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,`bucketMinutes`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -931,9 +931,9 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_list_projects(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_list_registered_actions_json(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_list_registered_actions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_list_starmaps_json(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_list_starmaps(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_list_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -979,9 +979,9 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_local_settings_envelope_json(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graphJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graphJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layoutJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layoutJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_sync_config(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -993,9 +993,9 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_update_chapter_note(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`note`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_embed_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_link_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_validate_workspace(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1115,11 +1115,11 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_writer_core_checksum_func_perform_dummy_action(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_link_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_link(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_node_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_node(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_ai_available(
     ): Short
@@ -1131,7 +1131,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_project(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_create_starmap_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_create_starmap(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_volume(
     ): Short
@@ -1147,19 +1147,19 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_volume(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_execute_action_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_execute_action(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_find_starmap_references_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_find_starmap_references(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_project_stats(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_recent_edits(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve(
     ): Short
@@ -1175,9 +1175,9 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_list_projects(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_list_registered_actions_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_list_registered_actions(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_list_starmaps_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_list_starmaps(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_list_volumes(
     ): Short
@@ -1223,9 +1223,9 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings_envelope_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_sync_config(
     ): Short
@@ -1237,9 +1237,9 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_update_chapter_note(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_link_json(
+    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_link(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_validate_workspace(
     ): Short
@@ -1265,13 +1265,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_func_perform_dummy_action() != 23039.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed_json() != 16597.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed() != 20356.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_link_json() != 37962.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_link() != 30432.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_node_json() != 39216.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_node() != 24042.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_ai_available() != 40582.toShort()) {
@@ -1289,7 +1289,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_project() != 52962.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_starmap_json() != 39856.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_starmap() != 16698.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_volume() != 57493.toShort()) {
@@ -1313,16 +1313,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume() != 5254.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_execute_action_json() != 21644.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_execute_action() != 64822.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_find_starmap_references_json() != 62178.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_find_starmap_references() != 5338.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats() != 56971.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot_json() != 44398.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot() != 28930.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_project_stats() != 19600.toShort()) {
@@ -1331,7 +1331,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_recent_edits() != 14757.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph_json() != 63746.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph() != 5563.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve() != 22637.toShort()) {
@@ -1355,10 +1355,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_list_projects() != 38395.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_registered_actions_json() != 52711.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_registered_actions() != 5259.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_starmaps_json() != 20166.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_starmaps() != 1074.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_list_volumes() != 10599.toShort()) {
@@ -1427,10 +1427,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_local_settings_envelope_json() != 37495.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph_json() != 21493.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph() != 18497.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout_json() != 7236.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout() != 35811.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_config() != 43143.toShort()) {
@@ -1448,10 +1448,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_update_chapter_note() != 23190.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed_json() != 50287.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed() != 44044.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_link_json() != 31002.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_link() != 44638.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_validate_workspace() != 63349.toShort()) {
@@ -1912,11 +1912,11 @@ private class JavaLangRefCleanable(
 }
 public interface WriterAppServiceInterface {
     
-    fun `addStarmapEmbedJson`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): kotlin.String
+    fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): StarMapEmbedDto
     
-    fun `addStarmapLinkJson`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): kotlin.String
+    fun `addStarmapLink`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): StarMapLinkDto
     
-    fun `addStarmapNodeJson`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String
+    fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String, `x`: kotlin.Float, `y`: kotlin.Float): StarMapNodeDto
     
     fun `aiAvailable`(): kotlin.Boolean
     
@@ -1928,7 +1928,7 @@ public interface WriterAppServiceInterface {
     
     fun `createProject`(`title`: kotlin.String): ProjectDto
     
-    fun `createStarmapJson`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String
+    fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): StarMapMetaDto
     
     fun `createVolume`(`projectId`: kotlin.String, `title`: kotlin.String): VolumeDto
     
@@ -1944,19 +1944,19 @@ public interface WriterAppServiceInterface {
     
     fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean
     
-    fun `executeActionJson`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): kotlin.String
+    fun `executeAction`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): ActionResultDto
     
-    fun `findStarmapReferencesJson`(`targetStarmapId`: kotlin.String): kotlin.String
+    fun `findStarmapReferences`(`targetStarmapId`: kotlin.String): List<StarMapReferenceDto>
     
     fun `flushWritingStats`(): kotlin.Boolean
     
-    fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String
+    fun `getMindmapSnapshot`(`projectId`: kotlin.String): MindMapSnapshotDto
     
     fun `getProjectStats`(`projectId`: kotlin.String): ProjectStatsDto
     
     fun `getRecentEdits`(): List<RecentEditDto>
     
-    fun `getStarmapGraphJson`(`starmapId`: kotlin.String): kotlin.String
+    fun `getStarmapGraph`(`starmapId`: kotlin.String): StarMapGraphDto
     
     fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): SpeedCurveSummaryDto
     
@@ -1972,9 +1972,9 @@ public interface WriterAppServiceInterface {
     
     fun `listProjects`(): List<ProjectDto>
     
-    fun `listRegisteredActionsJson`(): kotlin.String
+    fun `listRegisteredActions`(): List<ActionDescriptorDto>
     
-    fun `listStarmapsJson`(): kotlin.String
+    fun `listStarmaps`(): List<StarMapMetaDto>
     
     fun `listVolumes`(`projectId`: kotlin.String): List<VolumeDto>
     
@@ -2020,9 +2020,9 @@ public interface WriterAppServiceInterface {
     
     fun `saveLocalSettingsEnvelopeJson`(`settings`: LocalSettingsDto): kotlin.String
     
-    fun `saveMindmapGraphJson`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean
+    fun `saveMindmapGraph`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean
     
-    fun `saveStarmapLayoutJson`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean
+    fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean
     
     fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean
     
@@ -2034,9 +2034,9 @@ public interface WriterAppServiceInterface {
     
     fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean
     
-    fun `updateStarmapEmbedJson`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String
+    fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): StarMapEmbedDto
     
-    fun `updateStarmapLinkJson`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String
+    fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): StarMapLinkDto
     
     fun `validateWorkspace`(): kotlin.Boolean
     
@@ -2132,11 +2132,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
 
     
-    @Throws(WriterException::class)override fun `addStarmapEmbedJson`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): StarMapEmbedDto {
+            return FfiConverterTypeStarMapEmbedDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_embed_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_embed(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`embedJson`),_status)
 }
     }
@@ -2145,11 +2145,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `addStarmapLinkJson`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `addStarmapLink`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): StarMapLinkDto {
+            return FfiConverterTypeStarMapLinkDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_link_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_link(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`linkJson`),_status)
 }
     }
@@ -2158,12 +2158,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `addStarmapNodeJson`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String, `x`: kotlin.Float, `y`: kotlin.Float): StarMapNodeDto {
+            return FfiConverterTypeStarMapNodeDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_node_json(
-        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`nodeJson`),_status)
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_node(
+        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`nodeJson`),FfiConverterFloat.lower(`x`),FfiConverterFloat.lower(`y`),_status)
 }
     }
     )
@@ -2234,11 +2234,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `createStarmapJson`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): StarMapMetaDto {
+            return FfiConverterTypeStarMapMetaDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_starmap_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_starmap(
         it, FfiConverterString.lower(`title`),FfiConverterString.lower(`desc`),_status)
 }
     }
@@ -2337,11 +2337,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `executeActionJson`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    
+    @Throws(WriterException::class)override fun `executeAction`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): ActionResultDto {
+            return FfiConverterTypeActionResultDto.lift(
     callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_execute_action_json(
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_execute_action(
         it, FfiConverterString.lower(`actionId`),FfiConverterString.lower(`argsJson`),FfiConverterString.lower(`contextJson`),_status)
 }
     }
@@ -2350,11 +2351,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `findStarmapReferencesJson`(`targetStarmapId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `findStarmapReferences`(`targetStarmapId`: kotlin.String): List<StarMapReferenceDto> {
+            return FfiConverterSequenceTypeStarMapReferenceDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_find_starmap_references_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_find_starmap_references(
         it, FfiConverterString.lower(`targetStarmapId`),_status)
 }
     }
@@ -2376,11 +2377,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `getMindmapSnapshot`(`projectId`: kotlin.String): MindMapSnapshotDto {
+            return FfiConverterTypeMindMapSnapshotDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot(
         it, FfiConverterString.lower(`projectId`),_status)
 }
     }
@@ -2415,11 +2416,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `getStarmapGraphJson`(`starmapId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `getStarmapGraph`(`starmapId`: kotlin.String): StarMapGraphDto {
+            return FfiConverterTypeStarMapGraphDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_starmap_graph_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(
         it, FfiConverterString.lower(`starmapId`),_status)
 }
     }
@@ -2518,11 +2519,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `listRegisteredActionsJson`(): kotlin.String {
-            return FfiConverterString.lift(
+    
+    @Throws(WriterException::class)override fun `listRegisteredActions`(): List<ActionDescriptorDto> {
+            return FfiConverterSequenceTypeActionDescriptorDto.lift(
     callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_registered_actions_json(
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_registered_actions(
         it, _status)
 }
     }
@@ -2531,11 +2533,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `listStarmapsJson`(): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `listStarmaps`(): List<StarMapMetaDto> {
+            return FfiConverterSequenceTypeStarMapMetaDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_starmaps_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_starmaps(
         it, _status)
 }
     }
@@ -2829,11 +2831,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `saveMindmapGraphJson`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean {
+    @Throws(WriterException::class)override fun `saveMindmapGraph`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(
         it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`graphJson`),_status)
 }
     }
@@ -2842,11 +2844,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `saveStarmapLayoutJson`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean {
+    @Throws(WriterException::class)override fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_layout_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`layoutJson`),_status)
 }
     }
@@ -2919,11 +2921,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `updateStarmapEmbedJson`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): StarMapEmbedDto {
+            return FfiConverterTypeStarMapEmbedDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_embed_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`instanceId`),FfiConverterString.lower(`patchJson`),_status)
 }
     }
@@ -2932,11 +2934,11 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `updateStarmapLinkJson`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
+    @Throws(WriterException::class)override fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): StarMapLinkDto {
+            return FfiConverterTypeStarMapLinkDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_link_json(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_link(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`linkId`),FfiConverterString.lower(`patchJson`),_status)
 }
     }
@@ -2990,6 +2992,118 @@ public object FfiConverterTypeWriterAppService: FfiConverter<WriterAppService, P
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+data class ActionDescriptorDto (
+    var `id`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `description`: kotlin.String, 
+    var `category`: kotlin.String, 
+    var `kind`: ActionKindDto, 
+    var `riskLevel`: ActionRiskLevelDto, 
+    var `confirmRequired`: kotlin.Boolean, 
+    var `undoable`: kotlin.Boolean, 
+    var `platforms`: List<kotlin.String>, 
+    var `inputSchema`: kotlin.String?, 
+    var `uiSchema`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActionDescriptorDto: FfiConverterRustBuffer<ActionDescriptorDto> {
+    override fun read(buf: ByteBuffer): ActionDescriptorDto {
+        return ActionDescriptorDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeActionKindDto.read(buf),
+            FfiConverterTypeActionRiskLevelDto.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ActionDescriptorDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`description`) +
+            FfiConverterString.allocationSize(value.`category`) +
+            FfiConverterTypeActionKindDto.allocationSize(value.`kind`) +
+            FfiConverterTypeActionRiskLevelDto.allocationSize(value.`riskLevel`) +
+            FfiConverterBoolean.allocationSize(value.`confirmRequired`) +
+            FfiConverterBoolean.allocationSize(value.`undoable`) +
+            FfiConverterSequenceString.allocationSize(value.`platforms`) +
+            FfiConverterOptionalString.allocationSize(value.`inputSchema`) +
+            FfiConverterOptionalString.allocationSize(value.`uiSchema`)
+    )
+
+    override fun write(value: ActionDescriptorDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`description`, buf)
+            FfiConverterString.write(value.`category`, buf)
+            FfiConverterTypeActionKindDto.write(value.`kind`, buf)
+            FfiConverterTypeActionRiskLevelDto.write(value.`riskLevel`, buf)
+            FfiConverterBoolean.write(value.`confirmRequired`, buf)
+            FfiConverterBoolean.write(value.`undoable`, buf)
+            FfiConverterSequenceString.write(value.`platforms`, buf)
+            FfiConverterOptionalString.write(value.`inputSchema`, buf)
+            FfiConverterOptionalString.write(value.`uiSchema`, buf)
+    }
+}
+
+
+
+data class ActionResultDto (
+    var `success`: kotlin.Boolean, 
+    var `message`: kotlin.String?, 
+    var `data`: kotlin.String?, 
+    var `proposedUi`: kotlin.String?, 
+    var `requiresConfirmation`: kotlin.Boolean?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActionResultDto: FfiConverterRustBuffer<ActionResultDto> {
+    override fun read(buf: ByteBuffer): ActionResultDto {
+        return ActionResultDto(
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ActionResultDto) = (
+            FfiConverterBoolean.allocationSize(value.`success`) +
+            FfiConverterOptionalString.allocationSize(value.`message`) +
+            FfiConverterOptionalString.allocationSize(value.`data`) +
+            FfiConverterOptionalString.allocationSize(value.`proposedUi`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`requiresConfirmation`)
+    )
+
+    override fun write(value: ActionResultDto, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`success`, buf)
+            FfiConverterOptionalString.write(value.`message`, buf)
+            FfiConverterOptionalString.write(value.`data`, buf)
+            FfiConverterOptionalString.write(value.`proposedUi`, buf)
+            FfiConverterOptionalBoolean.write(value.`requiresConfirmation`, buf)
     }
 }
 
@@ -3503,6 +3617,658 @@ public object FfiConverterTypeLocalSettingsDto: FfiConverterRustBuffer<LocalSett
 
 
 
+data class MindMapAnchorDto (
+    var `id`: kotlin.String, 
+    var `projectId`: kotlin.String, 
+    var `chapterId`: kotlin.String, 
+    var `startOffset`: kotlin.UInt, 
+    var `endOffset`: kotlin.UInt, 
+    var `selectedText`: kotlin.String, 
+    var `prefixText`: kotlin.String, 
+    var `suffixText`: kotlin.String, 
+    var `checksum`: kotlin.String, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapAnchorDto: FfiConverterRustBuffer<MindMapAnchorDto> {
+    override fun read(buf: ByteBuffer): MindMapAnchorDto {
+        return MindMapAnchorDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapAnchorDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`projectId`) +
+            FfiConverterString.allocationSize(value.`chapterId`) +
+            FfiConverterUInt.allocationSize(value.`startOffset`) +
+            FfiConverterUInt.allocationSize(value.`endOffset`) +
+            FfiConverterString.allocationSize(value.`selectedText`) +
+            FfiConverterString.allocationSize(value.`prefixText`) +
+            FfiConverterString.allocationSize(value.`suffixText`) +
+            FfiConverterString.allocationSize(value.`checksum`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: MindMapAnchorDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`projectId`, buf)
+            FfiConverterString.write(value.`chapterId`, buf)
+            FfiConverterUInt.write(value.`startOffset`, buf)
+            FfiConverterUInt.write(value.`endOffset`, buf)
+            FfiConverterString.write(value.`selectedText`, buf)
+            FfiConverterString.write(value.`prefixText`, buf)
+            FfiConverterString.write(value.`suffixText`, buf)
+            FfiConverterString.write(value.`checksum`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class MindMapBoundsDto (
+    var `minX`: kotlin.Float, 
+    var `minY`: kotlin.Float, 
+    var `maxX`: kotlin.Float, 
+    var `maxY`: kotlin.Float
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapBoundsDto: FfiConverterRustBuffer<MindMapBoundsDto> {
+    override fun read(buf: ByteBuffer): MindMapBoundsDto {
+        return MindMapBoundsDto(
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapBoundsDto) = (
+            FfiConverterFloat.allocationSize(value.`minX`) +
+            FfiConverterFloat.allocationSize(value.`minY`) +
+            FfiConverterFloat.allocationSize(value.`maxX`) +
+            FfiConverterFloat.allocationSize(value.`maxY`)
+    )
+
+    override fun write(value: MindMapBoundsDto, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`minX`, buf)
+            FfiConverterFloat.write(value.`minY`, buf)
+            FfiConverterFloat.write(value.`maxX`, buf)
+            FfiConverterFloat.write(value.`maxY`, buf)
+    }
+}
+
+
+
+data class MindMapGraphDto (
+    var `schemaVersion`: kotlin.UInt, 
+    var `id`: kotlin.String, 
+    var `projectId`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `nodes`: List<MindMapGraphNodeDto>, 
+    var `edges`: List<MindMapGraphEdgeDto>, 
+    var `anchors`: List<MindMapAnchorDto>, 
+    var `links`: List<MindMapLinkDto>, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapGraphDto: FfiConverterRustBuffer<MindMapGraphDto> {
+    override fun read(buf: ByteBuffer): MindMapGraphDto {
+        return MindMapGraphDto(
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeMindMapGraphNodeDto.read(buf),
+            FfiConverterSequenceTypeMindMapGraphEdgeDto.read(buf),
+            FfiConverterSequenceTypeMindMapAnchorDto.read(buf),
+            FfiConverterSequenceTypeMindMapLinkDto.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapGraphDto) = (
+            FfiConverterUInt.allocationSize(value.`schemaVersion`) +
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`projectId`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterSequenceTypeMindMapGraphNodeDto.allocationSize(value.`nodes`) +
+            FfiConverterSequenceTypeMindMapGraphEdgeDto.allocationSize(value.`edges`) +
+            FfiConverterSequenceTypeMindMapAnchorDto.allocationSize(value.`anchors`) +
+            FfiConverterSequenceTypeMindMapLinkDto.allocationSize(value.`links`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: MindMapGraphDto, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`schemaVersion`, buf)
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`projectId`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterSequenceTypeMindMapGraphNodeDto.write(value.`nodes`, buf)
+            FfiConverterSequenceTypeMindMapGraphEdgeDto.write(value.`edges`, buf)
+            FfiConverterSequenceTypeMindMapAnchorDto.write(value.`anchors`, buf)
+            FfiConverterSequenceTypeMindMapLinkDto.write(value.`links`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class MindMapGraphEdgeDto (
+    var `id`: kotlin.String, 
+    var `from`: kotlin.String, 
+    var `to`: kotlin.String, 
+    var `kind`: MindMapEdgeKindDto, 
+    var `label`: kotlin.String?, 
+    var `payload`: kotlin.String?, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapGraphEdgeDto: FfiConverterRustBuffer<MindMapGraphEdgeDto> {
+    override fun read(buf: ByteBuffer): MindMapGraphEdgeDto {
+        return MindMapGraphEdgeDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeMindMapEdgeKindDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapGraphEdgeDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`from`) +
+            FfiConverterString.allocationSize(value.`to`) +
+            FfiConverterTypeMindMapEdgeKindDto.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterOptionalString.allocationSize(value.`payload`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: MindMapGraphEdgeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`from`, buf)
+            FfiConverterString.write(value.`to`, buf)
+            FfiConverterTypeMindMapEdgeKindDto.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterOptionalString.write(value.`payload`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class MindMapGraphMetadataDto (
+    var `id`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapGraphMetadataDto: FfiConverterRustBuffer<MindMapGraphMetadataDto> {
+    override fun read(buf: ByteBuffer): MindMapGraphMetadataDto {
+        return MindMapGraphMetadataDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapGraphMetadataDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: MindMapGraphMetadataDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class MindMapGraphNodeDto (
+    var `id`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `kind`: MindMapNodeKindDto, 
+    var `payload`: kotlin.String?, 
+    var `tags`: List<kotlin.String>, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapGraphNodeDto: FfiConverterRustBuffer<MindMapGraphNodeDto> {
+    override fun read(buf: ByteBuffer): MindMapGraphNodeDto {
+        return MindMapGraphNodeDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeMindMapNodeKindDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapGraphNodeDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterTypeMindMapNodeKindDto.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`payload`) +
+            FfiConverterSequenceString.allocationSize(value.`tags`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: MindMapGraphNodeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterTypeMindMapNodeKindDto.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`payload`, buf)
+            FfiConverterSequenceString.write(value.`tags`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class MindMapGraphsListDto (
+    var `defaultGraphId`: kotlin.String?, 
+    var `graphs`: List<MindMapGraphMetadataDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapGraphsListDto: FfiConverterRustBuffer<MindMapGraphsListDto> {
+    override fun read(buf: ByteBuffer): MindMapGraphsListDto {
+        return MindMapGraphsListDto(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeMindMapGraphMetadataDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapGraphsListDto) = (
+            FfiConverterOptionalString.allocationSize(value.`defaultGraphId`) +
+            FfiConverterSequenceTypeMindMapGraphMetadataDto.allocationSize(value.`graphs`)
+    )
+
+    override fun write(value: MindMapGraphsListDto, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`defaultGraphId`, buf)
+            FfiConverterSequenceTypeMindMapGraphMetadataDto.write(value.`graphs`, buf)
+    }
+}
+
+
+
+data class MindMapLayoutDto (
+    var `kind`: MindMapLayoutKindDto, 
+    var `nodes`: List<MindMapLayoutNodeDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapLayoutDto: FfiConverterRustBuffer<MindMapLayoutDto> {
+    override fun read(buf: ByteBuffer): MindMapLayoutDto {
+        return MindMapLayoutDto(
+            FfiConverterTypeMindMapLayoutKindDto.read(buf),
+            FfiConverterSequenceTypeMindMapLayoutNodeDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapLayoutDto) = (
+            FfiConverterTypeMindMapLayoutKindDto.allocationSize(value.`kind`) +
+            FfiConverterSequenceTypeMindMapLayoutNodeDto.allocationSize(value.`nodes`)
+    )
+
+    override fun write(value: MindMapLayoutDto, buf: ByteBuffer) {
+            FfiConverterTypeMindMapLayoutKindDto.write(value.`kind`, buf)
+            FfiConverterSequenceTypeMindMapLayoutNodeDto.write(value.`nodes`, buf)
+    }
+}
+
+
+
+data class MindMapLayoutNodeDto (
+    var `nodeId`: kotlin.String, 
+    var `x`: kotlin.Float, 
+    var `y`: kotlin.Float, 
+    var `width`: kotlin.Float, 
+    var `height`: kotlin.Float, 
+    var `radius`: kotlin.Float, 
+    var `collapsed`: kotlin.Boolean, 
+    var `zIndex`: kotlin.Int
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapLayoutNodeDto: FfiConverterRustBuffer<MindMapLayoutNodeDto> {
+    override fun read(buf: ByteBuffer): MindMapLayoutNodeDto {
+        return MindMapLayoutNodeDto(
+            FfiConverterString.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapLayoutNodeDto) = (
+            FfiConverterString.allocationSize(value.`nodeId`) +
+            FfiConverterFloat.allocationSize(value.`x`) +
+            FfiConverterFloat.allocationSize(value.`y`) +
+            FfiConverterFloat.allocationSize(value.`width`) +
+            FfiConverterFloat.allocationSize(value.`height`) +
+            FfiConverterFloat.allocationSize(value.`radius`) +
+            FfiConverterBoolean.allocationSize(value.`collapsed`) +
+            FfiConverterInt.allocationSize(value.`zIndex`)
+    )
+
+    override fun write(value: MindMapLayoutNodeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`nodeId`, buf)
+            FfiConverterFloat.write(value.`x`, buf)
+            FfiConverterFloat.write(value.`y`, buf)
+            FfiConverterFloat.write(value.`width`, buf)
+            FfiConverterFloat.write(value.`height`, buf)
+            FfiConverterFloat.write(value.`radius`, buf)
+            FfiConverterBoolean.write(value.`collapsed`, buf)
+            FfiConverterInt.write(value.`zIndex`, buf)
+    }
+}
+
+
+
+data class MindMapLinkDto (
+    var `id`: kotlin.String, 
+    var `nodeId`: kotlin.String, 
+    var `anchorId`: kotlin.String, 
+    var `kind`: kotlin.String, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapLinkDto: FfiConverterRustBuffer<MindMapLinkDto> {
+    override fun read(buf: ByteBuffer): MindMapLinkDto {
+        return MindMapLinkDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapLinkDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`nodeId`) +
+            FfiConverterString.allocationSize(value.`anchorId`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: MindMapLinkDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`nodeId`, buf)
+            FfiConverterString.write(value.`anchorId`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class MindMapSnapshotDto (
+    var `projectId`: kotlin.String, 
+    var `layoutKind`: kotlin.String, 
+    var `nodes`: List<MindMapSnapshotNodeDto>, 
+    var `edges`: List<MindMapSnapshotEdgeDto>, 
+    var `bounds`: MindMapBoundsDto, 
+    var `generatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapSnapshotDto: FfiConverterRustBuffer<MindMapSnapshotDto> {
+    override fun read(buf: ByteBuffer): MindMapSnapshotDto {
+        return MindMapSnapshotDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeMindMapSnapshotNodeDto.read(buf),
+            FfiConverterSequenceTypeMindMapSnapshotEdgeDto.read(buf),
+            FfiConverterTypeMindMapBoundsDto.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapSnapshotDto) = (
+            FfiConverterString.allocationSize(value.`projectId`) +
+            FfiConverterString.allocationSize(value.`layoutKind`) +
+            FfiConverterSequenceTypeMindMapSnapshotNodeDto.allocationSize(value.`nodes`) +
+            FfiConverterSequenceTypeMindMapSnapshotEdgeDto.allocationSize(value.`edges`) +
+            FfiConverterTypeMindMapBoundsDto.allocationSize(value.`bounds`) +
+            FfiConverterULong.allocationSize(value.`generatedAt`)
+    )
+
+    override fun write(value: MindMapSnapshotDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`projectId`, buf)
+            FfiConverterString.write(value.`layoutKind`, buf)
+            FfiConverterSequenceTypeMindMapSnapshotNodeDto.write(value.`nodes`, buf)
+            FfiConverterSequenceTypeMindMapSnapshotEdgeDto.write(value.`edges`, buf)
+            FfiConverterTypeMindMapBoundsDto.write(value.`bounds`, buf)
+            FfiConverterULong.write(value.`generatedAt`, buf)
+    }
+}
+
+
+
+data class MindMapSnapshotEdgeDto (
+    var `id`: kotlin.String, 
+    var `from`: kotlin.String, 
+    var `to`: kotlin.String, 
+    var `kind`: kotlin.String, 
+    var `label`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapSnapshotEdgeDto: FfiConverterRustBuffer<MindMapSnapshotEdgeDto> {
+    override fun read(buf: ByteBuffer): MindMapSnapshotEdgeDto {
+        return MindMapSnapshotEdgeDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapSnapshotEdgeDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`from`) +
+            FfiConverterString.allocationSize(value.`to`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`label`)
+    )
+
+    override fun write(value: MindMapSnapshotEdgeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`from`, buf)
+            FfiConverterString.write(value.`to`, buf)
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+    }
+}
+
+
+
+data class MindMapSnapshotNodeDto (
+    var `id`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `kind`: MindMapNodeKindDto, 
+    var `x`: kotlin.Float, 
+    var `y`: kotlin.Float, 
+    var `width`: kotlin.Float, 
+    var `height`: kotlin.Float, 
+    var `radius`: kotlin.Float, 
+    var `collapsed`: kotlin.Boolean, 
+    var `anchorCount`: kotlin.UInt, 
+    var `brokenLink`: kotlin.Boolean, 
+    var `tags`: List<kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapSnapshotNodeDto: FfiConverterRustBuffer<MindMapSnapshotNodeDto> {
+    override fun read(buf: ByteBuffer): MindMapSnapshotNodeDto {
+        return MindMapSnapshotNodeDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeMindMapNodeKindDto.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MindMapSnapshotNodeDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterTypeMindMapNodeKindDto.allocationSize(value.`kind`) +
+            FfiConverterFloat.allocationSize(value.`x`) +
+            FfiConverterFloat.allocationSize(value.`y`) +
+            FfiConverterFloat.allocationSize(value.`width`) +
+            FfiConverterFloat.allocationSize(value.`height`) +
+            FfiConverterFloat.allocationSize(value.`radius`) +
+            FfiConverterBoolean.allocationSize(value.`collapsed`) +
+            FfiConverterUInt.allocationSize(value.`anchorCount`) +
+            FfiConverterBoolean.allocationSize(value.`brokenLink`) +
+            FfiConverterSequenceString.allocationSize(value.`tags`)
+    )
+
+    override fun write(value: MindMapSnapshotNodeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterTypeMindMapNodeKindDto.write(value.`kind`, buf)
+            FfiConverterFloat.write(value.`x`, buf)
+            FfiConverterFloat.write(value.`y`, buf)
+            FfiConverterFloat.write(value.`width`, buf)
+            FfiConverterFloat.write(value.`height`, buf)
+            FfiConverterFloat.write(value.`radius`, buf)
+            FfiConverterBoolean.write(value.`collapsed`, buf)
+            FfiConverterUInt.write(value.`anchorCount`, buf)
+            FfiConverterBoolean.write(value.`brokenLink`, buf)
+            FfiConverterSequenceString.write(value.`tags`, buf)
+    }
+}
+
+
+
 data class NetworkProbeResultDto (
     var `mode`: kotlin.String, 
     var `success`: kotlin.Boolean, 
@@ -3818,6 +4584,1230 @@ public object FfiConverterTypeSpeedCurveSummaryDto: FfiConverterRustBuffer<Speed
             FfiConverterTypeDateRangeDto.write(value.`range`, buf)
             FfiConverterUInt.write(value.`bucketMinutes`, buf)
             FfiConverterSequenceTypeSpeedCurvePointDto.write(value.`buckets`, buf)
+    }
+}
+
+
+
+data class StarMapAnchorDto (
+    var `anchorId`: kotlin.String, 
+    var `target`: StarMapAnchorTargetDto, 
+    var `label`: kotlin.String?, 
+    var `role`: StarMapAnchorRoleDto
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapAnchorDto: FfiConverterRustBuffer<StarMapAnchorDto> {
+    override fun read(buf: ByteBuffer): StarMapAnchorDto {
+        return StarMapAnchorDto(
+            FfiConverterString.read(buf),
+            FfiConverterTypeStarMapAnchorTargetDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeStarMapAnchorRoleDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapAnchorDto) = (
+            FfiConverterString.allocationSize(value.`anchorId`) +
+            FfiConverterTypeStarMapAnchorTargetDto.allocationSize(value.`target`) +
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterTypeStarMapAnchorRoleDto.allocationSize(value.`role`)
+    )
+
+    override fun write(value: StarMapAnchorDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`anchorId`, buf)
+            FfiConverterTypeStarMapAnchorTargetDto.write(value.`target`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterTypeStarMapAnchorRoleDto.write(value.`role`, buf)
+    }
+}
+
+
+
+data class StarMapAnchorTargetDto (
+    var `kind`: kotlin.String, 
+    var `projectId`: kotlin.String?, 
+    var `volumeId`: kotlin.String?, 
+    var `chapterId`: kotlin.String?, 
+    var `rangeStart`: kotlin.UInt?, 
+    var `rangeEnd`: kotlin.UInt?, 
+    var `entityId`: kotlin.String?, 
+    var `entityType`: kotlin.String?, 
+    var `starmapId`: kotlin.String?, 
+    var `uri`: kotlin.String?, 
+    var `payload`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapAnchorTargetDto: FfiConverterRustBuffer<StarMapAnchorTargetDto> {
+    override fun read(buf: ByteBuffer): StarMapAnchorTargetDto {
+        return StarMapAnchorTargetDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapAnchorTargetDto) = (
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`projectId`) +
+            FfiConverterOptionalString.allocationSize(value.`volumeId`) +
+            FfiConverterOptionalString.allocationSize(value.`chapterId`) +
+            FfiConverterOptionalUInt.allocationSize(value.`rangeStart`) +
+            FfiConverterOptionalUInt.allocationSize(value.`rangeEnd`) +
+            FfiConverterOptionalString.allocationSize(value.`entityId`) +
+            FfiConverterOptionalString.allocationSize(value.`entityType`) +
+            FfiConverterOptionalString.allocationSize(value.`starmapId`) +
+            FfiConverterOptionalString.allocationSize(value.`uri`) +
+            FfiConverterOptionalString.allocationSize(value.`payload`)
+    )
+
+    override fun write(value: StarMapAnchorTargetDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`projectId`, buf)
+            FfiConverterOptionalString.write(value.`volumeId`, buf)
+            FfiConverterOptionalString.write(value.`chapterId`, buf)
+            FfiConverterOptionalUInt.write(value.`rangeStart`, buf)
+            FfiConverterOptionalUInt.write(value.`rangeEnd`, buf)
+            FfiConverterOptionalString.write(value.`entityId`, buf)
+            FfiConverterOptionalString.write(value.`entityType`, buf)
+            FfiConverterOptionalString.write(value.`starmapId`, buf)
+            FfiConverterOptionalString.write(value.`uri`, buf)
+            FfiConverterOptionalString.write(value.`payload`, buf)
+    }
+}
+
+
+
+data class StarMapDeepTargetDto (
+    var `starmapId`: kotlin.String, 
+    var `path`: List<StarMapPathSegmentDto>, 
+    var `target`: StarMapTargetDetailDto
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapDeepTargetDto: FfiConverterRustBuffer<StarMapDeepTargetDto> {
+    override fun read(buf: ByteBuffer): StarMapDeepTargetDto {
+        return StarMapDeepTargetDto(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeStarMapPathSegmentDto.read(buf),
+            FfiConverterTypeStarMapTargetDetailDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapDeepTargetDto) = (
+            FfiConverterString.allocationSize(value.`starmapId`) +
+            FfiConverterSequenceTypeStarMapPathSegmentDto.allocationSize(value.`path`) +
+            FfiConverterTypeStarMapTargetDetailDto.allocationSize(value.`target`)
+    )
+
+    override fun write(value: StarMapDeepTargetDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`starmapId`, buf)
+            FfiConverterSequenceTypeStarMapPathSegmentDto.write(value.`path`, buf)
+            FfiConverterTypeStarMapTargetDetailDto.write(value.`target`, buf)
+    }
+}
+
+
+
+data class StarMapDisplayPolicyDto (
+    var `importance`: kotlin.Float, 
+    var `minVisibleScale`: kotlin.Float, 
+    var `titleScale`: kotlin.Float, 
+    var `summaryScale`: kotlin.Float, 
+    var `detailScale`: kotlin.Float, 
+    var `maxPreviewChars`: kotlin.UInt, 
+    var `minReadablePx`: kotlin.Float
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapDisplayPolicyDto: FfiConverterRustBuffer<StarMapDisplayPolicyDto> {
+    override fun read(buf: ByteBuffer): StarMapDisplayPolicyDto {
+        return StarMapDisplayPolicyDto(
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterFloat.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapDisplayPolicyDto) = (
+            FfiConverterFloat.allocationSize(value.`importance`) +
+            FfiConverterFloat.allocationSize(value.`minVisibleScale`) +
+            FfiConverterFloat.allocationSize(value.`titleScale`) +
+            FfiConverterFloat.allocationSize(value.`summaryScale`) +
+            FfiConverterFloat.allocationSize(value.`detailScale`) +
+            FfiConverterUInt.allocationSize(value.`maxPreviewChars`) +
+            FfiConverterFloat.allocationSize(value.`minReadablePx`)
+    )
+
+    override fun write(value: StarMapDisplayPolicyDto, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`importance`, buf)
+            FfiConverterFloat.write(value.`minVisibleScale`, buf)
+            FfiConverterFloat.write(value.`titleScale`, buf)
+            FfiConverterFloat.write(value.`summaryScale`, buf)
+            FfiConverterFloat.write(value.`detailScale`, buf)
+            FfiConverterUInt.write(value.`maxPreviewChars`, buf)
+            FfiConverterFloat.write(value.`minReadablePx`, buf)
+    }
+}
+
+
+
+data class StarMapEdgeDto (
+    var `id`: kotlin.String, 
+    var `from`: kotlin.String?, 
+    var `to`: kotlin.String?, 
+    var `kind`: StarMapEdgeKindDto, 
+    var `label`: kotlin.String?, 
+    var `payload`: kotlin.String?, 
+    var `fromTarget`: StarMapDeepTargetDto?, 
+    var `toTarget`: StarMapDeepTargetDto?, 
+    var `fromEndpoint`: StarMapEdgeEndpointDto?, 
+    var `toEndpoint`: StarMapEdgeEndpointDto?, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEdgeDto: FfiConverterRustBuffer<StarMapEdgeDto> {
+    override fun read(buf: ByteBuffer): StarMapEdgeDto {
+        return StarMapEdgeDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeStarMapEdgeKindDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalTypeStarMapDeepTargetDto.read(buf),
+            FfiConverterOptionalTypeStarMapDeepTargetDto.read(buf),
+            FfiConverterOptionalTypeStarMapEdgeEndpointDto.read(buf),
+            FfiConverterOptionalTypeStarMapEdgeEndpointDto.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEdgeDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterOptionalString.allocationSize(value.`from`) +
+            FfiConverterOptionalString.allocationSize(value.`to`) +
+            FfiConverterTypeStarMapEdgeKindDto.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterOptionalString.allocationSize(value.`payload`) +
+            FfiConverterOptionalTypeStarMapDeepTargetDto.allocationSize(value.`fromTarget`) +
+            FfiConverterOptionalTypeStarMapDeepTargetDto.allocationSize(value.`toTarget`) +
+            FfiConverterOptionalTypeStarMapEdgeEndpointDto.allocationSize(value.`fromEndpoint`) +
+            FfiConverterOptionalTypeStarMapEdgeEndpointDto.allocationSize(value.`toEndpoint`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: StarMapEdgeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterOptionalString.write(value.`from`, buf)
+            FfiConverterOptionalString.write(value.`to`, buf)
+            FfiConverterTypeStarMapEdgeKindDto.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterOptionalString.write(value.`payload`, buf)
+            FfiConverterOptionalTypeStarMapDeepTargetDto.write(value.`fromTarget`, buf)
+            FfiConverterOptionalTypeStarMapDeepTargetDto.write(value.`toTarget`, buf)
+            FfiConverterOptionalTypeStarMapEdgeEndpointDto.write(value.`fromEndpoint`, buf)
+            FfiConverterOptionalTypeStarMapEdgeEndpointDto.write(value.`toEndpoint`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class StarMapEdgeEndpointDto (
+    var `kind`: kotlin.String, 
+    var `nodeId`: kotlin.String?, 
+    var `anchorId`: kotlin.String?, 
+    var `target`: StarMapDeepTargetDto?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEdgeEndpointDto: FfiConverterRustBuffer<StarMapEdgeEndpointDto> {
+    override fun read(buf: ByteBuffer): StarMapEdgeEndpointDto {
+        return StarMapEdgeEndpointDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalTypeStarMapDeepTargetDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEdgeEndpointDto) = (
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`nodeId`) +
+            FfiConverterOptionalString.allocationSize(value.`anchorId`) +
+            FfiConverterOptionalTypeStarMapDeepTargetDto.allocationSize(value.`target`)
+    )
+
+    override fun write(value: StarMapEdgeEndpointDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`nodeId`, buf)
+            FfiConverterOptionalString.write(value.`anchorId`, buf)
+            FfiConverterOptionalTypeStarMapDeepTargetDto.write(value.`target`, buf)
+    }
+}
+
+
+
+data class StarMapEmbedDto (
+    var `instanceId`: kotlin.String, 
+    var `targetStarmapId`: kotlin.String, 
+    var `label`: kotlin.String?, 
+    var `displayPolicy`: StarMapDisplayPolicyDto, 
+    var `openBehavior`: StarMapOpenBehaviorDto, 
+    var `placement`: StarMapEmbedPlacementDto, 
+    var `targetViewport`: StarMapEmbedViewportDto, 
+    var `sourceNodeId`: kotlin.String?, 
+    var `hostEndpoint`: StarMapEndpointDto?, 
+    var `provenance`: StarMapProvenanceDto, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEmbedDto: FfiConverterRustBuffer<StarMapEmbedDto> {
+    override fun read(buf: ByteBuffer): StarMapEmbedDto {
+        return StarMapEmbedDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeStarMapDisplayPolicyDto.read(buf),
+            FfiConverterTypeStarMapOpenBehaviorDto.read(buf),
+            FfiConverterTypeStarMapEmbedPlacementDto.read(buf),
+            FfiConverterTypeStarMapEmbedViewportDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalTypeStarMapEndpointDto.read(buf),
+            FfiConverterTypeStarMapProvenanceDto.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEmbedDto) = (
+            FfiConverterString.allocationSize(value.`instanceId`) +
+            FfiConverterString.allocationSize(value.`targetStarmapId`) +
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterTypeStarMapDisplayPolicyDto.allocationSize(value.`displayPolicy`) +
+            FfiConverterTypeStarMapOpenBehaviorDto.allocationSize(value.`openBehavior`) +
+            FfiConverterTypeStarMapEmbedPlacementDto.allocationSize(value.`placement`) +
+            FfiConverterTypeStarMapEmbedViewportDto.allocationSize(value.`targetViewport`) +
+            FfiConverterOptionalString.allocationSize(value.`sourceNodeId`) +
+            FfiConverterOptionalTypeStarMapEndpointDto.allocationSize(value.`hostEndpoint`) +
+            FfiConverterTypeStarMapProvenanceDto.allocationSize(value.`provenance`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: StarMapEmbedDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`instanceId`, buf)
+            FfiConverterString.write(value.`targetStarmapId`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterTypeStarMapDisplayPolicyDto.write(value.`displayPolicy`, buf)
+            FfiConverterTypeStarMapOpenBehaviorDto.write(value.`openBehavior`, buf)
+            FfiConverterTypeStarMapEmbedPlacementDto.write(value.`placement`, buf)
+            FfiConverterTypeStarMapEmbedViewportDto.write(value.`targetViewport`, buf)
+            FfiConverterOptionalString.write(value.`sourceNodeId`, buf)
+            FfiConverterOptionalTypeStarMapEndpointDto.write(value.`hostEndpoint`, buf)
+            FfiConverterTypeStarMapProvenanceDto.write(value.`provenance`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class StarMapEmbedPlacementDto (
+    var `x`: kotlin.Float, 
+    var `y`: kotlin.Float, 
+    var `width`: kotlin.Float, 
+    var `height`: kotlin.Float, 
+    var `scale`: kotlin.Float, 
+    var `zIndex`: kotlin.Int, 
+    var `collapsed`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEmbedPlacementDto: FfiConverterRustBuffer<StarMapEmbedPlacementDto> {
+    override fun read(buf: ByteBuffer): StarMapEmbedPlacementDto {
+        return StarMapEmbedPlacementDto(
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEmbedPlacementDto) = (
+            FfiConverterFloat.allocationSize(value.`x`) +
+            FfiConverterFloat.allocationSize(value.`y`) +
+            FfiConverterFloat.allocationSize(value.`width`) +
+            FfiConverterFloat.allocationSize(value.`height`) +
+            FfiConverterFloat.allocationSize(value.`scale`) +
+            FfiConverterInt.allocationSize(value.`zIndex`) +
+            FfiConverterBoolean.allocationSize(value.`collapsed`)
+    )
+
+    override fun write(value: StarMapEmbedPlacementDto, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`x`, buf)
+            FfiConverterFloat.write(value.`y`, buf)
+            FfiConverterFloat.write(value.`width`, buf)
+            FfiConverterFloat.write(value.`height`, buf)
+            FfiConverterFloat.write(value.`scale`, buf)
+            FfiConverterInt.write(value.`zIndex`, buf)
+            FfiConverterBoolean.write(value.`collapsed`, buf)
+    }
+}
+
+
+
+data class StarMapEmbedViewportDto (
+    var `scale`: kotlin.Float, 
+    var `offsetX`: kotlin.Float, 
+    var `offsetY`: kotlin.Float
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEmbedViewportDto: FfiConverterRustBuffer<StarMapEmbedViewportDto> {
+    override fun read(buf: ByteBuffer): StarMapEmbedViewportDto {
+        return StarMapEmbedViewportDto(
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEmbedViewportDto) = (
+            FfiConverterFloat.allocationSize(value.`scale`) +
+            FfiConverterFloat.allocationSize(value.`offsetX`) +
+            FfiConverterFloat.allocationSize(value.`offsetY`)
+    )
+
+    override fun write(value: StarMapEmbedViewportDto, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`scale`, buf)
+            FfiConverterFloat.write(value.`offsetX`, buf)
+            FfiConverterFloat.write(value.`offsetY`, buf)
+    }
+}
+
+
+
+data class StarMapEndpointDto (
+    var `kind`: kotlin.String, 
+    var `nodeId`: kotlin.String?, 
+    var `anchorId`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEndpointDto: FfiConverterRustBuffer<StarMapEndpointDto> {
+    override fun read(buf: ByteBuffer): StarMapEndpointDto {
+        return StarMapEndpointDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEndpointDto) = (
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`nodeId`) +
+            FfiConverterOptionalString.allocationSize(value.`anchorId`)
+    )
+
+    override fun write(value: StarMapEndpointDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`nodeId`, buf)
+            FfiConverterOptionalString.write(value.`anchorId`, buf)
+    }
+}
+
+
+
+data class StarMapGraphDto (
+    var `schemaVersion`: kotlin.UInt, 
+    var `id`: kotlin.String, 
+    var `starmapId`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `nodes`: List<StarMapNodeDto>, 
+    var `edges`: List<StarMapEdgeDto>, 
+    var `embeds`: List<StarMapEmbedDto>, 
+    var `links`: List<StarMapLinkDto>, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapGraphDto: FfiConverterRustBuffer<StarMapGraphDto> {
+    override fun read(buf: ByteBuffer): StarMapGraphDto {
+        return StarMapGraphDto(
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeStarMapNodeDto.read(buf),
+            FfiConverterSequenceTypeStarMapEdgeDto.read(buf),
+            FfiConverterSequenceTypeStarMapEmbedDto.read(buf),
+            FfiConverterSequenceTypeStarMapLinkDto.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapGraphDto) = (
+            FfiConverterUInt.allocationSize(value.`schemaVersion`) +
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`starmapId`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterSequenceTypeStarMapNodeDto.allocationSize(value.`nodes`) +
+            FfiConverterSequenceTypeStarMapEdgeDto.allocationSize(value.`edges`) +
+            FfiConverterSequenceTypeStarMapEmbedDto.allocationSize(value.`embeds`) +
+            FfiConverterSequenceTypeStarMapLinkDto.allocationSize(value.`links`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: StarMapGraphDto, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`schemaVersion`, buf)
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`starmapId`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterSequenceTypeStarMapNodeDto.write(value.`nodes`, buf)
+            FfiConverterSequenceTypeStarMapEdgeDto.write(value.`edges`, buf)
+            FfiConverterSequenceTypeStarMapEmbedDto.write(value.`embeds`, buf)
+            FfiConverterSequenceTypeStarMapLinkDto.write(value.`links`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class StarMapLayoutDto (
+    var `kind`: StarMapLayoutKindDto, 
+    var `nodes`: List<StarMapLayoutNodeDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapLayoutDto: FfiConverterRustBuffer<StarMapLayoutDto> {
+    override fun read(buf: ByteBuffer): StarMapLayoutDto {
+        return StarMapLayoutDto(
+            FfiConverterTypeStarMapLayoutKindDto.read(buf),
+            FfiConverterSequenceTypeStarMapLayoutNodeDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapLayoutDto) = (
+            FfiConverterTypeStarMapLayoutKindDto.allocationSize(value.`kind`) +
+            FfiConverterSequenceTypeStarMapLayoutNodeDto.allocationSize(value.`nodes`)
+    )
+
+    override fun write(value: StarMapLayoutDto, buf: ByteBuffer) {
+            FfiConverterTypeStarMapLayoutKindDto.write(value.`kind`, buf)
+            FfiConverterSequenceTypeStarMapLayoutNodeDto.write(value.`nodes`, buf)
+    }
+}
+
+
+
+data class StarMapLayoutNodeDto (
+    var `nodeId`: kotlin.String, 
+    var `x`: kotlin.Float, 
+    var `y`: kotlin.Float, 
+    var `width`: kotlin.Float, 
+    var `height`: kotlin.Float, 
+    var `radius`: kotlin.Float, 
+    var `collapsed`: kotlin.Boolean, 
+    var `zIndex`: kotlin.Int, 
+    var `scale`: kotlin.Float, 
+    var `depth`: kotlin.Float, 
+    var `focusWeight`: kotlin.Float, 
+    var `orbitGroup`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapLayoutNodeDto: FfiConverterRustBuffer<StarMapLayoutNodeDto> {
+    override fun read(buf: ByteBuffer): StarMapLayoutNodeDto {
+        return StarMapLayoutNodeDto(
+            FfiConverterString.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterInt.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapLayoutNodeDto) = (
+            FfiConverterString.allocationSize(value.`nodeId`) +
+            FfiConverterFloat.allocationSize(value.`x`) +
+            FfiConverterFloat.allocationSize(value.`y`) +
+            FfiConverterFloat.allocationSize(value.`width`) +
+            FfiConverterFloat.allocationSize(value.`height`) +
+            FfiConverterFloat.allocationSize(value.`radius`) +
+            FfiConverterBoolean.allocationSize(value.`collapsed`) +
+            FfiConverterInt.allocationSize(value.`zIndex`) +
+            FfiConverterFloat.allocationSize(value.`scale`) +
+            FfiConverterFloat.allocationSize(value.`depth`) +
+            FfiConverterFloat.allocationSize(value.`focusWeight`) +
+            FfiConverterOptionalString.allocationSize(value.`orbitGroup`)
+    )
+
+    override fun write(value: StarMapLayoutNodeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`nodeId`, buf)
+            FfiConverterFloat.write(value.`x`, buf)
+            FfiConverterFloat.write(value.`y`, buf)
+            FfiConverterFloat.write(value.`width`, buf)
+            FfiConverterFloat.write(value.`height`, buf)
+            FfiConverterFloat.write(value.`radius`, buf)
+            FfiConverterBoolean.write(value.`collapsed`, buf)
+            FfiConverterInt.write(value.`zIndex`, buf)
+            FfiConverterFloat.write(value.`scale`, buf)
+            FfiConverterFloat.write(value.`depth`, buf)
+            FfiConverterFloat.write(value.`focusWeight`, buf)
+            FfiConverterOptionalString.write(value.`orbitGroup`, buf)
+    }
+}
+
+
+
+data class StarMapLinkDto (
+    var `linkId`: kotlin.String, 
+    var `source`: StarMapEndpointDto, 
+    var `target`: StarMapDeepTargetDto, 
+    var `label`: kotlin.String?, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapLinkDto: FfiConverterRustBuffer<StarMapLinkDto> {
+    override fun read(buf: ByteBuffer): StarMapLinkDto {
+        return StarMapLinkDto(
+            FfiConverterString.read(buf),
+            FfiConverterTypeStarMapEndpointDto.read(buf),
+            FfiConverterTypeStarMapDeepTargetDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapLinkDto) = (
+            FfiConverterString.allocationSize(value.`linkId`) +
+            FfiConverterTypeStarMapEndpointDto.allocationSize(value.`source`) +
+            FfiConverterTypeStarMapDeepTargetDto.allocationSize(value.`target`) +
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: StarMapLinkDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`linkId`, buf)
+            FfiConverterTypeStarMapEndpointDto.write(value.`source`, buf)
+            FfiConverterTypeStarMapDeepTargetDto.write(value.`target`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class StarMapMetaDto (
+    var `starmapId`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `description`: kotlin.String, 
+    var `projectId`: kotlin.String?, 
+    var `parentStarmapId`: kotlin.String?, 
+    var `isMainForProject`: kotlin.Boolean, 
+    var `accentColor`: kotlin.String, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong, 
+    var `nodeCount`: kotlin.UInt, 
+    var `edgeCount`: kotlin.UInt, 
+    var `linkedChapterCount`: kotlin.UInt, 
+    var `childStarmapCount`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapMetaDto: FfiConverterRustBuffer<StarMapMetaDto> {
+    override fun read(buf: ByteBuffer): StarMapMetaDto {
+        return StarMapMetaDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapMetaDto) = (
+            FfiConverterString.allocationSize(value.`starmapId`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`description`) +
+            FfiConverterOptionalString.allocationSize(value.`projectId`) +
+            FfiConverterOptionalString.allocationSize(value.`parentStarmapId`) +
+            FfiConverterBoolean.allocationSize(value.`isMainForProject`) +
+            FfiConverterString.allocationSize(value.`accentColor`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`) +
+            FfiConverterUInt.allocationSize(value.`nodeCount`) +
+            FfiConverterUInt.allocationSize(value.`edgeCount`) +
+            FfiConverterUInt.allocationSize(value.`linkedChapterCount`) +
+            FfiConverterUInt.allocationSize(value.`childStarmapCount`)
+    )
+
+    override fun write(value: StarMapMetaDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`starmapId`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterString.write(value.`description`, buf)
+            FfiConverterOptionalString.write(value.`projectId`, buf)
+            FfiConverterOptionalString.write(value.`parentStarmapId`, buf)
+            FfiConverterBoolean.write(value.`isMainForProject`, buf)
+            FfiConverterString.write(value.`accentColor`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+            FfiConverterUInt.write(value.`nodeCount`, buf)
+            FfiConverterUInt.write(value.`edgeCount`, buf)
+            FfiConverterUInt.write(value.`linkedChapterCount`, buf)
+            FfiConverterUInt.write(value.`childStarmapCount`, buf)
+    }
+}
+
+
+
+data class StarMapNodeContentDto (
+    var `kind`: kotlin.String, 
+    var `summary`: kotlin.String?, 
+    var `body`: kotlin.String?, 
+    var `projectId`: kotlin.String?, 
+    var `volumeId`: kotlin.String?, 
+    var `chapterId`: kotlin.String?, 
+    var `rangeStart`: kotlin.UInt?, 
+    var `rangeEnd`: kotlin.UInt?, 
+    var `entityType`: kotlin.String?, 
+    var `entityId`: kotlin.String?, 
+    var `uri`: kotlin.String?, 
+    var `label`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapNodeContentDto: FfiConverterRustBuffer<StarMapNodeContentDto> {
+    override fun read(buf: ByteBuffer): StarMapNodeContentDto {
+        return StarMapNodeContentDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapNodeContentDto) = (
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`summary`) +
+            FfiConverterOptionalString.allocationSize(value.`body`) +
+            FfiConverterOptionalString.allocationSize(value.`projectId`) +
+            FfiConverterOptionalString.allocationSize(value.`volumeId`) +
+            FfiConverterOptionalString.allocationSize(value.`chapterId`) +
+            FfiConverterOptionalUInt.allocationSize(value.`rangeStart`) +
+            FfiConverterOptionalUInt.allocationSize(value.`rangeEnd`) +
+            FfiConverterOptionalString.allocationSize(value.`entityType`) +
+            FfiConverterOptionalString.allocationSize(value.`entityId`) +
+            FfiConverterOptionalString.allocationSize(value.`uri`) +
+            FfiConverterOptionalString.allocationSize(value.`label`)
+    )
+
+    override fun write(value: StarMapNodeContentDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`summary`, buf)
+            FfiConverterOptionalString.write(value.`body`, buf)
+            FfiConverterOptionalString.write(value.`projectId`, buf)
+            FfiConverterOptionalString.write(value.`volumeId`, buf)
+            FfiConverterOptionalString.write(value.`chapterId`, buf)
+            FfiConverterOptionalUInt.write(value.`rangeStart`, buf)
+            FfiConverterOptionalUInt.write(value.`rangeEnd`, buf)
+            FfiConverterOptionalString.write(value.`entityType`, buf)
+            FfiConverterOptionalString.write(value.`entityId`, buf)
+            FfiConverterOptionalString.write(value.`uri`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+    }
+}
+
+
+
+data class StarMapNodeDto (
+    var `id`: kotlin.String, 
+    var `title`: kotlin.String, 
+    var `kind`: StarMapNodeKindDto, 
+    var `payload`: kotlin.String?, 
+    var `tags`: List<kotlin.String>, 
+    var `content`: StarMapNodeContentDto, 
+    var `anchors`: List<StarMapAnchorDto>, 
+    var `portal`: StarMapPortalDto?, 
+    var `displayPolicy`: StarMapDisplayPolicyDto, 
+    var `openBehavior`: StarMapOpenBehaviorDto, 
+    var `provenance`: StarMapProvenanceDto, 
+    var `createdAt`: kotlin.ULong, 
+    var `updatedAt`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapNodeDto: FfiConverterRustBuffer<StarMapNodeDto> {
+    override fun read(buf: ByteBuffer): StarMapNodeDto {
+        return StarMapNodeDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeStarMapNodeKindDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterTypeStarMapNodeContentDto.read(buf),
+            FfiConverterSequenceTypeStarMapAnchorDto.read(buf),
+            FfiConverterOptionalTypeStarMapPortalDto.read(buf),
+            FfiConverterTypeStarMapDisplayPolicyDto.read(buf),
+            FfiConverterTypeStarMapOpenBehaviorDto.read(buf),
+            FfiConverterTypeStarMapProvenanceDto.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapNodeDto) = (
+            FfiConverterString.allocationSize(value.`id`) +
+            FfiConverterString.allocationSize(value.`title`) +
+            FfiConverterTypeStarMapNodeKindDto.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`payload`) +
+            FfiConverterSequenceString.allocationSize(value.`tags`) +
+            FfiConverterTypeStarMapNodeContentDto.allocationSize(value.`content`) +
+            FfiConverterSequenceTypeStarMapAnchorDto.allocationSize(value.`anchors`) +
+            FfiConverterOptionalTypeStarMapPortalDto.allocationSize(value.`portal`) +
+            FfiConverterTypeStarMapDisplayPolicyDto.allocationSize(value.`displayPolicy`) +
+            FfiConverterTypeStarMapOpenBehaviorDto.allocationSize(value.`openBehavior`) +
+            FfiConverterTypeStarMapProvenanceDto.allocationSize(value.`provenance`) +
+            FfiConverterULong.allocationSize(value.`createdAt`) +
+            FfiConverterULong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: StarMapNodeDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`id`, buf)
+            FfiConverterString.write(value.`title`, buf)
+            FfiConverterTypeStarMapNodeKindDto.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`payload`, buf)
+            FfiConverterSequenceString.write(value.`tags`, buf)
+            FfiConverterTypeStarMapNodeContentDto.write(value.`content`, buf)
+            FfiConverterSequenceTypeStarMapAnchorDto.write(value.`anchors`, buf)
+            FfiConverterOptionalTypeStarMapPortalDto.write(value.`portal`, buf)
+            FfiConverterTypeStarMapDisplayPolicyDto.write(value.`displayPolicy`, buf)
+            FfiConverterTypeStarMapOpenBehaviorDto.write(value.`openBehavior`, buf)
+            FfiConverterTypeStarMapProvenanceDto.write(value.`provenance`, buf)
+            FfiConverterULong.write(value.`createdAt`, buf)
+            FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class StarMapPathSegmentDto (
+    var `kind`: kotlin.String, 
+    var `starmapId`: kotlin.String?, 
+    var `nodeId`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapPathSegmentDto: FfiConverterRustBuffer<StarMapPathSegmentDto> {
+    override fun read(buf: ByteBuffer): StarMapPathSegmentDto {
+        return StarMapPathSegmentDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapPathSegmentDto) = (
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`starmapId`) +
+            FfiConverterOptionalString.allocationSize(value.`nodeId`)
+    )
+
+    override fun write(value: StarMapPathSegmentDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`starmapId`, buf)
+            FfiConverterOptionalString.write(value.`nodeId`, buf)
+    }
+}
+
+
+
+data class StarMapPortalDto (
+    var `targetStarmapId`: kotlin.String, 
+    var `deepTarget`: StarMapDeepTargetDto?, 
+    var `mode`: StarMapPortalModeDto, 
+    var `previewPolicy`: StarMapPortalPreviewPolicyDto
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapPortalDto: FfiConverterRustBuffer<StarMapPortalDto> {
+    override fun read(buf: ByteBuffer): StarMapPortalDto {
+        return StarMapPortalDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalTypeStarMapDeepTargetDto.read(buf),
+            FfiConverterTypeStarMapPortalModeDto.read(buf),
+            FfiConverterTypeStarMapPortalPreviewPolicyDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapPortalDto) = (
+            FfiConverterString.allocationSize(value.`targetStarmapId`) +
+            FfiConverterOptionalTypeStarMapDeepTargetDto.allocationSize(value.`deepTarget`) +
+            FfiConverterTypeStarMapPortalModeDto.allocationSize(value.`mode`) +
+            FfiConverterTypeStarMapPortalPreviewPolicyDto.allocationSize(value.`previewPolicy`)
+    )
+
+    override fun write(value: StarMapPortalDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`targetStarmapId`, buf)
+            FfiConverterOptionalTypeStarMapDeepTargetDto.write(value.`deepTarget`, buf)
+            FfiConverterTypeStarMapPortalModeDto.write(value.`mode`, buf)
+            FfiConverterTypeStarMapPortalPreviewPolicyDto.write(value.`previewPolicy`, buf)
+    }
+}
+
+
+
+data class StarMapProvenanceDto (
+    var `source`: StarMapSourceKindDto, 
+    var `sourceId`: kotlin.String?, 
+    var `generatedBy`: kotlin.String?, 
+    var `promptId`: kotlin.String?, 
+    var `reviewStatus`: StarMapReviewStatusDto, 
+    var `createdFromAnchor`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapProvenanceDto: FfiConverterRustBuffer<StarMapProvenanceDto> {
+    override fun read(buf: ByteBuffer): StarMapProvenanceDto {
+        return StarMapProvenanceDto(
+            FfiConverterTypeStarMapSourceKindDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeStarMapReviewStatusDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapProvenanceDto) = (
+            FfiConverterTypeStarMapSourceKindDto.allocationSize(value.`source`) +
+            FfiConverterOptionalString.allocationSize(value.`sourceId`) +
+            FfiConverterOptionalString.allocationSize(value.`generatedBy`) +
+            FfiConverterOptionalString.allocationSize(value.`promptId`) +
+            FfiConverterTypeStarMapReviewStatusDto.allocationSize(value.`reviewStatus`) +
+            FfiConverterOptionalString.allocationSize(value.`createdFromAnchor`)
+    )
+
+    override fun write(value: StarMapProvenanceDto, buf: ByteBuffer) {
+            FfiConverterTypeStarMapSourceKindDto.write(value.`source`, buf)
+            FfiConverterOptionalString.write(value.`sourceId`, buf)
+            FfiConverterOptionalString.write(value.`generatedBy`, buf)
+            FfiConverterOptionalString.write(value.`promptId`, buf)
+            FfiConverterTypeStarMapReviewStatusDto.write(value.`reviewStatus`, buf)
+            FfiConverterOptionalString.write(value.`createdFromAnchor`, buf)
+    }
+}
+
+
+
+data class StarMapReferenceDto (
+    var `hostStarmapId`: kotlin.String, 
+    var `hostTitle`: kotlin.String, 
+    var `refType`: kotlin.String, 
+    var `refId`: kotlin.String, 
+    var `targetStarmapId`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapReferenceDto: FfiConverterRustBuffer<StarMapReferenceDto> {
+    override fun read(buf: ByteBuffer): StarMapReferenceDto {
+        return StarMapReferenceDto(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapReferenceDto) = (
+            FfiConverterString.allocationSize(value.`hostStarmapId`) +
+            FfiConverterString.allocationSize(value.`hostTitle`) +
+            FfiConverterString.allocationSize(value.`refType`) +
+            FfiConverterString.allocationSize(value.`refId`) +
+            FfiConverterString.allocationSize(value.`targetStarmapId`)
+    )
+
+    override fun write(value: StarMapReferenceDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`hostStarmapId`, buf)
+            FfiConverterString.write(value.`hostTitle`, buf)
+            FfiConverterString.write(value.`refType`, buf)
+            FfiConverterString.write(value.`refId`, buf)
+            FfiConverterString.write(value.`targetStarmapId`, buf)
+    }
+}
+
+
+
+data class StarMapTargetDetailDto (
+    var `kind`: kotlin.String, 
+    var `nodeId`: kotlin.String?, 
+    var `anchorId`: kotlin.String?, 
+    var `projectId`: kotlin.String?, 
+    var `volumeId`: kotlin.String?, 
+    var `chapterId`: kotlin.String?, 
+    var `rangeStart`: kotlin.UInt?, 
+    var `rangeEnd`: kotlin.UInt?, 
+    var `entityType`: kotlin.String?, 
+    var `entityId`: kotlin.String?, 
+    var `uri`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapTargetDetailDto: FfiConverterRustBuffer<StarMapTargetDetailDto> {
+    override fun read(buf: ByteBuffer): StarMapTargetDetailDto {
+        return StarMapTargetDetailDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapTargetDetailDto) = (
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`nodeId`) +
+            FfiConverterOptionalString.allocationSize(value.`anchorId`) +
+            FfiConverterOptionalString.allocationSize(value.`projectId`) +
+            FfiConverterOptionalString.allocationSize(value.`volumeId`) +
+            FfiConverterOptionalString.allocationSize(value.`chapterId`) +
+            FfiConverterOptionalUInt.allocationSize(value.`rangeStart`) +
+            FfiConverterOptionalUInt.allocationSize(value.`rangeEnd`) +
+            FfiConverterOptionalString.allocationSize(value.`entityType`) +
+            FfiConverterOptionalString.allocationSize(value.`entityId`) +
+            FfiConverterOptionalString.allocationSize(value.`uri`)
+    )
+
+    override fun write(value: StarMapTargetDetailDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`nodeId`, buf)
+            FfiConverterOptionalString.write(value.`anchorId`, buf)
+            FfiConverterOptionalString.write(value.`projectId`, buf)
+            FfiConverterOptionalString.write(value.`volumeId`, buf)
+            FfiConverterOptionalString.write(value.`chapterId`, buf)
+            FfiConverterOptionalUInt.write(value.`rangeStart`, buf)
+            FfiConverterOptionalUInt.write(value.`rangeEnd`, buf)
+            FfiConverterOptionalString.write(value.`entityType`, buf)
+            FfiConverterOptionalString.write(value.`entityId`, buf)
+            FfiConverterOptionalString.write(value.`uri`, buf)
+    }
+}
+
+
+
+data class StarMapViewportDto (
+    var `scale`: kotlin.Float, 
+    var `offsetX`: kotlin.Float, 
+    var `offsetY`: kotlin.Float, 
+    var `width`: kotlin.Float, 
+    var `height`: kotlin.Float
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapViewportDto: FfiConverterRustBuffer<StarMapViewportDto> {
+    override fun read(buf: ByteBuffer): StarMapViewportDto {
+        return StarMapViewportDto(
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapViewportDto) = (
+            FfiConverterFloat.allocationSize(value.`scale`) +
+            FfiConverterFloat.allocationSize(value.`offsetX`) +
+            FfiConverterFloat.allocationSize(value.`offsetY`) +
+            FfiConverterFloat.allocationSize(value.`width`) +
+            FfiConverterFloat.allocationSize(value.`height`)
+    )
+
+    override fun write(value: StarMapViewportDto, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`scale`, buf)
+            FfiConverterFloat.write(value.`offsetX`, buf)
+            FfiConverterFloat.write(value.`offsetY`, buf)
+            FfiConverterFloat.write(value.`width`, buf)
+            FfiConverterFloat.write(value.`height`, buf)
     }
 }
 
@@ -4444,6 +6434,69 @@ public object FfiConverterTypeWritingStatsSummaryDto: FfiConverterRustBuffer<Wri
 
 
 
+enum class ActionKindDto {
+    
+    QUERY,
+    PREVIEW,
+    MUTATION;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActionKindDto: FfiConverterRustBuffer<ActionKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        ActionKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ActionKindDto) = 4UL
+
+    override fun write(value: ActionKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ActionRiskLevelDto {
+    
+    SAFE_READ,
+    SAFE_WRITE,
+    CONTENT_WRITE,
+    DANGEROUS;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActionRiskLevelDto: FfiConverterRustBuffer<ActionRiskLevelDto> {
+    override fun read(buf: ByteBuffer) = try {
+        ActionRiskLevelDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ActionRiskLevelDto) = 4UL
+
+    override fun write(value: ActionRiskLevelDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class AiActionType {
     
     NAVIGATE,
@@ -4478,6 +6531,125 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
 
 
 
+enum class MindMapEdgeKindDto {
+    
+    CONTAINS,
+    REFERENCES,
+    APPEARS_IN,
+    CAUSES,
+    RELATED_TO,
+    LOCATED_AT,
+    CHARACTER_RELATION,
+    TIMELINE,
+    FORESHADOWS,
+    RESOLVES,
+    DEPENDS_ON,
+    CONFLICTS_WITH,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapEdgeKindDto: FfiConverterRustBuffer<MindMapEdgeKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        MindMapEdgeKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: MindMapEdgeKindDto) = 4UL
+
+    override fun write(value: MindMapEdgeKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class MindMapLayoutKindDto {
+    
+    AUTO_RADIAL,
+    HORIZONTAL_TREE,
+    FREEFORM,
+    TIMELINE,
+    RELATIONSHIP,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapLayoutKindDto: FfiConverterRustBuffer<MindMapLayoutKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        MindMapLayoutKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: MindMapLayoutKindDto) = 4UL
+
+    override fun write(value: MindMapLayoutKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class MindMapNodeKindDto {
+    
+    PROJECT,
+    VOLUME,
+    CHAPTER,
+    TEXT_ANCHOR,
+    CHARACTER,
+    EVENT,
+    LOCATION,
+    ITEM,
+    CONCEPT,
+    THEME,
+    NOTE,
+    ORGANIZATION,
+    TIMELINE,
+    PLOT,
+    FORESHADOWING,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMindMapNodeKindDto: FfiConverterRustBuffer<MindMapNodeKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        MindMapNodeKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: MindMapNodeKindDto) = 4UL
+
+    override fun write(value: MindMapNodeKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class PlatformDto {
     
     LINUX,
@@ -4499,6 +6671,314 @@ public object FfiConverterTypePlatformDto: FfiConverterRustBuffer<PlatformDto> {
     override fun allocationSize(value: PlatformDto) = 4UL
 
     override fun write(value: PlatformDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapAnchorRoleDto {
+    
+    SOURCE,
+    DESTINATION,
+    REFERENCE,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapAnchorRoleDto: FfiConverterRustBuffer<StarMapAnchorRoleDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapAnchorRoleDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapAnchorRoleDto) = 4UL
+
+    override fun write(value: StarMapAnchorRoleDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapEdgeKindDto {
+    
+    CONTAINS,
+    REFERENCES,
+    APPEARS_IN,
+    CAUSES,
+    RELATED_TO,
+    LOCATED_AT,
+    CHARACTER_RELATION,
+    TIMELINE,
+    FORESHADOWS,
+    RESOLVES,
+    DEPENDS_ON,
+    CONFLICTS_WITH,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEdgeKindDto: FfiConverterRustBuffer<StarMapEdgeKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapEdgeKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapEdgeKindDto) = 4UL
+
+    override fun write(value: StarMapEdgeKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapLayoutKindDto {
+    
+    FREEFORM,
+    AUTO_RADIAL,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapLayoutKindDto: FfiConverterRustBuffer<StarMapLayoutKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapLayoutKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapLayoutKindDto) = 4UL
+
+    override fun write(value: StarMapLayoutKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapNodeKindDto {
+    
+    CHARACTER,
+    EVENT,
+    LOCATION,
+    ITEM,
+    CONCEPT,
+    THEME,
+    NOTE,
+    ORGANIZATION,
+    TIMELINE,
+    PLOT,
+    FORESHADOWING,
+    CHAPTER,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapNodeKindDto: FfiConverterRustBuffer<StarMapNodeKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapNodeKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapNodeKindDto) = 4UL
+
+    override fun write(value: StarMapNodeKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapOpenBehaviorDto {
+    
+    INSPECTOR,
+    EXPAND_CARD,
+    WRITING_MODE,
+    JUMP_TO_ANCHOR,
+    ENTER_PORTAL,
+    CUSTOM;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapOpenBehaviorDto: FfiConverterRustBuffer<StarMapOpenBehaviorDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapOpenBehaviorDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapOpenBehaviorDto) = 4UL
+
+    override fun write(value: StarMapOpenBehaviorDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapPortalModeDto {
+    
+    ENTER_CHILD,
+    PREVIEW_INLINE,
+    REFERENCE_ONLY;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapPortalModeDto: FfiConverterRustBuffer<StarMapPortalModeDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapPortalModeDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapPortalModeDto) = 4UL
+
+    override fun write(value: StarMapPortalModeDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapPortalPreviewPolicyDto {
+    
+    AUTO,
+    ALWAYS,
+    NEVER;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapPortalPreviewPolicyDto: FfiConverterRustBuffer<StarMapPortalPreviewPolicyDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapPortalPreviewPolicyDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapPortalPreviewPolicyDto) = 4UL
+
+    override fun write(value: StarMapPortalPreviewPolicyDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapReviewStatusDto {
+    
+    ACCEPTED,
+    DRAFT,
+    NEEDS_REVIEW,
+    REJECTED,
+    UNKNOWN;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapReviewStatusDto: FfiConverterRustBuffer<StarMapReviewStatusDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapReviewStatusDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapReviewStatusDto) = 4UL
+
+    override fun write(value: StarMapReviewStatusDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class StarMapSourceKindDto {
+    
+    HUMAN,
+    IMPORT,
+    PLUGIN,
+    AI,
+    SYSTEM,
+    UNKNOWN;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapSourceKindDto: FfiConverterRustBuffer<StarMapSourceKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        StarMapSourceKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: StarMapSourceKindDto) = 4UL
+
+    override fun write(value: StarMapSourceKindDto, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -4623,6 +7103,38 @@ public object FfiConverterTypeWriterError : FfiConverterRustBuffer<WriterExcepti
 /**
  * @suppress
  */
+public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
+    override fun read(buf: ByteBuffer): kotlin.UInt? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterUInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.UInt?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterUInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.UInt?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterUInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
     override fun read(buf: ByteBuffer): kotlin.Long? {
         if (buf.get().toInt() == 0) {
@@ -4655,6 +7167,38 @@ public object FfiConverterOptionalLong: FfiConverterRustBuffer<kotlin.Long?> {
 /**
  * @suppress
  */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
     override fun read(buf: ByteBuffer): kotlin.String? {
         if (buf.get().toInt() == 0) {
@@ -4677,6 +7221,134 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapDeepTargetDto: FfiConverterRustBuffer<StarMapDeepTargetDto?> {
+    override fun read(buf: ByteBuffer): StarMapDeepTargetDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapDeepTargetDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapDeepTargetDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapDeepTargetDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapDeepTargetDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapDeepTargetDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapEdgeEndpointDto: FfiConverterRustBuffer<StarMapEdgeEndpointDto?> {
+    override fun read(buf: ByteBuffer): StarMapEdgeEndpointDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapEdgeEndpointDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapEdgeEndpointDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapEdgeEndpointDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapEdgeEndpointDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapEdgeEndpointDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapEndpointDto: FfiConverterRustBuffer<StarMapEndpointDto?> {
+    override fun read(buf: ByteBuffer): StarMapEndpointDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapEndpointDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapEndpointDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapEndpointDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapEndpointDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapEndpointDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapPortalDto: FfiConverterRustBuffer<StarMapPortalDto?> {
+    override fun read(buf: ByteBuffer): StarMapPortalDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapPortalDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapPortalDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapPortalDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapPortalDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapPortalDto.write(value, buf)
         }
     }
 }
@@ -4769,6 +7441,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeActionDescriptorDto: FfiConverterRustBuffer<List<ActionDescriptorDto>> {
+    override fun read(buf: ByteBuffer): List<ActionDescriptorDto> {
+        val len = buf.getInt()
+        return List<ActionDescriptorDto>(len) {
+            FfiConverterTypeActionDescriptorDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ActionDescriptorDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeActionDescriptorDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ActionDescriptorDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeActionDescriptorDto.write(it, buf)
         }
     }
 }
@@ -4881,6 +7581,230 @@ public object FfiConverterSequenceTypeDeviceStatsRecordDto: FfiConverterRustBuff
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeDeviceStatsRecordDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapAnchorDto: FfiConverterRustBuffer<List<MindMapAnchorDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapAnchorDto> {
+        val len = buf.getInt()
+        return List<MindMapAnchorDto>(len) {
+            FfiConverterTypeMindMapAnchorDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapAnchorDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapAnchorDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapAnchorDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapAnchorDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapGraphEdgeDto: FfiConverterRustBuffer<List<MindMapGraphEdgeDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapGraphEdgeDto> {
+        val len = buf.getInt()
+        return List<MindMapGraphEdgeDto>(len) {
+            FfiConverterTypeMindMapGraphEdgeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapGraphEdgeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapGraphEdgeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapGraphEdgeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapGraphEdgeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapGraphMetadataDto: FfiConverterRustBuffer<List<MindMapGraphMetadataDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapGraphMetadataDto> {
+        val len = buf.getInt()
+        return List<MindMapGraphMetadataDto>(len) {
+            FfiConverterTypeMindMapGraphMetadataDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapGraphMetadataDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapGraphMetadataDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapGraphMetadataDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapGraphMetadataDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapGraphNodeDto: FfiConverterRustBuffer<List<MindMapGraphNodeDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapGraphNodeDto> {
+        val len = buf.getInt()
+        return List<MindMapGraphNodeDto>(len) {
+            FfiConverterTypeMindMapGraphNodeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapGraphNodeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapGraphNodeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapGraphNodeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapGraphNodeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapLayoutNodeDto: FfiConverterRustBuffer<List<MindMapLayoutNodeDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapLayoutNodeDto> {
+        val len = buf.getInt()
+        return List<MindMapLayoutNodeDto>(len) {
+            FfiConverterTypeMindMapLayoutNodeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapLayoutNodeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapLayoutNodeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapLayoutNodeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapLayoutNodeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapLinkDto: FfiConverterRustBuffer<List<MindMapLinkDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapLinkDto> {
+        val len = buf.getInt()
+        return List<MindMapLinkDto>(len) {
+            FfiConverterTypeMindMapLinkDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapLinkDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapLinkDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapLinkDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapLinkDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapSnapshotEdgeDto: FfiConverterRustBuffer<List<MindMapSnapshotEdgeDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapSnapshotEdgeDto> {
+        val len = buf.getInt()
+        return List<MindMapSnapshotEdgeDto>(len) {
+            FfiConverterTypeMindMapSnapshotEdgeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapSnapshotEdgeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapSnapshotEdgeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapSnapshotEdgeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapSnapshotEdgeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeMindMapSnapshotNodeDto: FfiConverterRustBuffer<List<MindMapSnapshotNodeDto>> {
+    override fun read(buf: ByteBuffer): List<MindMapSnapshotNodeDto> {
+        val len = buf.getInt()
+        return List<MindMapSnapshotNodeDto>(len) {
+            FfiConverterTypeMindMapSnapshotNodeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<MindMapSnapshotNodeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeMindMapSnapshotNodeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<MindMapSnapshotNodeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeMindMapSnapshotNodeDto.write(it, buf)
         }
     }
 }
@@ -5021,6 +7945,258 @@ public object FfiConverterSequenceTypeSpeedCurvePointDto: FfiConverterRustBuffer
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeSpeedCurvePointDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapAnchorDto: FfiConverterRustBuffer<List<StarMapAnchorDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapAnchorDto> {
+        val len = buf.getInt()
+        return List<StarMapAnchorDto>(len) {
+            FfiConverterTypeStarMapAnchorDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapAnchorDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapAnchorDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapAnchorDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapAnchorDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapEdgeDto: FfiConverterRustBuffer<List<StarMapEdgeDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapEdgeDto> {
+        val len = buf.getInt()
+        return List<StarMapEdgeDto>(len) {
+            FfiConverterTypeStarMapEdgeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapEdgeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapEdgeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapEdgeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapEdgeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapEmbedDto: FfiConverterRustBuffer<List<StarMapEmbedDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapEmbedDto> {
+        val len = buf.getInt()
+        return List<StarMapEmbedDto>(len) {
+            FfiConverterTypeStarMapEmbedDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapEmbedDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapEmbedDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapEmbedDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapEmbedDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapLayoutNodeDto: FfiConverterRustBuffer<List<StarMapLayoutNodeDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapLayoutNodeDto> {
+        val len = buf.getInt()
+        return List<StarMapLayoutNodeDto>(len) {
+            FfiConverterTypeStarMapLayoutNodeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapLayoutNodeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapLayoutNodeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapLayoutNodeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapLayoutNodeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapLinkDto: FfiConverterRustBuffer<List<StarMapLinkDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapLinkDto> {
+        val len = buf.getInt()
+        return List<StarMapLinkDto>(len) {
+            FfiConverterTypeStarMapLinkDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapLinkDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapLinkDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapLinkDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapLinkDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapMetaDto: FfiConverterRustBuffer<List<StarMapMetaDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapMetaDto> {
+        val len = buf.getInt()
+        return List<StarMapMetaDto>(len) {
+            FfiConverterTypeStarMapMetaDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapMetaDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapMetaDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapMetaDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapMetaDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapNodeDto: FfiConverterRustBuffer<List<StarMapNodeDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapNodeDto> {
+        val len = buf.getInt()
+        return List<StarMapNodeDto>(len) {
+            FfiConverterTypeStarMapNodeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapNodeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapNodeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapNodeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapNodeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapPathSegmentDto: FfiConverterRustBuffer<List<StarMapPathSegmentDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapPathSegmentDto> {
+        val len = buf.getInt()
+        return List<StarMapPathSegmentDto>(len) {
+            FfiConverterTypeStarMapPathSegmentDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapPathSegmentDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapPathSegmentDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapPathSegmentDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapPathSegmentDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapReferenceDto: FfiConverterRustBuffer<List<StarMapReferenceDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapReferenceDto> {
+        val len = buf.getInt()
+        return List<StarMapReferenceDto>(len) {
+            FfiConverterTypeStarMapReferenceDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapReferenceDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapReferenceDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapReferenceDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapReferenceDto.write(it, buf)
         }
     }
 }

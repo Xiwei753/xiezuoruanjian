@@ -89,7 +89,7 @@ impl AppBackend {
         };
 
         if let Some(api) = self.core_api() {
-            WriterCoreApi::envelope_json(api.update_mind_map_node(&pid, &gid, &nid, writer_core::api::types::MindMapNodePatchDto { title: patch.title, kind: patch.kind, payload: patch.payload.map(Some), tags: patch.tags })).into()
+            WriterCoreApi::envelope_json(api.update_mind_map_node(&pid, &gid, &nid, writer_core::api::types::MindMapNodePatchDto { title: patch.title, kind: patch.kind, payload: patch.payload.map(|v| Some(serde_json::to_string(&v).unwrap_or_default())), tags: patch.tags })).into()
         } else {
             envelope_not_initialized()
         }
@@ -143,7 +143,7 @@ impl AppBackend {
         };
 
         if let Some(api) = self.core_api() {
-            WriterCoreApi::envelope_json(api.update_mind_map_edge(&pid, &gid, &eid, writer_core::api::types::MindMapEdgePatchDto { kind: patch.kind, label: patch.label.map(Some), payload: patch.payload.map(Some) })).into()
+            WriterCoreApi::envelope_json(api.update_mind_map_edge(&pid, &gid, &eid, writer_core::api::types::MindMapEdgePatchDto { kind: patch.kind, label: patch.label.map(|v| Some(serde_json::to_string(&v).unwrap_or_default())), payload: patch.payload.map(|v| Some(serde_json::to_string(&v).unwrap_or_default())) })).into()
         } else {
             envelope_not_initialized()
         }

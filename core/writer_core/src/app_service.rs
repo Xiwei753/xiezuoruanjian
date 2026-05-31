@@ -4,6 +4,7 @@ use crate::api::{
     SyncResultDto, SyncSecretsDto, SyncStateDto, SyncableSettingsDto, VolumeDto, WriterCoreApi,
     WriterError,
 };
+use serde_json;
 
 /// Thin UniFFI adapter. Stable Core API behavior lives in `api::WriterCoreApi`.
 pub struct WriterAppService {
@@ -363,116 +364,77 @@ impl WriterAppService {
         self.api.flush_writing_stats()
     }
 
-    pub fn get_mindmap_snapshot_json(&self, project_id: String) -> Result<String, WriterError> {
-        self.api.get_mindmap_snapshot_json(&project_id)
+    // MindMap
+    pub fn get_mindmap_snapshot(&self, project_id: String) -> Result<crate::api::types::MindMapSnapshotDto, WriterError> {
+        self.api.get_mind_map_snapshot(&project_id)
     }
 
-    pub fn save_mindmap_graph_json(
-        &self,
-        project_id: String,
-        graph_json: String,
-    ) -> Result<bool, WriterError> {
+    pub fn save_mindmap_graph(&self, project_id: String, graph_json: String) -> Result<bool, WriterError> {
         self.api.save_mindmap_graph_json(&project_id, &graph_json)
     }
 
-    pub fn list_starmaps_json(&self) -> Result<String, WriterError> {
-        self.api.list_starmaps_json()
+    // StarMap
+    pub fn list_starmaps(&self) -> Result<Vec<crate::api::types::StarMapMetaDto>, WriterError> {
+        self.api.list_starmaps()
     }
 
-    pub fn create_starmap_json(&self, title: String, desc: String) -> Result<String, WriterError> {
-        self.api.create_starmap_json(&title, &desc)
+    pub fn create_starmap(&self, title: String, desc: String) -> Result<crate::api::types::StarMapMetaDto, WriterError> {
+        self.api.create_starmap(&title, &desc, None)
     }
 
-    pub fn get_starmap_graph_json(&self, starmap_id: String) -> Result<String, WriterError> {
-        self.api.get_starmap_graph_json(&starmap_id)
+    pub fn get_starmap_graph(&self, starmap_id: String) -> Result<crate::api::types::StarMapGraphDto, WriterError> {
+        self.api.get_starmap_graph(&starmap_id)
     }
 
-    pub fn add_starmap_node_json(
-        &self,
-        starmap_id: String,
-        node_json: String,
-    ) -> Result<String, WriterError> {
-        self.api.add_starmap_node_json(&starmap_id, &node_json)
+    pub fn add_starmap_node(&self, starmap_id: String, node_json: String, x: f32, y: f32) -> Result<crate::api::types::StarMapNodeDto, WriterError> {
+        let node: crate::api::types::StarMapNodeDto = serde_json::from_str(&node_json).map_err(|e| WriterError::Json(e.to_string()))?;
+        self.api.add_starmap_node(&starmap_id, node, x, y)
     }
 
-    pub fn save_starmap_layout_json(
-        &self,
-        starmap_id: String,
-        layout_json: String,
-    ) -> Result<bool, WriterError> {
-        self.api.save_starmap_layout_json(&starmap_id, &layout_json)
+    pub fn save_starmap_layout(&self, starmap_id: String, layout_json: String) -> Result<bool, WriterError> {
+        let layout: crate::api::types::StarMapLayoutDto = serde_json::from_str(&layout_json).map_err(|e| WriterError::Json(e.to_string()))?;
+        self.api.save_starmap_layout(&starmap_id, &layout)
     }
 
-    pub fn add_starmap_embed_json(
-        &self,
-        starmap_id: String,
-        embed_json: String,
-    ) -> Result<String, WriterError> {
-        self.api.add_starmap_embed_json(&starmap_id, &embed_json)
+    pub fn add_starmap_embed(&self, starmap_id: String, embed_json: String) -> Result<crate::api::types::StarMapEmbedDto, WriterError> {
+        let embed: crate::api::types::StarMapEmbedDto = serde_json::from_str(&embed_json).map_err(|e| WriterError::Json(e.to_string()))?;
+        self.api.add_starmap_embed(&starmap_id, embed)
     }
 
-    pub fn update_starmap_embed_json(
-        &self,
-        starmap_id: String,
-        instance_id: String,
-        patch_json: String,
-    ) -> Result<String, WriterError> {
-        self.api
-            .update_starmap_embed_json(&starmap_id, &instance_id, &patch_json)
+    pub fn update_starmap_embed(&self, starmap_id: String, instance_id: String, patch_json: String) -> Result<crate::api::types::StarMapEmbedDto, WriterError> {
+        let patch: crate::api::types::StarMapEmbedPatchDto = serde_json::from_str(&patch_json).map_err(|e| WriterError::Json(e.to_string()))?;
+        self.api.update_starmap_embed(&starmap_id, &instance_id, patch)
     }
 
-    pub fn delete_starmap_embed(
-        &self,
-        starmap_id: String,
-        instance_id: String,
-    ) -> Result<bool, WriterError> {
+    pub fn delete_starmap_embed(&self, starmap_id: String, instance_id: String) -> Result<bool, WriterError> {
         self.api.delete_starmap_embed(&starmap_id, &instance_id)
     }
 
-    pub fn add_starmap_link_json(
-        &self,
-        starmap_id: String,
-        link_json: String,
-    ) -> Result<String, WriterError> {
-        self.api.add_starmap_link_json(&starmap_id, &link_json)
+    pub fn add_starmap_link(&self, starmap_id: String, link_json: String) -> Result<crate::api::types::StarMapLinkDto, WriterError> {
+        let link: crate::api::types::StarMapLinkDto = serde_json::from_str(&link_json).map_err(|e| WriterError::Json(e.to_string()))?;
+        self.api.add_starmap_link(&starmap_id, link)
     }
 
-    pub fn update_starmap_link_json(
-        &self,
-        starmap_id: String,
-        link_id: String,
-        patch_json: String,
-    ) -> Result<String, WriterError> {
-        self.api
-            .update_starmap_link_json(&starmap_id, &link_id, &patch_json)
+    pub fn update_starmap_link(&self, starmap_id: String, link_id: String, patch_json: String) -> Result<crate::api::types::StarMapLinkDto, WriterError> {
+        let patch: crate::api::types::StarMapLinkPatchDto = serde_json::from_str(&patch_json).map_err(|e| WriterError::Json(e.to_string()))?;
+        self.api.update_starmap_link(&starmap_id, &link_id, patch)
     }
 
-    pub fn delete_starmap_link(
-        &self,
-        starmap_id: String,
-        link_id: String,
-    ) -> Result<bool, WriterError> {
+    pub fn delete_starmap_link(&self, starmap_id: String, link_id: String) -> Result<bool, WriterError> {
         self.api.delete_starmap_link(&starmap_id, &link_id)
     }
 
-    pub fn find_starmap_references_json(
-        &self,
-        target_starmap_id: String,
-    ) -> Result<String, WriterError> {
-        self.api.find_starmap_references_json(&target_starmap_id)
+    pub fn find_starmap_references(&self, target_starmap_id: String) -> Result<Vec<crate::api::types::StarMapReferenceDto>, WriterError> {
+        self.api.find_starmap_references(&target_starmap_id)
     }
 
-    pub fn list_registered_actions_json(&self) -> String {
-        self.api.list_registered_actions_json()
+    // Actions
+    pub fn list_registered_actions(&self) -> Result<Vec<crate::api::types::ActionDescriptorDto>, WriterError> {
+        self.api.list_registered_actions()
     }
 
-    pub fn execute_action_json(
-        &self,
-        action_id: String,
-        args_json: String,
-        context_json: String,
-    ) -> String {
-        self.api.execute_action_json(&action_id, &args_json, &context_json)
+    pub fn execute_action(&self, action_id: String, args_json: String, context_json: String) -> Result<crate::api::types::ActionResultDto, WriterError> {
+        self.api.execute_action_ext(&action_id, &args_json, &context_json)
     }
 
     pub fn ai_available(&self) -> bool {

@@ -90,9 +90,7 @@ impl AppBackend {
                     
                     self.debug_log("chapter", "open_chapter_success", "len_loaded");
                     
-                    let mut obj = serde_to_qjson_object(serde_json::to_value(data).unwrap_or_default());
-                    obj.insert("success", serde_value_to_qjson(serde_json::Value::Bool(true)));
-                    return obj;
+                    return bridge_success_object(serde_json::to_value(data).unwrap_or_default());
                 }
                 Err(e) => {
                     self.debug_error("chapter", "open_chapter_failed", &e.to_string());
