@@ -472,18 +472,16 @@ Rectangle {
                     anchors.topMargin: dt ? dt.sp32 : 32
                     anchors.bottomMargin: dt ? dt.sp32 : 32
 
-                    // Paper background - centered, responsive max width
+                    // Paper background - adapts to available space with left/right anchors, leaving a small side gap
                     Rectangle {
                         id: paperBg
-                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.left: parent.left
+                        anchors.right: parent.right
                         height: parent.height
                         color: dt ? dt.editorBg : "#191C21"
                         radius: dt ? dt.radiusMd : 12
                         border.color: dt ? dt.border : "#2A2E36"
                         border.width: 1
-                        
-                        // Responsive width capped at max 820px, and clamped within available parent width
-                        width: Math.min(parent.width, 820)
                     }
                     
                     ScrollView {
@@ -527,6 +525,7 @@ Rectangle {
                             implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
 
                             cursorVisible: false
+                            cursorDelegate: Component { Item {} }
 
                             text: ""
 
