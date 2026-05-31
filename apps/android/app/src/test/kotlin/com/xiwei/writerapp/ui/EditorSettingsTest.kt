@@ -130,17 +130,25 @@ class EditorSettingsTest {
     }
 
     @Test
-    fun testSettingsChangeBusBehavior() {
-        com.xiwei.writerapp.data.SettingsChangeBus.consumeChanged()
-        com.xiwei.writerapp.data.SettingsChangeBus.consumeEditorChanged()
+    fun testCoreSettingsEventsBehavior() {
+        com.xiwei.writerapp.data.CoreSettingsEvents.consumeChanged()
+        com.xiwei.writerapp.data.CoreSettingsEvents.consumeEditorChanged()
 
-        com.xiwei.writerapp.data.SettingsChangeBus.markChanged()
+        com.xiwei.writerapp.data.CoreSettingsEvents.record(
+            com.xiwei.writerapp.data.ResultEnvelope(
+                success = true,
+                data = true,
+                changedEntities = listOf(
+                    com.xiwei.writerapp.data.ChangedEntity(entityType = "SettingsSaved")
+                )
+            )
+        )
 
-        assertTrue(com.xiwei.writerapp.data.SettingsChangeBus.consumeChanged())
-        assertTrue(com.xiwei.writerapp.data.SettingsChangeBus.consumeEditorChanged())
+        assertTrue(com.xiwei.writerapp.data.CoreSettingsEvents.consumeChanged())
+        assertTrue(com.xiwei.writerapp.data.CoreSettingsEvents.consumeEditorChanged())
 
-        assertFalse(com.xiwei.writerapp.data.SettingsChangeBus.consumeChanged())
-        assertFalse(com.xiwei.writerapp.data.SettingsChangeBus.consumeEditorChanged())
+        assertFalse(com.xiwei.writerapp.data.CoreSettingsEvents.consumeChanged())
+        assertFalse(com.xiwei.writerapp.data.CoreSettingsEvents.consumeEditorChanged())
     }
 
     @Test

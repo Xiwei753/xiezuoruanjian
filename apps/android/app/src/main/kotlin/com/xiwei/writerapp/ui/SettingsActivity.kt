@@ -13,7 +13,7 @@ import com.google.android.material.materialswitch.MaterialSwitch
 import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.BridgeResult
 import com.xiwei.writerapp.data.SettingsRepository
-import com.xiwei.writerapp.data.SettingsChangeBus
+import com.xiwei.writerapp.data.CoreSettingsEvents
 import com.xiwei.writerapp.model.BridgeError
 import com.xiwei.writerapp.model.LocalSettings
 import android.widget.Toast
@@ -712,7 +712,7 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (SettingsChangeBus.consumeChanged()) {
+        if (CoreSettingsEvents.consumeChanged()) {
             reloadSettings()
         }
     }
@@ -836,8 +836,6 @@ class SettingsActivity : AppCompatActivity() {
                 else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
             }
         }
-
-        SettingsChangeBus.markChanged()
 
         if (finishActivity) { finish() }
     }

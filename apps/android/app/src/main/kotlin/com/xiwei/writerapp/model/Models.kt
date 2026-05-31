@@ -41,7 +41,9 @@ data class LocalSettings(
     val editorTypingAnimationDurationMs: Int = 100,
     val editorSmoothCursorDurationMs: Int = 80,
     val aiEnabled: Boolean = false,
-    val statsDeviceId: String? = null
+    val statsDeviceId: String? = null,
+    val linuxSidebarWidth: Double = 240.0,
+    val linuxEditorWidth: Double = 0.0
 )
 
 data class SyncableSettings(

@@ -19,6 +19,19 @@
 use super::*;
 use crate::backend::SafeAppPtr;
 
+fn backend_link_broken_json() -> QString {
+    WriterCoreApi::envelope_json::<String>(Err(writer_core::api::WriterError::Other(
+        "底层链接断开，请重启应用".to_string(),
+    )))
+    .into()
+}
+
+fn workspace_success_json(data: &str) -> QString {
+    writer_core::api::ResultEnvelope::success(data.to_string())
+        .to_json_string()
+        .into()
+}
+
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
 pub struct WorkspaceBackend {
@@ -70,11 +83,7 @@ impl WorkspaceBackend {
     fn try_restore_last_workspace(&mut self) { self.with_app_mut((), |app| app.try_restore_last_workspace()); self.emit_workspace_changed(); }
     fn create_new_workspace(&mut self) -> QString { 
         let res = self.with_app_mut(
-            serde_json::to_string(&serde_json::json!({
-                "success": false,
-                "errorCode": "BACKEND_LINK_BROKEN",
-                "userMessage": "底层链接断开，请重启应用"
-            })).unwrap().into(),
+            backend_link_broken_json(),
             |app| app.create_new_workspace()
         );
         self.emit_workspace_changed(); 
@@ -82,11 +91,7 @@ impl WorkspaceBackend {
     }
     fn open_existing_workspace(&mut self) -> QString { 
         let res = self.with_app_mut(
-            serde_json::to_string(&serde_json::json!({
-                "success": false,
-                "errorCode": "BACKEND_LINK_BROKEN",
-                "userMessage": "底层链接断开，请重启应用"
-            })).unwrap().into(),
+            backend_link_broken_json(),
             |app| app.open_existing_workspace()
         );
         self.emit_workspace_changed(); 
@@ -97,11 +102,7 @@ impl WorkspaceBackend {
         crate::backend::app_backend::debug_log_static("workspace", "qml_click_create_workspace", &format!("path={}", path_str));
         crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_create_workspace_called", &format!("path={}", path_str));
         let res = self.with_app_mut(
-            serde_json::to_string(&serde_json::json!({
-                "success": false,
-                "errorCode": "BACKEND_LINK_BROKEN",
-                "userMessage": "底层链接断开，请重启应用"
-            })).unwrap().into(),
+            backend_link_broken_json(),
             |app| app.internal_open_workspace(&path_str, true)
         );
         let has = self.has_workspace();
@@ -115,11 +116,7 @@ impl WorkspaceBackend {
         crate::backend::app_backend::debug_log_static("workspace", "qml_click_open_workspace", &format!("path={}", path_str));
         crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_open_workspace_called", &format!("path={}", path_str));
         let res = self.with_app_mut(
-            serde_json::to_string(&serde_json::json!({
-                "success": false,
-                "errorCode": "BACKEND_LINK_BROKEN",
-                "userMessage": "底层链接断开，请重启应用"
-            })).unwrap().into(),
+            backend_link_broken_json(),
             |app| app.internal_open_workspace(&path_str, false)
         );
         let has = self.has_workspace();
@@ -265,18 +262,6 @@ impl AppBackend {
 // AppBackend::internal_open_workspace
     pub(crate) fn internal_open_workspace(&mut self, path: &str, initialize: bool) -> QString {
         self.debug_log("workspace", "internal_open_workspace_start", &format!("path={}, initialize={}", path, initialize));
-        let path_obj = std::path::Path::new(path);
-        if !path_obj.exists() || !path_obj.is_dir() {
-            let err_msg = format!("路径不存在或不是目录: {}", path);
-            self.set_error(&err_msg);
-            self.debug_error("workspace", "internal_open_workspace_failed", &err_msg);
-            return serde_json::to_string(&serde_json::json!({
-                "success": false,
-                "errorCode": "WORKSPACE_PATH_NOT_FOUND",
-                "userMessage": err_msg
-            })).unwrap().into();
-        }
-
         let api = WriterCoreApi::new(path);
         let is_valid = api.validate_workspace().unwrap_or(false);
         self.debug_log("workspace", "internal_open_workspace_validate", &format!("path={}, is_valid={}", path, is_valid));
@@ -285,11 +270,7 @@ impl AppBackend {
             let err_msg = "不是有效工作区。请选择其他目录，或使用「新建工作区」初始化该目录。";
             self.set_error(err_msg);
             self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
-            return serde_json::to_string(&serde_json::json!({
-                "success": false,
-                "errorCode": "WORKSPACE_INVALID",
-                "userMessage": err_msg
-            })).unwrap().into();
+            return WriterCoreApi::envelope_json::<String>(Err(writer_core::api::WriterError::InvalidWorkspace)).into();
         }
 
         if !is_valid && initialize {
@@ -298,11 +279,7 @@ impl AppBackend {
                 let err_msg = format!("无法创建工作区: {}", e);
                 self.set_error(&err_msg);
                 self.debug_error("workspace", "internal_open_workspace_failed", &err_msg);
-                return serde_json::to_string(&serde_json::json!({
-                    "success": false,
-                    "errorCode": "WORKSPACE_CREATE_FAILED",
-                    "userMessage": err_msg
-                })).unwrap().into();
+                return WriterCoreApi::envelope_json::<String>(Err(e)).into();
             }
         }
 
@@ -312,11 +289,7 @@ impl AppBackend {
             let err_msg = "工作区验证失败";
             self.set_error(err_msg);
             self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
-            return serde_json::to_string(&serde_json::json!({
-                "success": false,
-                "errorCode": "WORKSPACE_VALIDATE_FAILED",
-                "userMessage": err_msg
-            })).unwrap().into();
+            return WriterCoreApi::envelope_json::<String>(Err(writer_core::api::WriterError::InvalidWorkspace)).into();
         }
 
         self.current_workspace = path.to_string();
@@ -333,10 +306,7 @@ impl AppBackend {
         let _ = writer_core::app_config::set_last_workspace_path(path);
         self.debug_log("workspace", "internal_open_workspace_success", &format!("path={}", path));
 
-        serde_json::to_string(&serde_json::json!({
-            "success": true,
-            "data": "OK"
-        })).unwrap().into()
+        workspace_success_json("OK")
     }
 
 // AppBackend::create_new_workspace
@@ -346,10 +316,7 @@ impl AppBackend {
             self.internal_open_workspace(&path.to_string_lossy(), true)
         } else {
             self.debug_log("workspace", "create_new_workspace_cancelled", "");
-            serde_json::to_string(&serde_json::json!({
-                "success": true,
-                "data": "CANCELLED"
-            })).unwrap().into()
+            workspace_success_json("CANCELLED")
         }
     }
 
@@ -360,10 +327,7 @@ impl AppBackend {
             self.internal_open_workspace(&path.to_string_lossy(), false)
         } else {
             self.debug_log("workspace", "open_existing_workspace_cancelled", "");
-            serde_json::to_string(&serde_json::json!({
-                "success": true,
-                "data": "CANCELLED"
-            })).unwrap().into()
+            workspace_success_json("CANCELLED")
         }
     }
 

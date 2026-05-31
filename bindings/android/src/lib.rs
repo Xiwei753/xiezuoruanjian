@@ -31,7 +31,7 @@ use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jstring};
 use jni::JNIEnv;
 use serde::Serialize;
-use writer_core::api::WriterCoreApi;
+use writer_core::api::{ResultEnvelope, WriterCoreApi};
 
 fn api_from_workspace(workspace_path: &str) -> WriterCoreApi {
     WriterCoreApi::new(workspace_path)
@@ -52,44 +52,18 @@ fn jstring_to_string(env: &mut JNIEnv, jstr: &JString) -> Result<String, String>
 
 /// 将 Core 层 Result 转换为 JSON 字符串返回给 Kotlin。
 ///
-/// 成功时返回 `{ "success": true, "data": ... }`
-/// 失败时返回 `{ "success": false, "code": "...", "error": "..." }`
+/// 成功/失败均返回标准 ResultEnvelope JSON。
 fn result_to_jstring<T: Serialize>(
     env: &mut JNIEnv,
     result: Result<T, writer_core::api::error::WriterError>,
 ) -> jstring {
-    let json_str = match result {
-        Ok(data) => {
-            let bridge_result = writer_core::error::BridgeResult {
-                success: true,
-                data: Some(data),
-                code: None,
-                error: None,
-            };
-            serde_json::to_string(&bridge_result).unwrap_or_else(|e| {
-                format!(
-                    r#"{{"success":false,"code":"JSON_ERROR","error":"Failed to serialize bridge result: {}"}}"#,
-                    e
-                )
-            })
-        }
-        Err(e) => {
-            let bridge_result = writer_core::error::BridgeResult::<()> {
-                success: false,
-                data: None,
-                code: Some(e.code().to_string()),
-                error: Some(e.to_string()),
-            };
-            serde_json::to_string(&bridge_result).unwrap_or_else(|err| {
-                format!(
-                    r#"{{"success":false,"code":"JSON_ERROR","error":"Failed to serialize bridge result: {}"}}"#,
-                    err
-                )
-            })
-        }
-    };
+    let json_str = ResultEnvelope::from_api_result(result).to_json_string();
 
-    match env.new_string(json_str) {
+    string_to_jstring(env, json_str)
+}
+
+fn string_to_jstring(env: &mut JNIEnv, value: String) -> jstring {
+    match env.new_string(value) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
@@ -541,7 +515,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveLocalS
     };
 
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.save_local_settings(settings))
+    string_to_jstring(&mut env, api.save_local_settings_envelope_json(settings))
 }
 
 // Load Syncable Settings
@@ -583,7 +557,7 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveSyncab
     };
 
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.save_syncable_settings(settings))
+    string_to_jstring(&mut env, api.save_syncable_settings_envelope_json(settings))
 }
 
 // --- Sync Service JNI ---

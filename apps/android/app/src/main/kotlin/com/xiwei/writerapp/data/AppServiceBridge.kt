@@ -1,6 +1,8 @@
 package com.xiwei.writerapp.data
 
 import android.util.Log
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.xiwei.writerapp.model.BackendType
 import com.xiwei.writerapp.model.BridgeError
 import com.xiwei.writerapp.model.BridgeErrorCode
@@ -44,6 +46,7 @@ import uniffi.writer_core.WriterException
 
 class AppServiceBridge(workspacePath: String) {
     private val service: WriterAppService = WriterAppService(workspacePath)
+    private val gson = Gson()
 
     companion object {
         private const val TAG = "AppServiceBridge"
@@ -58,6 +61,40 @@ class AppServiceBridge(workspacePath: String) {
         } catch (e: Exception) {
             Log.e(TAG, "Exception: ${e.message}", e)
             BridgeResult.Error(BridgeError(BridgeErrorCode.Unknown, e.message ?: "Unknown error"))
+        }
+    }
+
+    private inline fun <reified T> envelopeJsonResult(envelopeJson: String): BridgeResult<T> {
+        return try {
+            val type = object : TypeToken<ResultEnvelope<T>>() {}.type
+            val envelope = gson.fromJson<ResultEnvelope<T>>(envelopeJson, type)
+            if (envelope.success) {
+                val data = envelope.data ?: return BridgeResult.Error(
+                    BridgeError(BridgeErrorCode.JsonError, "ResultEnvelope 缺少 data")
+                )
+                BridgeResult.Success(data, envelope)
+            } else {
+                BridgeResult.Error(
+                    BridgeError(
+                        BridgeErrorCode.fromWire(envelope.errorCode),
+                        envelope.userMessage ?: "操作失败"
+                    ),
+                    ResultEnvelope(
+                        success = false,
+                        errorCode = envelope.errorCode,
+                        userMessage = envelope.userMessage,
+                        rawError = envelope.rawError,
+                        warnings = envelope.warnings,
+                        changedPaths = envelope.changedPaths,
+                        changedEntities = envelope.changedEntities
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "ResultEnvelope parse failed: ${e.message}", e)
+            BridgeResult.Error(
+                BridgeError(BridgeErrorCode.JsonError, e.message ?: "ResultEnvelope 解析失败")
+            )
         }
     }
 
@@ -163,17 +200,15 @@ class AppServiceBridge(workspacePath: String) {
         service.loadLocalSettings().toModel()
     }
 
-    fun saveLocalSettings(settings: LocalSettings): BridgeResult<Boolean> = wrapResult {
-        service.saveLocalSettings(settings.toDto())
-    }
+    fun saveLocalSettings(settings: LocalSettings): BridgeResult<Boolean> =
+        envelopeJsonResult(service.saveLocalSettingsEnvelopeJson(settings.toDto()))
 
     fun loadSyncableSettings(): BridgeResult<SyncableSettings> = wrapResult {
         service.loadSyncableSettings().toModel()
     }
 
-    fun saveSyncableSettings(settings: SyncableSettings): BridgeResult<Boolean> = wrapResult {
-        service.saveSyncableSettings(settings.toDto())
-    }
+    fun saveSyncableSettings(settings: SyncableSettings): BridgeResult<Boolean> =
+        envelopeJsonResult(service.saveSyncableSettingsEnvelopeJson(settings.toDto()))
 
     fun loadSyncConfig(): BridgeResult<SyncConfig> = wrapResult {
         service.loadSyncConfig().toModel()
@@ -208,23 +243,23 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsSummary(startDate, endDate)
+        service.getWritingStatsSummaryJson(startDate, endDate)
     }
 
     fun getWritingStatsByProject(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsByProject(startDate, endDate)
+        service.getWritingStatsByProjectJson(startDate, endDate)
     }
 
     fun getWritingStatsByChapter(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsByChapter(startDate, endDate)
+        service.getWritingStatsByChapterJson(startDate, endDate)
     }
 
     fun getWritingStatsByDevice(startDate: String, endDate: String): BridgeResult<String> = wrapResult {
-        service.getWritingStatsByDevice(startDate, endDate)
+        service.getWritingStatsByDeviceJson(startDate, endDate)
     }
 
     fun getWritingSpeedCurve(startDate: String, endDate: String, bucketMinutes: Int): BridgeResult<String> = wrapResult {
-        service.getWritingSpeedCurve(startDate, endDate, bucketMinutes.toUInt())
+        service.getWritingSpeedCurveJson(startDate, endDate, bucketMinutes.toUInt())
     }
 
     fun recordWritingEvent(deviceId: String, projectId: String, volumeId: String, chapterId: String, source: String, insertedChars: Int, deletedChars: Int, pastedChars: Int, aiInsertedChars: Int, sessionId: String): BridgeResult<Boolean> = wrapResult {
@@ -244,31 +279,31 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun listStarMaps(): BridgeResult<String> = wrapResult {
-        service.listStarmaps()
+        service.listStarmapsJson()
     }
 
     fun getStarMapGraph(starmapId: String): BridgeResult<String> = wrapResult {
-        service.getStarmapGraph(starmapId)
+        service.getStarmapGraphJson(starmapId)
     }
 
     fun createStarMap(title: String, desc: String): BridgeResult<String> = wrapResult {
-        service.createStarmap(title, desc)
+        service.createStarmapJson(title, desc)
     }
 
     fun addStarMapNode(starmapId: String, nodeJson: String): BridgeResult<String> = wrapResult {
-        service.addStarmapNode(starmapId, nodeJson)
+        service.addStarmapNodeJson(starmapId, nodeJson)
     }
 
     fun saveStarMapLayout(starmapId: String, layoutJson: String): BridgeResult<Boolean> = wrapResult {
-        service.saveStarmapLayout(starmapId, layoutJson)
+        service.saveStarmapLayoutJson(starmapId, layoutJson)
     }
 
     fun addStarmapEmbed(starmapId: String, embedJson: String): BridgeResult<String> = wrapResult {
-        service.addStarmapEmbed(starmapId, embedJson)
+        service.addStarmapEmbedJson(starmapId, embedJson)
     }
 
     fun updateStarmapEmbed(starmapId: String, instanceId: String, patchJson: String): BridgeResult<String> = wrapResult {
-        service.updateStarmapEmbed(starmapId, instanceId, patchJson)
+        service.updateStarmapEmbedJson(starmapId, instanceId, patchJson)
     }
 
     fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = wrapResult {
@@ -276,11 +311,11 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun addStarmapLink(starmapId: String, linkJson: String): BridgeResult<String> = wrapResult {
-        service.addStarmapLink(starmapId, linkJson)
+        service.addStarmapLinkJson(starmapId, linkJson)
     }
 
     fun updateStarmapLink(starmapId: String, linkId: String, patchJson: String): BridgeResult<String> = wrapResult {
-        service.updateStarmapLink(starmapId, linkId, patchJson)
+        service.updateStarmapLinkJson(starmapId, linkId, patchJson)
     }
 
     fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = wrapResult {
@@ -288,7 +323,7 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun findStarmapReferences(targetStarmapId: String): BridgeResult<String> = wrapResult {
-        service.findStarmapReferences(targetStarmapId)
+        service.findStarmapReferencesJson(targetStarmapId)
     }
 }
 
@@ -349,6 +384,7 @@ private fun LocalSettingsDto.toModel() = LocalSettings(
     locale = locale,
     autoSaveEnabled = autoSaveEnabled,
     editorFontSize = editorFontSize,
+    editorLineSpacingMultiplier = editorLineSpacingMultiplier,
     windowWidth = windowWidth.toDouble(),
     windowHeight = windowHeight.toDouble(),
     autoSaveDelayMs = autoSaveDelayMs.toLong(),
@@ -360,7 +396,8 @@ private fun LocalSettingsDto.toModel() = LocalSettings(
     editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toInt(),
     aiEnabled = aiEnabled,
     statsDeviceId = statsDeviceId,
-    editorLineSpacingMultiplier = 1.5f
+    linuxSidebarWidth = linuxSidebarWidth,
+    linuxEditorWidth = linuxEditorWidth
 )
 
 private fun LocalSettings.toDto() = LocalSettingsDto(
@@ -368,6 +405,7 @@ private fun LocalSettings.toDto() = LocalSettingsDto(
     locale = locale,
     autoSaveEnabled = autoSaveEnabled,
     editorFontSize = editorFontSize,
+    editorLineSpacingMultiplier = editorLineSpacingMultiplier,
     windowWidth = windowWidth.toFloat(),
     windowHeight = windowHeight.toFloat(),
     autoSaveDelayMs = autoSaveDelayMs.toULong(),
@@ -379,7 +417,8 @@ private fun LocalSettings.toDto() = LocalSettingsDto(
     editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toULong(),
     aiEnabled = aiEnabled,
     statsDeviceId = statsDeviceId,
-    editorLineSpacingMultiplier = editorLineSpacingMultiplier
+    linuxSidebarWidth = linuxSidebarWidth,
+    linuxEditorWidth = linuxEditorWidth
 )
 
 private fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode, monetColor)
@@ -416,7 +455,9 @@ private fun SyncConfig.toDto(): SyncConfigDto {
         proxyType = normalized.proxyType ?: "auto",
         proxyHost = normalized.proxyHost ?: "127.0.0.1",
         proxyPort = (normalized.proxyPort ?: 7890).coerceIn(0, UShort.MAX_VALUE.toInt()).toUShort(),
-        username = normalized.username ?: ""
+        username = normalized.username ?: "",
+        androidHasInternetPermission = normalized.androidHasInternetPermission ?: false,
+        androidHasAccessNetworkStatePermission = normalized.androidHasAccessNetworkStatePermission ?: false
     )
 }
 

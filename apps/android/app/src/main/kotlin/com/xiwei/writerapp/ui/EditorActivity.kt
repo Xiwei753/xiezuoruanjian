@@ -27,7 +27,7 @@ import android.text.style.BackgroundColorSpan
 import android.util.Log
 import android.widget.Toast
 import com.xiwei.writerapp.R
-import com.xiwei.writerapp.data.SettingsChangeBus
+import com.xiwei.writerapp.data.CoreSettingsEvents
 import com.xiwei.writerapp.data.SyncChangeBus
 import com.xiwei.writerapp.data.WorkspaceRepository
 import kotlinx.coroutines.flow.collectLatest
@@ -353,7 +353,7 @@ class EditorActivity : AppCompatActivity() {
                 }
             }
         }
-        if (SettingsChangeBus.consumeEditorChanged()) {
+        if (CoreSettingsEvents.consumeEditorChanged()) {
             viewModel.onSettingsChanged()
         }
     }

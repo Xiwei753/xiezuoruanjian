@@ -78,14 +78,26 @@ impl From<&Error> for BridgeError {
     }
 }
 
-/// 兼容旧端的 Bridge Result 包装。
+/// 标准跨端 ResultEnvelope 的旧兼容包装。
 ///
-/// 新代码应优先使用领域 Bridge DTO；旧 JSON 调用保留该统一包装。
+/// 新代码应直接使用 `api::ResultEnvelope`，该结构只保留给旧调用点编译期迁移。
 #[derive(Serialize, Debug, Clone)]
 pub struct BridgeResult<T: Serialize> {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<T>,
+    #[serde(rename = "errorCode", skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(rename = "userMessage", skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<String>,
+    #[serde(rename = "rawError", skip_serializing_if = "Option::is_none")]
+    pub raw_error: Option<String>,
+    #[serde(rename = "warnings")]
+    pub warnings: Vec<String>,
+    #[serde(rename = "changedPaths")]
+    pub changed_paths: Vec<String>,
+    #[serde(rename = "changedEntities")]
+    pub changed_entities: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,12 +110,24 @@ impl<T: Serialize> BridgeResult<T> {
             Ok(data) => Self {
                 success: true,
                 data: Some(data),
+                error_code: None,
+                user_message: None,
+                raw_error: None,
+                warnings: Vec::new(),
+                changed_paths: Vec::new(),
+                changed_entities: Vec::new(),
                 code: None,
                 error: None,
             },
             Err(error) => Self {
                 success: false,
                 data: None,
+                error_code: Some(error.code().to_string()),
+                user_message: Some(error.to_string()),
+                raw_error: Some(error.to_string()),
+                warnings: Vec::new(),
+                changed_paths: Vec::new(),
+                changed_entities: Vec::new(),
                 code: Some(error.code().to_string()),
                 error: Some(error.to_string()),
             },

@@ -836,6 +836,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -848,146 +852,150 @@ internal interface UniffiLib : Library {
                 uniffiCheckApiChecksums(lib)
                 }
         }
-        
+
         // The Cleaner for the whole library
         internal val CLEANER: UniffiCleaner by lazy {
             UniffiCleaner.create()
         }
     }
 
-    fun uniffi_writer_core_fn_clone_writerappservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_clone_writerappservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
-    fun uniffi_writer_core_fn_free_writerappservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_free_writerappservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_writer_core_fn_constructor_writerappservice_new(`workspacePath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_constructor_writerappservice_new(`workspacePath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`embedJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_embed_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`embedJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_link_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_node(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`nodeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_node_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`nodeJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_calculate_word_count(`ptr`: Pointer,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_calculate_word_count(`ptr`: Pointer,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Int
-    fun uniffi_writer_core_fn_method_writerappservice_clear_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_clear_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_create_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_project(`ptr`: Pointer,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_create_project(`ptr`: Pointer,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_starmap(`ptr`: Pointer,`title`: RustBuffer.ByValue,`desc`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_create_starmap_json(`ptr`: Pointer,`title`: RustBuffer.ByValue,`desc`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_create_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_workspace_if_needed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_create_workspace_if_needed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_delete_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_delete_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_delete_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_delete_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_delete_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_find_starmap_references(`ptr`: Pointer,`targetStarmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_find_starmap_references_json(`ptr`: Pointer,`targetStarmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_project_stats(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_project_stats(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_starmap_graph_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,`bucketMinutes`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,`bucketMinutes`: Int,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary_json(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_list_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_list_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_list_projects(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_list_projects(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_list_starmaps(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_list_starmaps_json(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_list_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_list_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_load_local_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_load_local_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_load_sync_config(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_load_sync_config(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_load_sync_secrets(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_load_sync_secrets(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_load_sync_state(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_load_sync_state(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_load_syncable_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_load_syncable_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_open_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_open_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_perform_sync(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_perform_sync(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_diagnostics(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_diagnostics(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_process_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`oldText`: RustBuffer.ByValue,`newText`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_process_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`oldText`: RustBuffer.ByValue,`newText`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_record_recent_edit(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_record_recent_edit(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_record_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`insertedChars`: Int,`deletedChars`: Int,`pastedChars`: Int,`aiInsertedChars`: Int,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_record_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`insertedChars`: Int,`deletedChars`: Int,`pastedChars`: Int,`aiInsertedChars`: Int,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_rename_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_rename_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_rename_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_rename_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_rename_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_rename_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_reorder_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`orderedChapterIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_reorder_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`orderedChapterIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_reorder_projects(`ptr`: Pointer,`orderedProjectIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_reorder_projects(`ptr`: Pointer,`orderedProjectIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_save_local_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_local_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graphJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layoutJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_sync_config(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_sync_secrets(`ptr`: Pointer,`secrets`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_syncable_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_update_chapter_note(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`note`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_local_settings_envelope_json(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_validate_workspace(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graphJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_writer_core_fn_func_perform_dummy_action(uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layoutJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_sync_config(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_sync_secrets(`ptr`: Pointer,`secrets`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_syncable_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_syncable_settings_envelope_json(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun ffi_writer_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_update_chapter_note(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`note`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_embed_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun ffi_writer_core_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_link_json(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun ffi_writer_core_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_validate_workspace(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_func_perform_dummy_action(uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun ffi_writer_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun ffi_writer_core_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun ffi_writer_core_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun ffi_writer_core_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun ffi_writer_core_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -995,7 +1003,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_u8(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
     fun ffi_writer_core_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1003,7 +1011,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_i8(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
     fun ffi_writer_core_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1011,7 +1019,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_u16(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Short
     fun ffi_writer_core_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1019,7 +1027,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_i16(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Short
     fun ffi_writer_core_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1027,7 +1035,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_u32(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Int
     fun ffi_writer_core_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1035,7 +1043,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_i32(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Int
     fun ffi_writer_core_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1043,7 +1051,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_u64(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
     fun ffi_writer_core_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1051,7 +1059,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_i64(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
     fun ffi_writer_core_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1059,7 +1067,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_f32(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Float
     fun ffi_writer_core_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1067,7 +1075,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_f64(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Double
     fun ffi_writer_core_rust_future_poll_pointer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1075,7 +1083,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_pointer(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
     fun ffi_writer_core_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1083,7 +1091,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_rust_buffer(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun ffi_writer_core_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1091,15 +1099,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_writer_core_rust_future_free_void(`handle`: Long,
     ): Unit
-    fun ffi_writer_core_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_writer_core_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_writer_core_checksum_func_perform_dummy_action(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed(
+    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_link(
+    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_link_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_node(
+    fun uniffi_writer_core_checksum_method_writerappservice_add_starmap_node_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_calculate_word_count(
     ): Short
@@ -1109,7 +1117,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_project(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_create_starmap(
+    fun uniffi_writer_core_checksum_method_writerappservice_create_starmap_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_volume(
     ): Short
@@ -1125,7 +1133,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_volume(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_find_starmap_references(
+    fun uniffi_writer_core_checksum_method_writerappservice_find_starmap_references_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats(
     ): Short
@@ -1135,23 +1143,23 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_recent_edits(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary(
+    fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_list_chapters(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_list_projects(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_list_starmaps(
+    fun uniffi_writer_core_checksum_method_writerappservice_list_starmaps_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_list_volumes(
     ): Short
@@ -1195,9 +1203,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings_envelope_json(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout(
+    fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_sync_config(
     ): Short
@@ -1205,11 +1215,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings_envelope_json(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_update_chapter_note(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed(
+    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed_json(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_link(
+    fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_link_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_validate_workspace(
     ): Short
@@ -1217,7 +1229,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun ffi_writer_core_uniffi_contract_version(
     ): Int
-    
+
 }
 
 private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
@@ -1235,13 +1247,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_func_perform_dummy_action() != 23039.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed() != 27846.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed_json() != 16597.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_link() != 2338.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_link_json() != 37962.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_node() != 57867.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_node_json() != 39216.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_calculate_word_count() != 56121.toShort()) {
@@ -1256,7 +1268,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_project() != 52962.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_starmap() != 22304.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_starmap_json() != 39856.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_volume() != 57493.toShort()) {
@@ -1280,7 +1292,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume() != 5254.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_find_starmap_references() != 26600.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_find_starmap_references_json() != 62178.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats() != 56971.toShort()) {
@@ -1295,22 +1307,22 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_recent_edits() != 14757.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph() != 37094.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph_json() != 63746.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve() != 14872.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve_json() != 38227.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter() != 42279.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter_json() != 7491.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device() != 24113.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_device_json() != 21323.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project() != 41393.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project_json() != 41510.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary() != 32199.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary_json() != 51836.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_list_chapters() != 34372.toShort()) {
@@ -1319,7 +1331,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_list_projects() != 38395.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_starmaps() != 26187.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_list_starmaps_json() != 20166.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_list_volumes() != 10599.toShort()) {
@@ -1385,10 +1397,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_local_settings() != 60350.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_local_settings_envelope_json() != 37495.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph_json() != 21493.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout() != 35811.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout_json() != 7236.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_config() != 43143.toShort()) {
@@ -1400,13 +1415,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings() != 28364.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings_envelope_json() != 31155.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_update_chapter_note() != 23190.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed() != 27131.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed_json() != 50287.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_link() != 38689.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_link_json() != 31002.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_validate_workspace() != 63349.toShort()) {
@@ -1455,7 +1473,7 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
         }
     }
 
-/** 
+/**
  * Used to instantiate an interface without an actual pointer, for fakes in tests, mostly.
  *
  * @suppress
@@ -1866,125 +1884,129 @@ private class JavaLangRefCleanable(
     override fun clean() = cleanable.clean()
 }
 public interface WriterAppServiceInterface {
-    
-    fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): kotlin.String
-    
-    fun `addStarmapLink`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): kotlin.String
-    
-    fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String
-    
+
+    fun `addStarmapEmbedJson`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): kotlin.String
+
+    fun `addStarmapLinkJson`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): kotlin.String
+
+    fun `addStarmapNodeJson`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String
+
     fun `calculateWordCount`(`text`: kotlin.String): kotlin.UInt
-    
+
     fun `clearChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterSaveReceiptDto
-    
+
     fun `createChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): ChapterMetaDto
-    
+
     fun `createProject`(`title`: kotlin.String): ProjectDto
-    
-    fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String
-    
+
+    fun `createStarmapJson`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String
+
     fun `createVolume`(`projectId`: kotlin.String, `title`: kotlin.String): VolumeDto
-    
+
     fun `createWorkspaceIfNeeded`(): kotlin.Boolean
-    
+
     fun `deleteChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean
-    
+
     fun `deleteProject`(`projectId`: kotlin.String): kotlin.Boolean
-    
+
     fun `deleteStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String): kotlin.Boolean
-    
+
     fun `deleteStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String): kotlin.Boolean
-    
+
     fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean
-    
-    fun `findStarmapReferences`(`targetStarmapId`: kotlin.String): kotlin.String
-    
+
+    fun `findStarmapReferencesJson`(`targetStarmapId`: kotlin.String): kotlin.String
+
     fun `flushWritingStats`(): kotlin.Boolean
-    
+
     fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String
-    
+
     fun `getProjectStats`(`projectId`: kotlin.String): ProjectStatsDto
-    
+
     fun `getRecentEdits`(): List<RecentEditDto>
-    
-    fun `getStarmapGraph`(`starmapId`: kotlin.String): kotlin.String
-    
-    fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String
-    
-    fun `getWritingStatsByChapter`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
-    
-    fun `getWritingStatsByDevice`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
-    
-    fun `getWritingStatsByProject`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
-    
-    fun `getWritingStatsSummary`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
-    
+
+    fun `getStarmapGraphJson`(`starmapId`: kotlin.String): kotlin.String
+
+    fun `getWritingSpeedCurveJson`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String
+
+    fun `getWritingStatsByChapterJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
+    fun `getWritingStatsByDeviceJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
+    fun `getWritingStatsByProjectJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
+    fun `getWritingStatsSummaryJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String
+
     fun `listChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String): List<ChapterMetaDto>
-    
+
     fun `listProjects`(): List<ProjectDto>
-    
-    fun `listStarmaps`(): kotlin.String
-    
+
+    fun `listStarmapsJson`(): kotlin.String
+
     fun `listVolumes`(`projectId`: kotlin.String): List<VolumeDto>
-    
+
     fun `loadLocalSettings`(): LocalSettingsDto
-    
+
     fun `loadSyncConfig`(): SyncConfigDto
-    
+
     fun `loadSyncSecrets`(): SyncSecretsDto
-    
+
     fun `loadSyncState`(): SyncStateDto
-    
+
     fun `loadSyncableSettings`(): SyncableSettingsDto
-    
+
     fun `openChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterContentDto
-    
+
     fun `performSync`(`config`: SyncConfigDto): SyncResultDto
-    
+
     fun `performSyncDiagnostics`(`config`: SyncConfigDto): SyncDiagnosticsResultDto
-    
+
     fun `performSyncDryRun`(`config`: SyncConfigDto): SyncPlanDto
-    
+
     fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean
-    
+
     fun `recordRecentEdit`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean
-    
+
     fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean
-    
+
     fun `renameChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
-    
+
     fun `renameProject`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
-    
+
     fun `renameVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
-    
+
     fun `reorderChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.Boolean
-    
+
     fun `reorderProjects`(`orderedProjectIds`: List<kotlin.String>): kotlin.Boolean
-    
+
     fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean
-    
+
     fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto
-    
+
     fun `saveLocalSettings`(`settings`: LocalSettingsDto): kotlin.Boolean
-    
+
+    fun `saveLocalSettingsEnvelopeJson`(`settings`: LocalSettingsDto): kotlin.String
+
     fun `saveMindmapGraphJson`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean
-    
-    fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean
-    
+
+    fun `saveStarmapLayoutJson`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean
+
     fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean
-    
+
     fun `saveSyncSecrets`(`secrets`: SyncSecretsDto): kotlin.Boolean
-    
+
     fun `saveSyncableSettings`(`settings`: SyncableSettingsDto): kotlin.Boolean
-    
+
+    fun `saveSyncableSettingsEnvelopeJson`(`settings`: SyncableSettingsDto): kotlin.String
+
     fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean
-    
-    fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String
-    
-    fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String
-    
+
+    fun `updateStarmapEmbedJson`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String
+
+    fun `updateStarmapLinkJson`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String
+
     fun `validateWorkspace`(): kotlin.Boolean
-    
+
     companion object
 }
 
@@ -2076,44 +2098,44 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
         }
     }
 
-    
-    @Throws(WriterException::class)override fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): kotlin.String {
+
+    @Throws(WriterException::class)override fun `addStarmapEmbedJson`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_embed(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_embed_json(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`embedJson`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `addStarmapLink`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `addStarmapLinkJson`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_link(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_link_json(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`linkJson`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `addStarmapNodeJson`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_node(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_node_json(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`nodeJson`),_status)
 }
     }
     )
     }
-    
+
 
     override fun `calculateWordCount`(`text`: kotlin.String): kotlin.UInt {
             return FfiConverterUInt.lift(
@@ -2125,9 +2147,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `clearChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterSaveReceiptDto {
             return FfiConverterTypeChapterSaveReceiptDto.lift(
     callWithPointer {
@@ -2138,9 +2160,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `createChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): ChapterMetaDto {
             return FfiConverterTypeChapterMetaDto.lift(
     callWithPointer {
@@ -2151,9 +2173,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `createProject`(`title`: kotlin.String): ProjectDto {
             return FfiConverterTypeProjectDto.lift(
     callWithPointer {
@@ -2164,22 +2186,22 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `createStarmapJson`(`title`: kotlin.String, `desc`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_starmap(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_starmap_json(
         it, FfiConverterString.lower(`title`),FfiConverterString.lower(`desc`),_status)
 }
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `createVolume`(`projectId`: kotlin.String, `title`: kotlin.String): VolumeDto {
             return FfiConverterTypeVolumeDto.lift(
     callWithPointer {
@@ -2190,9 +2212,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `createWorkspaceIfNeeded`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2203,9 +2225,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `deleteChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2216,9 +2238,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `deleteProject`(`projectId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2229,9 +2251,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `deleteStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2242,9 +2264,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `deleteStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2255,9 +2277,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2268,22 +2290,22 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `findStarmapReferences`(`targetStarmapId`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `findStarmapReferencesJson`(`targetStarmapId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_find_starmap_references(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_find_starmap_references_json(
         it, FfiConverterString.lower(`targetStarmapId`),_status)
 }
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `flushWritingStats`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2294,9 +2316,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `getMindmapSnapshotJson`(`projectId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
@@ -2307,9 +2329,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `getProjectStats`(`projectId`: kotlin.String): ProjectStatsDto {
             return FfiConverterTypeProjectStatsDto.lift(
     callWithPointer {
@@ -2320,9 +2342,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `getRecentEdits`(): List<RecentEditDto> {
             return FfiConverterSequenceTypeRecentEditDto.lift(
     callWithPointer {
@@ -2333,87 +2355,87 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `getStarmapGraph`(`starmapId`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `getStarmapGraphJson`(`starmapId`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_starmap_graph_json(
         it, FfiConverterString.lower(`starmapId`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `getWritingSpeedCurveJson`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve_json(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),FfiConverterUInt.lower(`bucketMinutes`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `getWritingStatsByChapter`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsByChapterJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_chapter_json(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `getWritingStatsByDevice`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsByDeviceJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_device_json(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `getWritingStatsByProject`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsByProjectJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project_json(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `getWritingStatsSummary`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `getWritingStatsSummaryJson`(`startDate`: kotlin.String, `endDate`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary_json(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
 }
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `listChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String): List<ChapterMetaDto> {
             return FfiConverterSequenceTypeChapterMetaDto.lift(
     callWithPointer {
@@ -2424,9 +2446,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `listProjects`(): List<ProjectDto> {
             return FfiConverterSequenceTypeProjectDto.lift(
     callWithPointer {
@@ -2437,22 +2459,22 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `listStarmaps`(): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `listStarmapsJson`(): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_starmaps(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_list_starmaps_json(
         it, _status)
 }
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `listVolumes`(`projectId`: kotlin.String): List<VolumeDto> {
             return FfiConverterSequenceTypeVolumeDto.lift(
     callWithPointer {
@@ -2463,9 +2485,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `loadLocalSettings`(): LocalSettingsDto {
             return FfiConverterTypeLocalSettingsDto.lift(
     callWithPointer {
@@ -2476,9 +2498,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `loadSyncConfig`(): SyncConfigDto {
             return FfiConverterTypeSyncConfigDto.lift(
     callWithPointer {
@@ -2489,9 +2511,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `loadSyncSecrets`(): SyncSecretsDto {
             return FfiConverterTypeSyncSecretsDto.lift(
     callWithPointer {
@@ -2502,9 +2524,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `loadSyncState`(): SyncStateDto {
             return FfiConverterTypeSyncStateDto.lift(
     callWithPointer {
@@ -2515,9 +2537,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `loadSyncableSettings`(): SyncableSettingsDto {
             return FfiConverterTypeSyncableSettingsDto.lift(
     callWithPointer {
@@ -2528,9 +2550,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `openChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterContentDto {
             return FfiConverterTypeChapterContentDto.lift(
     callWithPointer {
@@ -2541,9 +2563,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `performSync`(`config`: SyncConfigDto): SyncResultDto {
             return FfiConverterTypeSyncResultDto.lift(
     callWithPointer {
@@ -2554,9 +2576,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `performSyncDiagnostics`(`config`: SyncConfigDto): SyncDiagnosticsResultDto {
             return FfiConverterTypeSyncDiagnosticsResultDto.lift(
     callWithPointer {
@@ -2567,9 +2589,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `performSyncDryRun`(`config`: SyncConfigDto): SyncPlanDto {
             return FfiConverterTypeSyncPlanDto.lift(
     callWithPointer {
@@ -2580,9 +2602,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2593,9 +2615,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `recordRecentEdit`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2606,9 +2628,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2619,9 +2641,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `renameChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2632,9 +2654,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `renameProject`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2645,9 +2667,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `renameVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2658,9 +2680,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `reorderChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2671,9 +2693,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `reorderProjects`(`orderedProjectIds`: List<kotlin.String>): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2684,9 +2706,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2697,9 +2719,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto {
             return FfiConverterTypeChapterSaveReceiptDto.lift(
     callWithPointer {
@@ -2710,9 +2732,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `saveLocalSettings`(`settings`: LocalSettingsDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2723,9 +2745,21 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+    override fun `saveLocalSettingsEnvelopeJson`(`settings`: LocalSettingsDto): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_local_settings_envelope_json(
+        it, FfiConverterTypeLocalSettingsDto.lower(`settings`),_status)
+}
+    }
+    )
+    }
+
+
+
     @Throws(WriterException::class)override fun `saveMindmapGraphJson`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2736,22 +2770,22 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean {
+
+
+    @Throws(WriterException::class)override fun `saveStarmapLayoutJson`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_layout_json(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`layoutJson`),_status)
 }
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2762,9 +2796,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `saveSyncSecrets`(`secrets`: SyncSecretsDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2775,9 +2809,9 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `saveSyncableSettings`(`settings`: SyncableSettingsDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2788,9 +2822,21 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
+
+    override fun `saveSyncableSettingsEnvelopeJson`(`settings`: SyncableSettingsDto): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_syncable_settings_envelope_json(
+        it, FfiConverterTypeSyncableSettingsDto.lower(`settings`),_status)
+}
+    }
+    )
+    }
+
+
+
     @Throws(WriterException::class)override fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2801,35 +2847,35 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `updateStarmapEmbedJson`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_embed_json(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`instanceId`),FfiConverterString.lower(`patchJson`),_status)
 }
     }
     )
     }
-    
 
-    
-    @Throws(WriterException::class)override fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String {
+
+
+    @Throws(WriterException::class)override fun `updateStarmapLinkJson`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_link(
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_link_json(
         it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`linkId`),FfiConverterString.lower(`patchJson`),_status)
 }
     }
     )
     }
-    
 
-    
+
+
     @Throws(WriterException::class)override fun `validateWorkspace`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2840,14 +2886,14 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     )
     }
-    
 
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 /**
@@ -2881,11 +2927,11 @@ public object FfiConverterTypeWriterAppService: FfiConverter<WriterAppService, P
 
 
 data class AiAction (
-    var `label`: kotlin.String, 
-    var `actionType`: AiActionType, 
+    var `label`: kotlin.String,
+    var `actionType`: AiActionType,
     var `payload`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -2917,10 +2963,10 @@ public object FfiConverterTypeAiAction: FfiConverterRustBuffer<AiAction> {
 
 
 data class AiActionResponse (
-    var `displayText`: kotlin.String, 
+    var `displayText`: kotlin.String,
     var `actions`: List<AiAction>
 ) {
-    
+
     companion object
 }
 
@@ -2949,10 +2995,10 @@ public object FfiConverterTypeAiActionResponse: FfiConverterRustBuffer<AiActionR
 
 
 data class ChapterContentDto (
-    var `meta`: ChapterMetaDto, 
+    var `meta`: ChapterMetaDto,
     var `content`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -2981,16 +3027,16 @@ public object FfiConverterTypeChapterContentDto: FfiConverterRustBuffer<ChapterC
 
 
 data class ChapterMetaDto (
-    var `id`: kotlin.String, 
-    var `title`: kotlin.String, 
-    var `createdAt`: kotlin.String, 
-    var `updatedAt`: kotlin.String, 
-    var `order`: kotlin.Int, 
-    var `wordCount`: kotlin.UInt, 
-    var `hash`: kotlin.String, 
+    var `id`: kotlin.String,
+    var `title`: kotlin.String,
+    var `createdAt`: kotlin.String,
+    var `updatedAt`: kotlin.String,
+    var `order`: kotlin.Int,
+    var `wordCount`: kotlin.UInt,
+    var `hash`: kotlin.String,
     var `note`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -3037,14 +3083,14 @@ public object FfiConverterTypeChapterMetaDto: FfiConverterRustBuffer<ChapterMeta
 
 
 data class ChapterSaveReceiptDto (
-    var `chapterRelativePath`: kotlin.String, 
-    var `contentLen`: kotlin.UInt, 
-    var `contentHash`: kotlin.String, 
-    var `metaHash`: kotlin.String, 
-    var `updatedAt`: kotlin.String, 
+    var `chapterRelativePath`: kotlin.String,
+    var `contentLen`: kotlin.UInt,
+    var `contentHash`: kotlin.String,
+    var `metaHash`: kotlin.String,
+    var `updatedAt`: kotlin.String,
     var `wordCount`: kotlin.UInt
 ) {
-    
+
     companion object
 }
 
@@ -3085,24 +3131,26 @@ public object FfiConverterTypeChapterSaveReceiptDto: FfiConverterRustBuffer<Chap
 
 
 data class LocalSettingsDto (
-    var `themeMode`: kotlin.String?, 
-    var `locale`: kotlin.String?, 
-    var `autoSaveEnabled`: kotlin.Boolean, 
-    var `editorFontSize`: kotlin.Float, 
-    var `editorLineSpacingMultiplier`: kotlin.Float, 
-    var `windowWidth`: kotlin.Float, 
-    var `windowHeight`: kotlin.Float, 
-    var `autoSaveDelayMs`: kotlin.ULong, 
-    var `autoIndentEnabled`: kotlin.Boolean, 
-    var `autoIndentWidth`: kotlin.Float, 
-    var `editorTypingAnimationEnabled`: kotlin.Boolean, 
-    var `editorSmoothCursorEnabled`: kotlin.Boolean, 
-    var `editorTypingAnimationDurationMs`: kotlin.ULong, 
-    var `editorSmoothCursorDurationMs`: kotlin.ULong, 
-    var `aiEnabled`: kotlin.Boolean, 
-    var `statsDeviceId`: kotlin.String?
+    var `themeMode`: kotlin.String?,
+    var `locale`: kotlin.String?,
+    var `autoSaveEnabled`: kotlin.Boolean,
+    var `editorFontSize`: kotlin.Float,
+    var `editorLineSpacingMultiplier`: kotlin.Float,
+    var `windowWidth`: kotlin.Float,
+    var `windowHeight`: kotlin.Float,
+    var `autoSaveDelayMs`: kotlin.ULong,
+    var `autoIndentEnabled`: kotlin.Boolean,
+    var `autoIndentWidth`: kotlin.Float,
+    var `editorTypingAnimationEnabled`: kotlin.Boolean,
+    var `editorSmoothCursorEnabled`: kotlin.Boolean,
+    var `editorTypingAnimationDurationMs`: kotlin.ULong,
+    var `editorSmoothCursorDurationMs`: kotlin.ULong,
+    var `aiEnabled`: kotlin.Boolean,
+    var `statsDeviceId`: kotlin.String?,
+    var `linuxSidebarWidth`: kotlin.Double,
+    var `linuxEditorWidth`: kotlin.Double
 ) {
-    
+
     companion object
 }
 
@@ -3128,6 +3176,8 @@ public object FfiConverterTypeLocalSettingsDto: FfiConverterRustBuffer<LocalSett
             FfiConverterULong.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
         )
     }
 
@@ -3147,7 +3197,9 @@ public object FfiConverterTypeLocalSettingsDto: FfiConverterRustBuffer<LocalSett
             FfiConverterULong.allocationSize(value.`editorTypingAnimationDurationMs`) +
             FfiConverterULong.allocationSize(value.`editorSmoothCursorDurationMs`) +
             FfiConverterBoolean.allocationSize(value.`aiEnabled`) +
-            FfiConverterOptionalString.allocationSize(value.`statsDeviceId`)
+            FfiConverterOptionalString.allocationSize(value.`statsDeviceId`) +
+            FfiConverterDouble.allocationSize(value.`linuxSidebarWidth`) +
+            FfiConverterDouble.allocationSize(value.`linuxEditorWidth`)
     )
 
     override fun write(value: LocalSettingsDto, buf: ByteBuffer) {
@@ -3167,19 +3219,21 @@ public object FfiConverterTypeLocalSettingsDto: FfiConverterRustBuffer<LocalSett
             FfiConverterULong.write(value.`editorSmoothCursorDurationMs`, buf)
             FfiConverterBoolean.write(value.`aiEnabled`, buf)
             FfiConverterOptionalString.write(value.`statsDeviceId`, buf)
+            FfiConverterDouble.write(value.`linuxSidebarWidth`, buf)
+            FfiConverterDouble.write(value.`linuxEditorWidth`, buf)
     }
 }
 
 
 
 data class NetworkProbeResultDto (
-    var `mode`: kotlin.String, 
-    var `success`: kotlin.Boolean, 
-    var `status`: kotlin.String, 
-    var `message`: kotlin.String, 
+    var `mode`: kotlin.String,
+    var `success`: kotlin.Boolean,
+    var `status`: kotlin.String,
+    var `message`: kotlin.String,
     var `rawError`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -3217,12 +3271,12 @@ public object FfiConverterTypeNetworkProbeResultDto: FfiConverterRustBuffer<Netw
 
 
 data class ProjectDto (
-    var `id`: kotlin.String, 
-    var `title`: kotlin.String, 
-    var `createdAt`: kotlin.String, 
+    var `id`: kotlin.String,
+    var `title`: kotlin.String,
+    var `createdAt`: kotlin.String,
     var `updatedAt`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -3257,11 +3311,11 @@ public object FfiConverterTypeProjectDto: FfiConverterRustBuffer<ProjectDto> {
 
 
 data class ProjectStatsDto (
-    var `totalWordCount`: kotlin.UInt, 
-    var `volumeCount`: kotlin.UInt, 
+    var `totalWordCount`: kotlin.UInt,
+    var `volumeCount`: kotlin.UInt,
     var `chapterCount`: kotlin.UInt
 ) {
-    
+
     companion object
 }
 
@@ -3293,12 +3347,12 @@ public object FfiConverterTypeProjectStatsDto: FfiConverterRustBuffer<ProjectSta
 
 
 data class RecentEditDto (
-    var `projectId`: kotlin.String, 
-    var `volumeId`: kotlin.String, 
-    var `chapterId`: kotlin.String, 
+    var `projectId`: kotlin.String,
+    var `volumeId`: kotlin.String,
+    var `chapterId`: kotlin.String,
     var `timestamp`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -3333,20 +3387,22 @@ public object FfiConverterTypeRecentEditDto: FfiConverterRustBuffer<RecentEditDt
 
 
 data class SyncConfigDto (
-    var `enabled`: kotlin.Boolean, 
-    var `backendType`: kotlin.String, 
-    var `remoteUrl`: kotlin.String, 
-    var `transport`: kotlin.String, 
-    var `branch`: kotlin.String, 
-    var `autoSync`: kotlin.Boolean, 
-    var `syncIntervalSeconds`: kotlin.UInt, 
-    var `proxyEnabled`: kotlin.Boolean, 
-    var `proxyType`: kotlin.String, 
-    var `proxyHost`: kotlin.String, 
-    var `proxyPort`: kotlin.UShort, 
-    var `username`: kotlin.String
+    var `enabled`: kotlin.Boolean,
+    var `backendType`: kotlin.String,
+    var `remoteUrl`: kotlin.String,
+    var `transport`: kotlin.String,
+    var `branch`: kotlin.String,
+    var `autoSync`: kotlin.Boolean,
+    var `syncIntervalSeconds`: kotlin.UInt,
+    var `proxyEnabled`: kotlin.Boolean,
+    var `proxyType`: kotlin.String,
+    var `proxyHost`: kotlin.String,
+    var `proxyPort`: kotlin.UShort,
+    var `username`: kotlin.String,
+    var `androidHasInternetPermission`: kotlin.Boolean,
+    var `androidHasAccessNetworkStatePermission`: kotlin.Boolean
 ) {
-    
+
     companion object
 }
 
@@ -3368,6 +3424,8 @@ public object FfiConverterTypeSyncConfigDto: FfiConverterRustBuffer<SyncConfigDt
             FfiConverterString.read(buf),
             FfiConverterUShort.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -3383,7 +3441,9 @@ public object FfiConverterTypeSyncConfigDto: FfiConverterRustBuffer<SyncConfigDt
             FfiConverterString.allocationSize(value.`proxyType`) +
             FfiConverterString.allocationSize(value.`proxyHost`) +
             FfiConverterUShort.allocationSize(value.`proxyPort`) +
-            FfiConverterString.allocationSize(value.`username`)
+            FfiConverterString.allocationSize(value.`username`) +
+            FfiConverterBoolean.allocationSize(value.`androidHasInternetPermission`) +
+            FfiConverterBoolean.allocationSize(value.`androidHasAccessNetworkStatePermission`)
     )
 
     override fun write(value: SyncConfigDto, buf: ByteBuffer) {
@@ -3399,21 +3459,23 @@ public object FfiConverterTypeSyncConfigDto: FfiConverterRustBuffer<SyncConfigDt
             FfiConverterString.write(value.`proxyHost`, buf)
             FfiConverterUShort.write(value.`proxyPort`, buf)
             FfiConverterString.write(value.`username`, buf)
+            FfiConverterBoolean.write(value.`androidHasInternetPermission`, buf)
+            FfiConverterBoolean.write(value.`androidHasAccessNetworkStatePermission`, buf)
     }
 }
 
 
 
 data class SyncConflictDto (
-    var `localPath`: kotlin.String, 
-    var `remotePath`: kotlin.String, 
-    var `localHash`: kotlin.String, 
-    var `remoteHash`: kotlin.String, 
-    var `baseHash`: kotlin.String, 
-    var `createdAt`: kotlin.Long, 
+    var `localPath`: kotlin.String,
+    var `remotePath`: kotlin.String,
+    var `localHash`: kotlin.String,
+    var `remoteHash`: kotlin.String,
+    var `baseHash`: kotlin.String,
+    var `createdAt`: kotlin.Long,
     var `description`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -3457,34 +3519,34 @@ public object FfiConverterTypeSyncConflictDto: FfiConverterRustBuffer<SyncConfli
 
 
 data class SyncDiagnosticsResultDto (
-    var `success`: kotlin.Boolean, 
-    var `backendType`: kotlin.String, 
-    var `androidHasInternetPermission`: kotlin.Boolean, 
-    var `androidHasAccessNetworkStatePermission`: kotlin.Boolean, 
-    var `androidNetworkState`: kotlin.String, 
-    var `tcpProbeOk`: kotlin.Boolean, 
-    var `tcpProbeStatus`: kotlin.String, 
-    var `httpConnectProbeOk`: kotlin.Boolean, 
-    var `httpConnectProbeStatus`: kotlin.String, 
-    var `libgit2ProbeOk`: kotlin.Boolean, 
-    var `libgit2ProbeStatus`: kotlin.String, 
-    var `networkOk`: kotlin.Boolean, 
-    var `authOk`: kotlin.Boolean, 
-    var `repoOk`: kotlin.Boolean, 
-    var `branchOk`: kotlin.Boolean, 
-    var `networkStatus`: kotlin.String, 
-    var `authStatus`: kotlin.String, 
-    var `repoStatus`: kotlin.String, 
-    var `branchStatus`: kotlin.String, 
-    var `remoteUrlSanitized`: kotlin.String, 
-    var `transport`: kotlin.String, 
-    var `errorCategory`: kotlin.String, 
-    var `userMessage`: kotlin.String, 
-    var `rawError`: kotlin.String?, 
-    var `chosenNetworkMode`: kotlin.String?, 
+    var `success`: kotlin.Boolean,
+    var `backendType`: kotlin.String,
+    var `androidHasInternetPermission`: kotlin.Boolean,
+    var `androidHasAccessNetworkStatePermission`: kotlin.Boolean,
+    var `androidNetworkState`: kotlin.String,
+    var `tcpProbeOk`: kotlin.Boolean,
+    var `tcpProbeStatus`: kotlin.String,
+    var `httpConnectProbeOk`: kotlin.Boolean,
+    var `httpConnectProbeStatus`: kotlin.String,
+    var `libgit2ProbeOk`: kotlin.Boolean,
+    var `libgit2ProbeStatus`: kotlin.String,
+    var `networkOk`: kotlin.Boolean,
+    var `authOk`: kotlin.Boolean,
+    var `repoOk`: kotlin.Boolean,
+    var `branchOk`: kotlin.Boolean,
+    var `networkStatus`: kotlin.String,
+    var `authStatus`: kotlin.String,
+    var `repoStatus`: kotlin.String,
+    var `branchStatus`: kotlin.String,
+    var `remoteUrlSanitized`: kotlin.String,
+    var `transport`: kotlin.String,
+    var `errorCategory`: kotlin.String,
+    var `userMessage`: kotlin.String,
+    var `rawError`: kotlin.String?,
+    var `chosenNetworkMode`: kotlin.String?,
     var `networkProbeSummary`: List<NetworkProbeResultDto>?
 ) {
-    
+
     companion object
 }
 
@@ -3585,14 +3647,14 @@ public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<S
 
 
 data class SyncPlanDto (
-    var `filesToUpload`: List<kotlin.String>, 
-    var `filesToDownload`: List<kotlin.String>, 
-    var `filesToDeleteLocal`: List<kotlin.String>, 
-    var `filesToDeleteRemote`: List<kotlin.String>, 
-    var `ignoredFiles`: List<kotlin.String>, 
+    var `filesToUpload`: List<kotlin.String>,
+    var `filesToDownload`: List<kotlin.String>,
+    var `filesToDeleteLocal`: List<kotlin.String>,
+    var `filesToDeleteRemote`: List<kotlin.String>,
+    var `ignoredFiles`: List<kotlin.String>,
     var `conflicts`: List<kotlin.String>
 ) {
-    
+
     companion object
 }
 
@@ -3633,23 +3695,23 @@ public object FfiConverterTypeSyncPlanDto: FfiConverterRustBuffer<SyncPlanDto> {
 
 
 data class SyncResultDto (
-    var `status`: kotlin.String, 
-    var `uploadedFiles`: List<kotlin.String>, 
-    var `downloadedFiles`: List<kotlin.String>, 
-    var `localDeletes`: List<kotlin.String>, 
-    var `remoteDeletes`: List<kotlin.String>, 
-    var `overwrittenFiles`: List<kotlin.String>, 
-    var `ignoredFiles`: List<kotlin.String>, 
-    var `conflicts`: List<SyncConflictDto>, 
-    var `commitHash`: kotlin.String?, 
-    var `error`: kotlin.String?, 
+    var `status`: kotlin.String,
+    var `uploadedFiles`: List<kotlin.String>,
+    var `downloadedFiles`: List<kotlin.String>,
+    var `localDeletes`: List<kotlin.String>,
+    var `remoteDeletes`: List<kotlin.String>,
+    var `overwrittenFiles`: List<kotlin.String>,
+    var `ignoredFiles`: List<kotlin.String>,
+    var `conflicts`: List<SyncConflictDto>,
+    var `commitHash`: kotlin.String?,
+    var `error`: kotlin.String?,
     var `errorCategory`: kotlin.String?,
-    var `firstSyncMode`: kotlin.String, 
-    var `userMessage`: kotlin.String?, 
-    var `chosenNetworkMode`: kotlin.String?, 
+    var `firstSyncMode`: kotlin.String,
+    var `userMessage`: kotlin.String?,
+    var `chosenNetworkMode`: kotlin.String?,
     var `networkProbeSummary`: List<NetworkProbeResultDto>?
 ) {
-    
+
     companion object
 }
 
@@ -3719,7 +3781,7 @@ public object FfiConverterTypeSyncResultDto: FfiConverterRustBuffer<SyncResultDt
 data class SyncSecretsDto (
     var `token`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -3745,17 +3807,17 @@ public object FfiConverterTypeSyncSecretsDto: FfiConverterRustBuffer<SyncSecrets
 
 
 data class SyncStateDto (
-    var `status`: kotlin.String, 
-    var `remoteUrl`: kotlin.String?, 
-    var `backendType`: kotlin.String?, 
-    var `transport`: kotlin.String?, 
-    var `lastSyncedCommit`: kotlin.String?, 
-    var `lastSyncTime`: kotlin.Long?, 
-    var `lastError`: kotlin.String?, 
-    var `lastSuccessfulNetworkMode`: kotlin.String?, 
+    var `status`: kotlin.String,
+    var `remoteUrl`: kotlin.String?,
+    var `backendType`: kotlin.String?,
+    var `transport`: kotlin.String?,
+    var `lastSyncedCommit`: kotlin.String?,
+    var `lastSyncTime`: kotlin.Long?,
+    var `lastError`: kotlin.String?,
+    var `lastSuccessfulNetworkMode`: kotlin.String?,
     var `conflicts`: List<SyncConflictDto>?
 ) {
-    
+
     companion object
 }
 
@@ -3805,11 +3867,11 @@ public object FfiConverterTypeSyncStateDto: FfiConverterRustBuffer<SyncStateDto>
 
 
 data class SyncableSettingsDto (
-    var `fontSize`: kotlin.Double, 
-    var `themeMode`: kotlin.String, 
+    var `fontSize`: kotlin.Double,
+    var `themeMode`: kotlin.String,
     var `monetColor`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -3841,13 +3903,13 @@ public object FfiConverterTypeSyncableSettingsDto: FfiConverterRustBuffer<Syncab
 
 
 data class VolumeDto (
-    var `id`: kotlin.String, 
-    var `title`: kotlin.String, 
-    var `createdAt`: kotlin.String, 
-    var `updatedAt`: kotlin.String, 
+    var `id`: kotlin.String,
+    var `title`: kotlin.String,
+    var `createdAt`: kotlin.String,
+    var `updatedAt`: kotlin.String,
     var `order`: kotlin.Int
 ) {
-    
+
     companion object
 }
 
@@ -3886,7 +3948,7 @@ public object FfiConverterTypeVolumeDto: FfiConverterRustBuffer<VolumeDto> {
 
 
 enum class AiActionType {
-    
+
     NAVIGATE,
     APPLY_SETTING,
     INSERT_TEXT,
@@ -3921,29 +3983,29 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
 
 
 sealed class WriterException(message: String): kotlin.Exception(message) {
-        
+
         class Io(message: String) : WriterException(message)
-        
+
         class Json(message: String) : WriterException(message)
-        
+
         class InvalidWorkspace(message: String) : WriterException(message)
-        
+
         class ProjectNotFound(message: String) : WriterException(message)
-        
+
         class VolumeNotFound(message: String) : WriterException(message)
-        
+
         class ChapterNotFound(message: String) : WriterException(message)
-        
+
         class EmptyOverwriteBlocked(message: String) : WriterException(message)
-        
+
         class NotImplemented(message: String) : WriterException(message)
-        
+
         class RefuseToDeleteWorkspaceRoot(message: String) : WriterException(message)
-        
+
         class InvalidDeleteTarget(message: String) : WriterException(message)
-        
+
         class Other(message: String) : WriterException(message)
-        
+
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<WriterException> {
         override fun lift(error_buf: RustBuffer.ByValue): WriterException = FfiConverterTypeWriterError.lift(error_buf)
@@ -3955,7 +4017,7 @@ sealed class WriterException(message: String): kotlin.Exception(message) {
  */
 public object FfiConverterTypeWriterError : FfiConverterRustBuffer<WriterException> {
     override fun read(buf: ByteBuffer): WriterException {
-        
+
             return when(buf.getInt()) {
             1 -> WriterException.Io(FfiConverterString.read(buf))
             2 -> WriterException.Json(FfiConverterString.read(buf))
@@ -3970,7 +4032,7 @@ public object FfiConverterTypeWriterError : FfiConverterRustBuffer<WriterExcepti
             11 -> WriterException.Other(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
-        
+
     }
 
     override fun allocationSize(value: WriterException): ULong {
@@ -4386,4 +4448,3 @@ public object FfiConverterSequenceTypeVolumeDto: FfiConverterRustBuffer<List<Vol
 }
     )
     }
-    

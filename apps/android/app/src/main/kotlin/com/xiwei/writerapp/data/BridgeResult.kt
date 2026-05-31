@@ -6,12 +6,49 @@ import com.xiwei.writerapp.model.BridgeError
 import com.xiwei.writerapp.model.BridgeErrorCode
 
 sealed class BridgeResult<out T> {
-    data class Success<out T>(val data: T) : BridgeResult<T>()
-    data class Error(val error: BridgeError) : BridgeResult<Nothing>() {
+    data class Success<out T>(val data: T, val envelope: ResultEnvelope<T> = ResultEnvelope.success(data)) : BridgeResult<T>()
+    data class Error(
+        val error: BridgeError,
+        val envelope: ResultEnvelope<Nothing> = ResultEnvelope.error(error)
+    ) : BridgeResult<Nothing>() {
         val message: String get() = error.message
         val code: BridgeErrorCode get() = error.code
     }
-    object NotLoaded : BridgeResult<Nothing>()
+    object NotLoaded : BridgeResult<Nothing>() {
+        val envelope: ResultEnvelope<Nothing> = ResultEnvelope.error(
+            BridgeError(BridgeErrorCode.Unknown, "Native bridge not loaded")
+        )
+    }
+}
+
+data class ChangedEntity(
+    val entityType: String,
+    val entityId: String? = null
+)
+
+data class ResultEnvelope<out T>(
+    val success: Boolean,
+    val data: T? = null,
+    val errorCode: String? = null,
+    val userMessage: String? = null,
+    val rawError: String? = null,
+    val warnings: List<String> = emptyList(),
+    val changedPaths: List<String> = emptyList(),
+    val changedEntities: List<ChangedEntity> = emptyList()
+) {
+    companion object {
+        fun <T> success(data: T): ResultEnvelope<T> = ResultEnvelope(
+            success = true,
+            data = data
+        )
+
+        fun error(error: BridgeError): ResultEnvelope<Nothing> = ResultEnvelope(
+            success = false,
+            errorCode = error.code.wireName,
+            userMessage = error.message,
+            rawError = error.message
+        )
+    }
 }
 
 internal fun <T> NativeResult<T>.toBridgeResult(): BridgeResult<T> {

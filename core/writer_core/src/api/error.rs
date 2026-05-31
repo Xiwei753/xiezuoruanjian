@@ -47,6 +47,22 @@ impl WriterError {
             WriterError::Other(_) => "OTHER",
         }
     }
+
+    pub fn user_message(&self) -> &'static str {
+        match self {
+            WriterError::Io(_) => "文件读写失败，请检查工作区权限和磁盘状态",
+            WriterError::Json(_) => "数据文件格式异常，请检查工作区文件是否损坏",
+            WriterError::InvalidWorkspace => "不是有效的工作区",
+            WriterError::ProjectNotFound => "作品不存在或已被删除",
+            WriterError::VolumeNotFound => "卷不存在或已被删除",
+            WriterError::ChapterNotFound => "章节不存在或已被删除",
+            WriterError::EmptyOverwriteBlocked { .. } => "已阻止空内容覆盖现有章节",
+            WriterError::NotImplemented => "该功能尚未实现",
+            WriterError::RefuseToDeleteWorkspaceRoot => "拒绝删除工作区根目录",
+            WriterError::InvalidDeleteTarget(_) => "删除目标无效",
+            WriterError::Other(_) => "操作失败",
+        }
+    }
 }
 
 impl From<crate::error::Error> for WriterError {

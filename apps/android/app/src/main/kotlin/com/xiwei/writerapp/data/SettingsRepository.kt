@@ -42,7 +42,7 @@ class SettingsRepository(context: Context) {
     fun saveLocalSettings(settings: LocalSettings): Boolean {
         return when (val result = settingsBridge.saveLocalSettings(settings)) {
             is BridgeResult.Success -> {
-                SettingsChangeBus.notifyChanged()
+                CoreSettingsEvents.record(result.envelope)
                 result.data
             }
             is BridgeResult.Error -> {
@@ -68,7 +68,7 @@ class SettingsRepository(context: Context) {
     fun saveSyncableSettings(settings: SyncableSettings): Boolean {
         return when (val result = settingsBridge.saveSyncableSettings(settings)) {
             is BridgeResult.Success -> {
-                SettingsChangeBus.notifyChanged()
+                CoreSettingsEvents.record(result.envelope)
                 result.data
             }
             is BridgeResult.Error -> {

@@ -17,7 +17,6 @@ import com.xiwei.writerapp.R
 import com.xiwei.writerapp.data.ActionBridge
 import com.xiwei.writerapp.data.BridgeResult
 import com.xiwei.writerapp.data.BridgeProvider
-import com.xiwei.writerapp.data.SettingsChangeBus
 import com.xiwei.writerapp.model.ActionResult
 import com.xiwei.writerapp.model.ActionDescriptor
 import com.xiwei.writerapp.model.UiSchemaDescriptor
@@ -406,10 +405,6 @@ class ActionRegistryActivity : AppCompatActivity() {
             is BridgeResult.Success -> {
                 val actionResult = result.data
                 val msg = actionResult.message ?: if (actionResult.success) "执行成功" else "执行失败"
-
-                if (actionResult.success && isMutation(action)) {
-                    SettingsChangeBus.notifyChanged()
-                }
 
                 resultContainer.addView(TextView(this).apply {
                     text = msg

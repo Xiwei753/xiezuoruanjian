@@ -15,8 +15,8 @@
 
 **小结**：
 - Linux backend 已修复直接文件 I/O，目前通过 API 与 Core 对接。
-- Android 目前仅仅是 adapter，但没有封装统一的 ResultEnvelope。
-- 需要统一使用 ResultEnvelope 返回验证和创建结果。
+- Android 已有 `BridgeResult` / JNI fallback 的 `ResultEnvelope` 基础包装，但 UniFFI Capability 仍未全量返回 envelope。
+- 需要继续统一使用 ResultEnvelope 返回验证和创建结果。
 
 ## 2. ProjectCapability
 
@@ -28,8 +28,8 @@
 
 **小结**：
 - Linux 新建作品已收敛，完全依赖 Core `create_project`。
-- Android 仍在部分依赖 Legacy Bridge。
-- 必须优先统一 ResultEnvelope。
+- Android 仍在部分依赖 Legacy Bridge；legacy JSON 已开始返回标准 ResultEnvelope 字段。
+- 必须继续把 UniFFI 与 Linux backend 的散落返回收敛到 ResultEnvelope。
 
 ## 3. VolumeCapability
 
@@ -56,12 +56,12 @@
 
 | Capability | Core domain / facade | Core API | Android current 入口 | Android legacy 残留 | Linux current 入口 | Linux legacy 残留 | 是否对齐 | 风险级别 | 下一步 |
 |---|---|---|---|---|---|---|---|---|---|
-| 本地设置 | `load_local_settings`, `save_local_settings` | `load_local_settings`, `save_local_settings` | `SettingsBridge -> AppServiceBridge` | 待盘点 | `WriterCoreApi` | 无 | 否 | P0 | 废弃 `SettingsChangeBus`，由 Core 派发事件，平台端被动监听生效 |
-| 同步设置 | `load_syncable_settings`, `save_syncable_settings` | `load_syncable_settings`, `save_syncable_settings` | `SettingsBridge -> AppServiceBridge` | 待盘点 | `WriterCoreApi` | 无 | 否 | P1 | 补齐并统一事件 |
+| 本地设置 | `load_local_settings`, `save_local_settings` | `load_local_settings`, `save_local_settings`, `save_local_settings_envelope_json` | `SettingsBridge -> AppServiceBridge` | 待盘点 | `WriterCoreApi` | 无 | 部分 | P0 | Android 已改为消费 Core envelope 的 `SettingsSaved`；Linux 仍需接入同一事件模型 |
+| 同步设置 | `load_syncable_settings`, `save_syncable_settings` | `load_syncable_settings`, `save_syncable_settings`, `save_syncable_settings_envelope_json` | `SettingsBridge -> AppServiceBridge` | 待盘点 | `WriterCoreApi` | 无 | 部分 | P1 | Android 已改为消费 Core envelope 的 `SettingsSaved`；Linux 仍需补齐监听链路 |
 
 **小结**：
-- 设置生效机制严重分叉，Android 端直接使用了 `SettingsChangeBus` 这个内存临时总线补足了保存事件，未达到 "SettingsSaved 必须由 Core 广播" 的契约。
-- 必须统一事件模型与 ResultEnvelope。
+- Android 已移除 `SettingsChangeBus.notifyChanged()` / `markChanged()` 这类平台自行发事件路径，改为由 `CoreSettingsEvents` 记录 Core envelope 中的 `SettingsSaved`。
+- Core API 已提供设置保存 envelope JSON，并在 `changedEntities` 标记 `SettingsSaved`；Linux 仍需接入同一事件消费链路。
 
 ## 6. SyncCapability
 
@@ -120,12 +120,13 @@
    - 明确在 Core 中映射 libgit2 的 checkout conflict。
    - Android 同步和 Linux 同步统一消费 `SyncStatus.conflict`，停止使用裸字符串 (rawError) 或自己封装的 `SyncTaskOutcome`。
 2. **P0-3：SettingsCapability 保存/事件收敛，替代平台临时 bus**
-   - 废除 Android 端 `SettingsChangeBus.notifyChanged()`。
-   - 实现 Core 的 `SettingsSaved` 事件广播机制。
+   - Android 端已废除 `SettingsChangeBus.notifyChanged()` / `markChanged()`，保存设置后只消费 Core envelope 的 `SettingsSaved`。
+   - 继续补齐 Linux 侧 Core `SettingsSaved` 事件消费链路。
    - 双端保存设置统一经由 `saveLocalSettings` 等接口，UI 被动响应 Core 事件完成字号和动画开关刷新。
 3. **P1-1：MindMapCapability 双端入口补齐**
    - Linux backend 需要按 Android `NativeCoreBridge` 的已有模式，对接并暴露完整的 MindMap Edit 和 Snapshot API，确保双端能力对称。
 4. **P1-2：统一 ResultEnvelope 类型**
-   - 在 JNI 与 Backend 的所有接口中，彻底用标准化的 JSON 结构体 `ResultEnvelope` 替代现有各种散落的特化 JSON 拼接。
+   - `api::ResultEnvelope`、Android `BridgeResult` 包装和 JNI fallback 序列化基础层已落地。
+   - 继续在 UniFFI 与 Linux Backend 的所有接口中，用标准化的 JSON/DTO 结构体替代现有各种散落的特化 JSON 拼接。
 5. **P1-3：Android JNI / Linux backend 薄适配器化**
    - 清除所有的业务判断（如 `workspace_path.is_empty()` 判断、权限判定提示），全权由 Core 拒绝并返回错误码。

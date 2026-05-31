@@ -33,6 +33,7 @@ package com.xiwei.writerapp.data
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
+import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
 import com.xiwei.writerapp.model.*
 import java.io.File
@@ -155,13 +156,22 @@ internal class NativeCoreBridge(context: Context) {
     ): String?
 
 
-    // Helper classes for parsing Rust JSON responses
+    // Helper classes for parsing Rust ResultEnvelope JSON responses.
     private data class RustResponse<T>(
-        val success: Boolean,
-        val data: T?,
-        val code: String?,
-        val error: String?
-    )
+        val success: Boolean = false,
+        val data: T? = null,
+        val errorCode: String? = null,
+        val userMessage: String? = null,
+        val rawError: String? = null,
+        val warnings: List<String> = emptyList(),
+        val changedPaths: List<String> = emptyList(),
+        val changedEntities: List<Map<String, String?>> = emptyList(),
+        @SerializedName("code") private val legacyCode: String? = null,
+        @SerializedName("error") private val legacyError: String? = null
+    ) {
+        val code: String? get() = errorCode ?: legacyCode
+        val error: String? get() = userMessage ?: legacyError ?: rawError
+    }
 
     private data class RustChapterContent(
         val meta: ChapterMeta,

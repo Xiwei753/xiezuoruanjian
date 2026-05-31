@@ -4,7 +4,7 @@
 
 - Core domain：`workspace`、`project`、`volume`、`chapter`、`settings`、`sync_service`、`mind_map`、`starmap`、`writing_stats` 等模块负责真实业务和文件 I/O。
 - Facade：`facade::WriterCore` 聚合内部业务能力，是 **Core 内部协调层**；它不承诺作为平台稳定 DTO 边界，也不应该被外部直接调用。
-- Core API：`api::WriterCoreApi`、`api::types`、`api::error` 是**平台稳定入口**，面向 UniFFI、Linux binding、Android JNI 和未来前端。Android JNI 只能调用 `WriterCoreApi`。
+- Core API：`api::WriterCoreApi`、`api::types`、`api::error`、`api::envelope` 是**平台稳定入口**，面向 UniFFI、Linux binding、Android JNI 和未来前端。Android JNI 只能调用 `WriterCoreApi`。
 - UniFFI adapter：`app_service::WriterAppService` 只保留 Android 兼容的对象名和方法签名，负责接收 UniFFI 参数并委托 `WriterCoreApi`。
 
 > 注意：`sync_service` 的解耦拆分是后续阶段的任务，不在本次重构范围内。
@@ -15,6 +15,7 @@
 
 - `core/writer_core/src/api/types.rs`：平台稳定 DTO，如 `ProjectDto`、`VolumeDto`、`ChapterMetaDto`、`ChapterContentDto`、`ChapterSaveReceiptDto`、`RecentEditDto`、`LocalSettingsDto`、`SyncConfigDto`、`SyncStateDto`、`SyncResultDto` 等。
 - `core/writer_core/src/api/error.rs`：平台稳定错误 `WriterError`，集中从 `crate::error::Error` 映射，保留 `Io`、`Json`、`InvalidWorkspace`、`ProjectNotFound`、`VolumeNotFound`、`ChapterNotFound`、`EmptyOverwriteBlocked`、`NotImplemented`、`RefuseToDeleteWorkspaceRoot`、`InvalidDeleteTarget`、`Other` 语义。
+- `core/writer_core/src/api/envelope.rs`：跨平台标准 `ResultEnvelope<T>`，统一序列化 `success`、`data`、`errorCode`、`userMessage`、`rawError`、`warnings`、`changedPaths`、`changedEntities`。平台端只能根据 `success` / `errorCode` / `userMessage` 分支，不能解析 `rawError` 猜错误。
 - `core/writer_core/src/api/service.rs`：`WriterCoreApi` 持有 workspace path，统一封装 `facade::WriterCore` 调用，返回 API DTO / `WriterError`，不依赖 Android、Linux、QML 或 UniFFI。
 
 `writer_core` 当前稳定能力包括：
@@ -65,6 +66,8 @@
 
 ### 错误处理
 Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来处理内部失败模式。跨平台 `api::error::WriterError` 是平台暴露层稳定错误类型，由 `api/error.rs` 集中映射。跨端 Bridge 必须传播稳定错误码和错误语义，不得吞错或只依赖字符串匹配。当前稳定错误码包括 `IO_ERROR`、`JSON_ERROR`、`INVALID_WORKSPACE`、`PROJECT_NOT_FOUND`、`VOLUME_NOT_FOUND`、`CHAPTER_NOT_FOUND`、`EMPTY_OVERWRITE_BLOCKED`、`NOT_IMPLEMENTED`、`REFUSE_DELETE_WORKSPACE_ROOT`、`INVALID_DELETE_TARGET`、`OTHER`。
+
+跨端 JSON 入口必须返回标准 `ResultEnvelope`。JNI fallback 已通过 `ResultEnvelope::from_api_result` 序列化，Android legacy parser 兼容旧字段但优先读取 `errorCode` / `userMessage`。设置保存类 envelope 会把 `SettingsSaved` 写入 `changedEntities`；Android `SettingsBridge` 已改为消费该 Core 标记，不再通过平台端 `SettingsChangeBus.notifyChanged()` 自行发保存事件。
 
 写入、保存、同步和写作统计事件类 API 不允许用裸 `false` 代替错误。`bool` 只能表示业务成功值；Core API 失败必须返回 `WriterError`，Android Bridge 必须转换为 `BridgeResult.Error`。
 

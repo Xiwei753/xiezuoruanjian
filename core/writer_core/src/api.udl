@@ -305,11 +305,15 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean save_local_settings(LocalSettingsDto settings);
 
+    string save_local_settings_envelope_json(LocalSettingsDto settings);
+
     [Throws=WriterError]
     SyncableSettingsDto load_syncable_settings();
 
     [Throws=WriterError]
     boolean save_syncable_settings(SyncableSettingsDto settings);
+
+    string save_syncable_settings_envelope_json(SyncableSettingsDto settings);
 
     [Throws=WriterError]
     SyncConfigDto load_sync_config();

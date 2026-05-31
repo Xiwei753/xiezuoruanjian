@@ -209,6 +209,10 @@ impl WriterAppService {
         self.api.save_local_settings(settings)
     }
 
+    pub fn save_local_settings_envelope_json(&self, settings: LocalSettingsDto) -> String {
+        self.api.save_local_settings_envelope_json(settings)
+    }
+
     pub fn load_syncable_settings(&self) -> Result<SyncableSettingsDto, WriterError> {
         self.api.load_syncable_settings()
     }
@@ -218,6 +222,10 @@ impl WriterAppService {
         settings: SyncableSettingsDto,
     ) -> Result<bool, WriterError> {
         self.api.save_syncable_settings(settings)
+    }
+
+    pub fn save_syncable_settings_envelope_json(&self, settings: SyncableSettingsDto) -> String {
+        self.api.save_syncable_settings_envelope_json(settings)
     }
 
     pub fn load_sync_config(&self) -> Result<SyncConfigDto, WriterError> {

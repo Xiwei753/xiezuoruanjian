@@ -5,9 +5,11 @@
 //! API errors without depending on any platform UI or binding implementation.
 
 pub mod error;
+pub mod envelope;
 pub mod service;
 pub mod types;
 
 pub use error::WriterError;
+pub use envelope::{ChangedEntityDto, ResultEnvelope};
 pub use service::WriterCoreApi;
 pub use types::*;
