@@ -1,3 +1,21 @@
+// =============================================================================
+// mod.rs — Linux 客户端 QObject 后端聚合与生命周期管理器
+// =============================================================================
+//
+// 引用了什么：
+// - qmetaobject::QObjectBox/QmlEngine/pinned：Qt 绑定宏与底层引擎控制接口。
+// - app_backend：引入各领域具体的后端的强类型结构体定义。
+//
+// 干什么的：
+// - 声明并聚合所有的后台适配器子模块（workspace_backend、sync_backend 等）。
+// - 实现 SafeAppPtr 指针安全共享机制，用于使子模块获取主 AppBackend 的上下文指针，避免内存泄漏与生命周期交叉问题。
+// - 提供 BackendRuntime 所有者结构体，强引用并管理所有被 QObjectBox 包装的后端适配器，保证它们的生命周期贯穿 Qt 程序的整个生命周期。
+// - 提供 register_context_properties 方法，负责在 main.qml 加载前一站式绑定所有的 Context Property。
+//
+// 被什么引用：
+// - 被 apps/linux/src/main.rs 引用，用于实例化 BackendRuntime 并注册全局 QML 环境属性。
+// =============================================================================
+
 pub mod app_backend;
 pub mod json_utils;
 

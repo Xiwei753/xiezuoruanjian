@@ -1,3 +1,22 @@
+// =============================================================================
+// document_handler.rs — QTextDocument 视觉排版操作器
+// =============================================================================
+//
+// 引用了什么：
+// - qmetaobject：提供 QObject 宏定义，在 Rust 侧实现供 QML 直接调用的方法与属性。
+// - cpp：内联 C++ 头文件与类，操纵 Qt 原生 C++ 类（QQuickTextDocument、QTextDocument、QTextCursor、QTextBlockFormat 等）。
+//
+// 干什么的：
+// - 接管 QML TextArea 关联的 QTextDocument 实例。
+// - 负责纯文本的视觉排版调整，例如行高比例（QTextBlockFormat::setLineHeight）、段首首行缩进（setTextIndent）及文本颜色。
+// - 实现纯文本的安全提取（doc->toPlainText()）以及按行安全插入纯文本，杜绝 HTML 字符串或富文本内容物理污染磁盘正文。
+// - 提供在切换章节时一键清空撤销栈（clearUndoRedoStacks()）的底层实现。
+//
+// 被什么引用：
+// - 被 apps/linux/src/main.rs 注册为 QML 类 "DocumentHandler" (在 "Writer" 命名空间下)。
+// - 被 apps/linux/qml/EditorController.qml 实例化并绑定至 TextArea。
+// =============================================================================
+
 //! # QTextDocument 排版操作（Linux UI 层 - Backend Adapter）
 //!
 //! 负责纯文本的视觉排版（行距、首行缩进），不改变正文内容。

@@ -22,6 +22,9 @@ Item {
     property var beforeSyncHook: null
     signal settingsChanged()
 
+    property string activeOperationId: ""
+    property string activeOperationKind: ""
+
     // Remove color since root is now an Item
     function statusKind() {
         var s = root.backendRef ? root.backendRef.sync_status : ""
@@ -52,7 +55,16 @@ Item {
                 var resLen = root.backendRef ? root.backendRef.sync_operation_state.length : 0
                 window.debugLog("sync", "action_completed_callback", "resultLength=" + resLen)
             }
-            if (root.backendRef) { try { var obj = JSON.parse(root.backendRef.sync_operation_state); syncResultArea.text = obj.summary || ""; } catch(e) { syncResultArea.text = root.backendRef.sync_operation_state; } }
+            if (root.backendRef) {
+                try {
+                    var obj = JSON.parse(root.backendRef.sync_operation_state);
+                    if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
+                        syncResultArea.text = obj.summary || "";
+                    }
+                } catch(e) {
+                    syncResultArea.text = root.backendRef.sync_operation_state;
+                }
+            }
         }
         function onSync_status_changed() {
             var resLen = root.backendRef ? root.backendRef.sync_operation_state.length : 0
@@ -66,7 +78,16 @@ Item {
                     window.debugLog("sync", "status_changed_callback", "resultLength=" + resLen)
                 }
             }
-            if (root.backendRef) { try { var obj = JSON.parse(root.backendRef.sync_operation_state); syncResultArea.text = obj.summary || ""; } catch(e) { syncResultArea.text = root.backendRef.sync_operation_state; } }
+            if (root.backendRef) {
+                try {
+                    var obj = JSON.parse(root.backendRef.sync_operation_state);
+                    if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
+                        syncResultArea.text = obj.summary || "";
+                    }
+                } catch(e) {
+                    syncResultArea.text = root.backendRef.sync_operation_state;
+                }
+            }
         }
     }
 
@@ -181,7 +202,11 @@ Item {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
                     syncResultArea.text = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
                     if (typeof root.beforeSyncHook === "function") root.beforeSyncHook()
-                    if (root.backendRef) root.backendRef.perform_sync()
+                    if (root.backendRef) {
+                        var opId = root.backendRef.perform_sync()
+                        root.activeOperationId = opId
+                        root.activeOperationKind = "sync"
+                    }
                 }
             }
 
@@ -189,10 +214,15 @@ Item {
                 text: qsTr("运行诊断")
                 theme: root.theme
                 variant: "secondary"
+                enabled: !(root.backendRef && root.backendRef.sync_in_progress)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")
-                    if (root.backendRef) root.backendRef.perform_sync_diagnostics()
+                    if (root.backendRef) {
+                        var opId = root.backendRef.perform_sync_diagnostics()
+                        root.activeOperationId = opId
+                        root.activeOperationKind = "dry_run"
+                    }
                 }
             }
 
@@ -232,14 +262,25 @@ Item {
                 TextArea {
                     id: syncResultArea
                     width: logScroll.availableWidth
-                    text: { if (!root.backendRef) return ""; try { var obj = JSON.parse(root.backendRef.sync_operation_state); return obj.summary || ""; } catch(e) { return root.backendRef.sync_operation_state; } }
-                    color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.onDangerContainer : "#410002") : (theme ? theme.onSurfaceVariant : "#42474E")
+                    text: ""
+                    color: (root.backendRef && root.isFailureStatus(root.backendRef.sync_status)) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.onSurfaceVariant : "#42474E")
                     font.family: "monospace"
                     font.pixelSize: theme ? theme.caption : 12
                     readOnly: true
                     background: null
                     wrapMode: TextEdit.Wrap
                 }
+            }
+        }
+    }
+
+    Component.onCompleted: {
+        if (root.backendRef) {
+            try {
+                var obj = JSON.parse(root.backendRef.sync_operation_state);
+                syncResultArea.text = obj.summary || "";
+            } catch(e) {
+                syncResultArea.text = root.backendRef.sync_operation_state;
             }
         }
     }

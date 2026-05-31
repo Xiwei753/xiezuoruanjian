@@ -1,3 +1,21 @@
+// =============================================================================
+// workspace_backend.rs — 工作区领域 QObject 后端适配层
+// =============================================================================
+//
+// 引用了什么：
+// - super::*：引入 AppBackend 核心后端的全部方法与结构体。
+// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新工作区状态。
+//
+// 干什么的：
+// - 实现 WorkspaceBackend 结构体，作为 QML 中 "workspaceBackend" 对象的桥梁。
+// - 提供工作区的全生命周期交互，包含自动恢复上次工作区、唤起 RFD 文件夹框选择路径新建/打开工作区等。
+// - 支持从 GitHub 克隆（init_workspace_from_github & execute_github_init）拉取已有工作区至本地，并在异步线程中进行安全性操作。
+// - 负责向上层 QML 主页提供当前工作区路径（workspace_path）和是否已加载工作区（has_workspace）属性，以驱动界面渲染。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化工作区后端并绑定为 QML 全局上下文属性。
+// =============================================================================
+
 use super::*;
 use crate::backend::SafeAppPtr;
 
@@ -420,6 +438,10 @@ impl AppBackend {
         let proxy_host_str = proxy_host.to_string();
         let proxy_port_val = proxy_port;
 
+        let op_id = uuid::Uuid::new_v4().to_string();
+        self.current_sync_operation_id = op_id.clone();
+        self.current_sync_operation_kind = "sync".to_string();
+
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
         self.current_sync_operation_state = "正在初始化...".to_string();
@@ -432,8 +454,10 @@ impl AppBackend {
             });
         });
 
+        let op_id_capture = op_id.clone();
         thread::spawn(move || {
             let result = Self::do_github_init(
+                &op_id_capture,
                 &path_str, &remote_url_str, &branch_str, &token_str,
                 &proxy_type_str, &proxy_host_str, proxy_port_val,
             );
@@ -443,6 +467,7 @@ impl AppBackend {
 
 // AppBackend::do_github_init
     pub(crate) fn do_github_init(
+        operation_id: &str,
         path: &str,
         remote_url: &str,
         branch: &str,
@@ -516,7 +541,7 @@ impl AppBackend {
                             // Remote is empty or not a valid workspace — create workspace locally
                             if let Err(e) = api.create_workspace_if_needed() {
                                 return SyncTaskOutcome {
-                                    sync_status: "error".to_string(),
+                                    operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
                                     action_result: format!("克隆成功但工作区初始化失败: {}", e),
                                 };
                             }
@@ -538,24 +563,24 @@ impl AppBackend {
                                         let err = push_res.error.unwrap_or_default();
                                         if let Some(se) = save_outcome {
                                             return SyncTaskOutcome {
-                                                sync_status: "error".to_string(),
+                                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
                                                 action_result: format!("工作区已创建，但推送到远端失败: {}，且同步配置保存失败: {}. 请检查权限/磁盘。", mask_sync_error(&err), se),
                                             };
                                         }
                                         return SyncTaskOutcome {
-                                            sync_status: sync_error_category(&err),
+                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&err),
                                             action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&err)),
                                         };
                                     }
                                     Err(e) => {
                                         if let Some(se) = save_outcome {
                                             return SyncTaskOutcome {
-                                                sync_status: "error".to_string(),
+                                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
                                                 action_result: format!("工作区已创建，但推送到远端失败: {}，且同步配置保存失败: {}. 请检查权限/磁盘。", mask_sync_error(&e.to_string()), se),
                                             };
                                         }
                                         return SyncTaskOutcome {
-                                            sync_status: sync_error_category(&e.to_string()),
+                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&e.to_string()),
                                             action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&e.to_string())),
                                         };
                                     }
@@ -565,24 +590,24 @@ impl AppBackend {
                         // Save config + secrets to disk
                         match save_sync_configs(path, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
-                                sync_status: "success".to_string(),
+                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "success".to_string(),
                                 action_result: "克隆并初始化工作区成功".to_string(),
                             },
                             Err(e) => SyncTaskOutcome {
-                                sync_status: "error".to_string(),
+                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
                                 action_result: format!("工作区已创建/同步可能完成，但同步配置保存失败: {}. 请检查权限/磁盘，不要继续同步。", e),
                             },
                         }
                     } else {
                         let err = result.error.unwrap_or_default();
                         SyncTaskOutcome {
-                            sync_status: sync_error_category(&err),
+                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&err),
                             action_result: format!("克隆失败: {}", mask_sync_error(&err)),
                         }
                     }
                 }
                 Err(e) => SyncTaskOutcome {
-                    sync_status: sync_error_category(&e.to_string()),
+                    operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&e.to_string()),
                     action_result: format!("克隆失败: {}", mask_sync_error(&e.to_string())),
                 },
             }
@@ -594,11 +619,11 @@ impl AppBackend {
                     if result.status == writer_core::sync_service::SyncStatus::Success {
                         match save_sync_configs(path, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
-                                sync_status: "success".to_string(),
+                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "success".to_string(),
                                 action_result: "远程仓库已配置并同步成功".to_string(),
                             },
                             Err(e) => SyncTaskOutcome {
-                                sync_status: "error".to_string(),
+                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
                                 action_result: format!("同步成功但配置保存失败: {}. 请检查权限/磁盘，不要继续同步。", e),
                             },
                         }
@@ -633,7 +658,7 @@ impl AppBackend {
                             file_str
                         );
                         SyncTaskOutcome {
-                            sync_status: "conflict".to_string(),
+                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "conflict".to_string(),
                             action_result: m,
                         }
                     } else {
@@ -649,7 +674,7 @@ impl AppBackend {
                             format!("同步失败: {}", mask_sync_error(&err))
                         };
                         SyncTaskOutcome {
-                            sync_status: cat,
+                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: cat,
                             action_result,
                         }
                     }
@@ -667,7 +692,7 @@ impl AppBackend {
                         format!("同步失败: {}", mask_sync_error(&err_str))
                     };
                     SyncTaskOutcome {
-                        sync_status: cat,
+                        operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: cat,
                         action_result,
                     }
                 }
@@ -675,13 +700,13 @@ impl AppBackend {
         } else if is_git_repo() {
             // Has git repo but no workspace — error, user should open as workspace
             SyncTaskOutcome {
-                sync_status: "error".to_string(),
+                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
                 action_result: "目录包含 Git 仓库但不是 Writer 工作区。请先新建本地工作区（新建作品后保存），再配置同步。".to_string(),
             }
         } else {
             // Non-empty, no workspace, no git — blocked
             SyncTaskOutcome {
-                sync_status: "error".to_string(),
+                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
                 action_result: "目录非空且不是 Writer 工作区。请选择空目录，或先新建本地工作区。".to_string(),
             }
         }

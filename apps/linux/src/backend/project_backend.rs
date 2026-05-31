@@ -1,3 +1,21 @@
+// =============================================================================
+// project_backend.rs — 作品、分卷及章节生命周期领域 QObject 后端适配层
+// =============================================================================
+//
+// 引用了什么：
+// - super::*：引入 AppBackend 核心后端的全部方法与结构体。
+// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新项目与目录树状态。
+//
+// 干什么的：
+// - 实现 ProjectBackend 结构体，作为 QML 中 "projectBackend" 对象的桥梁。
+// - 提供作品（Project）、分卷（Volume）以及章节（Chapter）生命周期的修改接口，包含一键创建、重命名、安全物理删除和重排序。
+// - 负责向上层 QML 暴露作品列表与目录层级架构（Tree Model JSON & QJsonArray），以驱动左侧写作导航栏树的动态展示。
+// - 维护编辑区当前选中实体节点（selectedProjectId / selectedVolumeId / selectedChapterId）并在章节内容被外界更新或删除时执行安全状态同步（reconcile_selection_after_tree_reload）。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化项目后端并绑定为 QML 全局上下文属性。
+// =============================================================================
+
 use super::*;
 use crate::backend::SafeAppPtr;
 

@@ -424,7 +424,7 @@ Rectangle {
                 }
             }
 
-        // Right side: Toolbar + Editor
+        // Middle Area: Toolbar + Editor
         ColumnLayout {
             SplitView.fillWidth: true
             spacing: 0
@@ -458,238 +458,134 @@ Rectangle {
                 onOpenStats: { root.drawerTab = 2; root.drawerOpen = true; }
             }
 
-            // Main content area (Editor + Drawer)
-            RowLayout {
+            // Editor Container Area
+            Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 0
+                color: dt ? dt.bg : "#111318"
 
-                // Editor Area
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    color: dt ? dt.bg : "#111318"
+                // Centered paper container
+                Item {
+                    anchors.fill: parent
+                    anchors.leftMargin: dt ? dt.sp32 : 32
+                    anchors.rightMargin: root.drawerOpen ? (dt ? dt.sp32 : 32) : (dt ? dt.sp32 + 24 : 56)
+                    anchors.topMargin: dt ? dt.sp32 : 32
+                    anchors.bottomMargin: dt ? dt.sp32 : 32
 
-                    // Centered paper container
-                    Item {
-                        anchors.fill: parent
-                        anchors.margins: dt ? dt.sp32 : 32
-
-                        // Paper background - centered, responsive max width
-                        Rectangle {
-                            id: paperBg
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            property real editorWidthRatio: parent.width >= 1400 ? 0.78 : 1.0
-                            property int editorMaxWidth: parent.width >= 1600 ? 1280 : 960
-                            property real baseResponsiveWidth: Math.min(parent.width, editorMaxWidth, Math.max(820, parent.width * editorWidthRatio))
-                            height: parent.height
-                            color: dt ? dt.editorBg : "#191C21"
-                            radius: dt ? dt.radiusMd : 12
-                            border.color: dt ? dt.border : "#2A2E36"
-                            border.width: 1
-                            
-                            property real currentEditorWidth: root.backendRef && root.backendRef.setting_linux_editor_width > 0 ? root.backendRef.setting_linux_editor_width : baseResponsiveWidth
-                            width: currentEditorWidth
-                            
-                            Timer {
-                                id: editorWidthDebounceTimer
-                                interval: 300
-                                repeat: false
-                                onTriggered: {
-                                    if (root.backendRef && Math.abs(root.backendRef.setting_linux_editor_width - paperBg.currentEditorWidth) >= 1.0) {
-                                        root.backendRef.setting_linux_editor_width = paperBg.currentEditorWidth;
-                                    }
-                                }
-                            }
-                            
-                            function resetEditorWidth() {
-                                if (root.backendRef) {
-                                    root.backendRef.setting_linux_editor_width = 0;
-                                }
-                                currentEditorWidth = baseResponsiveWidth;
-                            }
-
-                            // Left edge drag handle
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                width: 4
-                                color: leftDragArea.containsMouse || leftDragArea.pressed ? (dt ? dt.primary : "#006497") : "transparent"
-                                Behavior on color { ColorAnimation { duration: 120 } }
-
-                                MouseArea {
-                                    id: leftDragArea
-                                    anchors.fill: parent
-                                    anchors.margins: -4
-                                    hoverEnabled: true
-                                    cursorShape: Qt.SizeHorCursor
-                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                    property real startX: 0
-                                    property real startWidth: 0
-                                    onPressed: function(mouse) {
-                                        if (mouse.button === Qt.RightButton) {
-                                            paperBg.resetEditorWidth();
-                                            return;
-                                        }
-                                        startX = mouse.x;
-                                        startWidth = paperBg.currentEditorWidth;
-                                    }
-                                    onPositionChanged: function(mouse) {
-                                        if (pressed && (mouse.buttons & Qt.LeftButton)) {
-                                            var dx = mouse.x - startX;
-                                            var newWidth = startWidth - dx * 2;
-                                            var maxPossible = Math.max(1400, paperBg.parent.width - 64);
-                                            newWidth = Math.max(720, Math.min(newWidth, maxPossible));
-                                            paperBg.currentEditorWidth = newWidth;
-                                            editorWidthDebounceTimer.restart();
-                                        }
-                                    }
-                                    onDoubleClicked: paperBg.resetEditorWidth()
-                                }
-                            }
-
-                            // Right edge drag handle
-                            Rectangle {
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                width: 4
-                                color: rightDragArea.containsMouse || rightDragArea.pressed ? (dt ? dt.primary : "#006497") : "transparent"
-                                Behavior on color { ColorAnimation { duration: 120 } }
-
-                                MouseArea {
-                                    id: rightDragArea
-                                    anchors.fill: parent
-                                    anchors.margins: -4
-                                    hoverEnabled: true
-                                    cursorShape: Qt.SizeHorCursor
-                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                    property real startX: 0
-                                    property real startWidth: 0
-                                    onPressed: function(mouse) {
-                                        if (mouse.button === Qt.RightButton) {
-                                            paperBg.resetEditorWidth();
-                                            return;
-                                        }
-                                        startX = mouse.x;
-                                        startWidth = paperBg.currentEditorWidth;
-                                    }
-                                    onPositionChanged: function(mouse) {
-                                        if (pressed && (mouse.buttons & Qt.LeftButton)) {
-                                            var dx = mouse.x - startX;
-                                            var newWidth = startWidth + dx * 2;
-                                            var maxPossible = Math.max(1400, paperBg.parent.width - 64);
-                                            newWidth = Math.max(720, Math.min(newWidth, maxPossible));
-                                            paperBg.currentEditorWidth = newWidth;
-                                            editorWidthDebounceTimer.restart();
-                                        }
-                                    }
-                                    onDoubleClicked: paperBg.resetEditorWidth()
-                                }
-                            }
-                        }
+                    // Paper background - centered, responsive max width
+                    Rectangle {
+                        id: paperBg
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        height: parent.height
+                        color: dt ? dt.editorBg : "#191C21"
+                        radius: dt ? dt.radiusMd : 12
+                        border.color: dt ? dt.border : "#2A2E36"
+                        border.width: 1
                         
-                        ScrollView {
-                            id: editorScroll
-                            anchors.fill: paperBg
-                            anchors.margins: dt ? dt.sp20 : 20
-                            clip: true
-                            contentWidth: availableWidth
-                            contentHeight: Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight, availableHeight)
-                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                            ScrollBar.vertical: ScrollBar {
-                                policy: ScrollBar.AsNeeded
-                                parent: editorScroll
-                                anchors.top: editorScroll.top
-                                anchors.bottom: editorScroll.bottom
-                                anchors.right: editorScroll.right
-                            }
-
-                            TextArea {
-                                id: editorArea
-                                property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
-                                width: editorScroll.availableWidth
-                                height: Math.max(implicitHeight, emptyContentMinimumHeight)
-                                color: dt ? dt.editorText : "#E2E2E5"
-                                selectedTextColor: dt ? dt.selectedText : "#CCE5FF"
-                                selectionColor: dt ? dt.primary : "#006497"
-                                font.pixelSize: root.backendRef ? root.backendRef.setting_font_size : 16
-                                font.family: "serif"
-                                wrapMode: TextArea.Wrap
-                                verticalAlignment: TextInput.AlignTop
-                                background: Rectangle { color: "transparent" }
-                                enabled: editorController.chapterId !== ""
-                                focus: true
-                                activeFocusOnTab: true
-                                selectByMouse: true
-                                persistentSelection: true
-                                leftPadding: dt ? dt.sp16 : 16
-                                rightPadding: dt ? dt.sp16 : 16
-                                topPadding: dt ? dt.sp16 : 16
-                                bottomPadding: dt ? dt.sp16 : 16
-                                implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
-
-                                cursorVisible: false
-
-                                text: ""
-
-                                Keys.onPressed: function(event) {
-                                    if (event.key === Qt.Key_Backspace ||
-                                        event.key === Qt.Key_Delete ||
-                                        (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
-                                        editorController.markPotentialExplicitClear();
-                                    }
-                                }
-
-                            }
+                        // Responsive width capped at max 820px, and clamped within available parent width
+                        width: Math.min(parent.width, 820)
+                    }
+                    
+                    ScrollView {
+                        id: editorScroll
+                        anchors.fill: paperBg
+                        anchors.margins: dt ? dt.sp20 : 20
+                        clip: true
+                        contentWidth: availableWidth
+                        contentHeight: Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight, availableHeight)
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                        ScrollBar.vertical: ScrollBar {
+                            policy: ScrollBar.AsNeeded
+                            parent: editorScroll
+                            anchors.top: editorScroll.top
+                            anchors.bottom: editorScroll.bottom
+                            anchors.right: editorScroll.right
                         }
 
-                        Item {
-                            id: cursorOverlay
-                            anchors.fill: editorScroll
-                            clip: false
-                            z: editorScroll.z + 1
+                        TextArea {
+                            id: editorArea
+                            property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
+                            width: editorScroll.availableWidth
+                            height: Math.max(implicitHeight, emptyContentMinimumHeight)
+                            color: dt ? dt.editorText : "#E2E2E5"
+                            selectedTextColor: dt ? dt.selectedText : "#CCE5FF"
+                            selectionColor: dt ? dt.primary : "#006497"
+                            font.pixelSize: root.backendRef ? root.backendRef.setting_font_size : 16
+                            font.family: "serif"
+                            wrapMode: TextArea.Wrap
+                            verticalAlignment: TextInput.AlignTop
+                            background: Rectangle { color: "transparent" }
+                            enabled: editorController.chapterId !== ""
+                            focus: true
+                            activeFocusOnTab: true
+                            selectByMouse: true
+                            persistentSelection: true
+                            leftPadding: dt ? dt.sp16 : 16
+                            rightPadding: dt ? dt.sp16 : 16
+                            topPadding: dt ? dt.sp16 : 16
+                            bottomPadding: dt ? dt.sp16 : 16
+                            implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
 
-                            SmoothCursor {
-                                targetTextArea: editorArea
-                                overlayItem: cursorOverlay
-                                dt: root.dt
-                                smoothCursorEnabled: root.backendRef ? root.backendRef.setting_smooth_cursor_enabled : true
-                                typingAnimationEnabled: root.backendRef ? root.backendRef.setting_typing_animation_enabled : true
-                                cursorAnimationDuration: root.backendRef ? root.backendRef.setting_smooth_cursor_duration_ms : 80
-                                typingAnimationDuration: root.backendRef ? root.backendRef.setting_typing_animation_duration_ms : 100
+                            cursorVisible: false
+
+                            text: ""
+
+                            Keys.onPressed: function(event) {
+                                if (event.key === Qt.Key_Backspace ||
+                                    event.key === Qt.Key_Delete ||
+                                    (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
+                                    editorController.markPotentialExplicitClear();
+                                }
                             }
                         }
                     }
 
-                    // Empty state
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        spacing: dt ? dt.sp12 : 12
-                        visible: !editorController.chapterId
+                    Item {
+                        id: cursorOverlay
+                        anchors.fill: editorScroll
+                        clip: false
+                        z: editorScroll.z + 1
 
-                        Rectangle {
-                            width: 32; height: 32
-                            radius: 16
-                            color: dt ? dt.textSecondary : "#8C9198"
-                            opacity: 0.1
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-                        AppText {
-                            text: qsTr("选择一个章节开始写作")
-                            color: dt ? dt.textSecondary : "#8C9198"
-                            font.pixelSize: dt ? dt.fontLg : 16
-                            Layout.alignment: Qt.AlignHCenter
+                        SmoothCursor {
+                            targetTextArea: editorArea
+                            overlayItem: cursorOverlay
+                            dt: root.dt
+                            smoothCursorEnabled: root.backendRef ? root.backendRef.setting_smooth_cursor_enabled : true
+                            typingAnimationEnabled: root.backendRef ? root.backendRef.setting_typing_animation_enabled : true
+                            cursorAnimationDuration: root.backendRef ? root.backendRef.setting_smooth_cursor_duration_ms : 80
+                            typingAnimationDuration: root.backendRef ? root.backendRef.setting_typing_animation_duration_ms : 100
                         }
                     }
                 }
 
-            // Right drawer button (when closed)
+                // Empty state
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    spacing: dt ? dt.sp12 : 12
+                    visible: !editorController.chapterId
+
+                    Rectangle {
+                        width: 32; height: 32
+                        radius: 16
+                        color: dt ? dt.textSecondary : "#8C9198"
+                        opacity: 0.1
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    AppText {
+                        text: qsTr("选择一个章节开始写作")
+                        color: dt ? dt.textSecondary : "#8C9198"
+                        font.pixelSize: dt ? dt.fontLg : 16
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                }
+
+                // Right drawer button (when closed)
                 Rectangle {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 36
                     visible: !root.drawerOpen
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 36
                     color: "transparent"
 
                     ColumnLayout {
@@ -718,21 +614,25 @@ Rectangle {
                         }
                     }
                 }
-
-                // Right drawer
-                RightDrawer {
-                    Layout.fillHeight: true
-                    dt: root.dt
-                    backendRef: root.backendRef
-                    isOpen: root.drawerOpen
-                    currentTab: root.drawerTab
-                    aiCapable: root.aiCapable
-                    aiEnabled: root.aiEnabled
-                    onCloseRequested: root.drawerOpen = false
-                    onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
-                    onOpenSettings: root.openSettings()
-                }
             }
+        }
+
+        // Right drawer - direct sibling in SplitView
+        RightDrawer {
+            id: rightDrawerRect
+            SplitView.preferredWidth: 320
+            SplitView.minimumWidth: 240
+            SplitView.maximumWidth: 480
+            visible: root.drawerOpen
+            dt: root.dt
+            backendRef: root.backendRef
+            isOpen: root.drawerOpen
+            currentTab: root.drawerTab
+            aiCapable: root.aiCapable
+            aiEnabled: root.aiEnabled
+            onCloseRequested: root.drawerOpen = false
+            onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
+            onOpenSettings: root.openSettings()
         }
     }
 

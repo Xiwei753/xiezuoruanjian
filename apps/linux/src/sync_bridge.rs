@@ -1,19 +1,22 @@
-//! # 同步桥接（Linux UI 层 - Backend Adapter）
-//!
-//! 同步相关的辅助函数：错误掩码、错误分类、诊断状态判定。
-//!
-//! ## 架构定位
-//!
-//! ```text
-//! QML SyncPage → sync_bridge::mask_sync_error() / sync_error_category()
-//!   → WriterCoreApi / sync_service
-//! ```
-//!
-//! ## 职责边界
-//!
-//! - **做**：错误消息脱敏（移除 Token）、错误分类（网络/认证/冲突等）、诊断状态判定
-//! - **不做**：实际同步操作（由 WriterCoreApi::perform_sync 负责）
-//! - **不做**：同步配置管理（由 WriterCoreApi::load_sync_config 负责）
+// =============================================================================
+// sync_bridge.rs — 网络同步与诊断任务桥接层
+// =============================================================================
+//
+// 引用了什么：
+// - writer_core::api::types::SyncDiagnosticsResultDto：核心库提供的强类型同步诊断 DTO。
+// - writer_core::api::WriterCoreApi：核心库对外的统一 API 入口。
+// - writer_core::sync_service：核心底层的 Git 与 RESTful 同步控制服务。
+//
+// 干什么的：
+// - 封装多线程异步同步/诊断任务结果传输结构体（SyncTaskOutcome），提供 operation_id 和 operation_kind。
+// - 负责错误消息脱敏处理（mask_sync_error），剥离 Token 等隐私信息，严守数据防泄露红线。
+// - 将底层网络或 Git 抛出的原始错误分类映射为 UI 状态码（sync_error_category），供 StatusPill 等组件渲染。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/sync_backend.rs 引用，用于启动异步同步线程并处理其回调结果。
+// - 被 apps/linux/src/backend/workspace_backend.rs 引用，协助 GitHub 初始化克隆工作区。
+// =============================================================================
+
 
 use writer_core::api::types::SyncDiagnosticsResultDto;
 use writer_core::api::WriterCoreApi;
@@ -21,6 +24,8 @@ use writer_core::sync_service::{SyncConfig, SyncSecrets};
 
 /// 同步任务结果封装。
 pub struct SyncTaskOutcome {
+    pub operation_id: String,
+    pub operation_kind: String,
     pub sync_status: String,
     pub action_result: String,
 }

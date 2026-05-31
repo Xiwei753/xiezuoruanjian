@@ -1,3 +1,20 @@
+// =============================================================================
+// settings_backend.rs — 应用配置与用户偏好领域 QObject 后端适配层
+// =============================================================================
+//
+// 引用了什么：
+// - super::*：引入 AppBackend 核心后端的全部方法与结构体。
+// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新本地/同步设置状态。
+//
+// 干什么的：
+// - 实现 SettingsBackend 结构体，作为 QML 中 "settingsBackend" 对象的桥梁。
+// - 维护并对外公开与设置 schema 强类型匹配的 Qt 属性，如字号、行距、自动保存延迟、首行缩进宽度、主题及 Monet 动态调色。
+// - 支持对本地不随云端同步的本地设置（LocalSettingsDto，如侧边栏 sidebar 宽度、打字动画开关）以及自动随网络同步的全局设置（SyncableSettingsDto，如作品的字体偏好）进行强类型校验的加载（load_local_settings）与安全性持久化落盘（save_local_settings）。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化设置后端并绑定为 QML 全局上下文属性。
+// =============================================================================
+
 use super::*;
 use crate::backend::SafeAppPtr;
 

@@ -1,3 +1,22 @@
+// =============================================================================
+// editor_backend.rs — 编辑器与写作统计领域 QObject 后端适配层
+// =============================================================================
+//
+// 引用了什么：
+// - super::*：引入 AppBackend 核心后端的全部方法与结构体。
+// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新正文状态与字数信息。
+//
+// 干什么的：
+// - 实现 EditorBackend 结构体，作为 QML 中 "editorBackend" 对象的桥梁。
+// - 负责编辑器核心章节读取（open_chapter & get_chapter_content）、防误删安全保存（save_chapter）、正文清空（clear_chapter_content）以及字数重新计算（calculate_word_count）。
+// - 记录并上报界面层触发的高频字符录入事件流，并按时间、项目、章节、设备等维度提供图表所需的统计快照 JSON 对象（get_writing_stats_summary_object 等）。
+// - 接收来自界面的自动同步请求（request_auto_sync）与客户端日志上报（log_qml）。
+// - 提供动作命令注册与调度执行机制（list_registered_actions & execute_action），作为 Action-Driven UI 智能体的重要旁路底座。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化编辑器后端并绑定为 QML 全局上下文属性。
+// =============================================================================
+
 use super::*;
 use crate::backend::SafeAppPtr;
 

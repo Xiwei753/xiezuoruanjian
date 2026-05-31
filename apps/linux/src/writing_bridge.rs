@@ -1,3 +1,23 @@
+// =============================================================================
+// writing_bridge.rs — 写作与编辑器数据桥接层
+// =============================================================================
+//
+// 引用了什么：
+// - writer_core::api::error::WriterError：核心统一业务错误。
+// - writer_core::api::types::ChapterSaveReceiptDto：章节保存结果回执 DTO。
+// - writer_core::api::WriterCoreApi：核心库主业务 API。
+//
+// 干什么的：
+// - 负责编辑器界面底层与核心写作 API 的桥接。
+// - 提供打开章节、缓存并返回 LinuxChapterOpenData 的接口。
+// - 封装章节内容安全保存语义（支持allow_empty_overwrite校验）、清空正文内容（clear_chapter_content）的核心实现。
+// - 负责将高频按键输入或粘贴动作翻译并记录为写作统计事件流（process_writing_event_from_text等）。
+// - 维护统计会话 Session 的生命周期及统计专用设备 ID 的自动生成与本地持久化。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/editor_backend.rs 引用，作为主写作编辑器的后端状态控制器与统计源。
+// =============================================================================
+
 //! # 写作桥接函数（Linux UI 层 - Backend Adapter）
 //!
 //! 将 WriterCoreApi 的写作 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。

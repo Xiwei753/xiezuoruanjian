@@ -1,26 +1,23 @@
+// =============================================================================
+// starmap_bridge.rs — 星图模块底层桥接器
+// =============================================================================
+//
+// 引用了什么：
+// - writer_core::api::types::*：星图节点、边、布局及相关 Patch 更新 DTO。
+// - writer_core::api::WriterCoreApi：核心库主业务 API。
+//
+// 干什么的：
+// - 负责星图领域核心 DTO 到客户端需要的兼容 JSON 字符串的双向数据编解码与类型转换。
+// - 提供星图生命周期（列表获取、绑定/解绑作品、创建/重命名/删除星图）的底层桥接。
+// - 提供图数据点、线、多维布局及嵌入式富文本元素（add_starmap_embed 等）的增删改查动作。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/starmap_backend.rs 引用，作为后端 QObject 完成星图数据管理的执行模块。
+// =============================================================================
+
 //! # 星图桥接函数（Linux UI 层 - Backend Adapter）
 //!
 //! 将 WriterCoreApi 的星图 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。
-//!
-//! ## 架构定位
-//!
-//! ```text
-//! QML StarMapGraphController → starmap_bridge::list_starmaps()
-//!   → WriterCoreApi::list_starmaps()
-//!     → starmap::list_starmaps()
-//! ```
-//!
-//! ## 职责边界
-//!
-//! - **做**：类型转换（API DTO ↔ 兼容 JSON）、错误格式化
-//! - **不做**：业务逻辑（全部委托给 WriterCoreApi）
-//! - **不做**：文件 I/O（由 WriterCoreApi 负责）
-//!
-//! ## 兼容协议
-//!
-//! 旧函数仍返回 JSON 字符串，AppBackend 新接口会转为 `QJsonObject` / `QJsonArray`：
-//! - 成功：`{ "success": true, "data": ... }`
-//! - 失败：`{ "success": false, "message": "..." }`
 
 use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto,

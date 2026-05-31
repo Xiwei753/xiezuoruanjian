@@ -1,5 +1,24 @@
-use qmetaobject::prelude::*;
+// =============================================================================
+// app_backend.rs — Linux 客户端全局底层状态与公共桥接后端
+// =============================================================================
+//
+// 引用了什么：
+// - qmetaobject：提供 Qt JSON 对象（QJsonObject, QJsonArray）与常规 QObject 属性机制。
+// - rfd::FileDialog：调用桌面系统原生文件选择对话框（如新建/打开工作区）。
+// - writer_core::api::WriterCoreApi：核心库对外的统一 API 入口。
+// - super::json_utils：JSON 工具函数库，用于进行 DTO ↔ QJsonObject 转换。
+// - crate::*：引入 starmap_bridge, sync_bridge, writing_bridge 以调用各个领域的桥接函数。
+//
+// 干什么的：
+// - 定义主后端 AppBackend 结构体，维护工作区路径、调试日志级别、临时剪贴板交互等全局性跨模块属性。
+// - 封装并对外提供 debug_log_static 等静态日志收集入口，规范化地将运行时关键链路节点记录到磁盘和控制台。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/mod.rs 引用，作为核心底层指针底座，被 SafeAppPtr 传递至各个分域后端。
+// - 被 apps/linux/src/main.rs 注册为 QML 内命名空间 "WriterApp" 下的 "AppBackend"。
+// =============================================================================
 
+use qmetaobject::prelude::*;
 use cpp::cpp;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
@@ -225,6 +244,8 @@ pub struct AppBackend {
     current_sync_username: String,
     current_sync_token: String,
     current_sync_operation_state: String,
+    current_sync_operation_id: String,
+    current_sync_operation_kind: String,
     current_sync_status: String,
     current_sync_in_progress: bool,
     current_last_sync_time: i64,
@@ -774,6 +795,8 @@ mod tests {
         backend.current_has_workspace = false;
 
         let outcome = SyncTaskOutcome {
+            operation_id: "".to_string(),
+            operation_kind: "sync".to_string(),
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
         };
@@ -789,6 +812,8 @@ mod tests {
         backend.current_has_workspace = true;
 
         let outcome = SyncTaskOutcome {
+            operation_id: "".to_string(),
+            operation_kind: "sync".to_string(),
             sync_status: "conflict".to_string(),
             action_result: "Conflict".to_string(),
         };
@@ -803,6 +828,8 @@ mod tests {
         backend.current_has_workspace = true;
 
         let outcome = SyncTaskOutcome {
+            operation_id: "".to_string(),
+            operation_kind: "sync".to_string(),
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
         };

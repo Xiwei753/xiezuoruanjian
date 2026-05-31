@@ -1,15 +1,26 @@
+// =============================================================================
+// sync_backend.rs — 网络同步与远程诊断领域 QObject 后端适配层
+// =============================================================================
+//
+// 引用了什么：
+// - super::*：引入 AppBackend 核心后端的全部方法与结构体。
+// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新网络同步状态。
+//
+// 干什么的：
+// - 实现 SyncBackend 结构体，作为 QML 中 "syncBackend" 对象的桥梁。
+// - 负责同步密钥安全存取与网络同步配置的管理（URL、分支、令牌、代理等）。
+// - 执行手动同步、运行网络诊断、和同步计划预热，通过 UUID 并行安全锁机制（operation_id & operation_kind），杜绝多个异步流的输出竞态冲突。
+// - 接收多线程同步结果 outcomes，提取并序列化为包含 { operation_id, operation_kind, status, summary, details } 的结构化 JSON 并通过 sync_operation_state 属性单向通知 QML 渲染，严格守卫逻辑与显示文案分离边界。
+//
+// 被什么引用：
+// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化同步后端并绑定为 QML 全局上下文属性。
+// =============================================================================
+
 use super::*;
 use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
-
-// -----------------------------------------------------------------------------
-// [架构注释]: SyncBackend 作为同步功能的桥接层 (Adapter)。
-// 其职责是：接收来自 QML 层的指令 -> 调用 core/writer_core 中的领域接口 -> 将核心结果封装为结构化的 `sync_operation_state` JSON 格式返回给 QML。
-// 严禁在此处拼接 UI 展示文案，确保 Core 层与 UI 层的彻底分离。
-// -----------------------------------------------------------------------------
-
 pub struct SyncBackend {
     base: qt_base_class!(trait QObject),
     sync_enabled: qt_property!(bool; READ sync_enabled WRITE set_sync_enabled NOTIFY sync_config_changed),
@@ -35,9 +46,9 @@ pub struct SyncBackend {
     set_sync_token: qt_method!(fn(&mut self, token: QString)),
     load_sync_config: qt_method!(fn(&mut self)),
     save_sync_config: qt_method!(fn(&mut self) -> bool),
-    perform_sync_dry_run: qt_method!(fn(&mut self)),
-    perform_sync: qt_method!(fn(&mut self)),
-    perform_sync_diagnostics: qt_method!(fn(&mut self)),
+    perform_sync_dry_run: qt_method!(fn(&mut self) -> QString),
+    perform_sync: qt_method!(fn(&mut self) -> QString),
+    perform_sync_diagnostics: qt_method!(fn(&mut self) -> QString),
     request_auto_sync: qt_method!(fn(&mut self, reason: QString)),
     maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
     open_workspace_dir: qt_method!(fn(&mut self)),
@@ -94,9 +105,9 @@ impl SyncBackend {
     fn set_sync_token(&mut self, token: QString) { self.with_app_mut((), |app| app.set_sync_token(token)); self.sync_config_changed(); }
     fn load_sync_config(&mut self) { self.with_app_mut((), |app| app.load_sync_config()); self.sync_config_changed(); self.sync_status_changed(); }
     fn save_sync_config(&mut self) -> bool { let ok = self.with_app_mut(false, |app| app.save_sync_config()); self.sync_config_changed(); ok }
-    fn perform_sync_dry_run(&mut self) { self.with_app_mut((), |app| app.perform_sync_dry_run()); self.sync_status_changed(); self.sync_action_completed(); }
-    fn perform_sync(&mut self) { self.with_app_mut((), |app| app.perform_sync()); self.sync_status_changed(); }
-    fn perform_sync_diagnostics(&mut self) { self.with_app_mut((), |app| app.perform_sync_diagnostics()); self.sync_status_changed(); self.sync_action_completed(); }
+    fn perform_sync_dry_run(&mut self) -> QString { let id = self.with_app_mut("".into(), |app| app.perform_sync_dry_run()); self.sync_status_changed(); self.sync_action_completed(); id }
+    fn perform_sync(&mut self) -> QString { let id = self.with_app_mut("".into(), |app| app.perform_sync()); self.sync_status_changed(); id }
+    fn perform_sync_diagnostics(&mut self) -> QString { let id = self.with_app_mut("".into(), |app| app.perform_sync_diagnostics()); self.sync_status_changed(); self.sync_action_completed(); id }
     fn request_auto_sync(&mut self, reason: QString) { self.with_app_mut((), |app| app.request_auto_sync(reason)); self.sync_status_changed(); }
     fn maybe_auto_sync_on_foreground(&mut self) { self.with_app_mut((), |app| app.maybe_auto_sync_on_foreground()); self.sync_status_changed(); }
     fn open_workspace_dir(&mut self) { self.with_app_mut((), |app| app.open_workspace_dir()); }
@@ -109,6 +120,11 @@ impl AppBackend {
 
 // AppBackend::handle_sync_outcome
     pub(crate) fn handle_sync_outcome(&mut self, outcome: SyncTaskOutcome) {
+        if outcome.operation_id != self.current_sync_operation_id {
+            self.debug_log("sync", "sync_outcome_discarded", &format!("Discarded outdated outcome. Expected: {}, got: {}", self.current_sync_operation_id, outcome.operation_id));
+            return;
+        }
+
         let status = outcome.sync_status.clone();
         let result_trunc = if outcome.action_result.chars().count() > 1000 {
             outcome.action_result.chars().take(1000).collect::<String>() + "..."
@@ -353,27 +369,40 @@ impl AppBackend {
 
 // AppBackend::sync_action_result
     pub(crate) fn sync_operation_state(&self) -> QString {
-        let summary = self.current_sync_operation_state.clone();
-        let status = self.current_sync_status.clone();
+        #[derive(serde::Serialize)]
+        struct SyncOperationState {
+            operation_id: String,
+            operation_kind: String,
+            status: String,
+            summary: String,
+            details: String,
+        }
 
-        let json_str = format!(
-            "{{\"operation_id\": \"\", \"operation_kind\": \"sync\", \"status\": \"{}\", \"summary\": \"{}\", \"details\": \"\"}}",
-            status.replace("\"", "\\\""),
-            summary.replace("\"", "\\\"").replace("\n", "\\n")
-        );
-        json_str.into()
+        let state = SyncOperationState {
+            operation_id: self.current_sync_operation_id.clone(),
+            operation_kind: self.current_sync_operation_kind.clone(),
+            status: self.current_sync_status.clone(),
+            summary: self.current_sync_operation_state.clone(),
+            details: String::new(),
+        };
+
+        serde_json::to_string(&state).unwrap_or_default().into()
     }
 
 // AppBackend::perform_sync_diagnostics
-    pub(crate) fn perform_sync_diagnostics(&mut self) {
+    pub(crate) fn perform_sync_diagnostics(&mut self) -> QString {
         self.debug_log("sync", "perform_sync_diagnostics_start", "");
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
             self.current_sync_operation_state = "请先打开工作区".to_string();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_diagnostics_failed", "workspace_empty");
-            return;
+            return "".into();
         }
+
+        let op_id = uuid::Uuid::new_v4().to_string();
+        self.current_sync_operation_id = op_id.clone();
+        self.current_sync_operation_kind = "diagnose".to_string();
 
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
@@ -387,6 +416,7 @@ impl AppBackend {
             });
         });
 
+        let op_id_capture = op_id.clone();
         thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
@@ -394,6 +424,8 @@ impl AppBackend {
                     Ok(c) => c,
                     Err(e) => {
                         return SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
                             sync_status: "error".to_string(),
                             action_result: format!("无法加载同步配置: {}", e),
                         };
@@ -410,12 +442,16 @@ impl AppBackend {
                         let msg = format_diagnostics_message(&result);
 
                         SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
                             sync_status: status.to_string(),
                             action_result: msg,
                         }
                     }
                     Err(e) => {
                         SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
                             sync_status: sync_error_category(&e.to_string()),
                             action_result: format!("诊断过程发生错误:\n{}", mask_sync_error(&e.to_string())),
                         }
@@ -434,12 +470,16 @@ impl AppBackend {
                         "未知 Panic".to_string()
                     };
                     callback(SyncTaskOutcome {
+                        operation_id: op_id_capture,
+                        operation_kind: "diagnose".to_string(),
                         sync_status: "fatal_error".to_string(),
                         action_result: format!("同步诊断发生致命错误 (Panic):\n{}", panic_msg),
                     });
                 }
             }
         });
+
+        op_id.into()
     }
 
 // AppBackend::load_sync_config
@@ -576,12 +616,12 @@ impl AppBackend {
     }
 
 // AppBackend::perform_sync_dry_run
-    pub(crate) fn perform_sync_dry_run(&mut self) {
+    pub(crate) fn perform_sync_dry_run(&mut self) -> QString {
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
             self.current_sync_operation_state = "请先打开工作区".to_string();
             self.sync_action_completed();
-            return;
+            return "".into();
         }
 
         if self.current_sync_remote_url.is_empty() {
@@ -589,7 +629,7 @@ impl AppBackend {
             self.current_sync_operation_state = "同步检查失败: 未配置远程仓库 URL".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
-            return;
+            return "".into();
         }
 
         if self.current_sync_token.is_empty() {
@@ -597,13 +637,17 @@ impl AppBackend {
             self.current_sync_operation_state = "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
-            return;
+            return "".into();
         }
 
         if self.current_sync_branch.is_empty() {
             self.current_sync_branch = "main".to_string();
             self.sync_config_changed();
         }
+
+        let op_id = uuid::Uuid::new_v4().to_string();
+        self.current_sync_operation_id = op_id.clone();
+        self.current_sync_operation_kind = "dry_run".to_string();
 
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
@@ -617,6 +661,7 @@ impl AppBackend {
             });
         });
 
+        let op_id_capture = op_id.clone();
         thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
@@ -624,6 +669,8 @@ impl AppBackend {
                     Ok(c) => c,
                     Err(e) => {
                         return SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "dry_run".to_string(),
                             sync_status: "configured_untested".to_string(),
                             action_result: format!("无法加载同步配置: {}", e),
                         };
@@ -651,12 +698,16 @@ impl AppBackend {
                             }
                         }
                         SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "dry_run".to_string(),
                             sync_status: "configured_untested".to_string(),
                             action_result: msg,
                         }
                     }
                     Err(e) => {
                         SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "dry_run".to_string(),
                             sync_status: "configured_untested".to_string(),
                             action_result: format!("检查同步计划失败: {}", mask_sync_error(&e.to_string())),
                         }
@@ -675,17 +726,21 @@ impl AppBackend {
                         "未知 Panic".to_string()
                     };
                     callback(SyncTaskOutcome {
+                        operation_id: op_id_capture,
+                        operation_kind: "dry_run".to_string(),
                         sync_status: "fatal_error".to_string(),
                         action_result: format!("检查同步计划发生致命错误 (Panic):\n{}", panic_msg),
                     });
                 }
             }
         });
+
+        op_id.into()
     }
 
 // AppBackend::perform_sync
-    pub(crate) fn perform_sync(&mut self) {
-        self.perform_sync_internal("manual", false);
+    pub(crate) fn perform_sync(&mut self) -> QString {
+        self.perform_sync_internal("manual", false)
     }
 
 // AppBackend::request_auto_sync
@@ -722,14 +777,14 @@ impl AppBackend {
     }
 
 // AppBackend::perform_sync_internal
-    pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) {
+    pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) -> QString {
         if self.current_sync_in_progress {
             self.debug_log("sync", "perform_sync_skipped", "sync already running");
             if trigger == "manual" {
                 self.current_sync_operation_state = "同步正在进行中，请稍候。".to_string();
                 self.sync_action_completed();
             }
-            return;
+            return self.current_sync_operation_id.clone().into();
         }
         let token_present = !self.current_sync_token.is_empty();
         let masked_url = mask_sync_error(&self.current_sync_remote_url);
@@ -743,7 +798,7 @@ impl AppBackend {
             self.current_sync_operation_state = "请先打开工作区".to_string();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "workspace_empty");
-            return;
+            return "".into();
         }
 
         if self.current_sync_remote_url.is_empty() {
@@ -752,7 +807,7 @@ impl AppBackend {
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
-            return;
+            return "".into();
         }
 
         if self.current_sync_token.is_empty() {
@@ -761,13 +816,17 @@ impl AppBackend {
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "token_empty");
-            return;
+            return "".into();
         }
 
         if self.current_sync_branch.is_empty() {
             self.current_sync_branch = "main".to_string();
             self.sync_config_changed();
         }
+
+        let op_id = uuid::Uuid::new_v4().to_string();
+        self.current_sync_operation_id = op_id.clone();
+        self.current_sync_operation_kind = "sync".to_string();
 
         self.flush_writing_stats();
         self.current_sync_operation_state = if silent_success {
@@ -787,6 +846,7 @@ impl AppBackend {
             });
         });
 
+        let op_id_capture = op_id.clone();
         thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
@@ -794,6 +854,8 @@ impl AppBackend {
                     Ok(c) => c,
                     Err(e) => {
                         return SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "sync".to_string(),
                             sync_status: "error".to_string(),
                             action_result: format!("无法读取同步配置: {}", e),
                         };
@@ -816,6 +878,8 @@ impl AppBackend {
                                 let cat = sync_error_category(e);
                                 debug_log_static("sync", "sync_error_prevented_success", &format!("status={}, masked error={}", result.status, mask_sync_error(e)));
                                 return SyncTaskOutcome {
+                                    operation_id: op_id_capture.clone(),
+                                    operation_kind: "sync".to_string(),
                                     sync_status: cat,
                                     action_result: format!("同步返回异常，已阻止显示成功:\n{}", mask_sync_error(e)),
                                 };
@@ -941,6 +1005,8 @@ impl AppBackend {
                         };
 
                         SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "sync".to_string(),
                             sync_status: status.to_string(),
                             action_result: msg,
                         }
@@ -958,6 +1024,8 @@ impl AppBackend {
                             format!("同步操作失败:\n{}", mask_sync_error(&err_str))
                         };
                         SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "sync".to_string(),
                             sync_status: cat,
                             action_result,
                         }
@@ -976,12 +1044,15 @@ impl AppBackend {
                         "未知 Panic".to_string()
                     };
                     callback(SyncTaskOutcome {
+                        operation_id: op_id_capture,
+                        operation_kind: "sync".to_string(),
                         sync_status: "fatal_error".to_string(),
                         action_result: format!("同步执行发生致命错误 (Panic):\n{}", panic_msg),
                     });
                 }
             }
         });
-    }
 
+        op_id.into()
+    }
 }
