@@ -99,9 +99,11 @@ Item {
                            : "transparent"
 
                     AppText {
-                        Layout.alignment: Qt.AlignVCenter
-                        anchors.left: parent.left
-                        anchors.leftMargin: dt ? dt.sp10 : 10
+                        anchors {
+                            left: parent.left
+                            leftMargin: dt ? dt.sp10 : 10
+                            verticalCenter: parent.verticalCenter
+                        }
                         text: (root.displayModel && root.displayModel.length > index) ? String(root.displayModel[index]) : String(modelData)
                         color: index === root.currentIndex ? (dt ? dt.onPrimaryContainer : "#001E31") : (dt ? dt.textPrimary : "#E2E4E9")
                         font.pixelSize: dt ? dt.label : 13

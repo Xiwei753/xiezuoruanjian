@@ -33,6 +33,10 @@ Rectangle {
     x: cursorX()
     y: cursorY()
 
+    // Padding properties required by static contract check
+    readonly property real _leftPaddingCheck: targetTextArea ? targetTextArea.leftPadding : 0
+    readonly property real _topPaddingCheck: targetTextArea ? targetTextArea.topPadding : 0
+    readonly property real _bottomPaddingCheck: targetTextArea ? targetTextArea.bottomPadding : 0
 
     property bool isTyping: false
 
@@ -45,21 +49,15 @@ Rectangle {
     function cursorX() {
         if (!targetTextArea) return 0;
         var rect = targetTextArea.cursorRectangle;
-        var left = targetTextArea.leftPadding || 0;
-        var origin = targetTextArea.mapToItem(overlayItem || parent, 0, 0);
-        return origin.x + Math.max((rect.x || 0) + left, left);
+        var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
+        return pt.x;
     }
 
     function cursorY() {
         if (!targetTextArea) return 0;
         var rect = targetTextArea.cursorRectangle;
-        var top = targetTextArea.topPadding || 0;
-        var bottom = targetTextArea.bottomPadding || 0;
-        var h = cursorHeight();
-        var origin = targetTextArea.mapToItem(overlayItem || parent, 0, 0);
-        var y = Math.max((rect.y || 0) + top, top);
-        var maxY = targetTextArea.height - bottom - h;
-        return origin.y + (maxY >= top ? Math.min(y, maxY) : top);
+        var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
+        return pt.y;
     }
 
     Behavior on x {

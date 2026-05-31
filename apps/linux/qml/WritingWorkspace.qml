@@ -425,6 +425,8 @@ Rectangle {
         // Middle Area: Toolbar + Editor
         ColumnLayout {
             SplitView.fillWidth: true
+            SplitView.preferredWidth: 800
+            SplitView.minimumWidth: 480
             spacing: 0
 
             // Top toolbar
