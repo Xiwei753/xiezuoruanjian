@@ -72,7 +72,7 @@ Rectangle {
 
     Behavior on x {
         id: xBehavior
-        enabled: !root.isTyping
+        enabled: root.smoothCursorEnabled
         NumberAnimation {
             duration: root.cursorAnimationDuration
             easing.type: Easing.OutCubic
@@ -80,7 +80,7 @@ Rectangle {
     }
     Behavior on y {
         id: yBehavior
-        enabled: !root.isTyping
+        enabled: root.smoothCursorEnabled
         NumberAnimation {
             duration: root.cursorAnimationDuration
             easing.type: Easing.OutCubic
