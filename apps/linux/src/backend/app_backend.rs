@@ -22,9 +22,8 @@ use qmetaobject::prelude::*;
 use cpp::cpp;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
-use std::io::Write;
-use std::thread;
 use std::sync::OnceLock;
+use std::thread;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -158,20 +157,10 @@ pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
     }
 }
 
-use sync_bridge::{SyncTaskOutcome, mask_sync_error, sync_error_category, sync_error_category_from_code, determine_diagnostics_status, format_diagnostics_message, save_sync_configs};
+use sync_bridge::SyncTaskOutcome;
 
-fn try_kreadconfig(cmd: &str) -> Option<String> {
-    let output = std::process::Command::new(cmd)
-        .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
-        .output().ok()?;
-    if output.status.success() {
-        let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
-        if value.contains("dark") {
-            return Some("dark".to_string());
-        }
-    }
-    None
-}
+#[path = "system_utils.rs"]
+mod system_utils;
 
 #[allow(dead_code)]
 #[allow(non_snake_case)]
@@ -212,7 +201,6 @@ pub struct AppBackend {
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
     log_qml: qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
-
 
     current_workspace: String,
     current_has_workspace: bool,
@@ -358,22 +346,12 @@ impl AppBackend {
         }
     }
 
-
     fn now_epoch_seconds() -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
     }
-
-
-
-
-
-
-
-
-
 
     fn system_color_scheme(&self) -> QString {
         self.current_system_color_scheme.clone().into()
@@ -392,310 +370,24 @@ impl AppBackend {
         self.ai_enabled_changed();
     }
 
-
     fn query_system_color_scheme(&mut self) {
-        // Priority:
-        // 1. QML-side Qt.styleHints.colorScheme (Qt 6.5+) — handled in main.qml
-        // 2. Bridge fallback: try gsettings (GNOME), kreadconfig5 (KDE), env vars
-        // 3. Fallback: light
-        let scheme = Self::detect_system_theme_from_platform();
+        let scheme = system_utils::detect_system_theme_from_platform();
         self.current_system_color_scheme = scheme;
         self.system_color_scheme_changed();
     }
 
-    fn detect_system_theme_from_platform() -> String {
-        // Priority: KDE6 kreadconfig6 > KDE5 kreadconfig5 > GNOME gsettings > GTK_THEME env >
-        //           gsettings gtk-theme > light fallback
-        // Do NOT return "light" early from KDE detection — continue checking other signals first.
-
-        // 1. Try KDE kreadconfig6 (Plasma 6)
-        if let Some("dark") = try_kreadconfig("kreadconfig6").as_deref() {
-            return "dark".to_string();
-        }
-
-        // 2. Try KDE kreadconfig5 (Plasma 5)
-        if let Some("dark") = try_kreadconfig("kreadconfig5").as_deref() {
-            return "dark".to_string();
-        }
-
-        // 3. Try GNOME gsettings color-scheme
-        if let Ok(output) = std::process::Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-            .output()
-        {
-            if output.status.success() {
-                let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
-                if value.contains("dark") {
-                    return "dark".to_string();
-                }
-            }
-        }
-
-        // 4. Try reading GTK_THEME env var
-        if let Ok(theme) = std::env::var("GTK_THEME") {
-            if theme.to_lowercase().contains("dark") || theme.to_lowercase().contains("-dark") {
-                return "dark".to_string();
-            }
-        }
-
-        // 5. Try gsettings gtk-theme
-        if let Ok(output) = std::process::Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
-            .output()
-        {
-            if output.status.success() {
-                let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
-                if value.contains("dark") || value.contains("-dark") || value.contains("_dark") {
-                    return "dark".to_string();
-                }
-            }
-        }
-
-        // 6. Fallback to light
-        "light".to_string()
-    }
-
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
-        let text_str = text.to_string();
-
-        // Helper to build a success response
-        let mk_success = |backend: &str| -> QString {
-            serde_json::json!({
-                "success": true,
-                "backend": backend,
-                "message": format!("已复制 (backend={})", backend),
-            }).to_string().into()
-        };
-
-        // 1. Try wl-copy (Wayland — best clipboard manager handoff)
-        if let Ok(mut child) = std::process::Command::new("wl-copy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        {
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(text_str.as_bytes());
-            }
-            match child.wait() {
-                Ok(status) if status.success() => return mk_success("wl-copy"),
-                _ => {}
-            }
-        }
-
-        // 2. Try xclip (X11)
-        if let Ok(mut child) = std::process::Command::new("xclip")
-            .args(["-selection", "clipboard", "-in"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        {
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(text_str.as_bytes());
-            }
-            match child.wait() {
-                Ok(status) if status.success() => return mk_success("xclip"),
-                _ => {}
-            }
-        }
-
-        // 3. Try xsel (X11 fallback)
-        if let Ok(mut child) = std::process::Command::new("xsel")
-            .args(["--clipboard", "--input"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        {
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(text_str.as_bytes());
-            }
-            match child.wait() {
-                Ok(status) if status.success() => return mk_success("xsel"),
-                _ => {}
-            }
-        }
-
-        // 4. Last resort: arboard (Rust clipboard API).
-        //    On Linux, arboard can raise "Clipboard was dropped very quickly"
-        //    warnings because the clipboard manager may not have read the
-        //    contents before the Clipboard handle is dropped.  We keep the
-        //    object alive by leaking it so the clipboard manager can pick up.
-        if let Ok(mut clip) = arboard::Clipboard::new() {
-            if clip.set_text(text_str.clone()).is_ok() {
-                Box::leak(Box::new(clip));
-                return mk_success("arboard");
-            }
-        }
-
-        // All backends failed
-        let result = serde_json::json!({
-            "success": false,
-            "backend": "none",
-            "message": "复制失败：未找到可用的剪贴板后端。请安装 wl-copy (Wayland)、xclip 或 xsel (X11)。",
-        });
+        let result = system_utils::copy_text_to_clipboard_impl(&text.to_string());
         result.to_string().into()
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         fn workspace_path(&self) -> QString {
         self.current_workspace.clone().into()
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     // --- StarMap methods ---
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     // Deprecated compatibility forwarding surface is split by domain.
 
