@@ -74,8 +74,12 @@ class StarMapBridge(private val appService: AppServiceBridge) {
     }
 
     fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> {
-        val cache = rawCacheByStarmapId[starmapId]
-        return when (val result = appService.addStarMapNode(starmapId, node.toDto(cache?.nodes?.get(node.id)), x, y)) {
+        val cache = when (val cacheResult = getOrLoadRawCache(starmapId)) {
+            is BridgeResult.Success -> cacheResult.data
+            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
+            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
+        }
+        return when (val result = appService.addStarMapNode(starmapId, node.toDto(cache.nodes[node.id]), x, y)) {
             is BridgeResult.Success -> {
                 rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
                     .nodes[result.data.id] = result.data
@@ -87,7 +91,11 @@ class StarMapBridge(private val appService: AppServiceBridge) {
     }
 
     fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
-        val cache = rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
+        val cache = when (val cacheResult = getOrLoadRawCache(starmapId)) {
+            is BridgeResult.Success -> cacheResult.data
+            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
+            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
+        }
         val dto = layout.toDto(cache)
         return when (val result = appService.saveStarMapLayout(starmapId, dto)) {
             is BridgeResult.Success -> {
@@ -138,6 +146,23 @@ class StarMapBridge(private val appService: AppServiceBridge) {
 
     fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<uniffi.writer_core.StarMapReferenceDto>> {
         return appService.findStarmapReferences(targetStarmapId)
+    }
+
+    private fun getOrLoadRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
+        rawCacheByStarmapId[starmapId]?.let { return BridgeResult.Success(it) }
+        return when (val result = appService.getStarMapGraph(starmapId)) {
+            is BridgeResult.Success -> {
+                try {
+                    val cache = result.data.toRawCache()
+                    rawCacheByStarmapId[starmapId] = cache
+                    BridgeResult.Success(cache)
+                } catch (e: Exception) {
+                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to cache starmap graph: ${e.message}"))
+                }
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
     }
 }
 
