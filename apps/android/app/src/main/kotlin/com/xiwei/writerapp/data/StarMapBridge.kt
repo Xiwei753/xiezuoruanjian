@@ -23,76 +23,98 @@ import uniffi.writer_core.StarMapNodeKindDto
 class StarMapBridge(private val appService: AppServiceBridge) {
 
     fun listStarmaps(): BridgeResult<List<StarMapMeta>> {
-        return when (val result = appService.listStarMaps()) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.listStarMaps()
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.map { it.toModel() })
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun createStarmap(title: String, desc: String): BridgeResult<StarMapMeta> {
-        return when (val result = appService.createStarMap(title, desc)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.createStarMap(title, desc)
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.toModel())
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun getStarmapGraph(starmapId: String): BridgeResult<StarMapData> {
-        return when (val result = appService.getStarMapGraph(starmapId)) {
-            is BridgeResult.Success -> {
-                try {
-                    BridgeResult.Success(result.data.toModel())
-                } catch (e: Exception) {
-                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert starmap graph: ${e.message}"))
-                }
+        val result = appService.getStarMapGraph(starmapId)
+        if (result is BridgeResult.Success) {
+            return try {
+                BridgeResult.Success(result.data.toModel())
+            } catch (e: Exception) {
+                BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert starmap graph: ${e.message}"))
             }
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun addStarmapNode(starmapId: String, nodeJson: String, x: Float, y: Float): BridgeResult<StarMapGraphNode> {
-        return when (val result = appService.addStarMapNode(starmapId, nodeJson, x, y)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toGraphNode())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.addStarMapNode(starmapId, nodeJson, x, y)
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.toGraphNode())
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun saveStarmapLayout(starmapId: String, layoutJson: String): BridgeResult<Boolean> = appService.saveStarMapLayout(starmapId, layoutJson)
 
     fun addStarmapEmbed(starmapId: String, embedJson: String): BridgeResult<String> {
-        return when (val result = appService.addStarmapEmbed(starmapId, embedJson)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toString())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.addStarmapEmbed(starmapId, embedJson)
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.toString())
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun updateStarmapEmbed(starmapId: String, instanceId: String, patchJson: String): BridgeResult<String> {
-        return when (val result = appService.updateStarmapEmbed(starmapId, instanceId, patchJson)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toString())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.updateStarmapEmbed(starmapId, instanceId, patchJson)
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.toString())
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = appService.deleteStarmapEmbed(starmapId, instanceId)
 
     fun addStarmapLink(starmapId: String, linkJson: String): BridgeResult<String> {
-        return when (val result = appService.addStarmapLink(starmapId, linkJson)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toString())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.addStarmapLink(starmapId, linkJson)
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.toString())
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun updateStarmapLink(starmapId: String, linkId: String, patchJson: String): BridgeResult<String> {
-        return when (val result = appService.updateStarmapLink(starmapId, linkId, patchJson)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toString())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.updateStarmapLink(starmapId, linkId, patchJson)
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.toString())
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
@@ -158,33 +180,33 @@ private fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
 )
 
 private fun StarMapNodeKindDto.toModel(): StarMapNodeKind = when (this) {
-    StarMapNodeKindDto.Character -> StarMapNodeKind.Character
-    StarMapNodeKindDto.Event -> StarMapNodeKind.Event
-    StarMapNodeKindDto.Location -> StarMapNodeKind.Location
-    StarMapNodeKindDto.Item -> StarMapNodeKind.Item
-    StarMapNodeKindDto.Concept -> StarMapNodeKind.Concept
-    StarMapNodeKindDto.Theme -> StarMapNodeKind.Theme
-    StarMapNodeKindDto.Note -> StarMapNodeKind.Note
-    StarMapNodeKindDto.Organization -> StarMapNodeKind.Organization
-    StarMapNodeKindDto.Timeline -> StarMapNodeKind.Timeline
-    StarMapNodeKindDto.Plot -> StarMapNodeKind.Plot
-    StarMapNodeKindDto.Foreshadowing -> StarMapNodeKind.Foreshadowing
-    StarMapNodeKindDto.Chapter -> StarMapNodeKind.Chapter
-    StarMapNodeKindDto.Custom -> StarMapNodeKind.Custom
+    StarMapNodeKindDto.CHARACTER -> StarMapNodeKind.Character
+    StarMapNodeKindDto.EVENT -> StarMapNodeKind.Event
+    StarMapNodeKindDto.LOCATION -> StarMapNodeKind.Location
+    StarMapNodeKindDto.ITEM -> StarMapNodeKind.Item
+    StarMapNodeKindDto.CONCEPT -> StarMapNodeKind.Concept
+    StarMapNodeKindDto.THEME -> StarMapNodeKind.Theme
+    StarMapNodeKindDto.NOTE -> StarMapNodeKind.Note
+    StarMapNodeKindDto.ORGANIZATION -> StarMapNodeKind.Organization
+    StarMapNodeKindDto.TIMELINE -> StarMapNodeKind.Timeline
+    StarMapNodeKindDto.PLOT -> StarMapNodeKind.Plot
+    StarMapNodeKindDto.FORESHADOWING -> StarMapNodeKind.Foreshadowing
+    StarMapNodeKindDto.CHAPTER -> StarMapNodeKind.Chapter
+    StarMapNodeKindDto.CUSTOM -> StarMapNodeKind.Custom
 }
 
 private fun StarMapEdgeKindDto.toModel(): StarMapEdgeKind = when (this) {
-    StarMapEdgeKindDto.Contains -> StarMapEdgeKind.Contains
-    StarMapEdgeKindDto.References -> StarMapEdgeKind.References
-    StarMapEdgeKindDto.AppearsIn -> StarMapEdgeKind.AppearsIn
-    StarMapEdgeKindDto.Causes -> StarMapEdgeKind.Causes
-    StarMapEdgeKindDto.RelatedTo -> StarMapEdgeKind.RelatedTo
-    StarMapEdgeKindDto.LocatedAt -> StarMapEdgeKind.LocatedAt
-    StarMapEdgeKindDto.CharacterRelation -> StarMapEdgeKind.CharacterRelation
-    StarMapEdgeKindDto.Timeline -> StarMapEdgeKind.Timeline
-    StarMapEdgeKindDto.Foreshadows -> StarMapEdgeKind.Foreshadows
-    StarMapEdgeKindDto.Resolves -> StarMapEdgeKind.Resolves
-    StarMapEdgeKindDto.DependsOn -> StarMapEdgeKind.DependsOn
-    StarMapEdgeKindDto.ConflictsWith -> StarMapEdgeKind.ConflictsWith
-    StarMapEdgeKindDto.Custom -> StarMapEdgeKind.Custom
+    StarMapEdgeKindDto.CONTAINS -> StarMapEdgeKind.Contains
+    StarMapEdgeKindDto.REFERENCES -> StarMapEdgeKind.References
+    StarMapEdgeKindDto.APPEARS_IN -> StarMapEdgeKind.AppearsIn
+    StarMapEdgeKindDto.CAUSES -> StarMapEdgeKind.Causes
+    StarMapEdgeKindDto.RELATED_TO -> StarMapEdgeKind.RelatedTo
+    StarMapEdgeKindDto.LOCATED_AT -> StarMapEdgeKind.LocatedAt
+    StarMapEdgeKindDto.CHARACTER_RELATION -> StarMapEdgeKind.CharacterRelation
+    StarMapEdgeKindDto.TIMELINE -> StarMapEdgeKind.Timeline
+    StarMapEdgeKindDto.FORESHADOWS -> StarMapEdgeKind.Foreshadows
+    StarMapEdgeKindDto.RESOLVES -> StarMapEdgeKind.Resolves
+    StarMapEdgeKindDto.DEPENDS_ON -> StarMapEdgeKind.DependsOn
+    StarMapEdgeKindDto.CONFLICTS_WITH -> StarMapEdgeKind.ConflictsWith
+    StarMapEdgeKindDto.CUSTOM -> StarMapEdgeKind.Custom
 }

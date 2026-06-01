@@ -12,18 +12,24 @@ class ActionBridge internal constructor(private val appService: AppServiceBridge
     private val gson = Gson()
 
     fun listRegisteredActions(): BridgeResult<List<ActionDescriptor>> {
-        return when (val result = appService.listRegisteredActions()) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.listRegisteredActions()
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.map { it.toModel() })
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 
     fun executeAction(actionId: String, argsJson: String = "{}"): BridgeResult<ActionResult> {
-        return when (val result = appService.executeAction(actionId, argsJson, "{}")) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        val result = appService.executeAction(actionId, argsJson, "{}")
+        if (result is BridgeResult.Success) {
+            return BridgeResult.Success(result.data.toModel())
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 }

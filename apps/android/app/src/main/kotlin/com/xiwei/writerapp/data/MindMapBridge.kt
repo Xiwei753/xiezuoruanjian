@@ -14,16 +14,17 @@ import uniffi.writer_core.MindMapSnapshotNodeDto
 class MindMapBridge(private val appService: AppServiceBridge) {
 
     fun getMindMapSnapshot(projectId: String): BridgeResult<MindMapSnapshot> {
-        return when (val result = appService.getMindMapSnapshot(projectId)) {
-            is BridgeResult.Success -> {
-                try {
-                    BridgeResult.Success(result.data.toModel())
-                } catch (e: Exception) {
-                    BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert mindmap snapshot: ${e.message}"))
-                }
+        val result = appService.getMindMapSnapshot(projectId)
+        if (result is BridgeResult.Success) {
+            return try {
+                BridgeResult.Success(result.data.toModel())
+            } catch (e: Exception) {
+                BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert mindmap snapshot: ${e.message}"))
             }
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+        } else if (result is BridgeResult.Error) {
+            return BridgeResult.Error(result.envelope)
+        } else {
+            return BridgeResult.NotLoaded
         }
     }
 }
@@ -68,20 +69,20 @@ private fun MindMapBoundsDto.toModel(): MindMapBounds = MindMapBounds(
 )
 
 private fun MindMapNodeKindDto.toModel(): MindMapNodeKind = when (this) {
-    MindMapNodeKindDto.Project -> MindMapNodeKind.Project
-    MindMapNodeKindDto.Volume -> MindMapNodeKind.Volume
-    MindMapNodeKindDto.Chapter -> MindMapNodeKind.Chapter
-    MindMapNodeKindDto.TextAnchor -> MindMapNodeKind.TextAnchor
-    MindMapNodeKindDto.Character -> MindMapNodeKind.Character
-    MindMapNodeKindDto.Event -> MindMapNodeKind.Event
-    MindMapNodeKindDto.Location -> MindMapNodeKind.Location
-    MindMapNodeKindDto.Item -> MindMapNodeKind.Item
-    MindMapNodeKindDto.Concept -> MindMapNodeKind.Concept
-    MindMapNodeKindDto.Theme -> MindMapNodeKind.Theme
-    MindMapNodeKindDto.Note -> MindMapNodeKind.Note
-    MindMapNodeKindDto.Organization -> MindMapNodeKind.Organization
-    MindMapNodeKindDto.Timeline -> MindMapNodeKind.Timeline
-    MindMapNodeKindDto.Plot -> MindMapNodeKind.Plot
-    MindMapNodeKindDto.Foreshadowing -> MindMapNodeKind.Foreshadowing
-    MindMapNodeKindDto.Custom -> MindMapNodeKind.Custom
+    MindMapNodeKindDto.PROJECT -> MindMapNodeKind.Project
+    MindMapNodeKindDto.VOLUME -> MindMapNodeKind.Volume
+    MindMapNodeKindDto.CHAPTER -> MindMapNodeKind.Chapter
+    MindMapNodeKindDto.TEXT_ANCHOR -> MindMapNodeKind.TextAnchor
+    MindMapNodeKindDto.CHARACTER -> MindMapNodeKind.Character
+    MindMapNodeKindDto.EVENT -> MindMapNodeKind.Event
+    MindMapNodeKindDto.LOCATION -> MindMapNodeKind.Location
+    MindMapNodeKindDto.ITEM -> MindMapNodeKind.Item
+    MindMapNodeKindDto.CONCEPT -> MindMapNodeKind.Concept
+    MindMapNodeKindDto.THEME -> MindMapNodeKind.Theme
+    MindMapNodeKindDto.NOTE -> MindMapNodeKind.Note
+    MindMapNodeKindDto.ORGANIZATION -> MindMapNodeKind.Organization
+    MindMapNodeKindDto.TIMELINE -> MindMapNodeKind.Timeline
+    MindMapNodeKindDto.PLOT -> MindMapNodeKind.Plot
+    MindMapNodeKindDto.FORESHADOWING -> MindMapNodeKind.Foreshadowing
+    MindMapNodeKindDto.CUSTOM -> MindMapNodeKind.Custom
 }
