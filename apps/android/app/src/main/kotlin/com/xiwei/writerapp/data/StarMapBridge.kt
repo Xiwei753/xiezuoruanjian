@@ -219,7 +219,7 @@ private fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
     val dtoCreatedAt = createdAt.toULong()
     val dtoUpdatedAt = updatedAt.toULong()
 
-    return base?.copy(
+    return if (base != null) base.copy(
         id = id,
         title = title,
         kind = dtoKind,
@@ -227,42 +227,54 @@ private fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
         tags = tags,
         createdAt = dtoCreatedAt,
         updatedAt = dtoUpdatedAt
-    ) ?: StarMapNodeDto(
-        id = id,
-        title = title,
-        kind = dtoKind,
+    ) else toNewDefaultNoteNodeDto(
         payload = resolvedPayload,
-        tags = tags,
-        content = StarMapNodeContentDto(
-            kind = "note",
-            summary = null,
-            body = null,
-            projectId = null,
-            volumeId = null,
-            chapterId = null,
-            rangeStart = null,
-            rangeEnd = null,
-            entityType = null,
-            entityId = null,
-            uri = null,
-            label = null
-        ),
-        anchors = emptyList(),
-        portal = null,
-        displayPolicy = defaultStarMapDisplayPolicy(),
-        openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-        provenance = StarMapProvenanceDto(
-            source = StarMapSourceKindDto.HUMAN,
-            sourceId = null,
-            generatedBy = null,
-            promptId = null,
-            reviewStatus = StarMapReviewStatusDto.ACCEPTED,
-            createdFromAnchor = null
-        ),
-        createdAt = dtoCreatedAt,
-        updatedAt = dtoUpdatedAt
+        dtoKind = dtoKind,
+        dtoCreatedAt = dtoCreatedAt,
+        dtoUpdatedAt = dtoUpdatedAt
     )
 }
+
+private fun StarMapGraphNode.toNewDefaultNoteNodeDto(
+    payload: String?,
+    dtoKind: StarMapNodeKindDto,
+    dtoCreatedAt: ULong,
+    dtoUpdatedAt: ULong
+): StarMapNodeDto = StarMapNodeDto(
+    id = id,
+    title = title,
+    kind = dtoKind,
+    payload = payload,
+    tags = tags,
+    content = StarMapNodeContentDto(
+        kind = "note",
+        summary = null,
+        body = null,
+        projectId = null,
+        volumeId = null,
+        chapterId = null,
+        rangeStart = null,
+        rangeEnd = null,
+        entityType = null,
+        entityId = null,
+        uri = null,
+        label = null
+    ),
+    anchors = emptyList(),
+    portal = null,
+    displayPolicy = defaultStarMapDisplayPolicy(),
+    openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+    provenance = StarMapProvenanceDto(
+        source = StarMapSourceKindDto.HUMAN,
+        sourceId = null,
+        generatedBy = null,
+        promptId = null,
+        reviewStatus = StarMapReviewStatusDto.ACCEPTED,
+        createdFromAnchor = null
+    ),
+    createdAt = dtoCreatedAt,
+    updatedAt = dtoUpdatedAt
+)
 
 private fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
     id = id,
