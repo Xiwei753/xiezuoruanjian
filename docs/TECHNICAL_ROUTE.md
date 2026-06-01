@@ -11,7 +11,7 @@
   - Kotlin + XML/View。
   - AppCompat / Material / ConstraintLayout / Lifecycle。
   - 当前主业务入口是 `AppServiceBridge + UniFFI` 自动生成的 Kotlin 绑定。
-  - `NativeCoreBridge` / `writer_core_jni` 仅作为 legacy JSON/JNI fallback，不是新业务入口。
+  - 曾经的 `NativeCoreBridge` / `writer_core_jni` 已经被完全移除，`AppServiceBridge + UniFFI` 是唯一的业务桥梁入口。
   - 只正式支持 arm64-v8a。
   - 暂不引入 Compose 作为主 UI 技术。
 - Linux：
@@ -67,11 +67,10 @@
   - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap/MindMap Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
   - 当前路线已经从“FFI 主链路收口”进入“Core API 层收口”：新增平台能力应优先落到 Rust `api/`，再由 UniFFI 或其他平台 adapter 暴露。
 - **legacy JSON 使用边界：**
-  - `NativeCoreBridge` / `writer_core_jni` 仅保留给尚未迁完的 fallback、native 加载状态和少量 legacy 动作路径。
-  - 统计、导图、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内并转换为 `BridgeResult<T>`；不得把裸 JSON 扩散到 UI 作为新契约。
-  - 当前收口目标不是把所有 Core 接口一次性 API-ification / typed DTO 化，而是先确保残留 JSON 不越过领域 Bridge 边界。
+  - 统计、导图、星图等早期返回 JSON 字符串的接口已经基本完成 typed DTO 转换，仅有少量复杂快照数据如果暂时返回 JSON，也必须封闭在领域 Bridge 内转换为 `BridgeResult<T>`；绝对禁止将 JSON 字符串暴露给 UI 层作为契约。
+  - 当底层发生错误时，必须明确抛出或通过 `BridgeResult.Error` 传递到 UI 层，坚决不能在领域 Bridge 或 UI 层伪造成功（例如 `calculateWordCount` 加载失败时不能返回 `text.length`）。
 - **禁止事项：**
-  - 禁止把 `NativeCoreBridge + JSON over JNI` 写成当前主路线。
+  - 禁止引入或恢复 `NativeCoreBridge + JSON over JNI` 路线。
   - 禁止用 JSON 字符串伪装 UniFFI typed API。
   - 禁止把 `api.udl` 当作业务 API 的唯一设计文档或事实来源。
   - 禁止把 `app_service.rs` 继续扩展成 DTO、错误、业务转发混杂的大文件。

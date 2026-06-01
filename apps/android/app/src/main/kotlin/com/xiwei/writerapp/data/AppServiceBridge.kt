@@ -224,12 +224,7 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun calculateWordCount(text: String): Int {
-        return try {
-            service.calculateWordCount(text).toInt()
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Writer native library is not loaded", e)
-            text.length
-        }
+        return service.calculateWordCount(text).toInt()
     }
 
     fun loadLocalSettings(): BridgeResult<LocalSettings> = wrapResult {
