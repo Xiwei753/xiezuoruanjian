@@ -37,6 +37,8 @@ Rectangle {
     signal openSync()
     signal createVolumeRequested(string projectId)
     signal createChapterRequested(string projectId, string volumeId)
+    signal renameItemRequested(var itemData)
+    signal deleteItemRequested(var itemData)
 
     WritingTreeController {
         id: writingTree
@@ -295,30 +297,6 @@ Rectangle {
                                             Layout.fillWidth: true
                                             elide: Text.ElideRight
                                         }
-
-                                        // "+" button for volumes (create chapter)
-                                        Rectangle {
-                                            visible: model.itemType === "volume"
-                                            width: 20; height: 20
-                                            radius: 10
-                                            color: addChapterHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
-
-                                            AppText {
-                                                anchors.centerIn: parent
-                                                text: "+"
-                                                color: dt ? dt.primary : "#006497"
-                                                font.pixelSize: dt ? dt.fontSm : 12
-                                                font.weight: Font.Bold
-                                            }
-
-                                            MouseArea {
-                                                id: addChapterHover
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: root.createChapterRequested(model.itemProjectId || "", model.itemId)
-                                            }
-                                        }
                                     }
 
                                     MouseArea {
@@ -338,8 +316,35 @@ Rectangle {
                                                 treeContextMenu.itemTitle = model.itemTitle;
                                                 treeContextMenu.itemProjectId = model.itemProjectId || "";
                                                 treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                                treeContextMenu.popup();
+                                                treeContextMenu.popup(delegateHover, mouse.x, mouse.y);
                                             }
+                                        }
+                                    }
+
+                                    // "+" button for volumes (create chapter)
+                                    Rectangle {
+                                        visible: model.itemType === "volume"
+                                        width: 20; height: 20
+                                        radius: 10
+                                        color: addChapterHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: dt ? dt.sp8 : 8
+                                        anchors.verticalCenter: parent.verticalCenter
+
+                                        AppText {
+                                            anchors.centerIn: parent
+                                            text: "+"
+                                            color: dt ? dt.primary : "#006497"
+                                            font.pixelSize: dt ? dt.fontSm : 12
+                                            font.weight: Font.Bold
+                                        }
+
+                                        MouseArea {
+                                            id: addChapterHover
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: root.createChapterRequested(model.itemProjectId || "", model.itemId)
                                         }
                                     }
                                 }
@@ -428,6 +433,53 @@ Rectangle {
                                 color: createChapterMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
                             }
                             onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
+                        }
+                        MenuSeparator {
+                            visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
+                        }
+                        MenuItem {
+                            id: renameMenuItem
+                            text: qsTr("重命名")
+                            visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
+                            contentItem: AppText {
+                                text: renameMenuItem.text
+                                color: dt ? dt.textPrimary : "#E2E2E5"
+                                font.pixelSize: dt ? dt.label : 13
+                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: renameMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                            }
+                            onTriggered: root.renameItemRequested({
+                                type: treeContextMenu.itemType,
+                                id: treeContextMenu.itemId,
+                                projectId: treeContextMenu.itemProjectId,
+                                volumeId: treeContextMenu.itemVolumeId,
+                                title: treeContextMenu.itemTitle
+                            })
+                        }
+                        MenuItem {
+                            id: deleteMenuItem
+                            text: qsTr("删除")
+                            visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
+                            contentItem: AppText {
+                                text: deleteMenuItem.text
+                                color: dt ? dt.error : "#FFB4AB"
+                                font.pixelSize: dt ? dt.label : 13
+                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle {
+                                color: deleteMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                            }
+                            onTriggered: root.deleteItemRequested({
+                                type: treeContextMenu.itemType,
+                                id: treeContextMenu.itemId,
+                                projectId: treeContextMenu.itemProjectId,
+                                volumeId: treeContextMenu.itemVolumeId,
+                                title: treeContextMenu.itemTitle
+                            })
                         }
                     }
                 }

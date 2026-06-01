@@ -197,6 +197,32 @@ QtObject {
         }
     }
 
+    function renameVolume(projectId, volumeId, title) {
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi || !projectId || !volumeId || !title) return false;
+        try {
+            projectApi.rename_volume(projectId, volumeId, title);
+            refreshState(qsTr("刷新重命名结果失败"));
+            return true;
+        } catch (e) {
+            emitError(qsTr("后端调用失败: ") + e);
+            return false;
+        }
+    }
+
+    function renameChapter(projectId, volumeId, chapterId, title) {
+        var projectApi = projectBackendRef || backendRef;
+        if (!projectApi || !projectId || !volumeId || !chapterId || !title) return false;
+        try {
+            projectApi.rename_chapter(projectId, volumeId, chapterId, title);
+            refreshState(qsTr("刷新重命名结果失败"));
+            return true;
+        } catch (e) {
+            emitError(qsTr("后端调用失败: ") + e);
+            return false;
+        }
+    }
+
     function createVolume(projectId, title) {
         var projectApi = projectBackendRef || backendRef;
         if (!projectApi) return false;

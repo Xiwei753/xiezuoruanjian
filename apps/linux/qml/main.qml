@@ -317,7 +317,29 @@ ApplicationWindow {
                     inputDialog.projectId = projectId;
                     inputDialog.volumeId = volumeId;
                     inputDialog.dialogTitle = qsTr("新建章节");
+                    inputDialog.defaultText = "";
                     inputDialog.open();
+                }
+
+                onRenameItemRequested: function(itemData) {
+                    inputDialog.actionType = "rename_" + itemData.type;
+                    inputDialog.projectId = itemData.projectId || "";
+                    inputDialog.volumeId = itemData.volumeId || "";
+                    inputDialog.chapterId = itemData.id || "";
+                    inputDialog.dialogTitle = qsTr("重命名");
+                    inputDialog.defaultText = itemData.title || "";
+                    inputDialog.open();
+                }
+
+                onDeleteItemRequested: function(itemData) {
+                    confirmDialog.actionType = "delete_" + itemData.type;
+                    confirmDialog.contextData = {
+                        projectId: itemData.projectId || "",
+                        volumeId: itemData.volumeId || "",
+                        chapterId: itemData.id || "",
+                        title: itemData.title || ""
+                    };
+                    confirmDialog.open();
                 }
             }
         }
@@ -496,6 +518,8 @@ ApplicationWindow {
         property string actionType: ""
         property string projectId: ""
         property string volumeId: ""
+        property string chapterId: ""
+        property string defaultText: ""
         property string dialogTitle: qsTr("请输入")
 
         modal: true
@@ -515,7 +539,11 @@ ApplicationWindow {
             spacing: designTokens.sp12
 
             AppText {
-                text: inputDialog.actionType === "volume" ? qsTr("卷名称") : qsTr("章节名称")
+                text: {
+                    if (inputDialog.actionType === "volume") return qsTr("卷名称");
+                    if (inputDialog.actionType === "chapter") return qsTr("章节名称");
+                    return qsTr("新名称");
+                }
                 color: designTokens.textSecondary
                 font.pixelSize: designTokens.label
                 font.family: designTokens.fontFamily
@@ -525,7 +553,11 @@ ApplicationWindow {
                 id: inputField
                 Layout.fillWidth: true
                 theme: designTokens
-                placeholderText: inputDialog.actionType === "volume" ? qsTr("例如：第一卷") : qsTr("例如：第一章")
+                placeholderText: {
+                    if (inputDialog.actionType === "volume") return qsTr("例如：第一卷");
+                    if (inputDialog.actionType === "chapter") return qsTr("例如：第一章");
+                    return qsTr("请输入新名称");
+                }
                 onAccepted: confirmInputButton.clicked()
             }
             RowLayout {
@@ -543,6 +575,12 @@ ApplicationWindow {
                                 appController.createVolume(inputDialog.projectId, title);
                             } else if (inputDialog.actionType === "chapter") {
                                 appController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
+                            } else if (inputDialog.actionType === "rename_project") {
+                                appController.renameProject(inputDialog.projectId, title);
+                            } else if (inputDialog.actionType === "rename_volume") {
+                                appController.renameVolume(inputDialog.projectId, inputDialog.volumeId, title);
+                            } else if (inputDialog.actionType === "rename_chapter") {
+                                appController.renameChapter(inputDialog.projectId, inputDialog.volumeId, inputDialog.chapterId, title);
                             }
                         }
                         inputDialog.close();
@@ -551,7 +589,7 @@ ApplicationWindow {
             }
         }
         onOpened: {
-            inputField.text = "";
+            inputField.text = inputDialog.defaultText;
             inputField.forceActiveFocus();
         }
     }
