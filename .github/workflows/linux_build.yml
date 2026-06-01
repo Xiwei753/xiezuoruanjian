@@ -57,6 +57,14 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev
 
+      - name: Configure Qt environment variables
+        run: |
+          QMAKE_PATH="$(command -v qmake6 || command -v qmake-qt6)"
+          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
+          echo "QT_INCLUDE_PATH=$($QMAKE_PATH -query QT_INSTALL_HEADERS)" >> "$GITHUB_ENV"
+          echo "QT_LIBRARY_PATH=$($QMAKE_PATH -query QT_INSTALL_LIBS)" >> "$GITHUB_ENV"
+          echo "QT_VERSION_MAJOR=6" >> "$GITHUB_ENV"
+
       - name: Test writer core
         run: cargo test -p writer_core
 
@@ -115,6 +123,14 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev
+
+      - name: Configure Qt environment variables
+        run: |
+          QMAKE_PATH="$(command -v qmake6 || command -v qmake-qt6)"
+          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
+          echo "QT_INCLUDE_PATH=$($QMAKE_PATH -query QT_INSTALL_HEADERS)" >> "$GITHUB_ENV"
+          echo "QT_LIBRARY_PATH=$($QMAKE_PATH -query QT_INSTALL_LIBS)" >> "$GITHUB_ENV"
+          echo "QT_VERSION_MAJOR=6" >> "$GITHUB_ENV"
 
       - name: Test writer core
         run: cargo test -p writer_core --features ai
