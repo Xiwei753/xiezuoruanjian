@@ -327,9 +327,11 @@ Rectangle {
                                         width: 20; height: 20
                                         radius: 10
                                         color: addChapterHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
-                                        anchors.right: parent.right
-                                        anchors.rightMargin: dt ? dt.sp8 : 8
-                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors {
+                                            right: parent.right
+                                            rightMargin: dt ? dt.sp8 : 8
+                                            verticalCenter: parent.verticalCenter
+                                        }
 
                                         AppText {
                                             anchors.centerIn: parent
