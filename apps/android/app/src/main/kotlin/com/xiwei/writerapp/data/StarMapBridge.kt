@@ -74,7 +74,7 @@ class StarMapBridge(private val appService: AppServiceBridge) {
     }
 
     fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> {
-        val cache = when (val cacheResult = getOrLoadRawCache(starmapId)) {
+        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
             is BridgeResult.Success -> cacheResult.data
             is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
             BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
@@ -91,7 +91,7 @@ class StarMapBridge(private val appService: AppServiceBridge) {
     }
 
     fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
-        val cache = when (val cacheResult = getOrLoadRawCache(starmapId)) {
+        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
             is BridgeResult.Success -> cacheResult.data
             is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
             BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
@@ -148,8 +148,7 @@ class StarMapBridge(private val appService: AppServiceBridge) {
         return appService.findStarmapReferences(targetStarmapId)
     }
 
-    private fun getOrLoadRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
-        rawCacheByStarmapId[starmapId]?.let { return BridgeResult.Success(it) }
+    private fun refreshRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
         return when (val result = appService.getStarMapGraph(starmapId)) {
             is BridgeResult.Success -> {
                 try {
