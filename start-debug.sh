@@ -152,6 +152,10 @@ fi
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="logs/linux-debug-${TIMESTAMP}.log"
+touch "$LOG_FILE"
+
+# Mirror all subsequent debug output into one log file, including build failures.
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 generate_summary() {
     # Generate logs/latest-summary.txt
@@ -207,4 +211,4 @@ echo "[start-debug] Building linux package..."
 cargo build -p linux
 
 echo "[start-debug] Running linux package with tracing..."
-cargo run -p linux 2>&1 | tee "$LOG_FILE"
+cargo run -p linux

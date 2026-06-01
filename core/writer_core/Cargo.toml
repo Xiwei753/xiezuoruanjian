@@ -17,8 +17,8 @@ chrono = { version = "0.4", features = ["serde"] }
 md5 = '0.7'
 tempfile = '3.8'
 aho-corasick = "1.1.4"
-git2 = { version = "0.18", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
-reqwest = { version = "0.11", default-features = false, features = ["blocking", "rustls-tls", "json"] }
+git2 = { version = "0.20.4", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 base64 = "0.22.1"
 
 [dependencies.uniffi]
