@@ -153,47 +153,64 @@ private fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
     id = id,
     title = title,
     kind = kind.toModel(),
-    payload = null,
+    payload = payload.toPayloadMap(),
+    payloadJson = payload,
     tags = tags,
     createdAt = createdAt.toLong(),
-    updatedAt = updatedAt.toLong()
+    updatedAt = updatedAt.toLong(),
+    coreDto = this
 )
 
-private fun StarMapGraphNode.toDto(): StarMapNodeDto = StarMapNodeDto(
-    id = id,
-    title = title,
-    kind = kind.toDto(),
-    payload = payload?.let { starMapPayloadGson.toJson(it) },
-    tags = tags,
-    content = StarMapNodeContentDto(
-        kind = "note",
-        summary = null,
-        body = null,
-        projectId = null,
-        volumeId = null,
-        chapterId = null,
-        rangeStart = null,
-        rangeEnd = null,
-        entityType = null,
-        entityId = null,
-        uri = null,
-        label = null
-    ),
-    anchors = emptyList(),
-    portal = null,
-    displayPolicy = defaultStarMapDisplayPolicy(),
-    openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
-    provenance = StarMapProvenanceDto(
-        source = StarMapSourceKindDto.HUMAN,
-        sourceId = null,
-        generatedBy = null,
-        promptId = null,
-        reviewStatus = StarMapReviewStatusDto.ACCEPTED,
-        createdFromAnchor = null
-    ),
-    createdAt = createdAt.toULong(),
-    updatedAt = updatedAt.toULong()
-)
+private fun StarMapGraphNode.toDto(): StarMapNodeDto {
+    val resolvedPayload = payloadJson ?: payload?.let { starMapPayloadGson.toJson(it) } ?: coreDto?.payload
+    val dtoKind = kind.toDto()
+    val dtoCreatedAt = createdAt.toULong()
+    val dtoUpdatedAt = updatedAt.toULong()
+
+    return coreDto?.copy(
+        id = id,
+        title = title,
+        kind = dtoKind,
+        payload = resolvedPayload,
+        tags = tags,
+        createdAt = dtoCreatedAt,
+        updatedAt = dtoUpdatedAt
+    ) ?: StarMapNodeDto(
+        id = id,
+        title = title,
+        kind = dtoKind,
+        payload = resolvedPayload,
+        tags = tags,
+        content = StarMapNodeContentDto(
+            kind = "note",
+            summary = null,
+            body = null,
+            projectId = null,
+            volumeId = null,
+            chapterId = null,
+            rangeStart = null,
+            rangeEnd = null,
+            entityType = null,
+            entityId = null,
+            uri = null,
+            label = null
+        ),
+        anchors = emptyList(),
+        portal = null,
+        displayPolicy = defaultStarMapDisplayPolicy(),
+        openBehavior = StarMapOpenBehaviorDto.INSPECTOR,
+        provenance = StarMapProvenanceDto(
+            source = StarMapSourceKindDto.HUMAN,
+            sourceId = null,
+            generatedBy = null,
+            promptId = null,
+            reviewStatus = StarMapReviewStatusDto.ACCEPTED,
+            createdFromAnchor = null
+        ),
+        createdAt = dtoCreatedAt,
+        updatedAt = dtoUpdatedAt
+    )
+}
 
 private fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
     id = id,
@@ -201,9 +218,11 @@ private fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
     to = to ?: "",
     kind = kind.toModel(),
     label = label,
-    payload = null,
+    payload = payload.toPayloadMap(),
+    payloadJson = payload,
     createdAt = createdAt.toLong(),
-    updatedAt = updatedAt.toLong()
+    updatedAt = updatedAt.toLong(),
+    coreDto = this
 )
 
 private fun StarMapLayoutData.toDto(): StarMapLayoutDto = StarMapLayoutDto(
@@ -211,7 +230,7 @@ private fun StarMapLayoutData.toDto(): StarMapLayoutDto = StarMapLayoutDto(
     nodes = nodes.map { it.toDto() }
 )
 
-private fun StarMapLayoutNodeData.toDto(): StarMapLayoutNodeDto = StarMapLayoutNodeDto(
+private fun StarMapLayoutNodeData.toDto(): StarMapLayoutNodeDto = coreDto?.copy(
     nodeId = nodeId,
     x = x,
     y = y,
@@ -220,10 +239,23 @@ private fun StarMapLayoutNodeData.toDto(): StarMapLayoutNodeDto = StarMapLayoutN
     radius = radius,
     collapsed = collapsed,
     zIndex = zIndex,
-    scale = 1f,
-    depth = 0f,
-    focusWeight = 1f,
-    orbitGroup = null
+    scale = scale,
+    depth = depth,
+    focusWeight = focusWeight,
+    orbitGroup = orbitGroup
+) ?: StarMapLayoutNodeDto(
+    nodeId = nodeId,
+    x = x,
+    y = y,
+    width = width,
+    height = height,
+    radius = radius,
+    collapsed = collapsed,
+    zIndex = zIndex,
+    scale = scale,
+    depth = depth,
+    focusWeight = focusWeight,
+    orbitGroup = orbitGroup
 )
 
 private fun StarMapNodeKindDto.toModel(): StarMapNodeKind = when (this) {
@@ -289,3 +321,13 @@ private fun defaultStarMapDisplayPolicy() = StarMapDisplayPolicyDto(
     maxPreviewChars = 120u,
     minReadablePx = 12f
 )
+
+@Suppress("UNCHECKED_CAST")
+private fun String?.toPayloadMap(): Map<String, Any>? {
+    if (isNullOrBlank()) return null
+    return try {
+        starMapPayloadGson.fromJson(this, Map::class.java) as? Map<String, Any>
+    } catch (_: Exception) {
+        null
+    }
+}

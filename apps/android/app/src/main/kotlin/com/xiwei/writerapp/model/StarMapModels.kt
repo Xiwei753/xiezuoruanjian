@@ -5,6 +5,9 @@ import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
 import com.google.gson.JsonDeserializationContext
 import java.lang.reflect.Type
+import uniffi.writer_core.StarMapEdgeDto
+import uniffi.writer_core.StarMapLayoutNodeDto
+import uniffi.writer_core.StarMapNodeDto
 
 /**
  * StarMapModels — 星图数据模型
@@ -125,9 +128,11 @@ data class StarMapGraphNode(
     val title: String,
     val kind: StarMapNodeKind,
     val payload: Map<String, Any>? = null,
+    val payloadJson: String? = null,
     val tags: List<String> = emptyList(),
     val createdAt: Long = 0,
-    val updatedAt: Long = 0
+    val updatedAt: Long = 0,
+    val coreDto: StarMapNodeDto? = null
 )
 
 data class StarMapGraphEdge(
@@ -137,8 +142,10 @@ data class StarMapGraphEdge(
     val kind: StarMapEdgeKind,
     val label: String? = null,
     val payload: Map<String, Any>? = null,
+    val payloadJson: String? = null,
     val createdAt: Long = 0,
-    val updatedAt: Long = 0
+    val updatedAt: Long = 0,
+    val coreDto: StarMapEdgeDto? = null
 )
 
 data class StarMapGraphData(
@@ -166,7 +173,12 @@ data class StarMapLayoutNodeData(
     val height: Float,
     val radius: Float,
     val collapsed: Boolean,
-    val zIndex: Int
+    val zIndex: Int,
+    val scale: Float = 1f,
+    val depth: Float = 0f,
+    val focusWeight: Float = 1f,
+    val orbitGroup: String? = null,
+    val coreDto: StarMapLayoutNodeDto? = null
 )
 
 data class StarMapLayoutData(
