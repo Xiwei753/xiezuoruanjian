@@ -9,7 +9,7 @@
 
 > 注意：`sync_service` 的解耦拆分是后续阶段的任务，不在本次重构范围内。
 
-`api.udl` 只是 UniFFI 绑定声明，用于生成 Kotlin/外部语言桥接代码；业务 API 的事实来源是 Rust `api/` 模块及其文档边界，不是 UDL 文件本身。
+`api.udl` 只是 UniFFI 绑定声明，用于生成 Kotlin/外部语言桥接代码；业务 API 的事实来源是 Rust `api/` 模块及其文档边界，不是 UDL 文件本身。图谱写入类 UniFFI 方法必须接收 DTO，不允许在 `WriterAppService` 或 `WriterCoreApi` 接收 JSON 字符串后再解析。
 
 ## Core API 模块
 
@@ -48,13 +48,16 @@
 - `record_writing_event_for_platform(...) -> Result<bool, WriterError>`：Linux/其他平台显式传入 `platform`，Android 兼容入口仍由 `record_writing_event` 固定为 `android`。
 - `flush_writing_stats() -> Result<bool, WriterError>`
 - `flush_recent_edits() -> Result<bool, WriterError>`
+- `save_mindmap_graph(project_id: &str, graph: MindMapGraphDto) -> Result<bool, WriterError>`：MindMap 整图保存接收强类型 DTO，Core API 不再提供 `graph_json` 写入入口。
+- `add_starmap_node(starmap_id: &str, node: StarMapNodeDto, x: f32, y: f32) -> Result<StarMapNodeDto, WriterError>`：StarMap 节点写入接收强类型 DTO。
+- `save_starmap_layout(starmap_id: &str, layout: &StarMapLayoutDto) -> Result<bool, WriterError>`：StarMap 布局保存接收强类型 DTO。
 - `list_starmaps_for_project(project_id: &str) -> Result<Vec<StarMapMetaDto>, WriterError>`
 - `get_starmap(starmap_id: &str) -> Result<StarMapMetaDto, WriterError>`
-- `add_starmap_embed(...) -> Result<StarMapEmbed, ...>`
-- `update_starmap_embed(...) -> Result<StarMapEmbed, ...>`
+- `add_starmap_embed(starmap_id: &str, embed: StarMapEmbedDto) -> Result<StarMapEmbedDto, WriterError>`
+- `update_starmap_embed(starmap_id: &str, instance_id: &str, patch: StarMapEmbedPatchDto) -> Result<StarMapEmbedDto, WriterError>`
 - `delete_starmap_embed(...) -> Result<()>`
-- `add_starmap_link(...) -> Result<StarMapLink, ...>`
-- `update_starmap_link(...) -> Result<StarMapLink, ...>`
+- `add_starmap_link(starmap_id: &str, link: StarMapLinkDto) -> Result<StarMapLinkDto, WriterError>`
+- `update_starmap_link(starmap_id: &str, link_id: &str, patch: StarMapLinkPatchDto) -> Result<StarMapLinkDto, WriterError>`
 - `delete_starmap_link(...) -> Result<()>`
 - `find_starmap_references(...) -> Result<Vec<StarMapReference>>`
 

@@ -871,11 +871,11 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_writer_core_fn_constructor_writerappservice_new(`workspacePath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`embedJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`embed`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`link`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_node(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`nodeJson`: RustBuffer.ByValue,`x`: Float,`y`: Float,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_add_starmap_node(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`node`: RustBuffer.ByValue,`x`: Float,`y`: Float,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_ai_available(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -979,9 +979,9 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_local_settings_envelope_json(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graphJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graph`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layoutJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layout`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_sync_config(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -993,9 +993,9 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_update_chapter_note(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`note`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`patch`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,`patchJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_update_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,`patch`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_validate_workspace(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1265,13 +1265,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_func_perform_dummy_action() != 23039.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed() != 20356.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_embed() != 23961.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_link() != 30432.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_link() != 45641.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_node() != 24042.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_add_starmap_node() != 5998.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_ai_available() != 40582.toShort()) {
@@ -1427,10 +1427,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_local_settings_envelope_json() != 37495.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph() != 18497.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph() != 39673.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout() != 35811.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout() != 21329.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_config() != 43143.toShort()) {
@@ -1448,10 +1448,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_update_chapter_note() != 23190.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed() != 44044.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed() != 10898.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_link() != 44638.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_link() != 50925.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_validate_workspace() != 63349.toShort()) {
@@ -1912,11 +1912,11 @@ private class JavaLangRefCleanable(
 }
 public interface WriterAppServiceInterface {
     
-    fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): StarMapEmbedDto
+    fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embed`: StarMapEmbedDto): StarMapEmbedDto
     
-    fun `addStarmapLink`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): StarMapLinkDto
+    fun `addStarmapLink`(`starmapId`: kotlin.String, `link`: StarMapLinkDto): StarMapLinkDto
     
-    fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String, `x`: kotlin.Float, `y`: kotlin.Float): StarMapNodeDto
+    fun `addStarmapNode`(`starmapId`: kotlin.String, `node`: StarMapNodeDto, `x`: kotlin.Float, `y`: kotlin.Float): StarMapNodeDto
     
     fun `aiAvailable`(): kotlin.Boolean
     
@@ -2020,9 +2020,9 @@ public interface WriterAppServiceInterface {
     
     fun `saveLocalSettingsEnvelopeJson`(`settings`: LocalSettingsDto): kotlin.String
     
-    fun `saveMindmapGraph`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean
+    fun `saveMindmapGraph`(`projectId`: kotlin.String, `graph`: MindMapGraphDto): kotlin.Boolean
     
-    fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean
+    fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layout`: StarMapLayoutDto): kotlin.Boolean
     
     fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean
     
@@ -2034,9 +2034,9 @@ public interface WriterAppServiceInterface {
     
     fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean
     
-    fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): StarMapEmbedDto
+    fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patch`: StarMapEmbedPatchInputDto): StarMapEmbedDto
     
-    fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): StarMapLinkDto
+    fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patch`: StarMapLinkPatchInputDto): StarMapLinkDto
     
     fun `validateWorkspace`(): kotlin.Boolean
     
@@ -2132,12 +2132,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
 
     
-    @Throws(WriterException::class)override fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embedJson`: kotlin.String): StarMapEmbedDto {
+    @Throws(WriterException::class)override fun `addStarmapEmbed`(`starmapId`: kotlin.String, `embed`: StarMapEmbedDto): StarMapEmbedDto {
             return FfiConverterTypeStarMapEmbedDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_embed(
-        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`embedJson`),_status)
+        it, FfiConverterString.lower(`starmapId`),FfiConverterTypeStarMapEmbedDto.lower(`embed`),_status)
 }
     }
     )
@@ -2145,12 +2145,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `addStarmapLink`(`starmapId`: kotlin.String, `linkJson`: kotlin.String): StarMapLinkDto {
+    @Throws(WriterException::class)override fun `addStarmapLink`(`starmapId`: kotlin.String, `link`: StarMapLinkDto): StarMapLinkDto {
             return FfiConverterTypeStarMapLinkDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_link(
-        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`linkJson`),_status)
+        it, FfiConverterString.lower(`starmapId`),FfiConverterTypeStarMapLinkDto.lower(`link`),_status)
 }
     }
     )
@@ -2158,12 +2158,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `addStarmapNode`(`starmapId`: kotlin.String, `nodeJson`: kotlin.String, `x`: kotlin.Float, `y`: kotlin.Float): StarMapNodeDto {
+    @Throws(WriterException::class)override fun `addStarmapNode`(`starmapId`: kotlin.String, `node`: StarMapNodeDto, `x`: kotlin.Float, `y`: kotlin.Float): StarMapNodeDto {
             return FfiConverterTypeStarMapNodeDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_add_starmap_node(
-        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`nodeJson`),FfiConverterFloat.lower(`x`),FfiConverterFloat.lower(`y`),_status)
+        it, FfiConverterString.lower(`starmapId`),FfiConverterTypeStarMapNodeDto.lower(`node`),FfiConverterFloat.lower(`x`),FfiConverterFloat.lower(`y`),_status)
 }
     }
     )
@@ -2831,12 +2831,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `saveMindmapGraph`(`projectId`: kotlin.String, `graphJson`: kotlin.String): kotlin.Boolean {
+    @Throws(WriterException::class)override fun `saveMindmapGraph`(`projectId`: kotlin.String, `graph`: MindMapGraphDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`graphJson`),_status)
+        it, FfiConverterString.lower(`projectId`),FfiConverterTypeMindMapGraphDto.lower(`graph`),_status)
 }
     }
     )
@@ -2844,12 +2844,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layoutJson`: kotlin.String): kotlin.Boolean {
+    @Throws(WriterException::class)override fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layout`: StarMapLayoutDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(
-        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`layoutJson`),_status)
+        it, FfiConverterString.lower(`starmapId`),FfiConverterTypeStarMapLayoutDto.lower(`layout`),_status)
 }
     }
     )
@@ -2921,12 +2921,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patchJson`: kotlin.String): StarMapEmbedDto {
+    @Throws(WriterException::class)override fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patch`: StarMapEmbedPatchInputDto): StarMapEmbedDto {
             return FfiConverterTypeStarMapEmbedDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(
-        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`instanceId`),FfiConverterString.lower(`patchJson`),_status)
+        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`instanceId`),FfiConverterTypeStarMapEmbedPatchInputDto.lower(`patch`),_status)
 }
     }
     )
@@ -2934,12 +2934,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patchJson`: kotlin.String): StarMapLinkDto {
+    @Throws(WriterException::class)override fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patch`: StarMapLinkPatchInputDto): StarMapLinkDto {
             return FfiConverterTypeStarMapLinkDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_starmap_link(
-        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`linkId`),FfiConverterString.lower(`patchJson`),_status)
+        it, FfiConverterString.lower(`starmapId`),FfiConverterString.lower(`linkId`),FfiConverterTypeStarMapLinkPatchInputDto.lower(`patch`),_status)
 }
     }
     )
@@ -4969,6 +4969,94 @@ public object FfiConverterTypeStarMapEmbedDto: FfiConverterRustBuffer<StarMapEmb
 
 
 
+data class StarMapEmbedPatchInputDto (
+    var `label`: kotlin.String?, 
+    var `clearLabel`: kotlin.Boolean, 
+    var `displayPolicy`: StarMapDisplayPolicyDto?, 
+    var `openBehavior`: StarMapOpenBehaviorDto?, 
+    var `viewport`: StarMapViewportDto?, 
+    var `clearViewport`: kotlin.Boolean, 
+    var `placement`: StarMapEmbedPlacementDto?, 
+    var `clearPlacement`: kotlin.Boolean, 
+    var `targetViewport`: StarMapEmbedViewportDto?, 
+    var `clearTargetViewport`: kotlin.Boolean, 
+    var `sourceNodeId`: kotlin.String?, 
+    var `clearSourceNodeId`: kotlin.Boolean, 
+    var `hostAnchor`: kotlin.String?, 
+    var `clearHostAnchor`: kotlin.Boolean, 
+    var `hostEndpoint`: StarMapEndpointDto?, 
+    var `clearHostEndpoint`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEmbedPatchInputDto: FfiConverterRustBuffer<StarMapEmbedPatchInputDto> {
+    override fun read(buf: ByteBuffer): StarMapEmbedPatchInputDto {
+        return StarMapEmbedPatchInputDto(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeStarMapDisplayPolicyDto.read(buf),
+            FfiConverterOptionalTypeStarMapOpenBehaviorDto.read(buf),
+            FfiConverterOptionalTypeStarMapViewportDto.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeStarMapEmbedPlacementDto.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeStarMapEmbedViewportDto.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeStarMapEndpointDto.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEmbedPatchInputDto) = (
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterBoolean.allocationSize(value.`clearLabel`) +
+            FfiConverterOptionalTypeStarMapDisplayPolicyDto.allocationSize(value.`displayPolicy`) +
+            FfiConverterOptionalTypeStarMapOpenBehaviorDto.allocationSize(value.`openBehavior`) +
+            FfiConverterOptionalTypeStarMapViewportDto.allocationSize(value.`viewport`) +
+            FfiConverterBoolean.allocationSize(value.`clearViewport`) +
+            FfiConverterOptionalTypeStarMapEmbedPlacementDto.allocationSize(value.`placement`) +
+            FfiConverterBoolean.allocationSize(value.`clearPlacement`) +
+            FfiConverterOptionalTypeStarMapEmbedViewportDto.allocationSize(value.`targetViewport`) +
+            FfiConverterBoolean.allocationSize(value.`clearTargetViewport`) +
+            FfiConverterOptionalString.allocationSize(value.`sourceNodeId`) +
+            FfiConverterBoolean.allocationSize(value.`clearSourceNodeId`) +
+            FfiConverterOptionalString.allocationSize(value.`hostAnchor`) +
+            FfiConverterBoolean.allocationSize(value.`clearHostAnchor`) +
+            FfiConverterOptionalTypeStarMapEndpointDto.allocationSize(value.`hostEndpoint`) +
+            FfiConverterBoolean.allocationSize(value.`clearHostEndpoint`)
+    )
+
+    override fun write(value: StarMapEmbedPatchInputDto, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterBoolean.write(value.`clearLabel`, buf)
+            FfiConverterOptionalTypeStarMapDisplayPolicyDto.write(value.`displayPolicy`, buf)
+            FfiConverterOptionalTypeStarMapOpenBehaviorDto.write(value.`openBehavior`, buf)
+            FfiConverterOptionalTypeStarMapViewportDto.write(value.`viewport`, buf)
+            FfiConverterBoolean.write(value.`clearViewport`, buf)
+            FfiConverterOptionalTypeStarMapEmbedPlacementDto.write(value.`placement`, buf)
+            FfiConverterBoolean.write(value.`clearPlacement`, buf)
+            FfiConverterOptionalTypeStarMapEmbedViewportDto.write(value.`targetViewport`, buf)
+            FfiConverterBoolean.write(value.`clearTargetViewport`, buf)
+            FfiConverterOptionalString.write(value.`sourceNodeId`, buf)
+            FfiConverterBoolean.write(value.`clearSourceNodeId`, buf)
+            FfiConverterOptionalString.write(value.`hostAnchor`, buf)
+            FfiConverterBoolean.write(value.`clearHostAnchor`, buf)
+            FfiConverterOptionalTypeStarMapEndpointDto.write(value.`hostEndpoint`, buf)
+            FfiConverterBoolean.write(value.`clearHostEndpoint`, buf)
+    }
+}
+
+
+
 data class StarMapEmbedPlacementDto (
     var `x`: kotlin.Float, 
     var `y`: kotlin.Float, 
@@ -5304,6 +5392,46 @@ public object FfiConverterTypeStarMapLinkDto: FfiConverterRustBuffer<StarMapLink
             FfiConverterOptionalString.write(value.`label`, buf)
             FfiConverterULong.write(value.`createdAt`, buf)
             FfiConverterULong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class StarMapLinkPatchInputDto (
+    var `source`: StarMapEndpointDto?, 
+    var `target`: StarMapDeepTargetDto?, 
+    var `label`: kotlin.String?, 
+    var `clearLabel`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapLinkPatchInputDto: FfiConverterRustBuffer<StarMapLinkPatchInputDto> {
+    override fun read(buf: ByteBuffer): StarMapLinkPatchInputDto {
+        return StarMapLinkPatchInputDto(
+            FfiConverterOptionalTypeStarMapEndpointDto.read(buf),
+            FfiConverterOptionalTypeStarMapDeepTargetDto.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapLinkPatchInputDto) = (
+            FfiConverterOptionalTypeStarMapEndpointDto.allocationSize(value.`source`) +
+            FfiConverterOptionalTypeStarMapDeepTargetDto.allocationSize(value.`target`) +
+            FfiConverterOptionalString.allocationSize(value.`label`) +
+            FfiConverterBoolean.allocationSize(value.`clearLabel`)
+    )
+
+    override fun write(value: StarMapLinkPatchInputDto, buf: ByteBuffer) {
+            FfiConverterOptionalTypeStarMapEndpointDto.write(value.`source`, buf)
+            FfiConverterOptionalTypeStarMapDeepTargetDto.write(value.`target`, buf)
+            FfiConverterOptionalString.write(value.`label`, buf)
+            FfiConverterBoolean.write(value.`clearLabel`, buf)
     }
 }
 
@@ -7263,6 +7391,38 @@ public object FfiConverterOptionalTypeStarMapDeepTargetDto: FfiConverterRustBuff
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeStarMapDisplayPolicyDto: FfiConverterRustBuffer<StarMapDisplayPolicyDto?> {
+    override fun read(buf: ByteBuffer): StarMapDisplayPolicyDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapDisplayPolicyDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapDisplayPolicyDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapDisplayPolicyDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapDisplayPolicyDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapDisplayPolicyDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeStarMapEdgeEndpointDto: FfiConverterRustBuffer<StarMapEdgeEndpointDto?> {
     override fun read(buf: ByteBuffer): StarMapEdgeEndpointDto? {
         if (buf.get().toInt() == 0) {
@@ -7285,6 +7445,70 @@ public object FfiConverterOptionalTypeStarMapEdgeEndpointDto: FfiConverterRustBu
         } else {
             buf.put(1)
             FfiConverterTypeStarMapEdgeEndpointDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapEmbedPlacementDto: FfiConverterRustBuffer<StarMapEmbedPlacementDto?> {
+    override fun read(buf: ByteBuffer): StarMapEmbedPlacementDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapEmbedPlacementDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapEmbedPlacementDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapEmbedPlacementDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapEmbedPlacementDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapEmbedPlacementDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapEmbedViewportDto: FfiConverterRustBuffer<StarMapEmbedViewportDto?> {
+    override fun read(buf: ByteBuffer): StarMapEmbedViewportDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapEmbedViewportDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapEmbedViewportDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapEmbedViewportDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapEmbedViewportDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapEmbedViewportDto.write(value, buf)
         }
     }
 }
@@ -7349,6 +7573,70 @@ public object FfiConverterOptionalTypeStarMapPortalDto: FfiConverterRustBuffer<S
         } else {
             buf.put(1)
             FfiConverterTypeStarMapPortalDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapViewportDto: FfiConverterRustBuffer<StarMapViewportDto?> {
+    override fun read(buf: ByteBuffer): StarMapViewportDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapViewportDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapViewportDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapViewportDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapViewportDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapViewportDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapOpenBehaviorDto: FfiConverterRustBuffer<StarMapOpenBehaviorDto?> {
+    override fun read(buf: ByteBuffer): StarMapOpenBehaviorDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapOpenBehaviorDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapOpenBehaviorDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapOpenBehaviorDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapOpenBehaviorDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapOpenBehaviorDto.write(value, buf)
         }
     }
 }

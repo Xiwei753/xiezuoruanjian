@@ -719,6 +719,32 @@ dictionary StarMapViewportDto {
     float height;
 };
 
+dictionary StarMapEmbedPatchInputDto {
+    string? label;
+    boolean clear_label;
+    StarMapDisplayPolicyDto? display_policy;
+    StarMapOpenBehaviorDto? open_behavior;
+    StarMapViewportDto? viewport;
+    boolean clear_viewport;
+    StarMapEmbedPlacementDto? placement;
+    boolean clear_placement;
+    StarMapEmbedViewportDto? target_viewport;
+    boolean clear_target_viewport;
+    string? source_node_id;
+    boolean clear_source_node_id;
+    string? host_anchor;
+    boolean clear_host_anchor;
+    StarMapEndpointDto? host_endpoint;
+    boolean clear_host_endpoint;
+};
+
+dictionary StarMapLinkPatchInputDto {
+    StarMapEndpointDto? source;
+    StarMapDeepTargetDto? target;
+    string? label;
+    boolean clear_label;
+};
+
 enum StarMapNodeKindDto {
     "Character",
     "Event",
@@ -987,7 +1013,7 @@ interface WriterAppService {
     MindMapSnapshotDto get_mindmap_snapshot(string project_id);
 
     [Throws=WriterError]
-    boolean save_mindmap_graph(string project_id, string graph_json);
+    boolean save_mindmap_graph(string project_id, MindMapGraphDto graph);
 
     // StarMap typed methods
     [Throws=WriterError]
@@ -1000,25 +1026,25 @@ interface WriterAppService {
     StarMapGraphDto get_starmap_graph(string starmap_id);
 
     [Throws=WriterError]
-    StarMapNodeDto add_starmap_node(string starmap_id, string node_json, float x, float y);
+    StarMapNodeDto add_starmap_node(string starmap_id, StarMapNodeDto node, float x, float y);
 
     [Throws=WriterError]
-    boolean save_starmap_layout(string starmap_id, string layout_json);
+    boolean save_starmap_layout(string starmap_id, StarMapLayoutDto layout);
 
     [Throws=WriterError]
-    StarMapEmbedDto add_starmap_embed(string starmap_id, string embed_json);
+    StarMapEmbedDto add_starmap_embed(string starmap_id, StarMapEmbedDto embed);
 
     [Throws=WriterError]
-    StarMapEmbedDto update_starmap_embed(string starmap_id, string instance_id, string patch_json);
+    StarMapEmbedDto update_starmap_embed(string starmap_id, string instance_id, StarMapEmbedPatchInputDto patch);
 
     [Throws=WriterError]
     boolean delete_starmap_embed(string starmap_id, string instance_id);
 
     [Throws=WriterError]
-    StarMapLinkDto add_starmap_link(string starmap_id, string link_json);
+    StarMapLinkDto add_starmap_link(string starmap_id, StarMapLinkDto link);
 
     [Throws=WriterError]
-    StarMapLinkDto update_starmap_link(string starmap_id, string link_id, string patch_json);
+    StarMapLinkDto update_starmap_link(string starmap_id, string link_id, StarMapLinkPatchInputDto patch);
 
     [Throws=WriterError]
     boolean delete_starmap_link(string starmap_id, string link_id);

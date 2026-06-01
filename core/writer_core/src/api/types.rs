@@ -746,6 +746,23 @@ impl From<crate::mind_map::MindMapGraph> for MindMapGraphDto {
     }
 }
 
+impl From<MindMapGraphDto> for crate::mind_map::MindMapGraph {
+    fn from(d: MindMapGraphDto) -> Self {
+        Self {
+            schema_version: d.schema_version,
+            id: d.id,
+            project_id: d.project_id,
+            title: d.title,
+            nodes: d.nodes.into_iter().map(Into::into).collect(),
+            edges: d.edges.into_iter().map(Into::into).collect(),
+            anchors: d.anchors.into_iter().map(Into::into).collect(),
+            links: d.links.into_iter().map(Into::into).collect(),
+            created_at: d.created_at,
+            updated_at: d.updated_at,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapGraphNodeDto {
@@ -902,6 +919,19 @@ impl From<crate::mind_map::MindMapLink> for MindMapLinkDto {
             kind: l.kind.into(),
             created_at: l.created_at,
             updated_at: l.updated_at,
+        }
+    }
+}
+
+impl From<MindMapLinkDto> for crate::mind_map::MindMapLink {
+    fn from(d: MindMapLinkDto) -> Self {
+        Self {
+            id: d.id,
+            node_id: d.node_id,
+            anchor_id: d.anchor_id,
+            kind: d.kind,
+            created_at: d.created_at,
+            updated_at: d.updated_at,
         }
     }
 }
@@ -2043,6 +2073,71 @@ pub struct StarMapEmbedPatchDto {
     pub host_endpoint: Option<Option<StarMapEndpointDto>>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEmbedPatchInputDto {
+    pub label: Option<String>,
+    pub clear_label: bool,
+    pub display_policy: Option<StarMapDisplayPolicyDto>,
+    pub open_behavior: Option<StarMapOpenBehaviorDto>,
+    pub viewport: Option<StarMapViewportDto>,
+    pub clear_viewport: bool,
+    pub placement: Option<StarMapEmbedPlacementDto>,
+    pub clear_placement: bool,
+    pub target_viewport: Option<StarMapEmbedViewportDto>,
+    pub clear_target_viewport: bool,
+    pub source_node_id: Option<String>,
+    pub clear_source_node_id: bool,
+    pub host_anchor: Option<String>,
+    pub clear_host_anchor: bool,
+    pub host_endpoint: Option<StarMapEndpointDto>,
+    pub clear_host_endpoint: bool,
+}
+
+impl From<StarMapEmbedPatchInputDto> for StarMapEmbedPatchDto {
+    fn from(d: StarMapEmbedPatchInputDto) -> Self {
+        Self {
+            label: if d.clear_label {
+                Some(None)
+            } else {
+                d.label.map(Some)
+            },
+            display_policy: d.display_policy,
+            open_behavior: d.open_behavior,
+            viewport: if d.clear_viewport {
+                Some(None)
+            } else {
+                d.viewport.map(Some)
+            },
+            placement: if d.clear_placement {
+                Some(None)
+            } else {
+                d.placement.map(Some)
+            },
+            target_viewport: if d.clear_target_viewport {
+                Some(None)
+            } else {
+                d.target_viewport.map(Some)
+            },
+            source_node_id: if d.clear_source_node_id {
+                Some(None)
+            } else {
+                d.source_node_id.map(Some)
+            },
+            host_anchor: if d.clear_host_anchor {
+                Some(None)
+            } else {
+                d.host_anchor.map(Some)
+            },
+            host_endpoint: if d.clear_host_endpoint {
+                Some(None)
+            } else {
+                d.host_endpoint.map(Some)
+            },
+        }
+    }
+}
+
 impl From<StarMapEmbedPatchDto> for crate::starmap::types::StarMapEmbedPatch {
     fn from(d: StarMapEmbedPatchDto) -> Self {
         Self {
@@ -2065,6 +2160,29 @@ pub struct StarMapLinkPatchDto {
     pub source: Option<StarMapEndpointDto>,
     pub target: Option<StarMapDeepTargetDto>,
     pub label: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapLinkPatchInputDto {
+    pub source: Option<StarMapEndpointDto>,
+    pub target: Option<StarMapDeepTargetDto>,
+    pub label: Option<String>,
+    pub clear_label: bool,
+}
+
+impl From<StarMapLinkPatchInputDto> for StarMapLinkPatchDto {
+    fn from(d: StarMapLinkPatchInputDto) -> Self {
+        Self {
+            source: d.source,
+            target: d.target,
+            label: if d.clear_label {
+                Some(None)
+            } else {
+                d.label.map(Some)
+            },
+        }
+    }
 }
 
 impl From<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {

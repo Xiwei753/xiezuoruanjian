@@ -642,12 +642,12 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn save_mindmap_graph_json(
+    pub fn save_mindmap_graph(
         &self,
         project_id: &str,
-        graph_json: &str,
+        graph: crate::api::types::MindMapGraphDto,
     ) -> ApiResult<bool> {
-        let graph: crate::mind_map::graph::MindMapGraph = serde_json::from_str(graph_json)?;
+        let graph: crate::mind_map::graph::MindMapGraph = graph.into();
         if graph.project_id != project_id {
             return Err(WriterError::Other(format!(
                 "project_id mismatch: request project_id={}, graph.project_id={}",
@@ -681,52 +681,23 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn add_starmap_node_json(&self, starmap_id: &str, node_json: &str) -> ApiResult<String> {
-        let value = self
-            .core()
-            .execute_action("starmap.node.add", starmap_id, node_json)
-            .map_err(WriterError::from)?;
-        Self::json_string(&value)
-    }
-
-    pub fn save_starmap_layout_json(&self, starmap_id: &str, layout_json: &str) -> ApiResult<bool> {
-        self.core()
-            .execute_action("starmap.layout.save", starmap_id, layout_json)
-            .map(|_| true)
-            .map_err(Into::into)
-    }
-
-    pub fn add_starmap_embed_json(&self, starmap_id: &str, embed_json: &str) -> ApiResult<String> {
-        let embed: crate::starmap::types::StarMapEmbed = serde_json::from_str(embed_json)?;
-        let value = self
-            .core()
-            .add_starmap_embed(starmap_id, embed)
-            .map_err(WriterError::from)?;
-        Self::json_string(&value)
-    }
-
-    pub fn add_starmap_embed(&self, starmap_id: &str, embed: crate::api::types::StarMapEmbedDto) -> ApiResult<crate::api::types::StarMapEmbedDto> {
+    pub fn add_starmap_embed(
+        &self,
+        starmap_id: &str,
+        embed: crate::api::types::StarMapEmbedDto,
+    ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         self.core()
             .add_starmap_embed(starmap_id, embed.into())
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    pub fn update_starmap_embed_json(
+    pub fn update_starmap_embed(
         &self,
         starmap_id: &str,
         instance_id: &str,
-        patch_json: &str,
-    ) -> ApiResult<String> {
-        let patch: crate::starmap::types::StarMapEmbedPatch = serde_json::from_str(patch_json)?;
-        let value = self
-            .core()
-            .update_starmap_embed(starmap_id, instance_id, patch)
-            .map_err(WriterError::from)?;
-        Self::json_string(&value)
-    }
-
-    pub fn update_starmap_embed(&self, starmap_id: &str, instance_id: &str, patch: crate::api::types::StarMapEmbedPatchDto) -> ApiResult<crate::api::types::StarMapEmbedDto> {
+        patch: crate::api::types::StarMapEmbedPatchDto,
+    ) -> ApiResult<crate::api::types::StarMapEmbedDto> {
         self.core()
             .update_starmap_embed(starmap_id, instance_id, patch.into())
             .map(Into::into)
@@ -740,37 +711,23 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn add_starmap_link_json(&self, starmap_id: &str, link_json: &str) -> ApiResult<String> {
-        let link: crate::starmap::types::StarMapLink = serde_json::from_str(link_json)?;
-        let value = self
-            .core()
-            .add_starmap_link(starmap_id, link)
-            .map_err(WriterError::from)?;
-        Self::json_string(&value)
-    }
-
-    pub fn add_starmap_link(&self, starmap_id: &str, link: crate::api::types::StarMapLinkDto) -> ApiResult<crate::api::types::StarMapLinkDto> {
+    pub fn add_starmap_link(
+        &self,
+        starmap_id: &str,
+        link: crate::api::types::StarMapLinkDto,
+    ) -> ApiResult<crate::api::types::StarMapLinkDto> {
         self.core()
             .add_starmap_link(starmap_id, link.into())
             .map(Into::into)
             .map_err(Into::into)
     }
 
-    pub fn update_starmap_link_json(
+    pub fn update_starmap_link(
         &self,
         starmap_id: &str,
         link_id: &str,
-        patch_json: &str,
-    ) -> ApiResult<String> {
-        let patch: crate::starmap::types::StarMapLinkPatch = serde_json::from_str(patch_json)?;
-        let value = self
-            .core()
-            .update_starmap_link(starmap_id, link_id, patch)
-            .map_err(WriterError::from)?;
-        Self::json_string(&value)
-    }
-
-    pub fn update_starmap_link(&self, starmap_id: &str, link_id: &str, patch: crate::api::types::StarMapLinkPatchDto) -> ApiResult<crate::api::types::StarMapLinkDto> {
+        patch: crate::api::types::StarMapLinkPatchDto,
+    ) -> ApiResult<crate::api::types::StarMapLinkDto> {
         self.core()
             .update_starmap_link(starmap_id, link_id, patch.into())
             .map(Into::into)
@@ -1189,16 +1146,15 @@ mod tests {
     }
 
     #[test]
-    fn save_mindmap_graph_json_persists_graph_and_snapshot_reads_it() {
+    fn save_mindmap_graph_persists_graph_and_snapshot_reads_it() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
         let project = api.create_project("Test Project").unwrap();
         let graph = valid_graph(&project.id);
-        let graph_json = serde_json::to_string(&graph).unwrap();
 
         assert_eq!(
-            api.save_mindmap_graph_json(&project.id, &graph_json).unwrap(),
+            api.save_mindmap_graph(&project.id, graph.into()).unwrap(),
             true
         );
 
@@ -1214,16 +1170,15 @@ mod tests {
     }
 
     #[test]
-    fn save_mindmap_graph_json_rejects_project_id_mismatch() {
+    fn save_mindmap_graph_rejects_project_id_mismatch() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
         let project = api.create_project("Test Project").unwrap();
         let graph = valid_graph("another_project");
-        let graph_json = serde_json::to_string(&graph).unwrap();
 
         let err = api
-            .save_mindmap_graph_json(&project.id, &graph_json)
+            .save_mindmap_graph(&project.id, graph.into())
             .unwrap_err();
 
         assert!(matches!(
@@ -1236,31 +1191,16 @@ mod tests {
     }
 
     #[test]
-    fn save_mindmap_graph_json_rejects_invalid_json() {
-        let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
-        let project = api.create_project("Test Project").unwrap();
-
-        let err = api
-            .save_mindmap_graph_json(&project.id, "{not-json")
-            .unwrap_err();
-
-        assert!(matches!(err, WriterError::Json(_)));
-    }
-
-    #[test]
-    fn save_mindmap_graph_json_propagates_validation_error() {
+    fn save_mindmap_graph_propagates_validation_error() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
         let project = api.create_project("Test Project").unwrap();
         let mut graph = valid_graph(&project.id);
         graph.schema_version = 1;
-        let graph_json = serde_json::to_string(&graph).unwrap();
 
         let err = api
-            .save_mindmap_graph_json(&project.id, &graph_json)
+            .save_mindmap_graph(&project.id, graph.into())
             .unwrap_err();
 
         assert!(matches!(

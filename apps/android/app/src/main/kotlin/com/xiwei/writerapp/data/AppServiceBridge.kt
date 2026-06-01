@@ -326,32 +326,32 @@ class AppServiceBridge(workspacePath: String) {
         service.createStarmap(title, desc)
     }
 
-    fun addStarMapNode(starmapId: String, nodeJson: String, x: Float, y: Float): BridgeResult<uniffi.writer_core.StarMapNodeDto> = wrapResult {
-        service.addStarmapNode(starmapId, nodeJson, x, y)
+    fun addStarMapNode(starmapId: String, node: uniffi.writer_core.StarMapNodeDto, x: Float, y: Float): BridgeResult<uniffi.writer_core.StarMapNodeDto> = wrapResult {
+        service.addStarmapNode(starmapId, node, x, y)
     }
 
-    fun saveStarMapLayout(starmapId: String, layoutJson: String): BridgeResult<Boolean> = wrapResult {
-        service.saveStarmapLayout(starmapId, layoutJson)
+    fun saveStarMapLayout(starmapId: String, layout: uniffi.writer_core.StarMapLayoutDto): BridgeResult<Boolean> = wrapResult {
+        service.saveStarmapLayout(starmapId, layout)
     }
 
-    fun addStarmapEmbed(starmapId: String, embedJson: String): BridgeResult<uniffi.writer_core.StarMapEmbedDto> = wrapResult {
-        service.addStarmapEmbed(starmapId, embedJson)
+    fun addStarmapEmbed(starmapId: String, embed: uniffi.writer_core.StarMapEmbedDto): BridgeResult<uniffi.writer_core.StarMapEmbedDto> = wrapResult {
+        service.addStarmapEmbed(starmapId, embed)
     }
 
-    fun updateStarmapEmbed(starmapId: String, instanceId: String, patchJson: String): BridgeResult<uniffi.writer_core.StarMapEmbedDto> = wrapResult {
-        service.updateStarmapEmbed(starmapId, instanceId, patchJson)
+    fun updateStarmapEmbed(starmapId: String, instanceId: String, patch: uniffi.writer_core.StarMapEmbedPatchInputDto): BridgeResult<uniffi.writer_core.StarMapEmbedDto> = wrapResult {
+        service.updateStarmapEmbed(starmapId, instanceId, patch)
     }
 
     fun deleteStarmapEmbed(starmapId: String, instanceId: String): BridgeResult<Boolean> = wrapResult {
         service.deleteStarmapEmbed(starmapId, instanceId)
     }
 
-    fun addStarmapLink(starmapId: String, linkJson: String): BridgeResult<uniffi.writer_core.StarMapLinkDto> = wrapResult {
-        service.addStarmapLink(starmapId, linkJson)
+    fun addStarmapLink(starmapId: String, link: uniffi.writer_core.StarMapLinkDto): BridgeResult<uniffi.writer_core.StarMapLinkDto> = wrapResult {
+        service.addStarmapLink(starmapId, link)
     }
 
-    fun updateStarmapLink(starmapId: String, linkId: String, patchJson: String): BridgeResult<uniffi.writer_core.StarMapLinkDto> = wrapResult {
-        service.updateStarmapLink(starmapId, linkId, patchJson)
+    fun updateStarmapLink(starmapId: String, linkId: String, patch: uniffi.writer_core.StarMapLinkPatchInputDto): BridgeResult<uniffi.writer_core.StarMapLinkDto> = wrapResult {
+        service.updateStarmapLink(starmapId, linkId, patch)
     }
 
     fun deleteStarmapLink(starmapId: String, linkId: String): BridgeResult<Boolean> = wrapResult {

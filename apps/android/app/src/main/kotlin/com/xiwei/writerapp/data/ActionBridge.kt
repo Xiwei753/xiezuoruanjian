@@ -14,16 +14,16 @@ class ActionBridge internal constructor(private val appService: AppServiceBridge
     fun listRegisteredActions(): BridgeResult<List<ActionDescriptor>> {
         return when (val result = appService.listRegisteredActions()) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
     }
 
     fun executeAction(actionId: String, argsJson: String = "{}"): BridgeResult<ActionResult> {
         return when (val result = appService.executeAction(actionId, argsJson, "{}")) {
             is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
-            is BridgeResult.Error -> result
-            BridgeResult.NotLoaded -> result
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
     }
 }

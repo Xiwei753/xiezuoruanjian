@@ -154,11 +154,11 @@ class SettingsRepository(context: Context) {
     }
 
     fun aiAvailable(): Boolean {
-        return BridgeProvider.getAiStatus(context)
+        return BridgeProvider.getAiStatus(appContext)
     }
 
     fun workspaceDir(): String {
-        return WorkspaceManager.getWorkspaceDir(context).absolutePath
+        return WorkspaceManager.getWorkspaceDir(appContext).absolutePath
     }
 
     fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> {
