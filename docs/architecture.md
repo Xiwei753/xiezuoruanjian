@@ -10,13 +10,13 @@
 
 为防止不同客户端（如 Android 和 Linux）之间的平台重复和状态分叉，本仓库强制执行**核心优先架构**：
 - **单一事实来源**：`core/writer_core` 是业务逻辑、状态变更和验证规则的唯一所有者。
-- **纯适配器**：Android 的 `AppServiceBridge + UniFFI` 主链路、少量 legacy JNI fallback，以及 Linux Qt/QML 后端严格作为薄适配器，将 Core 数据包转换为 UI 视图。禁止实现独立的业务规则或直接修改工作区文件。
+- **纯适配器**：Android 的 `AppServiceBridge + UniFFI` 主链路，以及 Linux Qt6/QML 后端严格作为薄适配器，将 Core 数据包转换为 UI 视图。历史 JNI 符号仅是兼容实现细节，不是新的业务入口。禁止实现独立的业务规则或直接修改工作区文件。
 - **契约执行**：所有共享功能（工作区、项目、卷、章、设置、同步、思维导图、编辑器模型、AI）必须实现 [跨平台能力契约](CROSS_PLATFORM_CAPABILITY_CONTRACT.md) 中定义的标准能力 API 契约。
 
 ## 项目结构
 - `core/writer_core`：用 Rust 编写的共享核心库。处理平台无关的逻辑、文档格式化、设置和同步规则。严格排除 UI、动画、输入法和窗口逻辑。（详见 [Rust Core 技术路线](../core/writer_core/TECHNICAL_ROUTE.md)）。
 - `apps/android`：原生 Kotlin Android 客户端，目标是低功耗、稳定的输入法和一致的键盘交互。（详见 [Android 技术路线](../apps/android/TECHNICAL_ROUTE.md)）。
-- `apps/linux`：原生 Linux 客户端，目标是使用 Qt/CMake 以获得与 X11/Wayland/fcitx5 的最佳集成。（详见 [Linux 技术路线](../apps/linux/TECHNICAL_ROUTE.md)）。
+- `apps/linux`：原生 Rust + Qt6/QML Linux 客户端，通过 Cargo 构建并由 QObject 后端适配 Rust Core，目标是在 X11/Wayland/fcitx5 下保持稳定集成。（详见 [Linux 技术路线](../apps/linux/TECHNICAL_ROUTE.md)）。
 - `bindings`：连接 Rust 核心和原生客户端（Android 和 Linux）的接口代码。
 
 所有客户端共享完全相同的工作区格式和同步规则。工作区的结构是文档格式的唯一事实来源。

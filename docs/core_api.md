@@ -85,6 +85,8 @@ Linux 工作区诊断入口已迁移到 `WriterCoreApi::get_workspace_diagnostic
 
 ### 同步 API
 
+- 当前运行期同步后端仅暴露 `git` 和 `github_api`。WebDAV、S3、本地文件夹等后端不在 `BackendType` 配置枚举中，也不是客户端可选择的同步路径。
+
 - `SyncConfigDto.backend_type = "github_api"` 使用 Rust Core 的 GitHub REST API 同步路径，不进入 libgit2/Git 工作树 reset 流程；`backend_type = "git"` 才使用传统 Git 后端。
 - GitHub API 同步采用 `app-meta/sync/manifest.sync.json` 作为 LWW 清单。清单文件由 Core 管理，不作为普通用户文件计入 `downloaded_files` / `uploaded_files`。
 - `ManifestFileRecord` 字段包括 `path`、`content_hash`、`updated_at_ms`、`deleted_at_ms`、`device_id`、`op`、`schema_version`。`deleted_at_ms` 为可选 tombstone 时间戳；旧清单缺少该字段时按 `updated_at_ms` 兼容读取。

@@ -151,7 +151,7 @@ pub struct NetworkProbeResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDiagnosticsResult {
     pub success: bool,
-    /// Backend type: git/github_api/webdav/s3/local_folder
+    /// Backend type: git/github_api
     pub backend_type: String,
     /// Android permission check results
     pub android_has_internet_permission: bool,
