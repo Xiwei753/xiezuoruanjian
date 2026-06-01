@@ -33,7 +33,14 @@ import uniffi.writer_core.StarMapSourceKindDto
 
 private val starMapPayloadGson = Gson()
 
+private data class StarMapRawCache(
+    val nodes: MutableMap<String, StarMapNodeDto> = mutableMapOf(),
+    val edges: MutableMap<String, StarMapEdgeDto> = mutableMapOf(),
+    val layoutNodes: MutableMap<String, StarMapLayoutNodeDto> = mutableMapOf()
+)
+
 class StarMapBridge(private val appService: AppServiceBridge) {
+    private val rawCacheByStarmapId = mutableMapOf<String, StarMapRawCache>()
 
     fun listStarmaps(): BridgeResult<List<StarMapMeta>> {
         return when (val result = appService.listStarMaps()) {
@@ -55,6 +62,7 @@ class StarMapBridge(private val appService: AppServiceBridge) {
         return when (val result = appService.getStarMapGraph(starmapId)) {
             is BridgeResult.Success -> {
                 try {
+                    rawCacheByStarmapId[starmapId] = result.data.toRawCache()
                     BridgeResult.Success(result.data.toModel())
                 } catch (e: Exception) {
                     BridgeResult.Error(ResultEnvelope.error("CONVERSION_ERROR", "Failed to convert starmap graph: ${e.message}"))
@@ -66,14 +74,31 @@ class StarMapBridge(private val appService: AppServiceBridge) {
     }
 
     fun addStarmapNode(starmapId: String, node: StarMapGraphNode, x: Float = 0f, y: Float = 0f): BridgeResult<StarMapGraphNode> {
-        return when (val result = appService.addStarMapNode(starmapId, node.toDto(), x, y)) {
-            is BridgeResult.Success -> BridgeResult.Success(result.data.toGraphNode())
+        val cache = rawCacheByStarmapId[starmapId]
+        return when (val result = appService.addStarMapNode(starmapId, node.toDto(cache?.nodes?.get(node.id)), x, y)) {
+            is BridgeResult.Success -> {
+                rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
+                    .nodes[result.data.id] = result.data
+                BridgeResult.Success(result.data.toGraphNode())
+            }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
     }
 
-    fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> = appService.saveStarMapLayout(starmapId, layout.toDto())
+    fun saveStarmapLayout(starmapId: String, layout: StarMapLayoutData): BridgeResult<Boolean> {
+        val cache = rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
+        val dto = layout.toDto(cache)
+        return when (val result = appService.saveStarMapLayout(starmapId, dto)) {
+            is BridgeResult.Success -> {
+                cache.layoutNodes.clear()
+                cache.layoutNodes.putAll(dto.nodes.associateBy { it.nodeId })
+                BridgeResult.Success(result.data)
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
 
     fun addStarmapEmbed(starmapId: String, embed: StarMapEmbedDto): BridgeResult<StarMapEmbedDto> {
         return when (val result = appService.addStarmapEmbed(starmapId, embed)) {
@@ -132,6 +157,11 @@ private fun StarMapMetaDto.toModel(): StarMapMeta = StarMapMeta(
     childStarmapCount = childStarmapCount.toInt()
 )
 
+private fun StarMapGraphDto.toRawCache(): StarMapRawCache = StarMapRawCache(
+    nodes = nodes.associateByTo(mutableMapOf()) { it.id },
+    edges = edges.associateByTo(mutableMapOf()) { it.id }
+)
+
 private fun StarMapGraphDto.toModel(): StarMapData = StarMapData(
     graph = StarMapGraphData(
         schemaVersion = schemaVersion.toInt(),
@@ -154,20 +184,18 @@ private fun StarMapNodeDto.toGraphNode(): StarMapGraphNode = StarMapGraphNode(
     title = title,
     kind = kind.toModel(),
     payload = payload.toPayloadMap(),
-    payloadJson = payload,
     tags = tags,
     createdAt = createdAt.toLong(),
-    updatedAt = updatedAt.toLong(),
-    coreDto = this
+    updatedAt = updatedAt.toLong()
 )
 
-private fun StarMapGraphNode.toDto(): StarMapNodeDto {
-    val resolvedPayload = payloadJson ?: payload?.let { starMapPayloadGson.toJson(it) } ?: coreDto?.payload
+private fun StarMapGraphNode.toDto(base: StarMapNodeDto?): StarMapNodeDto {
+    val resolvedPayload = payload?.let { starMapPayloadGson.toJson(it) } ?: base?.payload
     val dtoKind = kind.toDto()
     val dtoCreatedAt = createdAt.toULong()
     val dtoUpdatedAt = updatedAt.toULong()
 
-    return coreDto?.copy(
+    return base?.copy(
         id = id,
         title = title,
         kind = dtoKind,
@@ -219,18 +247,16 @@ private fun StarMapEdgeDto.toGraphEdge(): StarMapGraphEdge = StarMapGraphEdge(
     kind = kind.toModel(),
     label = label,
     payload = payload.toPayloadMap(),
-    payloadJson = payload,
     createdAt = createdAt.toLong(),
-    updatedAt = updatedAt.toLong(),
-    coreDto = this
+    updatedAt = updatedAt.toLong()
 )
 
-private fun StarMapLayoutData.toDto(): StarMapLayoutDto = StarMapLayoutDto(
+private fun StarMapLayoutData.toDto(cache: StarMapRawCache?): StarMapLayoutDto = StarMapLayoutDto(
     kind = kind.toDto(),
-    nodes = nodes.map { it.toDto() }
+    nodes = nodes.map { it.toDto(cache?.layoutNodes?.get(it.nodeId)) }
 )
 
-private fun StarMapLayoutNodeData.toDto(): StarMapLayoutNodeDto = coreDto?.copy(
+private fun StarMapLayoutNodeData.toDto(base: StarMapLayoutNodeDto?): StarMapLayoutNodeDto = base?.copy(
     nodeId = nodeId,
     x = x,
     y = y,
