@@ -107,7 +107,7 @@
             app:cardElevation="0dp"
             app:cardCornerRadius="0dp">
 
-            <com.xiwei.writerapp.ui.WriterEditText
+            <com.xiwei.sujian.ui.WriterEditText
                 android:id="@+id/editorEditText"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"

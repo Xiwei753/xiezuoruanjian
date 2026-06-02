@@ -238,7 +238,7 @@ Dialog {
 
             SettingsSection {
                 dt: root.dt
-                title: "AI"
+                title: qsTr("AI")
                 Layout.fillWidth: true
                 visible: root.backendRef ? root.backendRef.ai_available : false
                 SettingsRow {

@@ -287,12 +287,12 @@ impl AppBackend {
         } else if is_git_repo() {
             SyncTaskOutcome {
                 operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                action_result: "目录包含 Git 仓库但不是 Writer 工作区。请先新建本地工作区（新建作品后保存），再配置同步。".to_string(),
+                action_result: "目录包含 Git 仓库但不是素笺写作工作区。请先新建本地工作区（新建作品后保存），再配置同步。".to_string(),
             }
         } else {
             SyncTaskOutcome {
                 operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                action_result: "目录非空且不是 Writer 工作区。请选择空目录，或先新建本地工作区。".to_string(),
+                action_result: "目录非空且不是素笺写作工作区。请选择空目录，或先新建本地工作区。".to_string(),
             }
         }
     }

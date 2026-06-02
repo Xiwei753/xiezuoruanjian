@@ -147,11 +147,11 @@ fi
 
 # Clean up older log files (keep 20 most recent)
 if [ -d logs ]; then
-    ls -t logs/linux-debug-*.log 2>/dev/null | tail -n +21 | xargs rm -f || true
+    ls -t logs/sujian-linux-debug-*.log 2>/dev/null | tail -n +21 | xargs rm -f || true
 fi
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="logs/linux-debug-${TIMESTAMP}.log"
+LOG_FILE="logs/sujian-linux-debug-${TIMESTAMP}.log"
 touch "$LOG_FILE"
 
 # Mirror all subsequent debug output into one log file, including build failures.
@@ -167,7 +167,7 @@ generate_summary() {
     echo "WRITER_DEBUG_LEVEL: $WRITER_DEBUG_LEVEL" >> "$SUMMARY_FILE"
     echo "" >> "$SUMMARY_FILE"
 
-    echo "--- Staged WriterDebug and critical/warning/error logs ---" >> "$SUMMARY_FILE"
+    echo "--- Staged debug and critical/warning/error logs ---" >> "$SUMMARY_FILE"
     if [ -f "$LOG_FILE" ]; then
         grep -E -i "\[WriterDebug\]|error|warn|critical|conflict|failed|success" "$LOG_FILE" | grep -Ev "qt\.quick|qt\.scenegraph|qt\.qpa|\[Qt DEBUG\]" >> "$SUMMARY_FILE" || true
         echo "" >> "$SUMMARY_FILE"
@@ -207,8 +207,8 @@ if [ "${WRITER_DEBUG_QT_VERBOSE:-0}" = "0" ]; then
 fi
 echo "==========================="
 
-echo "[start-debug] Building linux package..."
-cargo build -p linux
+echo "[start-debug] Building sujian-linux package..."
+cargo build -p sujian-linux
 
-echo "[start-debug] Running linux package with tracing..."
-cargo run -p linux
+echo "[start-debug] Running 素笺写作 with tracing..."
+cargo run -p sujian-linux

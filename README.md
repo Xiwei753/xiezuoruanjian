@@ -1,6 +1,6 @@
-# 写作应用 (多客户端架构)
+# 素笺写作
 
-本仓库包含一个跨平台写作应用的源代码，目前已过渡到“Rust 核心 + 各平台轻量客户端”的单仓库架构。
+本仓库包含“素笺写作”的源代码，目前已过渡到“Rust 核心 + 各平台轻量客户端”的单仓库架构。
 
 ## 架构
 
@@ -47,13 +47,13 @@ cargo test
 Linux 客户端统一使用 Qt6。CI、`apps/linux/build.rs` 和目录 README 都以 Qt6 为唯一构建链路；不要混入 Qt5 QML/plugin 路径。
 
 ```bash
-cargo run -p linux
+cargo run -p sujian-linux
 ```
 
 如果遇到渲染相关问题（例如 Wayland 下的双重 UI 或黑屏错位），可尝试使用以下命令开启基础渲染循环并打开调试日志：
 
 ```bash
-QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p linux
+QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-linux
 ```
 
 ### 实机测试验证步骤

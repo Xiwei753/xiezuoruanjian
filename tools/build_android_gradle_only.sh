@@ -19,7 +19,7 @@
 #   - Gradle（项目自带 gradlew 脚本）
 #
 # 构建产物：
-#   - Android APK: apps/android/app/build/outputs/apk/debug/app-debug.apk
+#   - Android APK: apps/android/app/build/outputs/apk/*/debug/sujian-android-*.apk
 #
 # 适用场景：
 #   - 当 Rust JNI 库已经编译完成，只需要重新构建 Android 应用时
@@ -38,7 +38,7 @@ echo "开始构建 Android 应用..."
 ./gradlew assembleDebug
 if [ $? -eq 0 ]; then
     echo "Android 应用构建成功。"
-    echo "APK 文件位置: apps/android/app/build/outputs/apk/debug/app-debug.apk"
+    echo "APK 文件位置: apps/android/app/build/outputs/apk/*/debug/sujian-android-*.apk"
 else
     echo "Android 应用构建失败。"
     exit 1

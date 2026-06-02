@@ -20,7 +20,7 @@
 
 import QtQuick
 import QtQuick.Controls
-import Writer 1.0
+import Sujian 1.0
 
 QtObject {
     id: controller

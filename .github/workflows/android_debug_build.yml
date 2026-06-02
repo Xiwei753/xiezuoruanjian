@@ -1,4 +1,4 @@
-name: Android Native Debug Build
+name: Sujian Android Debug Build
 
 on:
   push:
@@ -49,7 +49,7 @@ jobs:
 
       - name: Test Android unit tests
         working-directory: apps/android
-        run: ./gradlew testNoAiReleaseUnitTest --tests com.xiwei.writerapp.model.SyncConfigNormalizeTest
+        run: ./gradlew testNoAiReleaseUnitTest --tests com.xiwei.sujian.model.SyncConfigNormalizeTest
 
       - name: Decode Android Keystore
         env:
@@ -83,8 +83,8 @@ jobs:
       - name: Upload no-ai Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: writer-android-no-ai-debug
-          path: apps/android/app/build/outputs/apk/noAi/debug/writer-android-no-ai-*.apk
+          name: sujian-android-no-ai-debug
+          path: apps/android/app/build/outputs/apk/noAi/debug/sujian-android-noAi-*.apk
 
   build-ai:
     runs-on: ubuntu-latest
@@ -122,7 +122,7 @@ jobs:
 
       - name: Test Android unit tests
         working-directory: apps/android
-        run: ./gradlew testAiReleaseUnitTest --tests com.xiwei.writerapp.model.SyncConfigNormalizeTest
+        run: ./gradlew testAiReleaseUnitTest --tests com.xiwei.sujian.model.SyncConfigNormalizeTest
 
       - name: Decode Android Keystore
         env:
@@ -156,5 +156,5 @@ jobs:
       - name: Upload ai Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: writer-android-ai-debug
-          path: apps/android/app/build/outputs/apk/ai/debug/writer-android-ai-*.apk
+          name: sujian-android-ai-debug
+          path: apps/android/app/build/outputs/apk/ai/debug/sujian-android-ai-*.apk

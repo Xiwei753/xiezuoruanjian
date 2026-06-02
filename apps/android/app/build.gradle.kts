@@ -37,7 +37,7 @@ val appVersionCode = gitCommitCount
 val appVersionName = "0.1.1"
 
 android {
-    namespace = "com.xiwei.writerapp"
+    namespace = "com.xiwei.sujian"
     compileSdk = 34
 
     signingConfigs {
@@ -53,7 +53,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.xiwei.writerapp"
+        applicationId = "com.xiwei.sujian"
         minSdk = 24
         targetSdk = 34
         versionCode = appVersionCode
@@ -117,7 +117,7 @@ android {
                         val defaultApk = output.outputFile
                         if (defaultApk.exists()) {
                             val flavorName = variant.productFlavors.firstOrNull()?.name ?: variant.name
-                            val customName = "writer-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
+                            val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
                             val destFile = File(defaultApk.parentFile, customName)
                             defaultApk.copyTo(destFile, overwrite = true)
                             println("Successfully copied custom-named APK to ${destFile.absolutePath}")

@@ -100,8 +100,8 @@ echo "[start] QT_PLUGIN_PATH: ${QT_PLUGIN_PATH:-}"
 echo "[start] QtQuick.Window qmldir: $( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing )"
 echo "[start] QtQuick Controls qmldir: $( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing )"
 
-echo "[start] Building linux package..."
-cargo build -p linux
+echo "[start] Building sujian-linux package..."
+cargo build -p sujian-linux
 
-echo "[start] Running linux package..."
-cargo run -p linux
+echo "[start] Running 素笺写作..."
+cargo run -p sujian-linux

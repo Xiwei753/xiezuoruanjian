@@ -13,7 +13,7 @@
 // - 提供在切换章节时一键清空撤销栈（clearUndoRedoStacks()）的底层实现。
 //
 // 被什么引用：
-// - 被 apps/linux/src/main.rs 注册为 QML 类 "DocumentHandler" (在 "Writer" 命名空间下)。
+// - 被 apps/linux/src/main.rs 注册为 QML 类 "DocumentHandler" (在 "Sujian" 命名空间下)。
 // - 被 apps/linux/qml/EditorController.qml 实例化并绑定至 TextArea。
 // =============================================================================
 

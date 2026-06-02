@@ -189,8 +189,25 @@ impl AppBackend {
         state.to_string().into()
     }
 
-    fn current_app_state_value(&mut self) -> serde_json::Value {
-        serde_json::from_str(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+    fn current_app_state_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "hasWorkspace": self.current_has_workspace,
+            "workspacePath": self.current_workspace,
+            "saveStatus": self.current_save_status,
+            "selected": {
+                "projectId": self.selected_project_id.clone().unwrap_or_default(),
+                "volumeId": self.selected_volume_id.clone().unwrap_or_default(),
+                "chapterId": self.selected_chapter_id.clone().unwrap_or_default()
+            },
+            "tree": self.build_tree_model_json(),
+            "settings": {
+                "fontSize": self.current_setting_font_size,
+                "themeMode": self.setting_theme_mode().to_string()
+            },
+            "sync": {
+                "status": self.current_sync_status
+            }
+        })
     }
 
     fn mutation_success_json(&mut self, data: serde_json::Value, user_message: &str, changed_entities: Vec<&str>) -> QString {
@@ -217,26 +234,15 @@ impl AppBackend {
 
     pub(crate) fn create_project_json(&mut self, title: QString, _action_id: QString) -> QString {
         let title_str = title.to_string();
-        let build_err = |msg: &str| -> String {
-            serde_json::json!({
-                "success": false,
-                "errorCode": "PROJECT_CREATION_FAILED",
-                "userMessage": msg,
-                "rawError": msg,
-                "changedEntities": []
-            }).to_string()
-        };
 
         if title_str.trim().is_empty() {
             let msg = "作品名不能为空";
-            self.set_error(msg);
-            return build_err(msg).into();
+            return self.mutation_error_json(msg.to_string(), msg.to_string());
         }
 
         if !self.current_has_workspace || self.current_workspace.is_empty() {
             let msg = "未打开工作区，无法创建作品。请先新建或打开一个工作区。";
-            self.set_error(msg);
-            return build_err(msg).into();
+            return self.mutation_error_json(msg.to_string(), msg.to_string());
         }
 
         if let Some(api) = self.core_api() {
@@ -261,34 +267,21 @@ impl AppBackend {
                     self.reload_tree();
                     self.trigger_projects_reloaded();
 
-                    let state_val: serde_json::Value = serde_json::from_str(&self.refresh_app_state_json().to_string()).unwrap_or_default();
-
-                    let final_res = serde_json::json!({
-                        "success": true,
-                        "data": { "project": proj },
-                        "userMessage": format!("作品「{}」创建成功", proj.title),
-                        "state": state_val,
-                        "changedEntities": ["ProjectList", "WorkspaceTree"]
-                    });
-                    final_res.to_string().into()
+                    self.mutation_success_json(
+                        serde_json::json!({ "project": proj }),
+                        "创建作品成功",
+                        vec!["ProjectList", "WorkspaceTree"],
+                    )
                 }
                 Err(e) => {
                     let err_display = format!("{}", e);
                     let msg = format!("创建作品失败: {}", e);
-                    self.set_error(&msg);
-                    serde_json::json!({
-                        "success": false,
-                        "errorCode": "CORE_ERROR",
-                        "userMessage": msg,
-                        "rawError": err_display,
-                        "changedEntities": []
-                    }).to_string().into()
+                    self.mutation_error_json(msg, err_display)
                 }
             }
         } else {
             let msg = "核心模块未初始化";
-            self.set_error(msg);
-            build_err(msg).into()
+            self.mutation_error_json(msg.to_string(), msg.to_string())
         }
     }
 

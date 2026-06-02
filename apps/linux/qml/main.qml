@@ -22,7 +22,7 @@ ApplicationWindow {
     visible: true
     width: 1100
     height: 768
-    title: "Writer"
+    title: qsTr("素笺写作")
     color: designTokens.bg
 
     function reportNullBackend(name) {
@@ -443,8 +443,9 @@ ApplicationWindow {
                     theme: designTokens
                     variant: "danger"
                     onClicked: {
-                        projectController.deleteItem(confirmDialog.actionType, confirmDialog.contextData);
-                        confirmDialog.close();
+                        if (projectController.deleteItem(confirmDialog.actionType, confirmDialog.contextData)) {
+                            confirmDialog.close();
+                        }
                     }
                 }
             }

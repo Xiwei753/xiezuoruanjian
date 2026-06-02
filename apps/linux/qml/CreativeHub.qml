@@ -61,7 +61,7 @@ Rectangle {
                     spacing: dt ? dt.sp10 : 10
                     Layout.alignment: Qt.AlignVCenter
                     AppText {
-                        text: "Writer"
+                        text: qsTr("素笺写作")
                         color: dt ? dt.primary : "#006497"
                         font.pixelSize: dt ? dt.fontXl : 18
                         font.family: dt ? dt.fontFamily : "sans-serif"

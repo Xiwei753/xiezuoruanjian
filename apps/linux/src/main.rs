@@ -191,19 +191,19 @@ fn probe_hub_header_resource() {
 }
 
 fn main() {
-    debug_log_static("app", "app_startup", "Writer application starting...");
+    debug_log_static("app", "app_startup", "Sujian application starting...");
     fail_if_not_qt6();
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     probe_hub_header_resource();
     qmetaobject::qml_register_type::<AppBackend>(
-        CStr::from_bytes_with_nul(b"WriterApp\0").unwrap(),
+        CStr::from_bytes_with_nul(b"SujianApp\0").unwrap(),
         1,
         0,
         CStr::from_bytes_with_nul(b"AppBackend\0").unwrap(),
     );
     qmetaobject::qml_register_type::<document_handler::DocumentHandler>(
-        CStr::from_bytes_with_nul(b"Writer\0").unwrap(),
+        CStr::from_bytes_with_nul(b"Sujian\0").unwrap(),
         1,
         0,
         CStr::from_bytes_with_nul(b"DocumentHandler\0").unwrap(),

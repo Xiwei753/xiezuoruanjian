@@ -1,4 +1,4 @@
-name: Linux Build
+name: Sujian Desktop Build
 
 on:
   push:
@@ -20,8 +20,17 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-no-ai:
+  linux-appimage:
+    name: Linux AppImage (${{ matrix.flavor }})
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: no-ai
+            features: ''
+          - flavor: ai
+            features: '--features ai'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,7 +48,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Qt and dependencies
+      - name: Install Qt, AppImage, and system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -55,7 +64,13 @@ jobs:
             pkg-config \
             libssl-dev \
             libgtk-3-dev \
-            libayatana-appindicator3-dev
+            libayatana-appindicator3-dev \
+            libfuse2 \
+            file \
+            wget
+          wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -O linuxdeploy-plugin-qt-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
 
       - name: Configure Qt environment variables
         run: |
@@ -65,30 +80,68 @@ jobs:
           echo "QT_LIBRARY_PATH=$($QMAKE_PATH -query QT_INSTALL_LIBS)" >> "$GITHUB_ENV"
           echo "QT_VERSION_MAJOR=6" >> "$GITHUB_ENV"
 
-      - name: Test writer core
-        run: cargo test -p writer_core
+      - name: Test Rust core
+        run: cargo test -p writer_core ${{ matrix.features }}
 
       - name: Security audit Rust dependencies
+        if: matrix.flavor == 'no-ai'
         run: cargo install cargo-audit --locked && cargo audit
 
       - name: Test Linux contracts
-        run: cargo test -p linux
+        run: cargo test -p sujian-linux ${{ matrix.features }}
 
-      - name: Build Linux no-ai
-        run: cargo build -p linux --release
+      - name: Build Linux desktop
+        run: cargo build -p sujian-linux --release ${{ matrix.features }}
 
-      - name: Rename artifact
-        run: cp target/release/linux target/release/writer-linux-no-ai
+      - name: Package AppImage
+        run: |
+          rm -rf AppDir
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
+          cp target/release/sujian-linux AppDir/usr/bin/sujian-linux
+          cat > AppDir/usr/share/applications/sujian-linux.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=素笺写作
+          Exec=sujian-linux
+          Icon=sujian-linux
+          Categories=Office;TextEditor;
+          Terminal=false
+          EOF
+          cat > AppDir/usr/share/icons/hicolor/scalable/apps/sujian-linux.svg <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+            <rect width="128" height="128" rx="28" fill="#2f5d50"/>
+            <path d="M34 34h60v60H34z" fill="#f5efe0"/>
+            <path d="M48 50h32M48 64h32M48 78h22" stroke="#2f5d50" stroke-width="7" stroke-linecap="round"/>
+          </svg>
+          EOF
+          OUTPUT="sujian-linux-${{ matrix.flavor }}.AppImage" \
+            QML_SOURCES_PATHS="$PWD/apps/linux/qml" \
+            ./linuxdeploy-x86_64.AppImage \
+              --appdir AppDir \
+              --executable AppDir/usr/bin/sujian-linux \
+              --desktop-file AppDir/usr/share/applications/sujian-linux.desktop \
+              --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/sujian-linux.svg \
+              --plugin qt \
+              --output appimage
 
-      - name: Upload no-ai artifact
+      - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: writer-linux-no-ai
-          path: target/release/writer-linux-no-ai
+          name: sujian-linux-${{ matrix.flavor }}
+          path: sujian-linux-${{ matrix.flavor }}.AppImage
           retention-days: 30
 
-  build-ai:
-    runs-on: ubuntu-22.04
+  windows-exe:
+    name: Windows exe (${{ matrix.flavor }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: no-ai
+            features: ''
+          - flavor: ai
+            features: '--features ai'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -106,47 +159,38 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Qt and dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            qt6-base-dev \
-            qt6-declarative-dev \
-            qt6-tools-dev \
-            qt6-tools-dev-tools \
-            qml6-module-qtquick \
-            qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts \
-            qml6-module-qtquick-window \
-            build-essential \
-            pkg-config \
-            libssl-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          modules: 'qtdeclarative qttools'
 
       - name: Configure Qt environment variables
+        shell: pwsh
         run: |
-          QMAKE_PATH="$(command -v qmake6 || command -v qmake-qt6)"
-          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
-          echo "QT_INCLUDE_PATH=$($QMAKE_PATH -query QT_INSTALL_HEADERS)" >> "$GITHUB_ENV"
-          echo "QT_LIBRARY_PATH=$($QMAKE_PATH -query QT_INSTALL_LIBS)" >> "$GITHUB_ENV"
-          echo "QT_VERSION_MAJOR=6" >> "$GITHUB_ENV"
+          $qmake = (Get-Command qmake.exe).Source
+          "QMAKE=$qmake" >> $env:GITHUB_ENV
+          "QT_VERSION_MAJOR=6" >> $env:GITHUB_ENV
 
-      - name: Test writer core
-        run: cargo test -p writer_core --features ai
+      - name: Test Rust core
+        run: cargo test -p writer_core ${{ matrix.features }}
 
-      - name: Test Linux contracts
-        run: cargo test -p linux --features ai
+      - name: Test Windows desktop contracts
+        run: cargo test -p sujian-linux ${{ matrix.features }}
 
-      - name: Build Linux ai
-        run: cargo build -p linux --release --features ai
+      - name: Build Windows desktop
+        run: cargo build -p sujian-linux --release ${{ matrix.features }}
 
-      - name: Rename artifact
-        run: cp target/release/linux target/release/writer-linux-ai
+      - name: Rename Windows exe
+        shell: pwsh
+        run: Copy-Item target/release/sujian-linux.exe target/release/sujian-windows-${{ matrix.flavor }}.exe
 
-      - name: Upload ai artifact
+      - name: Upload Windows exe
         uses: actions/upload-artifact@v4
         with:
-          name: writer-linux-ai
-          path: target/release/writer-linux-ai
+          name: sujian-windows-${{ matrix.flavor }}
+          path: target/release/sujian-windows-${{ matrix.flavor }}.exe
           retention-days: 30

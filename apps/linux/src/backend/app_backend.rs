@@ -15,7 +15,7 @@
 //
 // 被什么引用：
 // - 被 apps/linux/src/backend/mod.rs 引用，作为核心底层指针底座，被 SafeAppPtr 传递至各个分域后端。
-// - 被 apps/linux/src/main.rs 注册为 QML 内命名空间 "WriterApp" 下的 "AppBackend"。
+// - 被 apps/linux/src/main.rs 注册为 QML 内命名空间 "SujianApp" 下的 "AppBackend"。
 // =============================================================================
 
 use qmetaobject::prelude::*;

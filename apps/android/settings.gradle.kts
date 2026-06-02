@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "WriterApp"
+rootProject.name = "Sujian"
 include(":app")

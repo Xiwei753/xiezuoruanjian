@@ -24,7 +24,7 @@
 #
 # 构建产物：
 #   - Rust JNI 库: apps/android/app/src/main/jniLibs/arm64-v8a/libwriter_core_jni.so
-#   - Android APK: apps/android/app/build/outputs/apk/*/debug/writer-android-*.apk
+#   - Android APK: apps/android/app/build/outputs/apk/*/debug/sujian-android-*.apk
 #
 # 注意事项：
 #   - 本脚本只支持 arm64-v8a 架构（官方只支持 64 位 ARM 设备）
@@ -59,7 +59,7 @@ for arg in "$@"; do
     esac
 done
 
-echo "开始构建 Writer Core JNI 库..."
+echo "开始构建素笺写作 Android JNI 库..."
 echo "  Rust 特性: ${RUST_FEATURES:-<无>}"
 echo "  Gradle 构建类型: $GRADLE_FLAVOR"
 
@@ -96,7 +96,7 @@ if [ $? -eq 0 ]; then
 
     # 查找生成的 APK 文件
     APK_DIR="app/build/outputs/apk/${APK_VARIANT%Debug}/debug"
-    APK_PATH=$(find "$APK_DIR" -name "writer-android-*.apk" -type f 2>/dev/null | head -1)
+    APK_PATH=$(find "$APK_DIR" -name "sujian-android-*.apk" -type f 2>/dev/null | head -1)
 
     if [ -z "$APK_PATH" ]; then
         # 如果找不到自定义名称的 APK，使用默认名称
