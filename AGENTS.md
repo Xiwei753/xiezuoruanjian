@@ -11,7 +11,7 @@ core/writer_core/          Rust 核心库（唯一业务逻辑层）
 bindings/android/          Android JNI 桥接
 bindings/shared/           跨平台共享绑定
 apps/android/              Kotlin Android 客户端（薄客户端）
-apps/linux/                Qt/QML Linux 客户端（薄客户端）
+apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 ```
 
 **核心原则：Rust Core 是唯一事实来源。**
@@ -55,7 +55,7 @@ apps/linux/                Qt/QML Linux 客户端（薄客户端）
 ### 3.1 目录结构
 
 ```
-apps/linux/
+apps/desktop/
   src/
     main.rs              入口 + AppBackend QObject（业务绑定层）
     document_handler.rs  QTextDocument 排版操作（独立 QObject）
@@ -156,7 +156,7 @@ core/writer_core/
 cd core/writer_core && cargo test
 
 # Linux 客户端
-cd apps/linux && cargo check && cargo test
+cd apps/desktop && cargo check && cargo test
 
 # Android
 ./tools/build_android.sh
@@ -223,9 +223,9 @@ cd apps/linux && cargo check && cargo test
 | 文件/目录 | 允许修改 | 禁止修改 |
 |-----------|---------|---------|
 | `core/writer_core/` | Rust 核心逻辑 | — |
-| `apps/linux/src/main.rs` | AppBackend 绑定 | 不要新增写作排版细节 |
-| `apps/linux/src/document_handler.rs` | QTextDocument 操作 | 不要搬回 main.rs |
-| `apps/linux/qml/*.qml` | UI 组件和状态绑定 | 不要写复杂业务逻辑 |
+| `apps/desktop/src/main.rs` | AppBackend 绑定 | 不要新增写作排版细节 |
+| `apps/desktop/src/document_handler.rs` | QTextDocument 操作 | 不要搬回 main.rs |
+| `apps/desktop/qml/*.qml` | UI 组件和状态绑定 | 不要写复杂业务逻辑 |
 | `apps/android/` | Android 客户端 | 不要硬编码输入法逻辑 |
 | `.github/` | CI/CD 配置 | — |
 | `docs/*.md` | 文档 | — |

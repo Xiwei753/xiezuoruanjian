@@ -15,7 +15,7 @@
 // - 维护统计会话 Session 的生命周期及统计专用设备 ID 的自动生成与本地持久化。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/editor_backend.rs 引用，作为主写作编辑器的后端状态控制器与统计源。
+// - 被 apps/desktop/src/backend/editor_backend.rs 引用，作为主写作编辑器的后端状态控制器与统计源。
 // =============================================================================
 
 //! # 写作桥接函数（Linux UI 层 - Backend Adapter）

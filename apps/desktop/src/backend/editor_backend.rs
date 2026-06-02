@@ -14,7 +14,7 @@
 // - 提供动作命令注册与调度执行机制（list_registered_actions & execute_action），作为 Action-Driven UI 智能体的重要旁路底座。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化编辑器后端并绑定为 QML 全局上下文属性。
+// - 被 apps/desktop/src/backend/mod.rs 引用，用于实例化编辑器后端并绑定为 QML 全局上下文属性。
 // =============================================================================
 
 use super::*;

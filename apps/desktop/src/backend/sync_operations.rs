@@ -14,7 +14,7 @@
 // - 所有同步操作通过 UUID operation_id 机制保证并发安全，通过 QPointer + queued_callback 实现线程安全回调。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/app_backend/sync_backend.rs 中的 SyncBackend QObject 间接调用。
+// - 被 apps/desktop/src/backend/app_backend/sync_backend.rs 中的 SyncBackend QObject 间接调用。
 // =============================================================================
 
 use super::*;

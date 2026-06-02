@@ -4,7 +4,7 @@
 
 ## 目录结构说明
 
-- [linux/](file:///home/xiwei/xiezuoruanjian/apps/linux/)：Qt/QML Linux 桌面薄客户端。使用 Rust 进行底层 QObject 绑定，QML 负责高还原度的主题、写作排版渲染和交互。
+- [linux/](file:///home/xiwei/xiezuoruanjian/apps/desktop/)：Qt/QML Linux 桌面薄客户端。使用 Rust 进行底层 QObject 绑定，QML 负责高还原度的主题、写作排版渲染和交互。
 - [android/](file:///home/xiwei/xiezuoruanjian/apps/android/)：Kotlin Android 移动薄客户端。使用 XML/View 渲染 Material 现代组件，通过 UniFFI 绑定与共享 Rust Core 交互。
 
 ## 核心设计契约：薄客户端原则 (Thin Client Principle)

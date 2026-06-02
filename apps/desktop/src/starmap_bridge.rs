@@ -12,7 +12,7 @@
 // - 提供图数据点、线、多维布局及嵌入式富文本元素（add_starmap_embed 等）的增删改查动作。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/starmap_backend.rs 引用，作为后端 QObject 完成星图数据管理的执行模块。
+// - 被 apps/desktop/src/backend/starmap_backend.rs 引用，作为后端 QObject 完成星图数据管理的执行模块。
 // =============================================================================
 
 use writer_core::api::types::{

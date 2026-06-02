@@ -14,8 +14,8 @@
 // - 封装并对外提供 debug_log_static 等静态日志收集入口，规范化地将运行时关键链路节点记录到磁盘和控制台。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/mod.rs 引用，作为核心底层指针底座，被 SafeAppPtr 传递至各个分域后端。
-// - 被 apps/linux/src/main.rs 注册为 QML 内命名空间 "SujianApp" 下的 "AppBackend"。
+// - 被 apps/desktop/src/backend/mod.rs 引用，作为核心底层指针底座，被 SafeAppPtr 传递至各个分域后端。
+// - 被 apps/desktop/src/main.rs 注册为 QML 内命名空间 "SujianApp" 下的 "AppBackend"。
 // =============================================================================
 
 use cpp::cpp;
@@ -150,7 +150,7 @@ fn debug_level_enabled(module: &str, level: DebugLevel) -> bool {
 pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Info) {
         println!(
-            "[WriterDebug][static][module={}][event={}] {}",
+            "[SujianDebug][static][module={}][event={}] {}",
             module, event, message
         );
     }
@@ -160,7 +160,7 @@ pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
 pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Warn) {
         eprintln!(
-            "[WriterDebug][WARN][static][module={}][event={}] {}",
+            "[SujianDebug][WARN][static][module={}][event={}] {}",
             module, event, message
         );
     }
@@ -170,7 +170,7 @@ pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
 pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Error) {
         eprintln!(
-            "[WriterDebug][ERROR][static][module={}][event={}] {}",
+            "[SujianDebug][ERROR][static][module={}][event={}] {}",
             module, event, message
         );
     }
@@ -315,7 +315,7 @@ impl AppBackend {
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
 
-            let prefix = format!("[WriterDebug][qml][module={}][event={}]", m, ev);
+            let prefix = format!("[SujianDebug][qml][module={}][event={}]", m, ev);
             let state = format!(
                 "[workspace_exists={}][proj={}][vol={}][chap={}]",
                 ws_exists, proj, vol, chap
@@ -337,7 +337,7 @@ impl AppBackend {
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
             println!(
-                "[WriterDebug][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                "[SujianDebug][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
                 module, event, ws_exists, proj, vol, chap, message
             );
         }
@@ -350,7 +350,7 @@ impl AppBackend {
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
             eprintln!(
-                "[WriterDebug][WARN][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                "[SujianDebug][WARN][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
                 module, event, ws_exists, proj, vol, chap, message
             );
         }
@@ -363,7 +363,7 @@ impl AppBackend {
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
             eprintln!(
-                "[WriterDebug][ERROR][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
+                "[SujianDebug][ERROR][module={}][event={}][workspace_exists={}][proj={}][vol={}][chap={}] {}",
                 module, event, ws_exists, proj, vol, chap, message
             );
         }

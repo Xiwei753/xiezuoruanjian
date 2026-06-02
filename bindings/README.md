@@ -1,6 +1,6 @@
 # Bindings
 
-This directory contains the integration code that allows the native clients (`apps/android`, `apps/linux`) to communicate with the shared Rust core (`core/writer_core`).
+This directory contains the integration code that allows the native clients (`apps/android`, `apps/desktop`) to communicate with the shared Rust core (`core/writer_core`).
 
 ## Principles
 1. **Core is the source of truth.** Native clients must NOT implement workspace formats, saving rules, or project management themselves.

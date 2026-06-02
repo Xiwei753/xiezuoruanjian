@@ -13,7 +13,7 @@
 // - 接收多线程同步结果 outcomes，提取并序列化为包含 { operation_id, operation_kind, status, summary, details } 的结构化 JSON 并通过 sync_operation_state 属性单向通知 QML 渲染，严格守卫逻辑与显示文案分离边界。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化同步后端并绑定为 QML 全局上下文属性。
+// - 被 apps/desktop/src/backend/mod.rs 引用，用于实例化同步后端并绑定为 QML 全局上下文属性。
 // =============================================================================
 
 mod sync_operations;

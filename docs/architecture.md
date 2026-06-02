@@ -16,7 +16,7 @@
 ## 项目结构
 - `core/writer_core`：用 Rust 编写的共享核心库。处理平台无关的逻辑、文档格式化、设置和同步规则。严格排除 UI、动画、输入法和窗口逻辑。（详见 [Rust Core 技术路线](../core/writer_core/TECHNICAL_ROUTE.md)）。
 - `apps/android`：原生 Kotlin Android 客户端，目标是低功耗、稳定的输入法和一致的键盘交互。（详见 [Android 技术路线](../apps/android/TECHNICAL_ROUTE.md)）。
-- `apps/linux`：原生 Rust + Qt6/QML Linux 客户端，通过 Cargo 构建并由 QObject 后端适配 Rust Core，目标是在 X11/Wayland/fcitx5 下保持稳定集成。（详见 [Linux 技术路线](../apps/linux/TECHNICAL_ROUTE.md)）。
+- `apps/desktop`：原生 Rust + Qt6/QML Linux 客户端，通过 Cargo 构建并由 QObject 后端适配 Rust Core，目标是在 X11/Wayland/fcitx5 下保持稳定集成。（详见 [Linux 技术路线](../apps/desktop/TECHNICAL_ROUTE.md)）。
 - `bindings`：连接 Rust 核心和原生客户端（Android 和 Linux）的接口代码。
 
 所有客户端共享完全相同的工作区格式和同步规则。工作区的结构是文档格式的唯一事实来源。

@@ -227,7 +227,7 @@ QtObject {
 
     function logWriterWarning(event, message) {
         var msg = message || "";
-        console.warn("[WriterDebug][WARN][qml][module=editor][event=" + event + "] " + msg);
+        console.warn("[SujianDebug][WARN][qml][module=editor][event=" + event + "] " + msg);
         if (backendRef && backendRef.log_qml) {
             backendRef.log_qml("warn", "editor", event, msg);
         }
@@ -294,7 +294,7 @@ QtObject {
         var result = backendRef.open_chapter(pId, vId, cId);
 
         if (!result.success) {
-            console.error("[WriterDebug] Failed to open chapter:", result.userMessage || result.rawError);
+            console.error("[SujianDebug] Failed to open chapter:", result.userMessage || result.rawError);
             isLoadingChapter = false;
             return null;
         }

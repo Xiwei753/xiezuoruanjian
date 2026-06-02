@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-src="$root/apps/linux/src"
+src="$root/apps/desktop/src"
 
 search() {
   local pattern="$1"

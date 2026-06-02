@@ -16,11 +16,11 @@
 
 - **lupdate**：从 `.qml` 源码提取待翻译词条并生成/更新 `.ts` 文件。
   ```bash
-  lupdate apps/linux/qml -ts apps/linux/i18n/writer_zh_CN.ts
+  lupdate apps/desktop/qml -ts apps/desktop/i18n/writer_zh_CN.ts
   ```
 - **lrelease**：将 `.ts` 文件编译为 Qt 运行时高效加载的 `.qm` 文件。
   ```bash
-  lrelease apps/linux/i18n/writer_zh_CN.ts -qm apps/linux/i18n/writer_zh_CN.qm
+  lrelease apps/desktop/i18n/writer_zh_CN.ts -qm apps/desktop/i18n/writer_zh_CN.qm
   ```
 
 ## 3. 在 Rust/Qt 代码中加载翻译

@@ -12,7 +12,7 @@
 // - 支持对本地不随云端同步的本地设置（LocalSettingsDto，如侧边栏 sidebar 宽度、打字动画开关）以及自动随网络同步的全局设置（SyncableSettingsDto，如作品的字体偏好）进行强类型校验的加载（load_local_settings）与安全性持久化落盘（save_local_settings）。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/mod.rs 引用，用于实例化设置后端并绑定为 QML 全局上下文属性。
+// - 被 apps/desktop/src/backend/mod.rs 引用，用于实例化设置后端并绑定为 QML 全局上下文属性。
 // =============================================================================
 
 use super::*;

@@ -13,7 +13,7 @@
 // - 提供 register_context_properties 方法，负责在 main.qml 加载前一站式绑定所有的 Context Property。
 //
 // 被什么引用：
-// - 被 apps/linux/src/main.rs 引用，用于实例化 BackendRuntime 并注册全局 QML 环境属性。
+// - 被 apps/desktop/src/main.rs 引用，用于实例化 BackendRuntime 并注册全局 QML 环境属性。
 // =============================================================================
 
 pub mod app_backend;
