@@ -65,8 +65,7 @@ jobs:
       - name: Configure Qt environment variables
         shell: pwsh
         run: |
-          $qtBase = "${{ steps.install-qt.outputs.qtPath }}"
-          $qtPath = Join-Path $qtBase "msvc2019_64"
+          $qtPath = $env:QT_ROOT_DIR
           $qmakePath = Join-Path $qtPath "bin\qmake.exe"
           "QMAKE=$qmakePath" >> $env:GITHUB_ENV
           "QT_VERSION_MAJOR=6" >> $env:GITHUB_ENV
