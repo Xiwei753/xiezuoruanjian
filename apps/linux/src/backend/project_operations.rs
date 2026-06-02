@@ -193,6 +193,28 @@ impl AppBackend {
         serde_json::from_str(&self.refresh_app_state_json().to_string()).unwrap_or_default()
     }
 
+    fn mutation_success_json(&mut self, data: serde_json::Value, user_message: &str, changed_entities: Vec<&str>) -> QString {
+        serde_json::json!({
+            "success": true,
+            "data": data,
+            "userMessage": user_message,
+            "state": self.current_app_state_value(),
+            "changedEntities": changed_entities
+        }).to_string().into()
+    }
+
+    fn mutation_error_json(&mut self, user_message: String, raw_error: String) -> QString {
+        self.set_error(&user_message);
+        serde_json::json!({
+            "success": false,
+            "errorCode": "CORE_ERROR",
+            "userMessage": user_message,
+            "rawError": raw_error,
+            "state": self.current_app_state_value(),
+            "changedEntities": []
+        }).to_string().into()
+    }
+
     pub(crate) fn create_project_json(&mut self, title: QString, _action_id: QString) -> QString {
         let title_str = title.to_string();
         let build_err = |msg: &str| -> String {
@@ -496,30 +518,21 @@ impl AppBackend {
     }
 
     pub(crate) fn rename_project_json(&mut self, project_id: QString, new_title: QString) -> QString {
-        let mut success = false;
-        let mut user_message = "重命名作品成功".to_string();
-        if let Some(api) = self.core_api() {
-            let result = api.rename_project(&project_id.to_string(), &new_title.to_string());
-            match result {
-                Ok(_) => {
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                    success = true;
-                }
-                Err(e) => {
-                    self.set_error(&format!("重命名作品失败: {}", e));
-                    user_message = format!("重命名作品失败: {}", e);
-                }
+        let Some(api) = self.core_api() else {
+            let raw_error = WriterError::InvalidWorkspace.to_string();
+            return self.mutation_error_json(format!("重命名作品失败: {}", raw_error), raw_error);
+        };
+        match api.rename_project(&project_id.to_string(), &new_title.to_string()) {
+            Ok(value) => {
+                self.reload_tree();
+                self.trigger_projects_reloaded();
+                self.mutation_success_json(serde_json::json!(value), "重命名作品成功", vec!["WorkspaceTree"])
             }
-        } else {
-            user_message = "重命名作品失败: 后端未初始化".to_string();
+            Err(e) => {
+                let raw_error = e.to_string();
+                self.mutation_error_json(format!("重命名作品失败: {}", raw_error), raw_error)
+            }
         }
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": user_message,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
     }
 
     pub(crate) fn delete_project(&mut self, project_id: QString) -> Result<bool, WriterError> {
@@ -554,30 +567,21 @@ impl AppBackend {
     }
 
     pub(crate) fn rename_volume_json(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QString {
-        let mut success = false;
-        let mut user_message = "重命名分卷成功".to_string();
-        if let Some(api) = self.core_api() {
-            let result = api.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string());
-            match result {
-                Ok(_) => {
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                    success = true;
-                }
-                Err(e) => {
-                    self.set_error(&format!("重命名分卷失败: {}", e));
-                    user_message = format!("重命名分卷失败: {}", e);
-                }
+        let Some(api) = self.core_api() else {
+            let raw_error = WriterError::InvalidWorkspace.to_string();
+            return self.mutation_error_json(format!("重命名分卷失败: {}", raw_error), raw_error);
+        };
+        match api.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string()) {
+            Ok(value) => {
+                self.reload_tree();
+                self.trigger_projects_reloaded();
+                self.mutation_success_json(serde_json::json!(value), "重命名分卷成功", vec!["WorkspaceTree"])
             }
-        } else {
-            user_message = "重命名分卷失败: 后端未初始化".to_string();
+            Err(e) => {
+                let raw_error = e.to_string();
+                self.mutation_error_json(format!("重命名分卷失败: {}", raw_error), raw_error)
+            }
         }
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": user_message,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
     }
 
     pub(crate) fn delete_volume(&mut self, project_id: QString, volume_id: QString) -> Result<bool, WriterError> {
@@ -612,35 +616,26 @@ impl AppBackend {
     }
 
     pub(crate) fn rename_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) -> QString {
-        let mut success = false;
-        let mut user_message = "重命名章节成功".to_string();
-        if let Some(api) = self.core_api() {
-            let result = api.rename_chapter(
-                &project_id.to_string(),
-                &volume_id.to_string(),
-                &chapter_id.to_string(),
-                &new_title.to_string(),
-            );
-            match result {
-                Ok(_) => {
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                    success = true;
-                }
-                Err(e) => {
-                    self.set_error(&format!("重命名章节失败: {}", e));
-                    user_message = format!("重命名章节失败: {}", e);
-                }
+        let Some(api) = self.core_api() else {
+            let raw_error = WriterError::InvalidWorkspace.to_string();
+            return self.mutation_error_json(format!("重命名章节失败: {}", raw_error), raw_error);
+        };
+        match api.rename_chapter(
+            &project_id.to_string(),
+            &volume_id.to_string(),
+            &chapter_id.to_string(),
+            &new_title.to_string(),
+        ) {
+            Ok(value) => {
+                self.reload_tree();
+                self.trigger_projects_reloaded();
+                self.mutation_success_json(serde_json::json!(value), "重命名章节成功", vec!["WorkspaceTree"])
             }
-        } else {
-            user_message = "重命名章节失败: 后端未初始化".to_string();
+            Err(e) => {
+                let raw_error = e.to_string();
+                self.mutation_error_json(format!("重命名章节失败: {}", raw_error), raw_error)
+            }
         }
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": user_message,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
     }
 
     pub(crate) fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> Result<bool, WriterError> {

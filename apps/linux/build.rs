@@ -232,6 +232,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/ActionRegistryPage.qml");
     println!("cargo:rerun-if-changed=qml/SyncPage.qml");
     println!("cargo:rerun-if-changed=qml/AppController.qml");
+    println!("cargo:rerun-if-changed=qml/ProjectController.qml");
+    println!("cargo:rerun-if-changed=qml/StarMapController.qml");
     println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
     println!("cargo:rerun-if-changed=qml/StatsPreviewPage.qml");
     println!("cargo:rerun-if-changed=qml/StarMapPage.qml");

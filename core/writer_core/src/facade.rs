@@ -1156,9 +1156,24 @@ impl WriterCore {
         crate::starmap::create_starmap(&self.workspace_path, title, description, accent_color)
     }
 
+    pub fn create_child_starmap(
+        &self,
+        parent_id: &str,
+        title: &str,
+        description: &str,
+        accent_color: Option<&str>,
+    ) -> Result<crate::starmap::StarMapMeta> {
+        crate::starmap::create_child_starmap(
+            &self.workspace_path,
+            parent_id,
+            title,
+            description,
+            accent_color,
+        )
+    }
+
     /// **LEGACY API**: 创建子星图。
-    /// 新架构下，新建星图应作为独立对象创建，如需放入其他画布，请使用 `StarMapEmbed`。
-    /// 保留此方法仅为向下兼容，新功能禁止使用此方法创建层级强绑定的子星图。
+    /// 保留此方法仅为向下兼容，新的调用入口使用 `create_child_starmap`。
     pub fn create_child_starmap_legacy(
         &self,
         parent_id: &str,
@@ -1166,13 +1181,7 @@ impl WriterCore {
         description: &str,
         accent_color: Option<&str>,
     ) -> Result<crate::starmap::StarMapMeta> {
-        crate::starmap::create_child_starmap_legacy(
-            &self.workspace_path,
-            parent_id,
-            title,
-            description,
-            accent_color,
-        )
+        self.create_child_starmap(parent_id, title, description, accent_color)
     }
 
     pub fn rename_starmap(

@@ -864,8 +864,12 @@ impl WriterCoreApi {
         self.core().get_main_starmap_for_project(project_id).map(|opt| opt.map(Into::into)).map_err(Into::into)
     }
 
-    pub fn create_child_starmap_legacy(&self, parent_id: &str, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.core().create_child_starmap_legacy(parent_id, title, desc, template_id).map(Into::into).map_err(Into::into)
+    pub fn create_child_starmap(&self, parent_id: &str, title: &str, desc: &str, accent_color: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core().create_child_starmap(parent_id, title, desc, accent_color).map(Into::into).map_err(Into::into)
+    }
+
+    pub fn create_child_starmap_legacy(&self, parent_id: &str, title: &str, desc: &str, accent_color: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.create_child_starmap(parent_id, title, desc, accent_color)
     }
 
     pub fn update_starmap_node(&self, starmap_id: &str, node_id: &str, patch: crate::api::types::StarMapNodePatchDto) -> ApiResult<crate::api::types::StarMapNodeDto> {

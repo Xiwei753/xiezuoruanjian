@@ -53,6 +53,7 @@
 - `save_starmap_layout(starmap_id: &str, layout: &StarMapLayoutDto) -> Result<bool, WriterError>`：StarMap 布局保存接收强类型 DTO。
 - `list_starmaps_for_project(project_id: &str) -> Result<Vec<StarMapMetaDto>, WriterError>`
 - `get_starmap(starmap_id: &str) -> Result<StarMapMetaDto, WriterError>`
+- `create_child_starmap(parent_id: &str, title: &str, desc: &str, accent_color: Option<&str>) -> Result<StarMapMetaDto, WriterError>`：创建子星图的正式入口；旧 `create_child_starmap_legacy` 仅保留为兼容转发。
 - `add_starmap_embed(starmap_id: &str, embed: StarMapEmbedDto) -> Result<StarMapEmbedDto, WriterError>`
 - `update_starmap_embed(starmap_id: &str, instance_id: &str, patch: StarMapEmbedPatchDto) -> Result<StarMapEmbedDto, WriterError>`
 - `delete_starmap_embed(...) -> Result<()>`

@@ -65,8 +65,8 @@ pub fn create_starmap(api: &WriterCoreApi, title: &str, description: &str, accen
     envelope(api.create_starmap(title, description, accent_color))
 }
 
-pub fn create_child_starmap_legacy(api: &WriterCoreApi, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> String {
-    envelope(api.create_child_starmap_legacy(parent_id, title, description, accent_color))
+pub fn create_child_starmap(api: &WriterCoreApi, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> String {
+    envelope(api.create_child_starmap(parent_id, title, description, accent_color))
 }
 
 pub fn rename_starmap(api: &WriterCoreApi, starmap_id: &str, new_title: &str) -> String {

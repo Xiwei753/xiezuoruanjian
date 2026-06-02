@@ -198,22 +198,22 @@ impl AppBackend {
         qjson_object_from_json(&raw)
     }
 
-// AppBackend::create_child_starmap_legacy_json
     pub(crate) fn create_child_starmap_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
-        self.create_child_starmap_legacy_json(parent_id, title, description, accent_color)
-    }
-
-    pub(crate) fn create_child_starmap_legacy_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
         let pid = parent_id.to_string();
         let t = title.to_string();
         let d = description.to_string();
         let ac = accent_color.to_string();
         let color_ref = if ac.is_empty() { None } else { Some(ac.as_str()) };
         if let Some(core) = self.core_api() {
-            starmap_bridge::create_child_starmap_legacy(&core, &pid, &t, &d, color_ref).into()
+            starmap_bridge::create_child_starmap(&core, &pid, &t, &d, color_ref).into()
         } else {
             WriterCoreApi::envelope_json::<serde_json::Value>(Err(writer_core::api::WriterError::InvalidWorkspace)).to_string().into()
         }
+    }
+
+// AppBackend::create_child_starmap_legacy_json
+    pub(crate) fn create_child_starmap_legacy_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
+        self.create_child_starmap_json(parent_id, title, description, accent_color)
     }
 
 // AppBackend::rename_starmap_json

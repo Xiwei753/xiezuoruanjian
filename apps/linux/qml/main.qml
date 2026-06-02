@@ -99,13 +99,26 @@ ApplicationWindow {
         id: appController
         backendRef: backend
         workspaceBackendRef: workspaceBackend
-        projectBackendRef: projectBackend
-        starmapBackendRef: starmapBackend
+        stateBackendRef: projectBackend
         appBackendRef: backend
         onErrorRaised: function(message) {
             errorDialog.message = message;
             errorDialog.open();
         }
+    }
+
+    ProjectController {
+        id: projectController
+        backendRef: backend
+        projectBackendRef: projectBackend
+        appController: appController
+    }
+
+    StarMapController {
+        id: starMapController
+        backendRef: backend
+        starmapBackendRef: starmapBackend
+        appController: appController
     }
 
     Component.onCompleted: {
@@ -231,7 +244,7 @@ ApplicationWindow {
                 backendRef: projectBackend
                 editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
-                appController: appController
+                starMapController: starMapController
                 appState: window.appState
                 tree: window.appState.tree || []
                 aiCapable: settingsBackend.ai_available
@@ -252,7 +265,7 @@ ApplicationWindow {
                 }
 
                 onRenameProjectRequested: function(projectId, title) {
-                    appController.renameProject(projectId, title);
+                    projectController.renameProject(projectId, title);
                 }
 
                 onDeleteProjectRequested: function(projectId, title) {
@@ -286,7 +299,7 @@ ApplicationWindow {
             sourceComponent: WritingWorkspace {
                 dt: designTokens
                 backendRef: editorBackend
-                appController: appController
+                starMapController: starMapController
                 appState: window.appState
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
@@ -374,7 +387,7 @@ ApplicationWindow {
             var trimmedTitle = title ? title.trim() : "";
             var isEmpty = (trimmedTitle === "");
             window.debugLog("project", "create_project_submit", "titleLength=" + (title ? title.length : 0) + ", isEmpty=" + isEmpty);
-            if (appController.createProject(title)) {
+            if (projectController.createProject(title)) {
                 createProjectDialog.close();
             }
         }
@@ -430,7 +443,7 @@ ApplicationWindow {
                     theme: designTokens
                     variant: "danger"
                     onClicked: {
-                        appController.deleteItem(confirmDialog.actionType, confirmDialog.contextData);
+                        projectController.deleteItem(confirmDialog.actionType, confirmDialog.contextData);
                         confirmDialog.close();
                     }
                 }
@@ -576,15 +589,15 @@ ApplicationWindow {
                         var title = inputField.text.trim();
                         if (title !== "") {
                             if (inputDialog.actionType === "volume") {
-                                appController.createVolume(inputDialog.projectId, title);
+                                projectController.createVolume(inputDialog.projectId, title);
                             } else if (inputDialog.actionType === "chapter") {
-                                appController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
+                                projectController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
                             } else if (inputDialog.actionType === "rename_project") {
-                                appController.renameProject(inputDialog.projectId, title);
+                                projectController.renameProject(inputDialog.projectId, title);
                             } else if (inputDialog.actionType === "rename_volume") {
-                                appController.renameVolume(inputDialog.projectId, inputDialog.volumeId, title);
+                                projectController.renameVolume(inputDialog.projectId, inputDialog.volumeId, title);
                             } else if (inputDialog.actionType === "rename_chapter") {
-                                appController.renameChapter(inputDialog.projectId, inputDialog.volumeId, inputDialog.chapterId, title);
+                                projectController.renameChapter(inputDialog.projectId, inputDialog.volumeId, inputDialog.chapterId, title);
                             }
                         }
                         inputDialog.close();

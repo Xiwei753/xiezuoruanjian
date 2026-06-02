@@ -20,7 +20,7 @@ Rectangle {
     property var backendRef: null
     property var editorBackendRef: backendRef
     property var starmapBackendRef: backendRef
-    property var appController: null
+    property var starMapController: null
     property var appState: ({})
     property var tree: []
     property int currentTab: 0
@@ -264,7 +264,7 @@ Rectangle {
                 active: root.currentTab === 1
                 sourceComponent: StarMapPage {
                     dt: root.dt
-                    appController: root.appController
+                    starMapController: root.starMapController
                     appState: root.appState
 
                     onOpenStarmap: function(starmapId, title) {

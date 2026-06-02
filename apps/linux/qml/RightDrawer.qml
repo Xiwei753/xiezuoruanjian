@@ -17,7 +17,7 @@ Rectangle {
     id: root
     property var dt: null
     property var backendRef: null
-    property var appController: null
+    property var starMapController: null
     property bool isOpen: false
     property int currentTab: 0
     property bool aiCapable: false
@@ -135,7 +135,7 @@ Rectangle {
                 StarMapPage {
                     dt: root.dt
                     backendRef: root.backendRef
-                    appController: root.appController
+                    starMapController: root.starMapController
                     appState: ({})
                     visible: root.currentTab === 0
                     anchors.fill: parent

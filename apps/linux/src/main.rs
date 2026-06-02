@@ -66,6 +66,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StatCard.qml" as "StatCard.qml",
     "qml/CreativeHub.qml" as "CreativeHub.qml",
     "qml/AppController.qml" as "AppController.qml",
+    "qml/ProjectController.qml" as "ProjectController.qml",
+    "qml/StarMapController.qml" as "StarMapController.qml",
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
     "qml/WritingTreeController.qml" as "WritingTreeController.qml",
     "qml/EditorController.qml" as "EditorController.qml",

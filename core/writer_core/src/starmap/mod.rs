@@ -189,10 +189,7 @@ pub fn create_starmap(
     Ok(meta)
 }
 
-/// **LEGACY API**: 创建子星图。
-/// 新架构下，新建星图应作为独立对象创建，如需放入其他画布，请使用 `StarMapEmbed`。
-/// 保留此方法仅为向下兼容，新功能禁止使用此方法创建层级强绑定的子星图。
-pub fn create_child_starmap_legacy(
+pub fn create_child_starmap(
     workspace: &Path,
     parent_id: &str,
     title: &str,
@@ -230,6 +227,18 @@ pub fn create_child_starmap_legacy(
     save_starmap_meta(workspace, &updated_parent)?;
 
     Ok(meta)
+}
+
+/// **LEGACY API**: 创建子星图。
+/// 保留此方法仅为向下兼容，新的调用入口使用 `create_child_starmap`。
+pub fn create_child_starmap_legacy(
+    workspace: &Path,
+    parent_id: &str,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> Result<StarMapMeta> {
+    create_child_starmap(workspace, parent_id, title, description, accent_color)
 }
 
 pub fn rename_starmap(workspace: &Path, starmap_id: &str, new_title: &str) -> Result<StarMapMeta> {

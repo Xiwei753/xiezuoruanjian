@@ -21,7 +21,7 @@ Rectangle {
     id: root
     property var dt: null
     property var backendRef: null
-    property var appController: null
+    property var starMapController: null
     property var appState: ({})
     property var tree: []
     property string projectTitle: ""
@@ -696,10 +696,10 @@ Rectangle {
                             targetTextArea: editorArea
                             overlayItem: cursorOverlay
                             dt: root.dt
-                            smoothCursorEnabled: root.backendRef ? root.backendRef.setting_smooth_cursor_enabled : true
-                            typingAnimationEnabled: root.backendRef ? root.backendRef.setting_typing_animation_enabled : true
-                            cursorAnimationDuration: root.backendRef ? root.backendRef.setting_smooth_cursor_duration_ms : 80
-                            typingAnimationDuration: root.backendRef ? root.backendRef.setting_typing_animation_duration_ms : 100
+                            smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
+                            typingAnimationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
+                            cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
+                            typingAnimationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
                         }
                     }
                 }
@@ -772,7 +772,7 @@ Rectangle {
             visible: root.drawerOpen
             dt: root.dt
             backendRef: root.backendRef
-            appController: root.appController
+            starMapController: root.starMapController
             isOpen: root.drawerOpen
             currentTab: root.drawerTab
             aiCapable: root.aiCapable
