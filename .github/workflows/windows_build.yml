@@ -19,6 +19,9 @@ on:
       - 'Cargo.toml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   windows-exe:
     name: Windows exe (${{ matrix.flavor }})
