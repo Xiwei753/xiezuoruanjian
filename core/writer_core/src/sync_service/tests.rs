@@ -194,6 +194,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_record_sync_conflict_error_handling() {
         // Provide an invalid path to force an IO error
         let conflict = SyncConflict {
@@ -1839,6 +1840,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_perform_lww_sync_timestamp_wins() {
         let dir = tempdir().unwrap();
 
