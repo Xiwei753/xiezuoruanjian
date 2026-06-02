@@ -48,21 +48,33 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install Python (required for aqtinstall)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
+        id: install-qt
         with:
           version: '6.6.3'
           host: 'windows'
           target: 'desktop'
           arch: 'win64_msvc2019_64'
-          setup-python: 'false'
 
       - name: Configure Qt environment variables
         shell: pwsh
         run: |
-          $qmake = (Get-Command qmake.exe).Source
-          "QMAKE=$qmake" >> $env:GITHUB_ENV
+          $qtBase = "${{ steps.install-qt.outputs.qtPath }}"
+          $qtPath = Join-Path $qtBase "msvc2019_64"
+          $qmakePath = Join-Path $qtPath "bin\qmake.exe"
+          "QMAKE=$qmakePath" >> $env:GITHUB_ENV
           "QT_VERSION_MAJOR=6" >> $env:GITHUB_ENV
+          "QT_INCLUDE_PATH=$qtPath\include" >> $env:GITHUB_ENV
+          "QT_LIBRARY_PATH=$qtPath\lib" >> $env:GITHUB_ENV
+          $env:Path += ";$qtPath\bin"
+          "PATH=$env:Path" >> $env:GITHUB_ENV
+          "CXXFLAGS=/std:c++17" >> $env:GITHUB_ENV
 
       - name: Test Rust core
         run: cargo test -p writer_core ${{ matrix.features }}

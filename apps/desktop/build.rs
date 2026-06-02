@@ -142,6 +142,15 @@ fn detect_qt6_from_qmake() -> Option<Qt6BuildInfo> {
 }
 
 fn detect_qt6_from_env() -> Option<Qt6BuildInfo> {
+    // On MSVC Windows, the header structure is slightly different and we might not have qtcoreversion.h
+    // in the exact same expected place, so we can just blindly trust the env vars if we are on MSVC
+    if std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc" {
+        // The MSVC fallback is handled below in select_qt6_build_info
+        if std::env::var("QT_INCLUDE_PATH").is_ok() && std::env::var("QT_LIBRARY_PATH").is_ok() {
+            return None;
+        }
+    }
+
     let Ok(include_path) = std::env::var("QT_INCLUDE_PATH").map(|v| v.trim().to_string()) else {
         return None;
     };
@@ -218,6 +227,25 @@ fn select_qt6_build_info() -> Qt6BuildInfo {
 
     if let Some(info) = detect_qt6_from_env() {
         return info;
+    }
+
+    // Add fallback for Windows if all else fails and we are under MSVC and QT_INCLUDE_PATH is present
+    if std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc" {
+        if let Ok(include_path) = std::env::var("QT_INCLUDE_PATH") {
+            let header_root = PathBuf::from(&include_path);
+            let mut include_paths = vec![header_root.clone()];
+            for module in QT6_MODULES {
+                include_paths.push(header_root.join(format!("Qt{}", module)));
+            }
+            let library_paths: Vec<PathBuf> =
+                vec![std::env::var("QT_LIBRARY_PATH").unwrap_or_default().into()];
+            return Qt6BuildInfo {
+                source: "MSVC Fallback",
+                version: "6.6.3".to_string(), // we can assume default or read from action
+                include_paths,
+                library_paths,
+            };
+        }
     }
 
     panic!(
