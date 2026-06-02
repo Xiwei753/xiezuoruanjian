@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const QT6_MODULES: &[&str] = &["Core", "Gui", "Qml", "Quick", "QuickControls2"];
+#[cfg(target_env = "msvc")]
+const CPP_STANDARD_FLAG: &str = "/std:c++17";
+#[cfg(not(target_env = "msvc"))]
 const CPP_STANDARD_FLAG: &str = "-std=c++17";
 
 #[derive(Debug)]

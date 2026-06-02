@@ -13,8 +13,8 @@
 // - 将底层网络或 Git 抛出的原始错误分类映射为 UI 状态码（sync_error_category），供 StatusPill 等组件渲染。
 //
 // 被什么引用：
-// - 被 apps/linux/src/backend/sync_backend.rs 引用，用于启动异步同步线程并处理其回调结果。
-// - 被 apps/linux/src/backend/workspace_backend.rs 引用，协助 GitHub 初始化克隆工作区。
+// - 被 apps/desktop/src/backend/sync_backend.rs 引用，用于启动异步同步线程并处理其回调结果。
+// - 被 apps/desktop/src/backend/workspace_backend.rs 引用，协助 GitHub 初始化克隆工作区。
 // =============================================================================
 
 use writer_core::api::types::SyncDiagnosticsResultDto;

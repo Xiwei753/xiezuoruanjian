@@ -12,7 +12,7 @@
 #   ./build_android.sh [--ai|--no-ai]
 #
 # 参数说明：
-#   --ai    : 启用 AI 功能（需要 DeepSeek API 密钥）
+#   --ai    : 预留 AI 构建变体，当前功能未开放
 #   --no-ai : 禁用 AI 功能（默认选项）
 #
 # 环境要求：

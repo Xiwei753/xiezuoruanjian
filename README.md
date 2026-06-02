@@ -6,7 +6,7 @@
 
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
 - `apps/android`: 原生 Kotlin Android 客户端。作为当前的主客户端。主业务入口为 `AppServiceBridge + UniFFI`，`BridgeProvider` 只暴露领域 Bridge 给 Repository/ViewModel/UI 做平台适配；旧 `NativeCoreBridge` 类已不再作为 Android 应用源码入口，`bindings/android` 中残留的 JNI 符号名只是历史 ABI 兼容细节，不是 UI 契约。
-- `apps/linux`: 原生 Rust + Qt6/QML Linux 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则。
+- `apps/desktop`: 原生 Rust + Qt6/QML Linux 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 
 > 注：原有的 Flutter 客户端由于其架构冲突已彻底移除。有关历史信息，可参阅 `docs/legacy/flutter_removed.md`。
@@ -44,16 +44,16 @@ cargo test
 
 ### Linux 客户端
 
-Linux 客户端统一使用 Qt6。CI、`apps/linux/build.rs` 和目录 README 都以 Qt6 为唯一构建链路；不要混入 Qt5 QML/plugin 路径。
+Linux 客户端统一使用 Qt6。CI、`apps/desktop/build.rs` 和目录 README 都以 Qt6 为唯一构建链路；不要混入 Qt5 QML/plugin 路径。
 
 ```bash
-cargo run -p sujian-linux
+cargo run -p sujian-desktop
 ```
 
 如果遇到渲染相关问题（例如 Wayland 下的双重 UI 或黑屏错位），可尝试使用以下命令开启基础渲染循环并打开调试日志：
 
 ```bash
-QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-linux
+QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 ```
 
 ### 实机测试验证步骤

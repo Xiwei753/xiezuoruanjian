@@ -2,5 +2,5 @@
 members = [
     "core/writer_core",
     "bindings/android"
-, "apps/linux"]
+, "apps/desktop"]
 resolver = "2"

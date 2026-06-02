@@ -1,0 +1,85 @@
+name: Sujian Windows Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/desktop/**'
+      - 'core/writer_core/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/desktop/**'
+      - 'core/writer_core/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+jobs:
+  windows-exe:
+    name: Windows exe (${{ matrix.flavor }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: no-ai
+            features: ''
+          - flavor: ai
+            features: '--features ai'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          modules: 'qtdeclarative qttools'
+
+      - name: Configure Qt environment variables
+        shell: pwsh
+        run: |
+          $qmake = (Get-Command qmake.exe).Source
+          "QMAKE=$qmake" >> $env:GITHUB_ENV
+          "QT_VERSION_MAJOR=6" >> $env:GITHUB_ENV
+
+      - name: Test Rust core
+        run: cargo test -p writer_core ${{ matrix.features }}
+
+      - name: Test Windows desktop contracts
+        run: cargo test -p sujian-desktop ${{ matrix.features }}
+
+      - name: Build Windows desktop
+        run: cargo build -p sujian-desktop --release ${{ matrix.features }}
+
+      - name: Rename Windows exe
+        shell: pwsh
+        run: Copy-Item target/release/sujian-desktop.exe target/release/sujian-windows-${{ matrix.flavor }}.exe
+
+      - name: Upload Windows exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: sujian-windows-${{ matrix.flavor }}
+          path: target/release/sujian-windows-${{ matrix.flavor }}.exe
+          retention-days: 30

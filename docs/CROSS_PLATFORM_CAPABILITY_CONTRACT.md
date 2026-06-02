@@ -117,7 +117,7 @@ graph TD
         AVM -. legacy status/action .-> NCBridge[NativeCoreBridge]
     end
 
-    subgraph LinuxApp ["apps/linux (Linux 壳应用)"]
+    subgraph LinuxApp ["apps/desktop (Linux 壳应用)"]
         LBACK[Backend Adapter C++] --> LUI[QML UI]
     end
 
@@ -148,7 +148,7 @@ graph TD
   - 不做本地业务缓存。在设置界面编辑时，只允许在内存中修改 Draft，直到点击“保存”通过 SettingsCapability 写入，以 Core 返回的 `SettingsSaved` 事件为刷新 UI 的唯一依据。
   - 导图的拖拽缩放、手势事件、惯性计算是 UI 逻辑，但节点布局、数据和锚点更新全量来自 Core。
 
-- **`apps/linux` (Linux 客户端壳层)**
+- **`apps/desktop` (Linux 客户端壳层)**
   - 基于 Qt/QML 的 UI 部分和 C++ 编写的 Linux backend 适配层。
   - QML 只绑定 AppState 里的只读变量，并向后端发送用户指令动作。
   - 禁止在 QML 里使用 `Timer` 去间接轮询判断某项后台业务是否成功。
@@ -308,7 +308,7 @@ graph TD
 针对目前项目已出现的“Android 和 Linux 分离割裂”的严重架构风险，必须在后续阶段逐步按以下迁移路线将项目拉回正轨：
 
 ### 阶段 1：盘点能力 (Capability Auditing)
-- **输入**：对现有 `bindings/android`、`apps/android/NativeCoreBridge` 以及 `apps/linux/backend` 中所有的公开方法进行全量盘点。
+- **输入**：对现有 `bindings/android`、`apps/android/NativeCoreBridge` 以及 `apps/desktop/backend` 中所有的公开方法进行全量盘点。
 - **输出**：建立 `Capability Matrix`。对比并找出哪些方法在 Android 有而在 Linux 没有，或者两者在返回结构和错误码上存在分歧。
 
 ### 阶段 2：Core Capability Facade (建立核心能力门面)

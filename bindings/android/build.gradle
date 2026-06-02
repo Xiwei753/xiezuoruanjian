@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace 'com.xiwei.writerapp.bindings'
+    namespace 'com.xiwei.sujian.bindings'
     compileSdk 34
 
     defaultConfig {

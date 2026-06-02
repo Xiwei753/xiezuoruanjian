@@ -13,8 +13,8 @@
 // - 提供在切换章节时一键清空撤销栈（clearUndoRedoStacks()）的底层实现。
 //
 // 被什么引用：
-// - 被 apps/linux/src/main.rs 注册为 QML 类 "DocumentHandler" (在 "Sujian" 命名空间下)。
-// - 被 apps/linux/qml/EditorController.qml 实例化并绑定至 TextArea。
+// - 被 apps/desktop/src/main.rs 注册为 QML 类 "DocumentHandler" (在 "Sujian" 命名空间下)。
+// - 被 apps/desktop/qml/EditorController.qml 实例化并绑定至 TextArea。
 // =============================================================================
 
 //! # QTextDocument 排版操作（Linux UI 层 - Backend Adapter）
@@ -158,7 +158,7 @@ impl DocumentHandler {
             QColor color(text_color);
             static bool first_log = true;
             if (first_log) {
-                qDebug("[WriterDebug][DocumentHandler] apply_format text_color: %s, valid: %d", text_color.toUtf8().constData(), color.isValid());
+                qDebug("[SujianDebug][DocumentHandler] apply_format text_color: %s, valid: %d", text_color.toUtf8().constData(), color.isValid());
                 first_log = false;
             }
             if (color.isValid()) {

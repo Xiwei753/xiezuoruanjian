@@ -44,7 +44,7 @@ DerivedData/
 *.ida
 
 # Linux/C++ build
-apps/linux/build/
+apps/desktop/build/
 compile_commands.json
 
 # IDEs
