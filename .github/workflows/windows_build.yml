@@ -87,13 +87,19 @@ jobs:
       - name: Build Windows desktop
         run: cargo build -p sujian-desktop --release ${{ matrix.features }}
 
-      - name: Rename Windows exe
+      - name: Package with windeployqt
         shell: pwsh
-        run: Copy-Item target/release/sujian-desktop.exe target/release/sujian-windows-${{ matrix.flavor }}.exe
+        run: |
+          $buildDir = "target/release/sujian-windows-${{ matrix.flavor }}"
+          New-Item -ItemType Directory -Force -Path $buildDir
+          Copy-Item target/release/sujian-desktop.exe "$buildDir\sujian-windows-${{ matrix.flavor }}.exe"
+          $qmldir = "apps/desktop/qml"
+          $windeployqt = Join-Path $env:QT_ROOT_DIR "bin\windeployqt.exe"
+          & $windeployqt --qmldir $qmldir "$buildDir\sujian-windows-${{ matrix.flavor }}.exe"
 
-      - name: Upload Windows exe
+      - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
           name: sujian-windows-${{ matrix.flavor }}
-          path: target/release/sujian-windows-${{ matrix.flavor }}.exe
+          path: target/release/sujian-windows-${{ matrix.flavor }}
           retention-days: 30
