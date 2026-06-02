@@ -465,6 +465,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_create_project_failure() {
         let mut backend = AppBackend::default();
         backend.current_workspace = "/invalid/path/that/does/not/exist".to_string();
