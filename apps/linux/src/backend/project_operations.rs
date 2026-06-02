@@ -26,7 +26,10 @@ impl AppBackend {
             }
         }
 
-        if let (Some(project_id), Some(volume_id)) = (self.selected_project_id.clone(), self.selected_volume_id.clone()) {
+        if let (Some(project_id), Some(volume_id)) = (
+            self.selected_project_id.clone(),
+            self.selected_volume_id.clone(),
+        ) {
             let volumes = api.list_volumes(&project_id).unwrap_or_default();
             let volume_exists = volumes.iter().any(|v| v.id == volume_id);
             if !volume_exists {
@@ -43,7 +46,9 @@ impl AppBackend {
             self.selected_volume_id.clone(),
             self.selected_chapter_id.clone(),
         ) {
-            let chapters = api.list_chapters(&project_id, &volume_id).unwrap_or_default();
+            let chapters = api
+                .list_chapters(&project_id, &volume_id)
+                .unwrap_or_default();
             let chapter_exists = chapters.iter().any(|c| c.id == chapter_id);
             if !chapter_exists {
                 self.clear_editor_state();
@@ -68,7 +73,10 @@ impl AppBackend {
             if let Ok(projects) = core.list_projects() {
                 for p in projects {
                     let mut p_map = QJsonObject::default();
-                    p_map.insert("title".into(), QJsonValue::from(QString::from(p.title.clone())));
+                    p_map.insert(
+                        "title".into(),
+                        QJsonValue::from(QString::from(p.title.clone())),
+                    );
                     p_map.insert("id".into(), QJsonValue::from(QString::from(p.id.clone())));
                     p_map.insert("type".into(), QJsonValue::from(QString::from("project")));
                     list.push(QJsonValue::from(p_map));
@@ -76,20 +84,42 @@ impl AppBackend {
                     if let Ok(volumes) = core.list_volumes(&p.id) {
                         for v in volumes {
                             let mut v_map = QJsonObject::default();
-                            v_map.insert("title".into(), QJsonValue::from(QString::from(v.title.clone())));
-                            v_map.insert("id".into(), QJsonValue::from(QString::from(v.id.clone())));
-                            v_map.insert("projectId".into(), QJsonValue::from(QString::from(p.id.clone())));
+                            v_map.insert(
+                                "title".into(),
+                                QJsonValue::from(QString::from(v.title.clone())),
+                            );
+                            v_map
+                                .insert("id".into(), QJsonValue::from(QString::from(v.id.clone())));
+                            v_map.insert(
+                                "projectId".into(),
+                                QJsonValue::from(QString::from(p.id.clone())),
+                            );
                             v_map.insert("type".into(), QJsonValue::from(QString::from("volume")));
                             list.push(QJsonValue::from(v_map));
 
                             if let Ok(chapters) = core.list_chapters(&p.id, &v.id) {
                                 for c in chapters {
                                     let mut c_map = QJsonObject::default();
-                                    c_map.insert("title".into(), QJsonValue::from(QString::from(c.title.clone())));
-                                    c_map.insert("id".into(), QJsonValue::from(QString::from(c.id.clone())));
-                                    c_map.insert("projectId".into(), QJsonValue::from(QString::from(p.id.clone())));
-                                    c_map.insert("volumeId".into(), QJsonValue::from(QString::from(v.id.clone())));
-                                    c_map.insert("type".into(), QJsonValue::from(QString::from("chapter")));
+                                    c_map.insert(
+                                        "title".into(),
+                                        QJsonValue::from(QString::from(c.title.clone())),
+                                    );
+                                    c_map.insert(
+                                        "id".into(),
+                                        QJsonValue::from(QString::from(c.id.clone())),
+                                    );
+                                    c_map.insert(
+                                        "projectId".into(),
+                                        QJsonValue::from(QString::from(p.id.clone())),
+                                    );
+                                    c_map.insert(
+                                        "volumeId".into(),
+                                        QJsonValue::from(QString::from(v.id.clone())),
+                                    );
+                                    c_map.insert(
+                                        "type".into(),
+                                        QJsonValue::from(QString::from("chapter")),
+                                    );
                                     list.push(QJsonValue::from(c_map));
                                 }
                             }
@@ -100,7 +130,11 @@ impl AppBackend {
         }
         self.cached_tree = list;
         let after_count = self.cached_tree.len();
-        self.debug_log("tree", "reload_tree", &format!("before_count={}, after_count={}", before_count, after_count));
+        self.debug_log(
+            "tree",
+            "reload_tree",
+            &format!("before_count={}, after_count={}", before_count, after_count),
+        );
     }
 
     pub(crate) fn build_tree_model_json(&self) -> serde_json::Value {
@@ -210,14 +244,21 @@ impl AppBackend {
         })
     }
 
-    fn mutation_success_json(&mut self, data: serde_json::Value, user_message: &str, changed_entities: Vec<&str>) -> QString {
+    fn mutation_success_json(
+        &mut self,
+        data: serde_json::Value,
+        user_message: &str,
+        changed_entities: Vec<&str>,
+    ) -> QString {
         serde_json::json!({
             "success": true,
             "data": data,
             "userMessage": user_message,
             "state": self.current_app_state_value(),
             "changedEntities": changed_entities
-        }).to_string().into()
+        })
+        .to_string()
+        .into()
     }
 
     fn mutation_error_json(&mut self, user_message: String, raw_error: String) -> QString {
@@ -229,7 +270,9 @@ impl AppBackend {
             "rawError": raw_error,
             "state": self.current_app_state_value(),
             "changedEntities": []
-        }).to_string().into()
+        })
+        .to_string()
+        .into()
     }
 
     pub(crate) fn create_project_json(&mut self, title: QString, _action_id: QString) -> QString {
@@ -285,29 +328,49 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn create_volume_json(&mut self, project_id: QString, title: QString, action_id: QString) -> QString {
+    pub(crate) fn create_volume_json(
+        &mut self,
+        project_id: QString,
+        title: QString,
+        action_id: QString,
+    ) -> QString {
         let action_id_str = action_id.to_string();
         self.debug_log(
             "volume",
             "create_volume_start",
-            &format!("[actionId={}] project_id={}, title={}", action_id_str, project_id.to_string(), title.to_string())
+            &format!(
+                "[actionId={}] project_id={}, title={}",
+                action_id_str,
+                project_id.to_string(),
+                title.to_string()
+            ),
         );
         match self.create_new_volume(project_id.clone(), title.clone()) {
             Ok(volume) => {
-                self.debug_log("volume", "create_volume_success", &format!("[actionId={}] volume_id={}", action_id_str, volume.id));
+                self.debug_log(
+                    "volume",
+                    "create_volume_success",
+                    &format!("[actionId={}] volume_id={}", action_id_str, volume.id),
+                );
                 serde_json::json!({
                     "success": true,
                     "data": { "volume": volume },
                     "userMessage": "创建卷成功",
                     "state": self.current_app_state_value(),
                     "changedEntities": ["WorkspaceTree"]
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
             Err(e) => {
                 let raw_error = e.to_string();
                 let user_message = format!("创建卷失败: {}", raw_error);
                 self.set_error(&user_message);
-                self.debug_error("volume", "create_volume_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                self.debug_error(
+                    "volume",
+                    "create_volume_failed",
+                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
+                );
                 serde_json::json!({
                     "success": false,
                     "errorCode": "CORE_ERROR",
@@ -315,34 +378,58 @@ impl AppBackend {
                     "rawError": raw_error,
                     "state": self.current_app_state_value(),
                     "changedEntities": []
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
         }
     }
 
-    pub(crate) fn create_chapter_json(&mut self, project_id: QString, volume_id: QString, title: QString, action_id: QString) -> QString {
+    pub(crate) fn create_chapter_json(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        title: QString,
+        action_id: QString,
+    ) -> QString {
         let action_id_str = action_id.to_string();
         self.debug_log(
             "chapter",
             "create_chapter_start",
-            &format!("[actionId={}] project_id={}, volume_id={}, title={}", action_id_str, project_id.to_string(), volume_id.to_string(), title.to_string())
+            &format!(
+                "[actionId={}] project_id={}, volume_id={}, title={}",
+                action_id_str,
+                project_id.to_string(),
+                volume_id.to_string(),
+                title.to_string()
+            ),
         );
         match self.create_new_chapter(project_id.clone(), volume_id.clone(), title.clone()) {
             Ok(chapter) => {
-                self.debug_log("chapter", "create_chapter_success", &format!("[actionId={}] chapter_id={}", action_id_str, chapter.id));
+                self.debug_log(
+                    "chapter",
+                    "create_chapter_success",
+                    &format!("[actionId={}] chapter_id={}", action_id_str, chapter.id),
+                );
                 serde_json::json!({
                     "success": true,
                     "data": { "chapter": chapter },
                     "userMessage": "创建章节成功",
                     "state": self.current_app_state_value(),
                     "changedEntities": ["WorkspaceTree"]
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
             Err(e) => {
                 let raw_error = e.to_string();
                 let user_message = format!("创建章节失败: {}", raw_error);
                 self.set_error(&user_message);
-                self.debug_error("chapter", "create_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                self.debug_error(
+                    "chapter",
+                    "create_chapter_failed",
+                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
+                );
                 serde_json::json!({
                     "success": false,
                     "errorCode": "CORE_ERROR",
@@ -350,12 +437,21 @@ impl AppBackend {
                     "rawError": raw_error,
                     "state": self.current_app_state_value(),
                     "changedEntities": []
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
         }
     }
 
-    pub(crate) fn select_tree_item_json(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString {
+    pub(crate) fn select_tree_item_json(
+        &mut self,
+        item_type: QString,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        action_id: QString,
+    ) -> QString {
         let t = item_type.to_string();
         let action_id_str = action_id.to_string();
         self.debug_log(
@@ -363,8 +459,12 @@ impl AppBackend {
             "select_item_start",
             &format!(
                 "[actionId={}] type={}, project_id={}, volume_id={}, chapter_id={}",
-                action_id_str, t, project_id.to_string(), volume_id.to_string(), chapter_id.to_string()
-            )
+                action_id_str,
+                t,
+                project_id.to_string(),
+                volume_id.to_string(),
+                chapter_id.to_string()
+            ),
         );
         if t == "project" {
             self.select_project(project_id);
@@ -373,7 +473,11 @@ impl AppBackend {
         } else if t == "chapter" {
             self.select_chapter(project_id, volume_id, chapter_id);
         }
-        self.debug_log("tree", "select_item_success", &format!("[actionId={}] selection completed", action_id_str));
+        self.debug_log(
+            "tree",
+            "select_item_success",
+            &format!("[actionId={}] selection completed", action_id_str),
+        );
         let final_res = serde_json::json!({
             "success": true,
             "userMessage": "选择成功",
@@ -382,25 +486,47 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    pub(crate) fn delete_project_json(&mut self, project_id: QString, action_id: QString) -> QString {
+    pub(crate) fn delete_project_json(
+        &mut self,
+        project_id: QString,
+        action_id: QString,
+    ) -> QString {
         let action_id_str = action_id.to_string();
-        self.debug_log("project", "delete_project_start", &format!("[actionId={}] project_id={}", action_id_str, project_id.to_string()));
+        self.debug_log(
+            "project",
+            "delete_project_start",
+            &format!(
+                "[actionId={}] project_id={}",
+                action_id_str,
+                project_id.to_string()
+            ),
+        );
         match self.delete_project(project_id) {
             Ok(_) => {
-                self.debug_log("project", "delete_project_success", &format!("[actionId={}] project deleted successfully", action_id_str));
+                self.debug_log(
+                    "project",
+                    "delete_project_success",
+                    &format!("[actionId={}] project deleted successfully", action_id_str),
+                );
                 serde_json::json!({
                     "success": true,
                     "data": true,
                     "userMessage": "删除成功",
                     "state": self.current_app_state_value(),
                     "changedEntities": ["WorkspaceTree"]
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
             Err(e) => {
                 let raw_error = e.to_string();
                 let user_message = format!("删除作品失败: {}", raw_error);
                 self.set_error(&user_message);
-                self.debug_error("project", "delete_project_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                self.debug_error(
+                    "project",
+                    "delete_project_failed",
+                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
+                );
                 serde_json::json!({
                     "success": false,
                     "errorCode": "CORE_ERROR",
@@ -408,30 +534,56 @@ impl AppBackend {
                     "rawError": raw_error,
                     "state": self.current_app_state_value(),
                     "changedEntities": []
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
         }
     }
 
-    pub(crate) fn delete_volume_json(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString {
+    pub(crate) fn delete_volume_json(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        action_id: QString,
+    ) -> QString {
         let action_id_str = action_id.to_string();
-        self.debug_log("volume", "delete_volume_start", &format!("[actionId={}] project_id={}, volume_id={}", action_id_str, project_id.to_string(), volume_id.to_string()));
+        self.debug_log(
+            "volume",
+            "delete_volume_start",
+            &format!(
+                "[actionId={}] project_id={}, volume_id={}",
+                action_id_str,
+                project_id.to_string(),
+                volume_id.to_string()
+            ),
+        );
         match self.delete_volume(project_id, volume_id) {
             Ok(_) => {
-                self.debug_log("volume", "delete_volume_success", &format!("[actionId={}] volume deleted successfully", action_id_str));
+                self.debug_log(
+                    "volume",
+                    "delete_volume_success",
+                    &format!("[actionId={}] volume deleted successfully", action_id_str),
+                );
                 serde_json::json!({
                     "success": true,
                     "data": true,
                     "userMessage": "删除成功",
                     "state": self.current_app_state_value(),
                     "changedEntities": ["WorkspaceTree"]
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
             Err(e) => {
                 let raw_error = e.to_string();
                 let user_message = format!("删除分卷失败: {}", raw_error);
                 self.set_error(&user_message);
-                self.debug_error("volume", "delete_volume_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                self.debug_error(
+                    "volume",
+                    "delete_volume_failed",
+                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
+                );
                 serde_json::json!({
                     "success": false,
                     "errorCode": "CORE_ERROR",
@@ -439,30 +591,58 @@ impl AppBackend {
                     "rawError": raw_error,
                     "state": self.current_app_state_value(),
                     "changedEntities": []
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
         }
     }
 
-    pub(crate) fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString {
+    pub(crate) fn delete_chapter_json(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        action_id: QString,
+    ) -> QString {
         let action_id_str = action_id.to_string();
-        self.debug_log("chapter", "delete_chapter_start", &format!("[actionId={}] project_id={}, volume_id={}, chapter_id={}", action_id_str, project_id.to_string(), volume_id.to_string(), chapter_id.to_string()));
+        self.debug_log(
+            "chapter",
+            "delete_chapter_start",
+            &format!(
+                "[actionId={}] project_id={}, volume_id={}, chapter_id={}",
+                action_id_str,
+                project_id.to_string(),
+                volume_id.to_string(),
+                chapter_id.to_string()
+            ),
+        );
         match self.delete_chapter(project_id, volume_id, chapter_id) {
             Ok(_) => {
-                self.debug_log("chapter", "delete_chapter_success", &format!("[actionId={}] chapter deleted successfully", action_id_str));
+                self.debug_log(
+                    "chapter",
+                    "delete_chapter_success",
+                    &format!("[actionId={}] chapter deleted successfully", action_id_str),
+                );
                 serde_json::json!({
                     "success": true,
                     "data": true,
                     "userMessage": "删除成功",
                     "state": self.current_app_state_value(),
                     "changedEntities": ["WorkspaceTree"]
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
             Err(e) => {
                 let raw_error = e.to_string();
                 let user_message = format!("删除章节失败: {}", raw_error);
                 self.set_error(&user_message);
-                self.debug_error("chapter", "delete_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                self.debug_error(
+                    "chapter",
+                    "delete_chapter_failed",
+                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
+                );
                 serde_json::json!({
                     "success": false,
                     "errorCode": "CORE_ERROR",
@@ -470,7 +650,9 @@ impl AppBackend {
                     "rawError": raw_error,
                     "state": self.current_app_state_value(),
                     "changedEntities": []
-                }).to_string().into()
+                })
+                .to_string()
+                .into()
             }
         }
     }
@@ -479,7 +661,11 @@ impl AppBackend {
         self.cached_tree.clone()
     }
 
-    pub(crate) fn create_new_volume(&mut self, project_id: QString, title: QString) -> Result<VolumeDto, WriterError> {
+    pub(crate) fn create_new_volume(
+        &mut self,
+        project_id: QString,
+        title: QString,
+    ) -> Result<VolumeDto, WriterError> {
         let Some(api) = self.core_api() else {
             return Err(WriterError::InvalidWorkspace);
         };
@@ -494,7 +680,12 @@ impl AppBackend {
         Ok(vol)
     }
 
-    pub(crate) fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) -> Result<ChapterMetaDto, WriterError> {
+    pub(crate) fn create_new_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        title: QString,
+    ) -> Result<ChapterMetaDto, WriterError> {
         let Some(api) = self.core_api() else {
             return Err(WriterError::InvalidWorkspace);
         };
@@ -510,7 +701,11 @@ impl AppBackend {
         Ok(chap)
     }
 
-    pub(crate) fn rename_project_json(&mut self, project_id: QString, new_title: QString) -> QString {
+    pub(crate) fn rename_project_json(
+        &mut self,
+        project_id: QString,
+        new_title: QString,
+    ) -> QString {
         let Some(api) = self.core_api() else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
             return self.mutation_error_json(format!("重命名作品失败: {}", raw_error), raw_error);
@@ -519,7 +714,11 @@ impl AppBackend {
             Ok(value) => {
                 self.reload_tree();
                 self.trigger_projects_reloaded();
-                self.mutation_success_json(serde_json::json!(value), "重命名作品成功", vec!["WorkspaceTree"])
+                self.mutation_success_json(
+                    serde_json::json!(value),
+                    "重命名作品成功",
+                    vec!["WorkspaceTree"],
+                )
             }
             Err(e) => {
                 let raw_error = e.to_string();
@@ -547,7 +746,11 @@ impl AppBackend {
     pub(crate) fn reorder_projects(&mut self, ordered_ids_joined: QString) {
         if let Some(api) = self.core_api() {
             let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
             let result = api.reorder_projects(&ids);
             match result {
                 Ok(_) => {
@@ -559,16 +762,29 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn rename_volume_json(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QString {
+    pub(crate) fn rename_volume_json(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        new_title: QString,
+    ) -> QString {
         let Some(api) = self.core_api() else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
             return self.mutation_error_json(format!("重命名分卷失败: {}", raw_error), raw_error);
         };
-        match api.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string()) {
+        match api.rename_volume(
+            &project_id.to_string(),
+            &volume_id.to_string(),
+            &new_title.to_string(),
+        ) {
             Ok(value) => {
                 self.reload_tree();
                 self.trigger_projects_reloaded();
-                self.mutation_success_json(serde_json::json!(value), "重命名分卷成功", vec!["WorkspaceTree"])
+                self.mutation_success_json(
+                    serde_json::json!(value),
+                    "重命名分卷成功",
+                    vec!["WorkspaceTree"],
+                )
             }
             Err(e) => {
                 let raw_error = e.to_string();
@@ -577,7 +793,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn delete_volume(&mut self, project_id: QString, volume_id: QString) -> Result<bool, WriterError> {
+    pub(crate) fn delete_volume(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+    ) -> Result<bool, WriterError> {
         let Some(api) = self.core_api() else {
             return Err(WriterError::InvalidWorkspace);
         };
@@ -596,7 +816,11 @@ impl AppBackend {
     pub(crate) fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) {
         if let Some(api) = self.core_api() {
             let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
             let result = api.reorder_volumes(&project_id.to_string(), &ids);
             match result {
                 Ok(_) => {
@@ -608,7 +832,13 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn rename_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) -> QString {
+    pub(crate) fn rename_chapter_json(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        new_title: QString,
+    ) -> QString {
         let Some(api) = self.core_api() else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
             return self.mutation_error_json(format!("重命名章节失败: {}", raw_error), raw_error);
@@ -622,7 +852,11 @@ impl AppBackend {
             Ok(value) => {
                 self.reload_tree();
                 self.trigger_projects_reloaded();
-                self.mutation_success_json(serde_json::json!(value), "重命名章节成功", vec!["WorkspaceTree"])
+                self.mutation_success_json(
+                    serde_json::json!(value),
+                    "重命名章节成功",
+                    vec!["WorkspaceTree"],
+                )
             }
             Err(e) => {
                 let raw_error = e.to_string();
@@ -631,7 +865,12 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> Result<bool, WriterError> {
+    pub(crate) fn delete_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) -> Result<bool, WriterError> {
         let Some(api) = self.core_api() else {
             return Err(WriterError::InvalidWorkspace);
         };
@@ -647,11 +886,21 @@ impl AppBackend {
         Ok(true)
     }
 
-    pub(crate) fn reorder_chapters(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString) {
+    pub(crate) fn reorder_chapters(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        ordered_ids_joined: QString,
+    ) {
         if let Some(api) = self.core_api() {
             let ordered_ids_str = ordered_ids_joined.to_string();
-            let ids: Vec<String> = ordered_ids_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
-            let result = api.reorder_chapters(&project_id.to_string(), &volume_id.to_string(), &ids);
+            let ids: Vec<String> = ordered_ids_str
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+            let result =
+                api.reorder_chapters(&project_id.to_string(), &volume_id.to_string(), &ids);
             match result {
                 Ok(_) => {
                     self.reload_tree();
@@ -678,7 +927,12 @@ impl AppBackend {
         self.chapter_path_changed();
     }
 
-    pub(crate) fn select_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {
+    pub(crate) fn select_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) {
         self.selected_project_id = Some(project_id.to_string());
         self.selected_volume_id = Some(volume_id.to_string());
         self.selected_chapter_id = Some(chapter_id.to_string());

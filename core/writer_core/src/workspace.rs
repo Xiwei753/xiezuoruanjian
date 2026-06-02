@@ -137,7 +137,8 @@ pub fn record_recent_edit(
 
     // Basic Debounce: Only flush to disk at most once every 5 seconds to reduce I/O.
     static LAST_FLUSH: OnceLock<Mutex<std::time::Instant>> = OnceLock::new();
-    let flush_mutex = LAST_FLUSH.get_or_init(|| Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(10)));
+    let flush_mutex = LAST_FLUSH
+        .get_or_init(|| Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(10)));
     let mut last_flush = flush_mutex.lock().unwrap();
 
     if last_flush.elapsed().as_secs() >= 5 {

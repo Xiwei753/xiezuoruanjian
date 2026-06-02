@@ -1,11 +1,11 @@
-use crate::sync_service::types::BackendType;
-use crate::sync_service::types::SyncDiagnosticsResult;
-use crate::sync_service::types::SyncConfig;
 use crate::sync_service::git_backend::GitBackend;
-use crate::sync_service::types::SyncTransport;
+use crate::sync_service::types::BackendType;
+use crate::sync_service::types::SyncConfig;
+use crate::sync_service::types::SyncDiagnosticsResult;
 use crate::sync_service::types::SyncSecrets;
-use crate::sync_service::url::sanitize_remote_url;
+use crate::sync_service::types::SyncTransport;
 use crate::sync_service::url::detect_transport;
+use crate::sync_service::url::sanitize_remote_url;
 
 pub(crate) fn get_user_friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
@@ -144,5 +144,4 @@ impl crate::sync_service::SyncService {
 
         Ok(result)
     }
-
 }

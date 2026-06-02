@@ -3,10 +3,21 @@
 // =============================================================================
 
 use super::*;
-use crate::sync_bridge::{mask_sync_error, sync_error_category, sync_error_category_from_code, save_sync_configs};
+use crate::sync_bridge::{
+    mask_sync_error, save_sync_configs, sync_error_category, sync_error_category_from_code,
+};
 
 impl AppBackend {
-    pub(crate) fn execute_github_init(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16) {
+    pub(crate) fn execute_github_init(
+        &mut self,
+        path: QString,
+        remote_url: QString,
+        branch: QString,
+        token: QString,
+        proxy_type: QString,
+        proxy_host: QString,
+        proxy_port: u16,
+    ) {
         let path_str = path.to_string();
         let path_obj = std::path::Path::new(&path_str);
         if !path_obj.exists() || !path_obj.is_dir() {
@@ -24,7 +35,11 @@ impl AppBackend {
             return;
         }
 
-        let branch_str = if branch.to_string().is_empty() { "main".to_string() } else { branch.to_string() };
+        let branch_str = if branch.to_string().is_empty() {
+            "main".to_string()
+        } else {
+            branch.to_string()
+        };
         let token_str = token.to_string();
         let proxy_type_str = proxy_type.to_string();
         let proxy_host_str = proxy_host.to_string();
@@ -50,8 +65,13 @@ impl AppBackend {
         thread::spawn(move || {
             let result = Self::do_github_init(
                 &op_id_capture,
-                &path_str, &remote_url_str, &branch_str, &token_str,
-                &proxy_type_str, &proxy_host_str, proxy_port_val,
+                &path_str,
+                &remote_url_str,
+                &branch_str,
+                &token_str,
+                &proxy_type_str,
+                &proxy_host_str,
+                proxy_port_val,
             );
             callback(result);
         });
@@ -67,7 +87,9 @@ impl AppBackend {
         proxy_host: &str,
         proxy_port: u16,
     ) -> SyncTaskOutcome {
-        use writer_core::sync_service::{sanitize_remote_url, SyncConfig, BackendType, SyncSecrets};
+        use writer_core::sync_service::{
+            sanitize_remote_url, BackendType, SyncConfig, SyncSecrets,
+        };
 
         let parsed = sanitize_remote_url(remote_url);
         let sanitized_url = parsed.sanitized_url;
@@ -83,12 +105,12 @@ impl AppBackend {
         };
 
         let has_workspace = || -> bool {
-            WriterCoreApi::new(path).validate_workspace().unwrap_or(false)
+            WriterCoreApi::new(path)
+                .validate_workspace()
+                .unwrap_or(false)
         };
 
-        let is_git_repo = || -> bool {
-            path_obj.join(".git").exists()
-        };
+        let is_git_repo = || -> bool { path_obj.join(".git").exists() };
 
         let effective_token = if token.is_empty() {
             parsed.extracted_token.clone()
@@ -104,7 +126,10 @@ impl AppBackend {
             branch: branch.to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
-            proxy_enabled: !proxy_type.is_empty() && proxy_type != "none" && !proxy_host.is_empty() && proxy_port > 0,
+            proxy_enabled: !proxy_type.is_empty()
+                && proxy_type != "none"
+                && !proxy_host.is_empty()
+                && proxy_port > 0,
             proxy_type: proxy_type.to_string(),
             proxy_host: proxy_host.to_string(),
             proxy_port,
@@ -130,14 +155,23 @@ impl AppBackend {
                         if !api.validate_workspace().unwrap_or(false) {
                             if let Err(e) = api.create_workspace_if_needed() {
                                 return SyncTaskOutcome {
-                                    operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
+                                    operation_id: operation_id.to_string(),
+                                    operation_kind: "sync".to_string(),
+                                    sync_status: "error".to_string(),
                                     action_result: format!("克隆成功但工作区初始化失败: {}", e),
                                 };
                             }
-                            let push_backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
+                            let push_backend = writer_core::sync_service::create_sync_backend(
+                                &config.backend_type,
+                            );
                             let push_result = push_backend.sync(path_obj, &config, &secrets);
                             let save_first = match &push_result {
-                                Ok(r) if r.status != writer_core::sync_service::SyncStatus::Success => true,
+                                Ok(r)
+                                    if r.status
+                                        != writer_core::sync_service::SyncStatus::Success =>
+                                {
+                                    true
+                                }
                                 Err(_) => true,
                                 _ => false,
                             };
@@ -189,13 +223,20 @@ impl AppBackend {
                     } else {
                         let err = result.error.unwrap_or_default();
                         SyncTaskOutcome {
-                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category_from_code(result.error_category.as_deref(), &err),
+                            operation_id: operation_id.to_string(),
+                            operation_kind: "sync".to_string(),
+                            sync_status: sync_error_category_from_code(
+                                result.error_category.as_deref(),
+                                &err,
+                            ),
                             action_result: format!("克隆失败: {}", mask_sync_error(&err)),
                         }
                     }
                 }
                 Err(e) => SyncTaskOutcome {
-                    operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&e.to_string()),
+                    operation_id: operation_id.to_string(),
+                    operation_kind: "sync".to_string(),
+                    sync_status: sync_error_category(&e.to_string()),
                     action_result: format!("克隆失败: {}", mask_sync_error(&e.to_string())),
                 },
             }
@@ -206,16 +247,27 @@ impl AppBackend {
                     if result.status == writer_core::sync_service::SyncStatus::Success {
                         match save_sync_configs(path, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
-                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "success".to_string(),
+                                operation_id: operation_id.to_string(),
+                                operation_kind: "sync".to_string(),
+                                sync_status: "success".to_string(),
                                 action_result: "远程仓库已配置并同步成功".to_string(),
                             },
                             Err(e) => SyncTaskOutcome {
-                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                                action_result: format!("同步成功但配置保存失败: {}. 请检查权限/磁盘，不要继续同步。", e),
+                                operation_id: operation_id.to_string(),
+                                operation_kind: "sync".to_string(),
+                                sync_status: "error".to_string(),
+                                action_result: format!(
+                                    "同步成功但配置保存失败: {}. 请检查权限/磁盘，不要继续同步。",
+                                    e
+                                ),
                             },
                         }
                     } else if result.status == writer_core::sync_service::SyncStatus::Conflict {
-                        let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
+                        let mut files = result
+                            .conflicts
+                            .iter()
+                            .map(|c| c.local_path.clone())
+                            .collect::<Vec<_>>();
                         if let Some(summary) = &result.conflict_summary {
                             for f in &summary.conflicted_files {
                                 files.push(f.clone());
@@ -223,7 +275,7 @@ impl AppBackend {
                         }
                         files.sort();
                         files.dedup();
-                        
+
                         let file_str = if files.is_empty() {
                             "未能列出具体冲突文件".to_string()
                         } else {
@@ -236,23 +288,45 @@ impl AppBackend {
                             };
                             display_files.join("\n  - ")
                         };
-                        
-                        let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
-                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
-                        
+
+                        let masked_err = result
+                            .error
+                            .as_deref()
+                            .map(mask_sync_error)
+                            .unwrap_or_else(|| "None".to_string());
+                        debug_log_static(
+                            "sync",
+                            "conflict_detected",
+                            &format!(
+                                "conflicted file count={}, masked error={}",
+                                files.len(),
+                                masked_err
+                            ),
+                        );
+
                         let m = format!(
                             "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
                             file_str
                         );
                         SyncTaskOutcome {
-                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "conflict".to_string(),
+                            operation_id: operation_id.to_string(),
+                            operation_kind: "sync".to_string(),
+                            sync_status: "conflict".to_string(),
                             action_result: m,
                         }
                     } else {
                         let err = result.error.unwrap_or_default();
-                        let cat = sync_error_category_from_code(result.error_category.as_deref(), &err);
+                        let cat =
+                            sync_error_category_from_code(result.error_category.as_deref(), &err);
                         let action_result = if cat == "conflict" {
-                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err)));
+                            debug_log_static(
+                                "sync",
+                                "conflict_detected",
+                                &format!(
+                                    "conflicted file count=unknown, masked error={}",
+                                    mask_sync_error(&err)
+                                ),
+                            );
                             format!(
                                 "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
                                 mask_sync_error(&err)
@@ -261,7 +335,9 @@ impl AppBackend {
                             format!("同步失败: {}", mask_sync_error(&err))
                         };
                         SyncTaskOutcome {
-                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: cat,
+                            operation_id: operation_id.to_string(),
+                            operation_kind: "sync".to_string(),
+                            sync_status: cat,
                             action_result,
                         }
                     }
@@ -270,7 +346,14 @@ impl AppBackend {
                     let err_str = e.to_string();
                     let cat = sync_error_category(&err_str);
                     let action_result = if cat == "conflict" {
-                        debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err_str)));
+                        debug_log_static(
+                            "sync",
+                            "conflict_detected",
+                            &format!(
+                                "conflicted file count=unknown, masked error={}",
+                                mask_sync_error(&err_str)
+                            ),
+                        );
                         format!(
                             "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
                             mask_sync_error(&err_str)
@@ -279,7 +362,9 @@ impl AppBackend {
                         format!("同步失败: {}", mask_sync_error(&err_str))
                     };
                     SyncTaskOutcome {
-                        operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: cat,
+                        operation_id: operation_id.to_string(),
+                        operation_kind: "sync".to_string(),
+                        sync_status: cat,
                         action_result,
                     }
                 }
@@ -291,8 +376,11 @@ impl AppBackend {
             }
         } else {
             SyncTaskOutcome {
-                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                action_result: "目录非空且不是素笺写作工作区。请选择空目录，或先新建本地工作区。".to_string(),
+                operation_id: operation_id.to_string(),
+                operation_kind: "sync".to_string(),
+                sync_status: "error".to_string(),
+                action_result: "目录非空且不是素笺写作工作区。请选择空目录，或先新建本地工作区。"
+                    .to_string(),
             }
         }
     }

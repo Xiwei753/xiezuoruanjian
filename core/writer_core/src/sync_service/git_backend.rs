@@ -1,8 +1,8 @@
-use crate::sync_service::conflict::collect_index_conflicts;
 use crate::sync_service::conflict::build_conflict_summary;
+use crate::sync_service::conflict::collect_index_conflicts;
+use crate::sync_service::service::SyncService;
 use crate::sync_service::types::SyncConfig;
 use crate::sync_service::types::SyncConflictSummary;
-use crate::sync_service::service::SyncService;
 use std::path::Path;
 
 pub enum GitAuth {
@@ -881,8 +881,8 @@ pub(crate) fn fetch_and_reset_local_repo(
                 .fetch(&[refspec], Some(&mut fetch_opts), None)
                 .map_err(|e| crate::Error::Other(e.to_string()))?;
 
-            let commit_oid =
-                git2::Oid::from_str(new_commit_sha).map_err(|e| crate::Error::Other(e.to_string()))?;
+            let commit_oid = git2::Oid::from_str(new_commit_sha)
+                .map_err(|e| crate::Error::Other(e.to_string()))?;
             let commit_obj = repo
                 .find_commit(commit_oid)
                 .map_err(|e| crate::Error::Other(e.to_string()))?;
@@ -909,7 +909,10 @@ pub(crate) fn fetch_and_reset_local_repo(
             } else {
                 "未知 Panic".to_string()
             };
-            Err(crate::Error::Other(format!("fetch_and_reset_local_repo panic: {}", panic_msg)))
+            Err(crate::Error::Other(format!(
+                "fetch_and_reset_local_repo panic: {}",
+                panic_msg
+            )))
         }
     }
 }

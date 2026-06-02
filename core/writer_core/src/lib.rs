@@ -64,8 +64,8 @@ pub mod volume;
 pub mod workspace;
 pub mod writing_stats;
 
-pub use error::{Error, Result};
 pub use api::*;
+pub use error::{Error, Result};
 
 #[cfg(test)]
 pub mod backup_tests;

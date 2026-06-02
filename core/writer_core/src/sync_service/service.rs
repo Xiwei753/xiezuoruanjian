@@ -1,21 +1,21 @@
 use crate::sync_service::conflict::build_conflict_summary;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::git_backend::GitBackend;
 use crate::sync_service::conflict::collect_git_status_summary;
-use crate::sync_service::types::SyncResult;
-use crate::sync_service::types::SyncPlan;
-use crate::sync_service::types::SyncConflict;
-use crate::sync_service::types::SyncStatus;
-use crate::sync_service::types::SyncSecrets;
-use crate::sync_service::url::sanitize_remote_url;
-use crate::sync_service::types::FirstSyncMode;
-use crate::sync_service::types::SyncTransport;
 use crate::sync_service::diagnostics::get_user_friendly_error;
-use crate::sync_service::types::SyncConflictSummary;
-use crate::sync_service::types::SettingConflictDetail;
 use crate::sync_service::git_backend::GitAuth;
-use crate::sync_service::scanner;
+use crate::sync_service::git_backend::GitBackend;
 use crate::sync_service::lww;
+use crate::sync_service::scanner;
+use crate::sync_service::types::FirstSyncMode;
+use crate::sync_service::types::SettingConflictDetail;
+use crate::sync_service::types::SyncConfig;
+use crate::sync_service::types::SyncConflict;
+use crate::sync_service::types::SyncConflictSummary;
+use crate::sync_service::types::SyncPlan;
+use crate::sync_service::types::SyncResult;
+use crate::sync_service::types::SyncSecrets;
+use crate::sync_service::types::SyncStatus;
+use crate::sync_service::types::SyncTransport;
+use crate::sync_service::url::sanitize_remote_url;
 use std::path::Path;
 
 fn map_git_error(e: crate::Error) -> crate::Error {
@@ -37,9 +37,7 @@ fn map_git_error(e: crate::Error) -> crate::Error {
 fn classify_error(e_str: &str) -> SyncStatus {
     let lower = e_str.to_lowercase();
     if lower.contains("recoverable_error") {
-        SyncStatus::RecoverableError(
-            e_str.replace("recoverable_error:", "").trim().to_string(),
-        )
+        SyncStatus::RecoverableError(e_str.replace("recoverable_error:", "").trim().to_string())
     } else if lower.contains("fatal_error") {
         SyncStatus::FatalError(e_str.replace("fatal_error:", "").trim().to_string())
     } else if lower.contains("auth")
@@ -102,7 +100,6 @@ impl SyncService {
 
         Ok(())
     }
-
 }
 
 impl SyncService {
@@ -115,7 +112,6 @@ impl SyncService {
         }
         scanner::build_sync_plan_from_workspace(workspace_path)
     }
-
 }
 
 impl SyncService {
@@ -126,7 +122,6 @@ impl SyncService {
     ) -> crate::Result<SyncResult> {
         lww::perform_lww_sync(workspace_path, config, secrets)
     }
-
 }
 
 enum PullOutcome {
@@ -148,8 +143,7 @@ fn handle_pull_error(
             .nth(1)
             .unwrap_or("")
             .trim();
-        let details: Option<Vec<SettingConflictDetail>> =
-            serde_json::from_str(payload_str).ok();
+        let details: Option<Vec<SettingConflictDetail>> = serde_json::from_str(payload_str).ok();
         let mut res = SyncResult::error(
             SyncStatus::Conflict,
             first_sync_mode,
@@ -248,7 +242,9 @@ fn handle_pull_error(
                 format!("Pull failed: {}", e),
             ));
         }
-        return PullOutcome::Continue { pull_branch_missing: true };
+        return PullOutcome::Continue {
+            pull_branch_missing: true,
+        };
     } else if e.to_string().contains("SyncConflict_Detected") {
         return handle_merge_conflict(workspace_path, result, first_sync_mode);
     } else {
@@ -327,11 +323,7 @@ fn handle_merge_conflict(
             let sync_conflict = SyncConflict {
                 local_path,
                 remote_path,
-                local_hash: c
-                    .our
-                    .as_ref()
-                    .map(|o| o.id.to_string())
-                    .unwrap_or_default(),
+                local_hash: c.our.as_ref().map(|o| o.id.to_string()).unwrap_or_default(),
                 remote_hash: c
                     .their
                     .as_ref()
@@ -624,10 +616,13 @@ impl SyncService {
             .err();
         if let Some(e) = pull_failed {
             match handle_pull_error(e, workspace_path, &result, result.first_sync_mode.clone()) {
-                PullOutcome::Continue { pull_branch_missing: missing } => {
+                PullOutcome::Continue {
+                    pull_branch_missing: missing,
+                } => {
                     if missing {
                         pull_branch_missing = true;
-                        result.user_message = Some("远程分支不存在，首次同步将创建该分支。".to_string());
+                        result.user_message =
+                            Some("远程分支不存在，首次同步将创建该分支。".to_string());
                     }
                 }
                 PullOutcome::Return(res) => return Ok(res),
@@ -738,7 +733,6 @@ impl SyncService {
         };
         Ok(result)
     }
-
 }
 
 impl SyncService {
@@ -749,7 +743,9 @@ impl SyncService {
         }
     }
 
-    pub fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Vec<crate::sync_service::types::SyncFileEntry>> {
+    pub fn scan_workspace_for_sync(
+        workspace_path: &Path,
+    ) -> crate::Result<Vec<crate::sync_service::types::SyncFileEntry>> {
         scanner::scan_workspace_for_sync(workspace_path)
     }
 
@@ -760,7 +756,6 @@ impl SyncService {
     pub fn sync(&self) -> crate::Result<()> {
         Err(crate::Error::NotImplemented)
     }
-
 }
 
 impl Default for SyncService {

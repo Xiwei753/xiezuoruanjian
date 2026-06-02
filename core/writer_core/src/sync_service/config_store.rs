@@ -45,7 +45,6 @@ impl crate::sync_service::SyncService {
 
         false
     }
-
 }
 
 impl crate::sync_service::SyncService {
@@ -118,7 +117,6 @@ impl crate::sync_service::SyncService {
 
         false
     }
-
 }
 
 impl crate::sync_service::SyncService {
@@ -153,7 +151,6 @@ impl crate::sync_service::SyncService {
         }
         Ok(state)
     }
-
 }
 
 impl crate::sync_service::SyncService {
@@ -172,7 +169,6 @@ impl crate::sync_service::SyncService {
 
         Ok(())
     }
-
 }
 
 impl crate::sync_service::SyncService {
@@ -180,5 +176,4 @@ impl crate::sync_service::SyncService {
         let plan = Self::build_sync_plan_from_workspace(workspace_path)?;
         Ok(plan.ignored_files)
     }
-
 }

@@ -55,19 +55,39 @@ pub struct WorkspaceBackend {
     clear_last_workspace: qt_method!(fn(&mut self)),
     switch_workspace: qt_method!(fn(&mut self)),
     init_workspace_from_github: qt_method!(fn(&mut self)),
-    execute_github_init: qt_method!(fn(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16)),
+    execute_github_init: qt_method!(
+        fn(
+            &mut self,
+            path: QString,
+            remote_url: QString,
+            branch: QString,
+            token: QString,
+            proxy_type: QString,
+            proxy_host: QString,
+            proxy_port: u16,
+        )
+    ),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     open_workspace_dir: qt_method!(fn(&mut self)),
     app: SafeAppPtr,
 }
 
 impl WorkspaceBackend {
-    pub fn new(app: SafeAppPtr) -> Self { Self { app, ..Default::default() } }
+    pub fn new(app: SafeAppPtr) -> Self {
+        Self {
+            app,
+            ..Default::default()
+        }
+    }
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         if let Some(app) = self.app.get() {
             unsafe { f(&*app) }
         } else {
-            crate::backend::app_backend::debug_error_static("workspace", "BACKEND_LINK_BROKEN", "app pointer is null");
+            crate::backend::app_backend::debug_error_static(
+                "workspace",
+                "BACKEND_LINK_BROKEN",
+                "app pointer is null",
+            );
             default
         }
     }
@@ -75,91 +95,177 @@ impl WorkspaceBackend {
         if let Some(app) = self.app.get() {
             unsafe { f(&mut *app) }
         } else {
-            crate::backend::app_backend::debug_error_static("workspace", "BACKEND_LINK_BROKEN", "app pointer is null");
+            crate::backend::app_backend::debug_error_static(
+                "workspace",
+                "BACKEND_LINK_BROKEN",
+                "app pointer is null",
+            );
             default
         }
     }
-    fn emit_workspace_changed(&mut self) { self.workspace_opened(); self.workspace_content_changed(); self.workspace_state_changed(); }
-    fn workspace_path(&self) -> QString { self.with_app("".into(), |app| app.workspace_path()) }
-    fn has_workspace(&self) -> bool { self.with_app(false, |app| app.has_workspace()) }
-    fn pending_github_init_path(&self) -> QString { self.with_app("".into(), |app| app.pending_github_init_path()) }
-    fn try_restore_last_workspace(&mut self) { self.with_app_mut((), |app| app.try_restore_last_workspace()); self.emit_workspace_changed(); }
-    fn create_new_workspace(&mut self) -> QString { 
-        let res = self.with_app_mut(
-            backend_link_broken_json(),
-            |app| app.create_new_workspace()
-        );
-        self.emit_workspace_changed(); 
-        res
+    fn emit_workspace_changed(&mut self) {
+        self.workspace_opened();
+        self.workspace_content_changed();
+        self.workspace_state_changed();
     }
-    fn open_existing_workspace(&mut self) -> QString { 
-        let res = self.with_app_mut(
-            backend_link_broken_json(),
-            |app| app.open_existing_workspace()
-        );
-        self.emit_workspace_changed(); 
-        res
+    fn workspace_path(&self) -> QString {
+        self.with_app("".into(), |app| app.workspace_path())
     }
-    fn create_workspace_with_path(&mut self, path: QString) -> QString { 
-        let path_str = path.to_string();
-        crate::backend::app_backend::debug_log_static("workspace", "qml_click_create_workspace", &format!("path={}", path_str));
-        crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_create_workspace_called", &format!("path={}", path_str));
-        let res = self.with_app_mut(
-            backend_link_broken_json(),
-            |app| app.internal_open_workspace(&path_str, true)
-        );
-        let has = self.has_workspace();
-        crate::backend::app_backend::debug_log_static("workspace", "writer_core_create_workspace_result", &format!("success={}", has));
-        self.emit_workspace_changed(); 
-        crate::backend::app_backend::debug_log_static("workspace", "workspace_state_updated", &format!("has_workspace={}", has));
-        res
+    fn has_workspace(&self) -> bool {
+        self.with_app(false, |app| app.has_workspace())
     }
-    fn open_workspace_with_path(&mut self, path: QString) -> QString { 
-        let path_str = path.to_string();
-        crate::backend::app_backend::debug_log_static("workspace", "qml_click_open_workspace", &format!("path={}", path_str));
-        crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_open_workspace_called", &format!("path={}", path_str));
-        let res = self.with_app_mut(
-            backend_link_broken_json(),
-            |app| app.internal_open_workspace(&path_str, false)
-        );
-        let has = self.has_workspace();
-        crate::backend::app_backend::debug_log_static("workspace", "writer_core_open_workspace_result", &format!("success={}", has));
-        self.emit_workspace_changed(); 
-        crate::backend::app_backend::debug_log_static("workspace", "workspace_state_updated", &format!("has_workspace={}", has));
-        res
+    fn pending_github_init_path(&self) -> QString {
+        self.with_app("".into(), |app| app.pending_github_init_path())
     }
-    fn close_workspace(&mut self) { self.with_app_mut((), |app| app.close_workspace()); self.emit_workspace_changed(); }
-    fn clear_last_workspace(&mut self) { self.with_app_mut((), |app| app.clear_last_workspace()); self.workspace_state_changed(); }
-    fn switch_workspace(&mut self) { self.with_app_mut((), |app| app.switch_workspace()); self.emit_workspace_changed(); }
-    fn init_workspace_from_github(&mut self) { self.with_app_mut((), |app| app.init_workspace_from_github()); self.pending_github_init_path_changed(); }
-    fn execute_github_init(&mut self, path: QString, remote_url: QString, branch: QString, token: QString, proxy_type: QString, proxy_host: QString, proxy_port: u16) {
-        crate::backend::app_backend::debug_log_static("workspace", "qml_click_import_workspace", &format!("path={}, url={}", path.to_string(), remote_url.to_string()));
-        crate::backend::app_backend::debug_log_static("workspace", "workspace_backend_import_workspace_called", &format!("path={}", path.to_string()));
-        self.with_app_mut((), |app| app.execute_github_init(path, remote_url, branch, token, proxy_type, proxy_host, proxy_port));
+    fn try_restore_last_workspace(&mut self) {
+        self.with_app_mut((), |app| app.try_restore_last_workspace());
         self.emit_workspace_changed();
+    }
+    fn create_new_workspace(&mut self) -> QString {
+        let res = self.with_app_mut(backend_link_broken_json(), |app| app.create_new_workspace());
+        self.emit_workspace_changed();
+        res
+    }
+    fn open_existing_workspace(&mut self) -> QString {
+        let res = self.with_app_mut(backend_link_broken_json(), |app| {
+            app.open_existing_workspace()
+        });
+        self.emit_workspace_changed();
+        res
+    }
+    fn create_workspace_with_path(&mut self, path: QString) -> QString {
+        let path_str = path.to_string();
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "qml_click_create_workspace",
+            &format!("path={}", path_str),
+        );
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "workspace_backend_create_workspace_called",
+            &format!("path={}", path_str),
+        );
+        let res = self.with_app_mut(backend_link_broken_json(), |app| {
+            app.internal_open_workspace(&path_str, true)
+        });
         let has = self.has_workspace();
-        crate::backend::app_backend::debug_log_static("workspace", "workspace_state_updated", &format!("has_workspace={}", has));
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "writer_core_create_workspace_result",
+            &format!("success={}", has),
+        );
+        self.emit_workspace_changed();
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "workspace_state_updated",
+            &format!("has_workspace={}", has),
+        );
+        res
+    }
+    fn open_workspace_with_path(&mut self, path: QString) -> QString {
+        let path_str = path.to_string();
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "qml_click_open_workspace",
+            &format!("path={}", path_str),
+        );
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "workspace_backend_open_workspace_called",
+            &format!("path={}", path_str),
+        );
+        let res = self.with_app_mut(backend_link_broken_json(), |app| {
+            app.internal_open_workspace(&path_str, false)
+        });
+        let has = self.has_workspace();
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "writer_core_open_workspace_result",
+            &format!("success={}", has),
+        );
+        self.emit_workspace_changed();
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "workspace_state_updated",
+            &format!("has_workspace={}", has),
+        );
+        res
+    }
+    fn close_workspace(&mut self) {
+        self.with_app_mut((), |app| app.close_workspace());
+        self.emit_workspace_changed();
+    }
+    fn clear_last_workspace(&mut self) {
+        self.with_app_mut((), |app| app.clear_last_workspace());
+        self.workspace_state_changed();
+    }
+    fn switch_workspace(&mut self) {
+        self.with_app_mut((), |app| app.switch_workspace());
+        self.emit_workspace_changed();
+    }
+    fn init_workspace_from_github(&mut self) {
+        self.with_app_mut((), |app| app.init_workspace_from_github());
         self.pending_github_init_path_changed();
     }
-    fn get_workspace_diagnostics(&self) -> QString { self.with_app(backend_link_broken_json(), |app| app.get_workspace_diagnostics()) }
-    fn open_workspace_dir(&mut self) { self.with_app_mut((), |app| app.open_workspace_dir()); }
+    fn execute_github_init(
+        &mut self,
+        path: QString,
+        remote_url: QString,
+        branch: QString,
+        token: QString,
+        proxy_type: QString,
+        proxy_host: QString,
+        proxy_port: u16,
+    ) {
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "qml_click_import_workspace",
+            &format!("path={}, url={}", path.to_string(), remote_url.to_string()),
+        );
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "workspace_backend_import_workspace_called",
+            &format!("path={}", path.to_string()),
+        );
+        self.with_app_mut((), |app| {
+            app.execute_github_init(
+                path, remote_url, branch, token, proxy_type, proxy_host, proxy_port,
+            )
+        });
+        self.emit_workspace_changed();
+        let has = self.has_workspace();
+        crate::backend::app_backend::debug_log_static(
+            "workspace",
+            "workspace_state_updated",
+            &format!("has_workspace={}", has),
+        );
+        self.pending_github_init_path_changed();
+    }
+    fn get_workspace_diagnostics(&self) -> QString {
+        self.with_app(backend_link_broken_json(), |app| {
+            app.get_workspace_diagnostics()
+        })
+    }
+    fn open_workspace_dir(&mut self) {
+        self.with_app_mut((), |app| app.open_workspace_dir());
+    }
 }
 
 impl AppBackend {
-// Included inside impl AppBackend from app_backend.rs.
-// Deprecated compatibility methods for this Linux backend domain.
+    // Included inside impl AppBackend from app_backend.rs.
+    // Deprecated compatibility methods for this Linux backend domain.
 
-// AppBackend::has_workspace
+    // AppBackend::has_workspace
     pub(crate) fn has_workspace(&self) -> bool {
         self.current_has_workspace
     }
 
-// AppBackend::pending_github_init_path
+    // AppBackend::pending_github_init_path
     pub(crate) fn pending_github_init_path(&self) -> QString {
         self.current_pending_github_init_path.clone().into()
     }
 
-// AppBackend::get_workspace_diagnostics
+    // AppBackend::get_workspace_diagnostics
     pub(crate) fn get_workspace_diagnostics(&self) -> QString {
         WriterCoreApi::new(&self.current_workspace)
             .get_workspace_diagnostics_envelope_json(
@@ -169,14 +275,22 @@ impl AppBackend {
             .into()
     }
 
-// AppBackend::try_restore_last_workspace
+    // AppBackend::try_restore_last_workspace
     pub(crate) fn try_restore_last_workspace(&mut self) {
         self.debug_log("workspace", "try_restore_last_workspace_start", "");
         if let Some(path) = writer_core::app_config::get_last_workspace_path() {
-            self.debug_log("workspace", "try_restore_last_workspace_path_found", &format!("path={}", path));
+            self.debug_log(
+                "workspace",
+                "try_restore_last_workspace_path_found",
+                &format!("path={}", path),
+            );
             let api = WriterCoreApi::new(&path);
             let val_res = api.validate_workspace().unwrap_or(false);
-            self.debug_log("workspace", "try_restore_last_workspace_validate", &format!("path={}, is_valid={}", path, val_res));
+            self.debug_log(
+                "workspace",
+                "try_restore_last_workspace_validate",
+                &format!("path={}, is_valid={}", path, val_res),
+            );
             if val_res {
                 self.current_workspace = path.clone();
                 self.current_has_workspace = true;
@@ -189,11 +303,19 @@ impl AppBackend {
                 self.workspace_opened();
                 self.workspace_content_changed();
                 self.workspace_state_changed();
-                self.debug_log("workspace", "try_restore_last_workspace_success", &format!("path={}", path));
+                self.debug_log(
+                    "workspace",
+                    "try_restore_last_workspace_success",
+                    &format!("path={}", path),
+                );
                 return;
             }
             // Restore failed: clear the invalid lastWorkspacePath to avoid being stuck
-            self.debug_warn("workspace", "try_restore_last_workspace_failed_clearing", &format!("path={}", path));
+            self.debug_warn(
+                "workspace",
+                "try_restore_last_workspace_failed_clearing",
+                &format!("path={}", path),
+            );
             let _ = writer_core::app_config::clear_last_workspace_path();
         } else {
             self.debug_log("workspace", "try_restore_last_workspace_no_path", "");
@@ -208,18 +330,29 @@ impl AppBackend {
         self.ai_available_changed();
     }
 
-// AppBackend::internal_open_workspace
+    // AppBackend::internal_open_workspace
     pub(crate) fn internal_open_workspace(&mut self, path: &str, initialize: bool) -> QString {
-        self.debug_log("workspace", "internal_open_workspace_start", &format!("path={}, initialize={}", path, initialize));
+        self.debug_log(
+            "workspace",
+            "internal_open_workspace_start",
+            &format!("path={}, initialize={}", path, initialize),
+        );
         let api = WriterCoreApi::new(path);
         let is_valid = api.validate_workspace().unwrap_or(false);
-        self.debug_log("workspace", "internal_open_workspace_validate", &format!("path={}, is_valid={}", path, is_valid));
+        self.debug_log(
+            "workspace",
+            "internal_open_workspace_validate",
+            &format!("path={}, is_valid={}", path, is_valid),
+        );
 
         if !is_valid && !initialize {
             let err_msg = "不是有效工作区。请选择其他目录，或使用「新建工作区」初始化该目录。";
             self.set_error(err_msg);
             self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
-            return WriterCoreApi::envelope_json::<String>(Err(writer_core::api::WriterError::InvalidWorkspace)).into();
+            return WriterCoreApi::envelope_json::<String>(Err(
+                writer_core::api::WriterError::InvalidWorkspace,
+            ))
+            .into();
         }
 
         if !is_valid && initialize {
@@ -233,12 +366,19 @@ impl AppBackend {
         }
 
         let val_res = api.validate_workspace().unwrap_or(false);
-        self.debug_log("workspace", "internal_open_workspace_revalidate", &format!("path={}, is_valid={}", path, val_res));
+        self.debug_log(
+            "workspace",
+            "internal_open_workspace_revalidate",
+            &format!("path={}, is_valid={}", path, val_res),
+        );
         if !val_res {
             let err_msg = "工作区验证失败";
             self.set_error(err_msg);
             self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
-            return WriterCoreApi::envelope_json::<String>(Err(writer_core::api::WriterError::InvalidWorkspace)).into();
+            return WriterCoreApi::envelope_json::<String>(Err(
+                writer_core::api::WriterError::InvalidWorkspace,
+            ))
+            .into();
         }
 
         self.current_workspace = path.to_string();
@@ -253,12 +393,16 @@ impl AppBackend {
         self.workspace_state_changed();
 
         let _ = writer_core::app_config::set_last_workspace_path(path);
-        self.debug_log("workspace", "internal_open_workspace_success", &format!("path={}", path));
+        self.debug_log(
+            "workspace",
+            "internal_open_workspace_success",
+            &format!("path={}", path),
+        );
 
         workspace_success_json("OK")
     }
 
-// AppBackend::create_new_workspace
+    // AppBackend::create_new_workspace
     pub(crate) fn create_new_workspace(&mut self) -> QString {
         self.debug_log("workspace", "create_new_workspace_clicked", "");
         if let Some(path) = FileDialog::new().pick_folder() {
@@ -269,7 +413,7 @@ impl AppBackend {
         }
     }
 
-// AppBackend::open_existing_workspace
+    // AppBackend::open_existing_workspace
     pub(crate) fn open_existing_workspace(&mut self) -> QString {
         self.debug_log("workspace", "open_existing_workspace_clicked", "");
         if let Some(path) = FileDialog::new().pick_folder() {
@@ -280,7 +424,7 @@ impl AppBackend {
         }
     }
 
-// AppBackend::close_workspace
+    // AppBackend::close_workspace
     pub(crate) fn close_workspace(&mut self) {
         self.debug_log("workspace", "close_workspace_start", "");
         self.flush_writing_stats();
@@ -307,18 +451,18 @@ impl AppBackend {
         self.debug_log("workspace", "close_workspace_success", "");
     }
 
-// AppBackend::clear_last_workspace
+    // AppBackend::clear_last_workspace
     pub(crate) fn clear_last_workspace(&mut self) {
         let _ = writer_core::app_config::clear_last_workspace_path();
     }
 
-// AppBackend::switch_workspace
+    // AppBackend::switch_workspace
     pub(crate) fn switch_workspace(&mut self) {
         self.close_workspace();
         self.clear_last_workspace();
     }
 
-// AppBackend::init_workspace_from_github
+    // AppBackend::init_workspace_from_github
     pub(crate) fn init_workspace_from_github(&mut self) {
         if let Some(path) = FileDialog::new().pick_folder() {
             self.current_pending_github_init_path = path.to_string_lossy().to_string();
@@ -326,14 +470,11 @@ impl AppBackend {
         }
     }
 
-// AppBackend::open_workspace_dir
+    // AppBackend::open_workspace_dir
     pub(crate) fn open_workspace_dir(&mut self) {
         let path = self.current_workspace.clone();
         if !path.is_empty() {
-            let _ = std::process::Command::new("xdg-open")
-                .arg(&path)
-                .spawn();
+            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
         }
     }
-
 }

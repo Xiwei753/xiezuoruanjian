@@ -10,8 +10,9 @@ use std::fs;
 
 #[test]
 fn test_sync_backend_exposes_operation_id_methods() {
-    let sync_backend = fs::read_to_string("src/backend/sync_backend.rs").expect("read sync backend");
-    
+    let sync_backend =
+        fs::read_to_string("src/backend/sync_backend.rs").expect("read sync backend");
+
     // 验证同步、诊断、预运行方法都返回 QString 作为唯一的 operation_id
     assert!(
         sync_backend.contains("perform_sync: qt_method!(fn(&mut self) -> QString)"),
@@ -30,19 +31,19 @@ fn test_sync_backend_exposes_operation_id_methods() {
 #[test]
 fn test_sync_page_uses_operation_id_check() {
     let sync_page = fs::read_to_string("qml/SyncPage.qml").expect("read SyncPage.qml");
-    
+
     // 验证 SyncPage 声明了用于缓存当前操作 ID 的 local property
     assert!(
         sync_page.contains("property string activeOperationId:"),
         "SyncPage must declare activeOperationId"
     );
-    
+
     // 验证 SyncPage 在 Connections 接收结果时校验了 obj.operation_id
     assert!(
         sync_page.contains("obj.operation_id === root.activeOperationId"),
         "SyncPage must verify operation_id matches activeOperationId before updating text"
     );
-    
+
     // 验证 SyncPage 按钮在 clicked 时记录了 opId
     assert!(
         sync_page.contains("root.activeOperationId = opId"),

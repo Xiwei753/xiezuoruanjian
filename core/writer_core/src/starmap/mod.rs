@@ -260,11 +260,17 @@ pub fn rename_starmap(workspace: &Path, starmap_id: &str, new_title: &str) -> Re
 pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
     // Before deleting, check if it's referenced by any EXTERNAL StarMap.
     let refs = find_starmap_references(workspace, starmap_id)?;
-    let external_refs: Vec<_> = refs.into_iter().filter(|r| r.host_starmap_id != starmap_id).collect();
+    let external_refs: Vec<_> = refs
+        .into_iter()
+        .filter(|r| r.host_starmap_id != starmap_id)
+        .collect();
     if !external_refs.is_empty() {
         return Err(crate::error::Error::Io(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!("Cannot delete StarMap because it is referenced by {} external places.", external_refs.len()),
+            format!(
+                "Cannot delete StarMap because it is referenced by {} external places.",
+                external_refs.len()
+            ),
         )));
     }
 
@@ -438,30 +444,42 @@ pub struct StarMapReference {
     pub target_starmap_id: String,
 }
 
-fn deep_target_references_starmap(target: &crate::starmap::semantic::StarMapDeepTarget, target_starmap_id: &str) -> bool {
+fn deep_target_references_starmap(
+    target: &crate::starmap::semantic::StarMapDeepTarget,
+    target_starmap_id: &str,
+) -> bool {
     if target.starmap_id == target_starmap_id {
         return true;
     }
     target.path.iter().any(|p| match p {
-        crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => s == target_starmap_id,
+        crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => {
+            s == target_starmap_id
+        }
         _ => false,
     })
 }
 
-fn edge_endpoint_references_starmap(endpoint: &crate::starmap::types::StarMapEdgeEndpoint, target_starmap_id: &str) -> bool {
+fn edge_endpoint_references_starmap(
+    endpoint: &crate::starmap::types::StarMapEdgeEndpoint,
+    target_starmap_id: &str,
+) -> bool {
     match endpoint {
-        crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target } => deep_target_references_starmap(target, target_starmap_id),
+        crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target } => {
+            deep_target_references_starmap(target, target_starmap_id)
+        }
         _ => false,
     }
 }
 
-pub fn find_starmap_references(workspace: &Path, target_starmap_id: &str) -> Result<Vec<StarMapReference>> {
+pub fn find_starmap_references(
+    workspace: &Path,
+    target_starmap_id: &str,
+) -> Result<Vec<StarMapReference>> {
     let mut refs = Vec::new();
     let idx = load_index(workspace)?;
 
     for m in &idx.starmaps {
         if let Ok(graph) = crate::starmap::graph::get_starmap_graph(workspace, &m.starmap_id) {
-            
             // 1. Check embeds
             for embed in &graph.embeds {
                 if embed.target_starmap_id == target_starmap_id {
@@ -492,16 +510,24 @@ pub fn find_starmap_references(workspace: &Path, target_starmap_id: &str) -> Res
             for edge in &graph.edges {
                 let mut matches = false;
                 if let Some(ft) = &edge.from_target {
-                    if deep_target_references_starmap(ft, target_starmap_id) { matches = true; }
+                    if deep_target_references_starmap(ft, target_starmap_id) {
+                        matches = true;
+                    }
                 }
                 if let Some(tt) = &edge.to_target {
-                    if deep_target_references_starmap(tt, target_starmap_id) { matches = true; }
+                    if deep_target_references_starmap(tt, target_starmap_id) {
+                        matches = true;
+                    }
                 }
                 if let Some(fe) = &edge.from_endpoint {
-                    if edge_endpoint_references_starmap(fe, target_starmap_id) { matches = true; }
+                    if edge_endpoint_references_starmap(fe, target_starmap_id) {
+                        matches = true;
+                    }
                 }
                 if let Some(te) = &edge.to_endpoint {
-                    if edge_endpoint_references_starmap(te, target_starmap_id) { matches = true; }
+                    if edge_endpoint_references_starmap(te, target_starmap_id) {
+                        matches = true;
+                    }
                 }
 
                 if matches {
@@ -541,7 +567,7 @@ pub fn find_starmap_references(workspace: &Path, target_starmap_id: &str) -> Res
             }
         }
     }
-    
+
     Ok(refs)
 }
 
@@ -574,7 +600,8 @@ mod tests {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let child =
-            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None)
+                .unwrap();
 
         assert_eq!(
             child.parent_starmap_id.as_deref(),
@@ -604,9 +631,11 @@ mod tests {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let _child1 =
-            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None)
+                .unwrap();
         let _child2 =
-            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 2", "", None)
+                .unwrap();
 
         delete_starmap_cascade_legacy(dir.path(), &parent.starmap_id).unwrap();
 
@@ -619,9 +648,11 @@ mod tests {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let child1 =
-            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 1", "", None)
+                .unwrap();
         let child2 =
-            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
+            create_child_starmap_legacy(dir.path(), &parent.starmap_id, "Child 2", "", None)
+                .unwrap();
 
         delete_starmap(dir.path(), &parent.starmap_id).unwrap();
 
@@ -662,47 +693,61 @@ mod tests {
         let child = create_starmap(dir.path(), "Child", "", None).unwrap();
 
         // 1. Add internal edge -> shouldn't block delete
-        let mut parent_graph = crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
+        let mut parent_graph =
+            crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
         let internal_edge = crate::starmap::types::StarMapEdge {
             id: "internal_e".to_string(),
-            from: None, to: None,
-            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo, label: None, payload: None,
-            from_target: None, to_target: None,
+            from: None,
+            to: None,
+            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
             from_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::Starmap),
             to_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget {
                 target: crate::starmap::semantic::StarMapDeepTarget {
                     starmap_id: parent.starmap_id.clone(),
                     path: vec![],
                     target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-                }
+                },
             }),
-            created_at: 0, updated_at: 0,
+            created_at: 0,
+            updated_at: 0,
         };
         parent_graph.edges.push(internal_edge);
-        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph).unwrap();
+        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph)
+            .unwrap();
 
         // Deleting parent should still work since it's an internal reference,
         // but we won't delete parent yet, we need it.
 
         // 2. Add external edge in parent pointing to child
-        let mut parent_graph = crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
+        let mut parent_graph =
+            crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
         let external_edge = crate::starmap::types::StarMapEdge {
             id: "external_e".to_string(),
-            from: None, to: None,
-            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo, label: None, payload: None,
-            from_target: None, to_target: None,
+            from: None,
+            to: None,
+            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
             from_endpoint: None,
             to_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget {
                 target: crate::starmap::semantic::StarMapDeepTarget {
                     starmap_id: child.starmap_id.clone(),
                     path: vec![],
                     target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-                }
+                },
             }),
-            created_at: 0, updated_at: 0,
+            created_at: 0,
+            updated_at: 0,
         };
         parent_graph.edges.push(external_edge);
-        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph).unwrap();
+        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph)
+            .unwrap();
 
         // Check find_starmap_references discovers it
         let refs = find_starmap_references(dir.path(), &child.starmap_id).unwrap();
@@ -714,27 +759,37 @@ mod tests {
         assert!(delete_starmap(dir.path(), &child.starmap_id).is_err());
 
         // Delete the external edge
-        crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e").unwrap();
+        crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e")
+            .unwrap();
 
         // 3. Add external edge with from_endpoint and EnterChild path
-        let mut parent_graph = crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
+        let mut parent_graph =
+            crate::starmap::graph::get_starmap_graph(dir.path(), &parent.starmap_id).unwrap();
         let external_edge_2 = crate::starmap::types::StarMapEdge {
             id: "external_e2".to_string(),
-            from: None, to: None,
-            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo, label: None, payload: None,
-            from_target: None, to_target: None,
+            from: None,
+            to: None,
+            kind: crate::starmap::types::StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            from_target: None,
+            to_target: None,
             from_endpoint: Some(crate::starmap::types::StarMapEdgeEndpoint::DeepTarget {
                 target: crate::starmap::semantic::StarMapDeepTarget {
                     starmap_id: parent.starmap_id.clone(),
-                    path: vec![crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: child.starmap_id.clone() }],
+                    path: vec![crate::starmap::semantic::StarMapPathSegment::EnterChild {
+                        starmap_id: child.starmap_id.clone(),
+                    }],
                     target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-                }
+                },
             }),
             to_endpoint: None,
-            created_at: 0, updated_at: 0,
+            created_at: 0,
+            updated_at: 0,
         };
         parent_graph.edges.push(external_edge_2);
-        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph).unwrap();
+        crate::starmap::graph::save_starmap_graph(dir.path(), &parent.starmap_id, &parent_graph)
+            .unwrap();
 
         // Check find_starmap_references discovers the EnterChild path from from_endpoint
         let refs2 = find_starmap_references(dir.path(), &child.starmap_id).unwrap();
@@ -746,7 +801,8 @@ mod tests {
         assert!(delete_starmap(dir.path(), &child.starmap_id).is_err());
 
         // Delete external edge 2
-        crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e2").unwrap();
+        crate::starmap::graph::delete_starmap_edge(dir.path(), &parent.starmap_id, "external_e2")
+            .unwrap();
 
         // Try deleting child again -> should succeed
         assert!(delete_starmap(dir.path(), &child.starmap_id).is_ok());

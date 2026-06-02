@@ -33,10 +33,16 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveLocalS
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let settings = match serde_json::from_str::<writer_core::api::types::LocalSettingsDto>(&settings_json) {
-        Ok(s) => s,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
-    };
+    let settings =
+        match serde_json::from_str::<writer_core::api::types::LocalSettingsDto>(&settings_json) {
+            Ok(s) => s,
+            Err(e) => {
+                return result_to_jstring::<()>(
+                    &mut env,
+                    Err(writer_core::api::error::WriterError::Json(e.to_string())),
+                )
+            }
+        };
 
     let api = api_from_workspace(&workspace_path);
     string_to_jstring(&mut env, api.save_local_settings_envelope_json(settings))
@@ -75,9 +81,16 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveSyncab
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let settings = match serde_json::from_str::<writer_core::api::types::SyncableSettingsDto>(&settings_json) {
+    let settings = match serde_json::from_str::<writer_core::api::types::SyncableSettingsDto>(
+        &settings_json,
+    ) {
         Ok(s) => s,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Json(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&workspace_path);
@@ -119,9 +132,15 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveSyncCo
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json) {
+    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json)
+    {
         Ok(c) => c,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Json(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&workspace_path);
@@ -161,10 +180,16 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_saveSyncSe
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let secrets = match serde_json::from_str::<writer_core::api::types::SyncSecretsDto>(&secrets_json) {
-        Ok(s) => s,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
-    };
+    let secrets =
+        match serde_json::from_str::<writer_core::api::types::SyncSecretsDto>(&secrets_json) {
+            Ok(s) => s,
+            Err(e) => {
+                return result_to_jstring::<()>(
+                    &mut env,
+                    Err(writer_core::api::error::WriterError::Json(e.to_string())),
+                )
+            }
+        };
 
     let api = api_from_workspace(&workspace_path);
     result_to_jstring(&mut env, api.save_sync_secrets(secrets))

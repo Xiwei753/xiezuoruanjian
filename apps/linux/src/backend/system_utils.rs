@@ -6,10 +6,20 @@ use std::io::Write;
 
 pub(crate) fn try_kreadconfig(cmd: &str) -> Option<String> {
     let output = std::process::Command::new(cmd)
-        .args(["--file", "kdeglobals", "--group", "General", "--key", "ColorScheme"])
-        .output().ok()?;
+        .args([
+            "--file",
+            "kdeglobals",
+            "--group",
+            "General",
+            "--key",
+            "ColorScheme",
+        ])
+        .output()
+        .ok()?;
     if output.status.success() {
-        let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+        let value = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_lowercase();
         if value.contains("dark") {
             return Some("dark".to_string());
         }
@@ -31,7 +41,9 @@ pub(crate) fn detect_system_theme_from_platform() -> String {
         .output()
     {
         if output.status.success() {
-            let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+            let value = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_lowercase();
             if value.contains("dark") {
                 return "dark".to_string();
             }
@@ -47,7 +59,9 @@ pub(crate) fn detect_system_theme_from_platform() -> String {
         .output()
     {
         if output.status.success() {
-            let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+            let value = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_lowercase();
             if value.contains("dark") || value.contains("-dark") || value.contains("_dark") {
                 return "dark".to_string();
             }

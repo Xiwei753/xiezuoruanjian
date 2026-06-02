@@ -1,6 +1,10 @@
 use base64::Engine;
 
-pub(crate) fn github_api_error(context: &str, status: reqwest::StatusCode, body: String) -> crate::Error {
+pub(crate) fn github_api_error(
+    context: &str,
+    status: reqwest::StatusCode,
+    body: String,
+) -> crate::Error {
     let status_u16 = status.as_u16();
     let category = match status_u16 {
         401 | 403 => "auth_error",
@@ -57,10 +61,15 @@ pub(crate) fn github_get_content(
     let json: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| crate::Error::Other(format!("api_error: invalid contents json: {}", e)))?;
     let sha = json["sha"].as_str().map(|s| s.to_string());
-    let content_b64 = json["content"].as_str().unwrap_or_default().replace('\n', "");
+    let content_b64 = json["content"]
+        .as_str()
+        .unwrap_or_default()
+        .replace('\n', "");
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(content_b64.as_bytes())
-        .map_err(|e| crate::Error::Other(format!("api_error: invalid base64 for {}: {}", path, e)))?;
+        .map_err(|e| {
+            crate::Error::Other(format!("api_error: invalid base64 for {}: {}", path, e))
+        })?;
     Ok(Some((bytes, sha)))
 }
 
@@ -71,8 +80,7 @@ pub(crate) fn github_get_content_sha(
     branch: &str,
     path: &str,
 ) -> crate::Result<Option<String>> {
-    Ok(github_get_content(client, api_base, token, branch, path)?
-        .and_then(|(_, sha)| sha))
+    Ok(github_get_content(client, api_base, token, branch, path)?.and_then(|(_, sha)| sha))
 }
 
 pub(crate) fn github_put_content_once(
@@ -196,18 +204,16 @@ pub(crate) fn github_delete_content_serial(
     let Some(mut sha) = remote_sha else {
         return Ok(());
     };
-    let (status, body) = github_delete_content_once(
-        client, api_base, token, branch, path, &sha,
-    )?;
+    let (status, body) = github_delete_content_once(client, api_base, token, branch, path, &sha)?;
     if status.is_success() || status.as_u16() == 404 {
         return Ok(());
     }
     if status.as_u16() == 409 {
-        if let Some(refreshed_sha) = github_get_content_sha(client, api_base, token, branch, path)? {
+        if let Some(refreshed_sha) = github_get_content_sha(client, api_base, token, branch, path)?
+        {
             sha = refreshed_sha;
-            let (retry_status, retry_body) = github_delete_content_once(
-                client, api_base, token, branch, path, &sha,
-            )?;
+            let (retry_status, retry_body) =
+                github_delete_content_once(client, api_base, token, branch, path, &sha)?;
             if retry_status.is_success() || retry_status.as_u16() == 404 {
                 return Ok(());
             }

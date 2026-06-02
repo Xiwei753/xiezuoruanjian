@@ -5,7 +5,6 @@ impl crate::sync_service::SyncService {
         let content = std::fs::read(path)?;
         Ok(format!("{:x}", md5::compute(&content)))
     }
-
 }
 
 impl crate::sync_service::SyncService {
@@ -15,5 +14,4 @@ impl crate::sync_service::SyncService {
             Err(_) => format!("{:x}", md5::compute(content)),
         }
     }
-
 }

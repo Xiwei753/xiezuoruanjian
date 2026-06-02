@@ -38,7 +38,12 @@ pub struct LinuxChapterOpenData {
     pub meta: writer_core::api::types::ChapterMetaDto,
 }
 
-pub fn open_chapter(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<LinuxChapterOpenData, writer_core::api::error::WriterError> {
+pub fn open_chapter(
+    api: &WriterCoreApi,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<LinuxChapterOpenData, writer_core::api::error::WriterError> {
     let chapters = api.list_chapters(project_id, volume_id).unwrap_or_default();
     let chapter_meta = chapters.into_iter().find(|ch| ch.id == chapter_id);
 
@@ -80,23 +85,28 @@ pub fn save_chapter(
     }
 }
 
-pub fn clear_chapter_content(api: &WriterCoreApi, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
+pub fn clear_chapter_content(
+    api: &WriterCoreApi,
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
     let receipt = api.clear_chapter_content(project_id, volume_id, chapter_id)?;
     Ok(receipt)
 }
 
 pub fn report_writing_event(
     api: &WriterCoreApi,
-    project_id: &str, 
-    volume_id: &str, 
-    chapter_id: &str, 
-    source: &str, 
-    inserted_chars: u32, 
-    deleted_chars: u32, 
-    pasted_chars: u32, 
+    project_id: &str,
+    volume_id: &str,
+    chapter_id: &str,
+    source: &str,
+    inserted_chars: u32,
+    deleted_chars: u32,
+    pasted_chars: u32,
     ai_inserted_chars: u32,
     device_id: &str,
-    session_id: &str
+    session_id: &str,
 ) -> Result<bool, WriterError> {
     api.record_writing_event_for_platform(
         device_id,
@@ -109,7 +119,7 @@ pub fn report_writing_event(
         deleted_chars as i32,
         pasted_chars as i32,
         ai_inserted_chars as i32,
-        session_id
+        session_id,
     )
 }
 
@@ -121,17 +131,10 @@ pub fn process_writing_event_from_text(
     old_text: &str,
     new_text: &str,
     device_id: &str,
-    session_id: &str
+    session_id: &str,
 ) -> Result<bool, WriterError> {
     api.process_writing_event(
-        device_id,
-        "linux",
-        project_id,
-        volume_id,
-        chapter_id,
-        old_text,
-        new_text,
-        session_id
+        device_id, "linux", project_id, volume_id, chapter_id, old_text, new_text, session_id,
     )
 }
 
@@ -139,7 +142,7 @@ pub fn ensure_stats_session(
     api: &WriterCoreApi,
     device_id: &mut String,
     session_id: &mut String,
-    last_event_ms: &mut i64
+    last_event_ms: &mut i64,
 ) {
     if device_id.is_empty() {
         *device_id = format!("linux-{}", uuid::Uuid::new_v4());

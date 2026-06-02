@@ -99,7 +99,11 @@ mod architecture_tests {
             let filename = path.file_name().unwrap().to_string_lossy();
 
             for (idx, line) in content.lines().enumerate() {
-                if line.contains("forbidden_facade") || line.contains("forbidden_new") || line.trim().starts_with("//") || line.trim().starts_with("panic!") {
+                if line.contains("forbidden_facade")
+                    || line.contains("forbidden_new")
+                    || line.trim().starts_with("//")
+                    || line.trim().starts_with("panic!")
+                {
                     continue;
                 }
                 if line.contains(&forbidden_facade) || line.contains(&forbidden_new) {

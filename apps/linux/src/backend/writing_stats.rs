@@ -21,8 +21,13 @@ impl AppBackend {
         let src = source.to_string();
 
         if let Some(core) = self.core_api() {
-            writing_bridge::ensure_stats_session(&core, &mut self.stats_device_id, &mut self.stats_session_id, &mut self.stats_last_event_ms);
-            
+            writing_bridge::ensure_stats_session(
+                &core,
+                &mut self.stats_device_id,
+                &mut self.stats_session_id,
+                &mut self.stats_last_event_ms,
+            );
+
             if let Err(e) = writing_bridge::report_writing_event(
                 &core,
                 &pid,
@@ -57,8 +62,13 @@ impl AppBackend {
         let nt = new_text.to_string();
 
         if let Some(core) = self.core_api() {
-            writing_bridge::ensure_stats_session(&core, &mut self.stats_device_id, &mut self.stats_session_id, &mut self.stats_last_event_ms);
-            
+            writing_bridge::ensure_stats_session(
+                &core,
+                &mut self.stats_device_id,
+                &mut self.stats_session_id,
+                &mut self.stats_last_event_ms,
+            );
+
             if let Err(e) = writing_bridge::process_writing_event_from_text(
                 &core,
                 &pid,
@@ -69,13 +79,21 @@ impl AppBackend {
                 &self.stats_device_id,
                 &self.stats_session_id,
             ) {
-                self.debug_error("stats", "process_writing_event_from_text_failed", &e.to_string());
+                self.debug_error(
+                    "stats",
+                    "process_writing_event_from_text_failed",
+                    &e.to_string(),
+                );
             }
             self.flush_writing_stats();
         }
     }
 
-    pub(crate) fn get_writing_stats_summary(&self, start_date: QString, end_date: QString) -> QString {
+    pub(crate) fn get_writing_stats_summary(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -88,7 +106,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_stats_summary_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+    pub(crate) fn get_writing_stats_summary_object(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -113,7 +135,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_stats_by_project(&self, start_date: QString, end_date: QString) -> QString {
+    pub(crate) fn get_writing_stats_by_project(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -126,7 +152,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_stats_by_project_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+    pub(crate) fn get_writing_stats_by_project_object(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -139,7 +169,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_stats_by_chapter(&self, start_date: QString, end_date: QString) -> QString {
+    pub(crate) fn get_writing_stats_by_chapter(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -152,7 +186,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_stats_by_chapter_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+    pub(crate) fn get_writing_stats_by_chapter_object(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -165,7 +203,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_stats_by_device(&self, start_date: QString, end_date: QString) -> QString {
+    pub(crate) fn get_writing_stats_by_device(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -178,7 +220,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_stats_by_device_object(&self, start_date: QString, end_date: QString) -> QJsonObject {
+    pub(crate) fn get_writing_stats_by_device_object(
+        &self,
+        start_date: QString,
+        end_date: QString,
+    ) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -191,7 +237,12 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_speed_curve(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString {
+    pub(crate) fn get_writing_speed_curve(
+        &self,
+        start_date: QString,
+        end_date: QString,
+        bucket_minutes: u32,
+    ) -> QString {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -204,7 +255,12 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_writing_speed_curve_object(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject {
+    pub(crate) fn get_writing_speed_curve_object(
+        &self,
+        start_date: QString,
+        end_date: QString,
+        bucket_minutes: u32,
+    ) -> QJsonObject {
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {

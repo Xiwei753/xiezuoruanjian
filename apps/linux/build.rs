@@ -49,7 +49,11 @@ fn qmake_query(qmake: &Path, key: &str) -> Option<String> {
         return None;
     }
     let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if value.is_empty() { None } else { Some(value) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn find_qt6_qmake() -> Option<PathBuf> {
@@ -68,9 +72,10 @@ fn find_qt6_qmake() -> Option<PathBuf> {
         "/usr/bin/qmake6",
         "/usr/bin/qmake-qt6",
     ];
-    candidates.iter().map(PathBuf::from).find(|path| {
-        qmake_query(path, "QT_VERSION").is_some_and(|v| v.starts_with('6'))
-    })
+    candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| qmake_query(path, "QT_VERSION").is_some_and(|v| v.starts_with('6')))
 }
 
 fn detect_qt6_from_pkg_config() -> Option<Qt6BuildInfo> {

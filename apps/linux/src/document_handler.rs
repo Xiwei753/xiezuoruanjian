@@ -46,11 +46,11 @@
 //! - `get_plain_text()`：获取纯文本（替换 `\u2029` 为 `\n`）
 //! - `clear_undo_stack()`：清空撤销栈（章节切换时调用）
 
+use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
-use cpp::cpp;
 
-cpp!{{
+cpp! {{
     #include <QtCore/QVariant>
     #include <QtQuick/QQuickTextDocument>
     #include <QtGui/QTextDocument>
@@ -89,14 +89,18 @@ pub struct DocumentHandler {
 }
 
 impl DocumentHandler {
-    fn document(&self) -> QVariant { self.current_doc.clone() }
+    fn document(&self) -> QVariant {
+        self.current_doc.clone()
+    }
     fn set_document(&mut self, val: QVariant) {
         self.current_doc = val;
         self.document_changed();
         self.apply_format();
     }
 
-    fn line_spacing(&self) -> f32 { self.current_line_spacing }
+    fn line_spacing(&self) -> f32 {
+        self.current_line_spacing
+    }
     fn set_line_spacing(&mut self, val: f32) {
         if (self.current_line_spacing - val).abs() > 0.001 {
             self.current_line_spacing = val;
@@ -105,7 +109,9 @@ impl DocumentHandler {
         }
     }
 
-    fn text_indent(&self) -> f32 { self.current_text_indent }
+    fn text_indent(&self) -> f32 {
+        self.current_text_indent
+    }
     fn set_text_indent(&mut self, val: f32) {
         if (self.current_text_indent - val).abs() > 0.001 {
             self.current_text_indent = val;
@@ -114,7 +120,9 @@ impl DocumentHandler {
         }
     }
 
-    fn text_color(&self) -> QString { self.current_text_color.clone() }
+    fn text_color(&self) -> QString {
+        self.current_text_color.clone()
+    }
     fn set_text_color(&mut self, val: QString) {
         if self.current_text_color != val {
             self.current_text_color = val;
@@ -250,10 +258,10 @@ impl DocumentHandler {
 
             QTextCursor cursor(doc);
             cursor.beginEditBlock();
-            
+
             if (cursor_position >= 0 && cursor_position <= doc->characterCount()) {
                 cursor.setPosition(cursor_position);
-                
+
                 // Select the current block (paragraph) and apply color
                 cursor.select(QTextCursor::BlockUnderCursor);
                 QTextCharFormat charFormat;

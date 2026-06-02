@@ -24,26 +24,24 @@
 //! - 团队协作时的数据共享
 //! - 版本控制与历史追踪
 
-
-
-pub mod types;
-pub mod url;
+pub mod backends;
 pub mod config_store;
+pub mod conflict;
 pub mod diagnostics;
 pub mod git_backend;
-pub mod github_backend;
-pub mod backends;
-pub mod conflict;
 pub mod github_api_client;
+pub mod github_backend;
 pub mod lww;
 pub mod scanner;
 pub mod service;
-pub mod utils;
 pub mod tests;
+pub mod types;
+pub mod url;
+pub mod utils;
 
-pub use types::*;
-pub use url::*;
+pub use backends::*;
 pub use git_backend::*;
 pub use github_backend::*;
-pub use backends::*;
 pub use service::*;
+pub use types::*;
+pub use url::*;

@@ -17,7 +17,6 @@
 // - 被 apps/linux/src/backend/workspace_backend.rs 引用，协助 GitHub 初始化克隆工作区。
 // =============================================================================
 
-
 use writer_core::api::types::SyncDiagnosticsResultDto;
 use writer_core::api::WriterCoreApi;
 use writer_core::sync_service::{SyncConfig, SyncSecrets};
@@ -42,8 +41,12 @@ pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str)
         "token_missing" => "configured_untested".to_string(),
         "empty_url" => "not_configured".to_string(),
         "missing_permission" => "permission_missing".to_string(),
-        "repo_not_found_or_no_permission" | "github_unauthorized" | "github_forbidden" => "auth_failed".to_string(),
-        "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => "network_failed".to_string(),
+        "repo_not_found_or_no_permission" | "github_unauthorized" | "github_forbidden" => {
+            "auth_failed".to_string()
+        }
+        "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => {
+            "network_failed".to_string()
+        }
         "branch_missing" | "remote_branch_missing" => "branch_missing".to_string(),
         "non_fast_forward" => "non_fast_forward".to_string(),
         "conflict" | "checkout_conflict" | "local_blocking_file" => "conflict".to_string(),
@@ -55,20 +58,31 @@ pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str)
 /// 根据遗留错误消息内容分类错误类型。仅作为 core 未提供 error_category 时的 fallback。
 pub fn sync_error_category(msg: &str) -> String {
     let lower = msg.to_lowercase();
-    if lower.contains("token") && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided")) {
+    if lower.contains("token")
+        && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided"))
+    {
         return "configured_untested".to_string();
     }
-    if lower.contains("repository not found") || (lower.contains("not found") && lower.contains("repo")) || lower.contains("404") ||
-       lower.contains("permission denied") || lower.contains("403") {
+    if lower.contains("repository not found")
+        || (lower.contains("not found") && lower.contains("repo"))
+        || lower.contains("404")
+        || lower.contains("permission denied")
+        || lower.contains("403")
+    {
         return "auth_failed".to_string();
     }
-    if lower.contains("ref not found") || lower.contains("couldn't find remote ref") ||
-       lower.contains("remote branch not found") ||
-       (lower.contains("branch") && lower.contains("not found")) {
+    if lower.contains("ref not found")
+        || lower.contains("couldn't find remote ref")
+        || lower.contains("remote branch not found")
+        || (lower.contains("branch") && lower.contains("not found"))
+    {
         return "branch_missing".to_string();
     }
-    if lower.contains("non-fast-forward") || lower.contains("non fast forward") || lower.contains("nonfastforward") ||
-       (lower.contains("fetch first") && lower.contains("push")) {
+    if lower.contains("non-fast-forward")
+        || lower.contains("non fast forward")
+        || lower.contains("nonfastforward")
+        || (lower.contains("fetch first") && lower.contains("push"))
+    {
         return "non_fast_forward".to_string();
     }
     if lower.contains("checkout_conflict") || lower.contains("local_blocking_file") {
@@ -80,16 +94,29 @@ pub fn sync_error_category(msg: &str) -> String {
     if lower.contains("unrelated") {
         return "unrelated_histories".to_string();
     }
-    if lower.contains("authentication") || lower.contains("auth failed") || lower.contains("401") ||
-       lower.contains("credentials") || lower.contains("could not authenticate") ||
-       lower.contains("bad credentials") {
+    if lower.contains("authentication")
+        || lower.contains("auth failed")
+        || lower.contains("401")
+        || lower.contains("credentials")
+        || lower.contains("could not authenticate")
+        || lower.contains("bad credentials")
+    {
         return "auth_failed".to_string();
     }
-    if lower.contains("resolve") || lower.contains("timeout") || lower.contains("connection refused") ||
-       lower.contains("dns") || lower.contains("network") || lower.contains("proxy") ||
-       lower.contains("eof") || lower.contains("tls") || lower.contains("ssl") ||
-       lower.contains("certificate") || lower.contains("unreachable") ||
-       lower.contains("connection reset") || lower.contains("no route to host") {
+    if lower.contains("resolve")
+        || lower.contains("timeout")
+        || lower.contains("connection refused")
+        || lower.contains("dns")
+        || lower.contains("network")
+        || lower.contains("proxy")
+        || lower.contains("eof")
+        || lower.contains("tls")
+        || lower.contains("ssl")
+        || lower.contains("certificate")
+        || lower.contains("unreachable")
+        || lower.contains("connection reset")
+        || lower.contains("no route to host")
+    {
         return "network_failed".to_string();
     }
     "error".to_string()
@@ -134,7 +161,9 @@ pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> &'stat
             "token_missing" => "configured_untested",
             "empty_url" => "not_configured",
             cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
-            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => "network_failed",
+            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => {
+                "network_failed"
+            }
             "repo_not_found_or_no_permission" => "auth_failed",
             _ => "error",
         }
@@ -157,10 +186,26 @@ pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
         msg.push_str(&format!("\n网络模式: {}", mode));
     }
 
-    msg.push_str(&format!("\n网络连接: {}", if result.network_ok { "正常" } else { "异常" }));
-    msg.push_str(&format!("\n身份认证: {}", if result.auth_ok { "正常" } else { "异常" }));
-    msg.push_str(&format!("\n仓库访问: {}", if result.repo_ok { "正常" } else { "异常" }));
-    msg.push_str(&format!("\n分支存在: {}", if result.branch_ok { "正常" } else { "异常" }));
+    msg.push_str(&format!(
+        "\n网络连接: {}",
+        if result.network_ok {
+            "正常"
+        } else {
+            "异常"
+        }
+    ));
+    msg.push_str(&format!(
+        "\n身份认证: {}",
+        if result.auth_ok { "正常" } else { "异常" }
+    ));
+    msg.push_str(&format!(
+        "\n仓库访问: {}",
+        if result.repo_ok { "正常" } else { "异常" }
+    ));
+    msg.push_str(&format!(
+        "\n分支存在: {}",
+        if result.branch_ok { "正常" } else { "异常" }
+    ));
 
     if !result.error_category.is_empty() && result.error_category != "none" {
         msg.push_str(&format!("\n错误分类: {}", result.error_category));
@@ -176,9 +221,15 @@ pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
     msg
 }
 
-pub fn save_sync_configs(path: &str, config: &SyncConfig, secrets: &SyncSecrets) -> Result<(), String> {
+pub fn save_sync_configs(
+    path: &str,
+    config: &SyncConfig,
+    secrets: &SyncSecrets,
+) -> Result<(), String> {
     let api = WriterCoreApi::new(path);
-    api.save_sync_config(config.clone().into()).map_err(|e| format!("保存同步配置失败: {}", e))?;
-    api.save_sync_secrets(secrets.clone().into()).map_err(|e| format!("保存同步凭证失败: {}", e))?;
+    api.save_sync_config(config.clone().into())
+        .map_err(|e| format!("保存同步配置失败: {}", e))?;
+    api.save_sync_secrets(secrets.clone().into())
+        .map_err(|e| format!("保存同步凭证失败: {}", e))?;
     Ok(())
 }

@@ -13,9 +13,14 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
     // Specific emojis we want to forbid
     let forbidden_emojis = ["📁", "📄", "📝", "📦", "☁️", "⚙️", "📂", "✏️", "💡", "⚠️"];
     // Hardcoded colors we want to forbid
-    let forbidden_colors = ["#000000", "#111111", "#1a1c1e", "#1A1C1E", "black", "#2C2E36", "#2c2e36"];
+    let forbidden_colors = [
+        "#000000", "#111111", "#1a1c1e", "#1A1C1E", "black", "#2C2E36", "#2c2e36",
+    ];
     // Forbidden qml binding usages
-    let forbidden_bindings = ["dt ? dt.editorText : \"#2C2E36\"", "dt ? dt.editorText : \"#2c2e36\""];
+    let forbidden_bindings = [
+        "dt ? dt.editorText : \"#2C2E36\"",
+        "dt ? dt.editorText : \"#2c2e36\"",
+    ];
 
     for entry in fs::read_dir(qml_dir).unwrap() {
         let entry = entry.unwrap();
@@ -28,7 +33,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
             let mut brace_count = 0;
             let mut b_start = false;
             let mut early_close_line = 0;
-            
+
             for (line_idx, line) in content.lines().enumerate() {
                 let line_num = line_idx + 1;
                 let trimmed = line.trim();
@@ -41,12 +46,21 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 let mut char_iter = trimmed.chars().peekable();
                 let mut in_string = false;
                 while let Some(c) = char_iter.next() {
-                    if c == '"' { in_string = !in_string; }
-                    if in_string { continue; }
-                    if c == '/' && char_iter.peek() == Some(&'/') { break; }
-                    if c == '{' { brace_count += 1; b_start = true; }
-                    if c == '}' { 
-                        brace_count -= 1; 
+                    if c == '"' {
+                        in_string = !in_string;
+                    }
+                    if in_string {
+                        continue;
+                    }
+                    if c == '/' && char_iter.peek() == Some(&'/') {
+                        break;
+                    }
+                    if c == '{' {
+                        brace_count += 1;
+                        b_start = true;
+                    }
+                    if c == '}' {
+                        brace_count -= 1;
                         if b_start && brace_count == 0 && early_close_line == 0 {
                             early_close_line = line_num;
                         }
@@ -59,46 +73,75 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     (c >= '\u{2600}' && c <= '\u{26FF}') ||   // Misc Symbols
                     (c >= '\u{2700}' && c <= '\u{27BF}') ||   // Dingbats
                     (c >= '\u{1F600}' && c <= '\u{1F64F}') || // Emoticons
-                    (c >= '\u{1F680}' && c <= '\u{1F6FF}')    // Transport and Map
+                    (c >= '\u{1F680}' && c <= '\u{1F6FF}') // Transport and Map
                 });
                 if has_emoji {
-                    eprintln!("{}:{}: Found forbidden emoji in line: {}", file_name, line_num, trimmed);
+                    eprintln!(
+                        "{}:{}: Found forbidden emoji in line: {}",
+                        file_name, line_num, trimmed
+                    );
                     has_errors = true;
                 }
                 for emoji in &forbidden_emojis {
                     if trimmed.contains(emoji) {
-                        eprintln!("{}:{}: Found forbidden emoji '{}'", file_name, line_num, emoji);
+                        eprintln!(
+                            "{}:{}: Found forbidden emoji '{}'",
+                            file_name, line_num, emoji
+                        );
                         has_errors = true;
                     }
                 }
 
                 // 2. Check for hardcoded dark colors and palette.text
-                if trimmed.contains("color:") || trimmed.contains("color :") || trimmed.contains("color=") || trimmed.contains("color :") {
+                if trimmed.contains("color:")
+                    || trimmed.contains("color :")
+                    || trimmed.contains("color=")
+                    || trimmed.contains("color :")
+                {
                     let lower = trimmed.to_lowercase();
                     for color in &forbidden_colors {
                         let c = color.to_lowercase();
-                        if lower.contains(&format!("\"{}\"", c)) || lower.contains(&format!("'{}'", c)) || lower.contains(&c) {
-                            eprintln!("{}:{}: Found hardcoded dark color '{}'", file_name, line_num, color);
+                        if lower.contains(&format!("\"{}\"", c))
+                            || lower.contains(&format!("'{}'", c))
+                            || lower.contains(&c)
+                        {
+                            eprintln!(
+                                "{}:{}: Found hardcoded dark color '{}'",
+                                file_name, line_num, color
+                            );
                             has_errors = true;
                         }
                     }
                     for binding in &forbidden_bindings {
-                        if trimmed.contains(binding) || trimmed.contains(&binding.replace("\"", "'")) {
-                            eprintln!("{}:{}: Found forbidden text_color binding '{}'", file_name, line_num, binding);
+                        if trimmed.contains(binding)
+                            || trimmed.contains(&binding.replace("\"", "'"))
+                        {
+                            eprintln!(
+                                "{}:{}: Found forbidden text_color binding '{}'",
+                                file_name, line_num, binding
+                            );
                             has_errors = true;
                         }
                     }
                     if trimmed.contains("palette.text") {
-                        eprintln!("{}:{}: Found forbidden palette.text fallback: {}", file_name, line_num, trimmed);
+                        eprintln!(
+                            "{}:{}: Found forbidden palette.text fallback: {}",
+                            file_name, line_num, trimmed
+                        );
                         has_errors = true;
                     }
                 }
-                
+
                 // Check for anchors.verticalCenter inside Layouts (simple check)
-                if trimmed.contains("anchors.verticalCenter") || trimmed.contains("anchors.centerIn") {
+                if trimmed.contains("anchors.verticalCenter")
+                    || trimmed.contains("anchors.centerIn")
+                {
                     // It's hard to know perfectly if we are in a Layout without parsing, but TopWritingToolbar and WritingWorkspace had these bugs.
                     // Let's warn if we see it in certain files or globally. For now, we'll flag obvious bad patterns like:
-                    if trimmed.contains("anchors.verticalCenter: parent.verticalCenter") && file_name != "ModernComboBox.qml" && file_name != "WritingWorkspace.qml" {
+                    if trimmed.contains("anchors.verticalCenter: parent.verticalCenter")
+                        && file_name != "ModernComboBox.qml"
+                        && file_name != "WritingWorkspace.qml"
+                    {
                         eprintln!("{}:{}: Found potentially dangerous anchors.verticalCenter. Use Layout.alignment instead if inside Layout.", file_name, line_num);
                         has_errors = true;
                     }
@@ -109,8 +152,16 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 if has_chinese && !trimmed.contains("qsTr") {
                     // There are exceptions like property names or string concatenation not properly formatted, but we try our best.
                     // Also ignore console.log or backend.log
-                    if !trimmed.contains("console.") && !trimmed.contains("debugLog") && !trimmed.contains("window.debugLog") && !trimmed.contains("logger") && !trimmed.contains("log_") {
-                        eprintln!("{}:{}: Found Chinese text without qsTr(): {}", file_name, line_num, trimmed);
+                    if !trimmed.contains("console.")
+                        && !trimmed.contains("debugLog")
+                        && !trimmed.contains("window.debugLog")
+                        && !trimmed.contains("logger")
+                        && !trimmed.contains("log_")
+                    {
+                        eprintln!(
+                            "{}:{}: Found Chinese text without qsTr(): {}",
+                            file_name, line_num, trimmed
+                        );
                         has_errors = true;
                     }
                 }
@@ -120,28 +171,49 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 let re_return = regex::Regex::new(r#"return\s+qsTr\([^)]*\)\)\s*;"#).unwrap();
                 let re_arg = regex::Regex::new(r#"qsTr\([^)]*\)\)\.arg"#).unwrap();
                 let re_assign = regex::Regex::new(r#"=\s*qsTr\([^)]*\)\)\s*;"#).unwrap();
-                
-                if re_text.is_match(trimmed) || re_title.is_match(trimmed) || re_return.is_match(trimmed) || re_arg.is_match(trimmed) || re_assign.is_match(trimmed) {
-                    eprintln!("{}:{}: Found potential syntax error double parenthesis in qsTr: {}", file_name, line_num, trimmed);
+
+                if re_text.is_match(trimmed)
+                    || re_title.is_match(trimmed)
+                    || re_return.is_match(trimmed)
+                    || re_arg.is_match(trimmed)
+                    || re_assign.is_match(trimmed)
+                {
+                    eprintln!(
+                        "{}:{}: Found potential syntax error double parenthesis in qsTr: {}",
+                        file_name, line_num, trimmed
+                    );
                     has_errors = true;
                 }
             }
-            
+
             if brace_count != 0 {
-                eprintln!("{}: Brace imbalance detected! Count: {}", file_name, brace_count);
+                eprintln!(
+                    "{}: Brace imbalance detected! Count: {}",
+                    file_name, brace_count
+                );
                 has_errors = true;
             }
             if early_close_line > 0 && early_close_line < content.lines().count() {
                 for (line_idx, line) in content.lines().enumerate().skip(early_close_line) {
                     let trimmed = line.trim();
-                    if !trimmed.is_empty() && !trimmed.starts_with("//") && !trimmed.starts_with("/*") && !trimmed.starts_with("import ") {
-                        eprintln!("{}: Root object closed early at line {} but found code at line {}: {}", file_name, early_close_line, line_idx + 1, trimmed);
+                    if !trimmed.is_empty()
+                        && !trimmed.starts_with("//")
+                        && !trimmed.starts_with("/*")
+                        && !trimmed.starts_with("import ")
+                    {
+                        eprintln!(
+                            "{}: Root object closed early at line {} but found code at line {}: {}",
+                            file_name,
+                            early_close_line,
+                            line_idx + 1,
+                            trimmed
+                        );
                         has_errors = true;
                         break;
                     }
                 }
             }
-            
+
             if file_name == "WritingWorkspace.qml" {
                 let paperbg_matches: Vec<_> = content.match_indices("id: paperBg").collect();
                 if !paperbg_matches.is_empty() {
@@ -151,59 +223,104 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     let mut width_count = 0;
                     for line in text_after.lines() {
                         let trimmed = line.trim();
-                        if trimmed.starts_with("width:") && !trimmed.contains("border.width") { width_count += 1; }
+                        if trimmed.starts_with("width:") && !trimmed.contains("border.width") {
+                            width_count += 1;
+                        }
                         for c in line.chars() {
-                            if c == '{' { b_count += 1; b_s = true; }
-                            if c == '}' { b_count -= 1; }
+                            if c == '{' {
+                                b_count += 1;
+                                b_s = true;
+                            }
+                            if c == '}' {
+                                b_count -= 1;
+                            }
                         }
                         if b_s && b_count == 0 {
                             break;
                         }
                     }
                     if width_count > 1 {
-                        eprintln!("{}: paperBg has multiple width properties! Count: {}", file_name, width_count);
+                        eprintln!(
+                            "{}: paperBg has multiple width properties! Count: {}",
+                            file_name, width_count
+                        );
                         has_errors = true;
                     }
                 }
-                
+
                 // Specific check for TextArea colors in WritingWorkspace.qml
-                if !content.contains("color: dt ? dt.editorText : \"#E2E2E5\"") && !content.contains("color: dt ? dt.editorText : '#E2E2E5'") {
-                    eprintln!("{}: TextArea missing proper color fallback to #E2E2E5", file_name);
+                if !content.contains("color: dt ? dt.editorText : \"#E2E2E5\"")
+                    && !content.contains("color: dt ? dt.editorText : '#E2E2E5'")
+                {
+                    eprintln!(
+                        "{}: TextArea missing proper color fallback to #E2E2E5",
+                        file_name
+                    );
                     has_errors = true;
                 }
-                if !content.contains("selectedTextColor: dt ? dt.selectedText : \"#CCE5FF\"") && !content.contains("selectedTextColor: dt ? dt.selectedText : '#CCE5FF'") {
+                if !content.contains("selectedTextColor: dt ? dt.selectedText : \"#CCE5FF\"")
+                    && !content.contains("selectedTextColor: dt ? dt.selectedText : '#CCE5FF'")
+                {
                     eprintln!("{}: TextArea missing selectedTextColor", file_name);
                     has_errors = true;
                 }
-                if !content.contains("selectionColor: dt ? dt.primary : \"#006497\"") && !content.contains("selectionColor: dt ? dt.primary : '#006497'") {
+                if !content.contains("selectionColor: dt ? dt.primary : \"#006497\"")
+                    && !content.contains("selectionColor: dt ? dt.primary : '#006497'")
+                {
                     eprintln!("{}: TextArea missing selectionColor", file_name);
                     has_errors = true;
                 }
-                if !content.contains("emptyContentMinimumHeight") || !content.contains("topPadding: dt ? dt.sp16") || !content.contains("bottomPadding: dt ? dt.sp16") {
-                    eprintln!("{}: TextArea missing empty-content minimum height/padding guard", file_name);
+                if !content.contains("emptyContentMinimumHeight")
+                    || !content.contains("topPadding: dt ? dt.sp16")
+                    || !content.contains("bottomPadding: dt ? dt.sp16")
+                {
+                    eprintln!(
+                        "{}: TextArea missing empty-content minimum height/padding guard",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("contentHeight: Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight, availableHeight)") {
                     eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
                     has_errors = true;
                 }
-                if !content.contains("id: cursorOverlay") || !content.contains("overlayItem: cursorOverlay") {
-                    eprintln!("{}: SmoothCursor must be hosted by an overlay above the TextArea", file_name);
+                if !content.contains("id: cursorOverlay")
+                    || !content.contains("overlayItem: cursorOverlay")
+                {
+                    eprintln!(
+                        "{}: SmoothCursor must be hosted by an overlay above the TextArea",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("#606470") {
-                    eprintln!("{}: Found low-contrast muted text fallback #606470 in writing workspace", file_name);
+                    eprintln!(
+                        "{}: Found low-contrast muted text fallback #606470 in writing workspace",
+                        file_name
+                    );
                     has_errors = true;
                 }
             }
 
             if file_name == "SmoothCursor.qml" {
-                if !content.contains("fallbackCursorHeight") || !content.contains("targetTextArea.cursorRectangle") || !content.contains("Math.max(rect.height || 0, fallbackCursorHeight)") {
-                    eprintln!("{}: SmoothCursor missing empty cursorRectangle fallback", file_name);
+                if !content.contains("fallbackCursorHeight")
+                    || !content.contains("targetTextArea.cursorRectangle")
+                    || !content.contains("Math.max(rect.height || 0, fallbackCursorHeight)")
+                {
+                    eprintln!(
+                        "{}: SmoothCursor missing empty cursorRectangle fallback",
+                        file_name
+                    );
                     has_errors = true;
                 }
-                if !content.contains("targetTextArea.leftPadding") || !content.contains("targetTextArea.topPadding") || !content.contains("targetTextArea.bottomPadding") {
-                    eprintln!("{}: SmoothCursor must position against TextArea padding", file_name);
+                if !content.contains("targetTextArea.leftPadding")
+                    || !content.contains("targetTextArea.topPadding")
+                    || !content.contains("targetTextArea.bottomPadding")
+                {
+                    eprintln!(
+                        "{}: SmoothCursor must position against TextArea padding",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("targetTextArea.mapToItem(overlayItem || parent") {
@@ -213,9 +330,19 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
             }
 
             if file_name == "TopWritingToolbar.qml" || file_name == "WorkspaceTree.qml" {
-                for forbidden in ["palette.text", "root.palette.text", "control.palette.text", "textMain", "textDim", "sidebarBg"] {
+                for forbidden in [
+                    "palette.text",
+                    "root.palette.text",
+                    "control.palette.text",
+                    "textMain",
+                    "textDim",
+                    "sidebarBg",
+                ] {
                     if content.contains(forbidden) {
-                        eprintln!("{}: Found forbidden dark text fallback/token alias '{}'", file_name, forbidden);
+                        eprintln!(
+                            "{}: Found forbidden dark text fallback/token alias '{}'",
+                            file_name, forbidden
+                        );
                         has_errors = true;
                     }
                 }
@@ -227,5 +354,8 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
         }
     }
 
-    assert!(!has_errors, "QML static checks failed. See stderr for details.");
+    assert!(
+        !has_errors,
+        "QML static checks failed. See stderr for details."
+    );
 }

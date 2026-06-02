@@ -71,7 +71,11 @@ impl WriterAppService {
         self.api.list_volumes(&project_id)
     }
 
-    pub fn create_volume(&self, project_id: String, title: String) -> Result<VolumeDto, WriterError> {
+    pub fn create_volume(
+        &self,
+        project_id: String,
+        title: String,
+    ) -> Result<VolumeDto, WriterError> {
         self.api.create_volume(&project_id, &title)
     }
 
@@ -84,7 +88,11 @@ impl WriterAppService {
         self.api.rename_volume(&project_id, &volume_id, &new_title)
     }
 
-    pub fn delete_volume(&self, project_id: String, volume_id: String) -> Result<bool, WriterError> {
+    pub fn delete_volume(
+        &self,
+        project_id: String,
+        volume_id: String,
+    ) -> Result<bool, WriterError> {
         self.api.delete_volume(&project_id, &volume_id)
     }
 
@@ -130,7 +138,8 @@ impl WriterAppService {
         volume_id: String,
         chapter_id: String,
     ) -> Result<bool, WriterError> {
-        self.api.delete_chapter(&project_id, &volume_id, &chapter_id)
+        self.api
+            .delete_chapter(&project_id, &volume_id, &chapter_id)
     }
 
     pub fn reorder_chapters(
@@ -276,7 +285,8 @@ impl WriterAppService {
         start_date: String,
         end_date: String,
     ) -> Result<crate::api::types::ProjectStatsSummaryDto, WriterError> {
-        self.api.get_writing_stats_by_project(&start_date, &end_date)
+        self.api
+            .get_writing_stats_by_project(&start_date, &end_date)
     }
 
     pub fn get_writing_stats_by_chapter(
@@ -284,7 +294,8 @@ impl WriterAppService {
         start_date: String,
         end_date: String,
     ) -> Result<crate::api::types::ChapterStatsSummaryDto, WriterError> {
-        self.api.get_writing_stats_by_chapter(&start_date, &end_date)
+        self.api
+            .get_writing_stats_by_chapter(&start_date, &end_date)
     }
 
     pub fn get_writing_stats_by_device(
@@ -435,7 +446,11 @@ impl WriterAppService {
             .update_starmap_embed(&starmap_id, &instance_id, patch.into())
     }
 
-    pub fn delete_starmap_embed(&self, starmap_id: String, instance_id: String) -> Result<bool, WriterError> {
+    pub fn delete_starmap_embed(
+        &self,
+        starmap_id: String,
+        instance_id: String,
+    ) -> Result<bool, WriterError> {
         self.api.delete_starmap_embed(&starmap_id, &instance_id)
     }
 
@@ -457,7 +472,11 @@ impl WriterAppService {
             .update_starmap_link(&starmap_id, &link_id, patch.into())
     }
 
-    pub fn delete_starmap_link(&self, starmap_id: String, link_id: String) -> Result<bool, WriterError> {
+    pub fn delete_starmap_link(
+        &self,
+        starmap_id: String,
+        link_id: String,
+    ) -> Result<bool, WriterError> {
         self.api.delete_starmap_link(&starmap_id, &link_id)
     }
 
@@ -469,12 +488,20 @@ impl WriterAppService {
     }
 
     // Actions
-    pub fn list_registered_actions(&self) -> Result<Vec<crate::api::types::ActionDescriptorDto>, WriterError> {
+    pub fn list_registered_actions(
+        &self,
+    ) -> Result<Vec<crate::api::types::ActionDescriptorDto>, WriterError> {
         self.api.list_registered_actions()
     }
 
-    pub fn execute_action(&self, action_id: String, args_json: String, context_json: String) -> Result<crate::api::types::ActionResultDto, WriterError> {
-        self.api.execute_action_ext(&action_id, &args_json, &context_json)
+    pub fn execute_action(
+        &self,
+        action_id: String,
+        args_json: String,
+        context_json: String,
+    ) -> Result<crate::api::types::ActionResultDto, WriterError> {
+        self.api
+            .execute_action_ext(&action_id, &args_json, &context_json)
     }
 
     pub fn ai_available(&self) -> bool {

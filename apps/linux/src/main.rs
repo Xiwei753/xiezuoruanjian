@@ -22,10 +22,10 @@
 #![recursion_limit = "256"]
 //! Linux 客户端入口：只负责 Qt/QML 启动、资源注册和顶层 Backend 注册。
 
+use cpp::cpp;
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
-use cpp::cpp;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -103,7 +103,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/ToolbarButton.qml" as "ToolbarButton.qml",
 });
 
-
 static QML_LOAD_FAILED: AtomicBool = AtomicBool::new(false);
 static QML_HUB_HEADER_MISSING: AtomicBool = AtomicBool::new(false);
 static QML_LAST_LOAD_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
@@ -126,7 +125,10 @@ fn fail_if_not_qt6() {
         std::process::exit(1);
     }
     if !version.starts_with("6.") {
-        eprintln!("[QtDiagnostics] WARNING: expected Qt6 runtime, got {}", version);
+        eprintln!(
+            "[QtDiagnostics] WARNING: expected Qt6 runtime, got {}",
+            version
+        );
     }
 }
 
@@ -152,11 +154,15 @@ extern "C" fn qml_load_error_handler(
 ) {
     let s = format!("{}", msg);
     if matches!(msg_type, QtMsgType::QtWarningMsg | QtMsgType::QtCriticalMsg) {
-        eprintln!("[Qt {}] {}", match msg_type {
-            QtMsgType::QtWarningMsg => "WARNING",
-            QtMsgType::QtCriticalMsg => "CRITICAL",
-            _ => "INFO",
-        }, s);
+        eprintln!(
+            "[Qt {}] {}",
+            match msg_type {
+                QtMsgType::QtWarningMsg => "WARNING",
+                QtMsgType::QtCriticalMsg => "CRITICAL",
+                _ => "INFO",
+            },
+            s
+        );
         debug_warn_static("app", "qml_warning_critical", &s);
         if s.contains("qrc:/main.qml")
             || s.contains("QQmlApplicationEngine failed")
@@ -184,9 +190,17 @@ fn probe_hub_header_resource() {
     install_message_handler(prev_handler);
 
     if QML_HUB_HEADER_MISSING.load(Ordering::SeqCst) {
-        debug_error_static("app", "qml_resource_probe", "qrc:/HubPageHeader.qml missing from embedded qrc");
+        debug_error_static(
+            "app",
+            "qml_resource_probe",
+            "qrc:/HubPageHeader.qml missing from embedded qrc",
+        );
     } else {
-        debug_log_static("app", "qml_resource_probe", "qrc:/HubPageHeader.qml exists in embedded qrc");
+        debug_log_static(
+            "app",
+            "qml_resource_probe",
+            "qrc:/HubPageHeader.qml exists in embedded qrc",
+        );
     }
 }
 
@@ -210,7 +224,11 @@ fn main() {
     );
 
     let qml_path = "qrc:/main.qml";
-    debug_log_static("app", "qml_loading", &format!("Loading QML entry: {}", qml_path));
+    debug_log_static(
+        "app",
+        "qml_loading",
+        &format!("Loading QML entry: {}", qml_path),
+    );
 
     QML_LOAD_FAILED.store(false, Ordering::SeqCst);
     remember_qml_load_error("");
@@ -230,10 +248,18 @@ fn main() {
             eprintln!("Last QML error: {}", last_error);
         }
         eprintln!("Check that QML2_IMPORT_PATH points to Qt6 only, for example /usr/lib64/qt6/qml, and does not include Qt5 paths.");
-        debug_error_static("app", "qml_load_failed", &format!("QML load failed for {}: {}", qml_path, last_error));
+        debug_error_static(
+            "app",
+            "qml_load_failed",
+            &format!("QML load failed for {}: {}", qml_path, last_error),
+        );
         std::process::exit(1);
     }
 
-    debug_log_static("app", "event_loop_enter", "QML engine started, entering event loop");
+    debug_log_static(
+        "app",
+        "event_loop_enter",
+        "QML engine started, entering event loop",
+    );
     engine.exec();
 }

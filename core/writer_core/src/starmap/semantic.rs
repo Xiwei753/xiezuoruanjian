@@ -198,7 +198,7 @@ pub fn validate_display_policy(dp: &StarMapDisplayPolicy) -> crate::error::Resul
             "max_preview_chars cannot exceed 10000",
         )));
     }
-    
+
     Ok(())
 }
 

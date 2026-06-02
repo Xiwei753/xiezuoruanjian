@@ -1309,7 +1309,12 @@ impl WriterCore {
         instance_id: &str,
         patch: crate::starmap::types::StarMapEmbedPatch,
     ) -> Result<crate::starmap::types::StarMapEmbed> {
-        crate::starmap::graph::update_starmap_embed(&self.workspace_path, starmap_id, instance_id, patch)
+        crate::starmap::graph::update_starmap_embed(
+            &self.workspace_path,
+            starmap_id,
+            instance_id,
+            patch,
+        )
     }
 
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> Result<()> {
@@ -1502,7 +1507,9 @@ mod tests {
         assert_eq!(receipt.word_count, 11);
         assert!(receipt.content_len > 0);
 
-        let opened = core.open_chapter(&project.id, &volume.id, &chapter.id).unwrap();
+        let opened = core
+            .open_chapter(&project.id, &volume.id, &chapter.id)
+            .unwrap();
         assert_eq!(opened.meta.id, chapter.id);
         assert_eq!(opened.content, "Content here");
 
@@ -1515,7 +1522,12 @@ mod tests {
             .clear_chapter_content_verified(&project.id, &volume.id, &chapter.id)
             .unwrap();
         assert_eq!(clear_receipt.word_count, 0);
-        assert_eq!(core.open_chapter(&project.id, &volume.id, &chapter.id).unwrap().content, "");
+        assert_eq!(
+            core.open_chapter(&project.id, &volume.id, &chapter.id)
+                .unwrap()
+                .content,
+            ""
+        );
     }
 
     #[test]

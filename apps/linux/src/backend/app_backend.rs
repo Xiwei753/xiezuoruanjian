@@ -18,18 +18,21 @@
 // - 被 apps/linux/src/main.rs 注册为 QML 内命名空间 "SujianApp" 下的 "AppBackend"。
 // =============================================================================
 
-use qmetaobject::prelude::*;
 use cpp::cpp;
+use qmetaobject::prelude::*;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use rfd::FileDialog;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::thread;
-use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
 
-use super::json_utils::{bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json, serde_to_qjson_object, serde_value_to_qjson};
+use super::json_utils::{
+    bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
+    serde_to_qjson_object, serde_value_to_qjson,
+};
 use crate::{starmap_bridge, sync_bridge, writing_bridge};
 
 cpp! {{
@@ -70,8 +73,12 @@ static DEBUG_CONFIG: OnceLock<DebugConfig> = OnceLock::new();
 
 fn get_debug_config() -> &'static DebugConfig {
     DEBUG_CONFIG.get_or_init(|| {
-        let enabled = std::env::var("WRITER_DEBUG").map(|v| v == "1").unwrap_or(false);
-        let qml_enabled = std::env::var("WRITER_DEBUG_QML").map(|v| v == "1").unwrap_or(false);
+        let enabled = std::env::var("WRITER_DEBUG")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let qml_enabled = std::env::var("WRITER_DEBUG_QML")
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let modules_env = std::env::var("WRITER_DEBUG_MODULES").unwrap_or_default();
         let level_env = std::env::var("WRITER_DEBUG_LEVEL").unwrap_or_else(|_| "info".to_string());
         let level = DebugLevel::from_str(&level_env);
@@ -102,7 +109,10 @@ fn get_debug_config() -> &'static DebugConfig {
 }
 
 fn is_empty_overwrite_blocked(error: &writer_core::api::error::WriterError) -> bool {
-    matches!(error, writer_core::api::error::WriterError::EmptyOverwriteBlocked { .. })
+    matches!(
+        error,
+        writer_core::api::error::WriterError::EmptyOverwriteBlocked { .. }
+    )
 }
 
 fn blocked_empty_overwrite_user_message() -> &'static str {
@@ -139,21 +149,30 @@ fn debug_level_enabled(module: &str, level: DebugLevel) -> bool {
 #[allow(dead_code)]
 pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Info) {
-        println!("[WriterDebug][static][module={}][event={}] {}", module, event, message);
+        println!(
+            "[WriterDebug][static][module={}][event={}] {}",
+            module, event, message
+        );
     }
 }
 
 #[allow(dead_code)]
 pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Warn) {
-        eprintln!("[WriterDebug][WARN][static][module={}][event={}] {}", module, event, message);
+        eprintln!(
+            "[WriterDebug][WARN][static][module={}][event={}] {}",
+            module, event, message
+        );
     }
 }
 
 #[allow(dead_code)]
 pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Error) {
-        eprintln!("[WriterDebug][ERROR][static][module={}][event={}] {}", module, event, message);
+        eprintln!(
+            "[WriterDebug][ERROR][static][module={}][event={}] {}",
+            module, event, message
+        );
     }
 }
 
@@ -200,7 +219,8 @@ pub struct AppBackend {
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
-    log_qml: qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
+    log_qml:
+        qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
 
     current_workspace: String,
     current_has_workspace: bool,
@@ -294,9 +314,12 @@ impl AppBackend {
             let proj = self.selected_project_id.as_deref().unwrap_or("none");
             let vol = self.selected_volume_id.as_deref().unwrap_or("none");
             let chap = self.selected_chapter_id.as_deref().unwrap_or("none");
-            
+
             let prefix = format!("[WriterDebug][qml][module={}][event={}]", m, ev);
-            let state = format!("[workspace_exists={}][proj={}][vol={}][chap={}]", ws_exists, proj, vol, chap);
+            let state = format!(
+                "[workspace_exists={}][proj={}][vol={}][chap={}]",
+                ws_exists, proj, vol, chap
+            );
             if lvl_enum == DebugLevel::Warn {
                 eprintln!("{}[WARN]{} {}", prefix, state, msg);
             } else if lvl_enum == DebugLevel::Error {
@@ -381,30 +404,27 @@ impl AppBackend {
         result.to_string().into()
     }
 
-        fn workspace_path(&self) -> QString {
+    fn workspace_path(&self) -> QString {
         self.current_workspace.clone().into()
     }
-
-    
 
     // --- StarMap methods ---
 
     // Deprecated compatibility forwarding surface is split by domain.
-
 }
 
-#[path = "workspace_backend.rs"]
-pub mod workspace_backend;
-#[path = "project_backend.rs"]
-pub mod project_backend;
 #[path = "editor_backend.rs"]
 pub mod editor_backend;
+#[path = "project_backend.rs"]
+pub mod project_backend;
 #[path = "settings_backend.rs"]
 pub mod settings_backend;
-#[path = "sync_backend.rs"]
-pub mod sync_backend;
 #[path = "starmap_backend.rs"]
 pub mod starmap_backend;
+#[path = "sync_backend.rs"]
+pub mod sync_backend;
+#[path = "workspace_backend.rs"]
+pub mod workspace_backend;
 
 pub use editor_backend::EditorBackend;
 pub use project_backend::ProjectBackend;
@@ -433,7 +453,8 @@ mod tests {
 
         // Create 3 projects
         for i in 1..=3 {
-            let res_json = backend.create_project_json(format!("Test Project {}", i).into(), "".into());
+            let res_json =
+                backend.create_project_json(format!("Test Project {}", i).into(), "".into());
             let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
             assert_eq!(res["success"], true);
         }
@@ -476,7 +497,7 @@ mod tests {
         let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
 
         assert_eq!(res["success"], false);
-        assert_eq!(res["errorCode"], "PROJECT_CREATION_FAILED");
+        assert_eq!(res["errorCode"], "CORE_ERROR");
         assert!(res["userMessage"].as_str().unwrap().contains("不能为空"));
     }
 
@@ -541,7 +562,9 @@ mod tests {
         backend.perform_sync_dry_run();
 
         assert_eq!(backend.current_sync_status, "error");
-        assert!(backend.current_sync_operation_state.contains("未配置远程仓库 URL"));
+        assert!(backend
+            .current_sync_operation_state
+            .contains("未配置远程仓库 URL"));
     }
 }
 
@@ -554,25 +577,34 @@ mod workspace_flow_tests {
         use tempfile::tempdir;
         let mut app = AppBackend::default();
         assert!(!app.has_workspace());
-        
+
         let dir = tempdir().unwrap();
         let path_str = dir.path().to_string_lossy().to_string();
-        
+
         // Test creating a new workspace
         app.internal_open_workspace(&path_str, true);
-        
-        assert!(app.has_workspace(), "AppBackend must have workspace after creation");
+
+        assert!(
+            app.has_workspace(),
+            "AppBackend must have workspace after creation"
+        );
         assert_eq!(app.workspace_path().to_string(), path_str);
-        
+
         let manifest_path = dir.path().join("workspace_manifest.json");
         assert!(manifest_path.exists(), "Workspace manifest must be created");
-        
+
         // Close workspace
         app.close_workspace();
-        assert!(!app.has_workspace(), "AppBackend must not have workspace after closing");
-        
+        assert!(
+            !app.has_workspace(),
+            "AppBackend must not have workspace after closing"
+        );
+
         // Reopen existing workspace
         app.internal_open_workspace(&path_str, false);
-        assert!(app.has_workspace(), "AppBackend must have workspace after opening existing");
+        assert!(
+            app.has_workspace(),
+            "AppBackend must have workspace after opening existing"
+        );
     }
 }

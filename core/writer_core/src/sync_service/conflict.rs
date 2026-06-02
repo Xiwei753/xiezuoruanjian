@@ -1,7 +1,7 @@
-use crate::sync_service::types::SyncConflictSummary;
 use crate::sync_service::service::SyncService;
 use crate::sync_service::types::SettingConflictDetail;
 use crate::sync_service::types::SyncConflict;
+use crate::sync_service::types::SyncConflictSummary;
 use std::path::Path;
 
 pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
@@ -212,7 +212,6 @@ impl crate::sync_service::SyncService {
             Ok(merged)
         }
     }
-
 }
 
 impl crate::sync_service::SyncService {
@@ -255,5 +254,4 @@ impl crate::sync_service::SyncService {
 
         Ok(())
     }
-
 }

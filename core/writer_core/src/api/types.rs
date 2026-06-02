@@ -310,7 +310,8 @@ impl From<crate::sync_service::SyncConfig> for SyncConfigDto {
             proxy_port: c.proxy_port,
             username: c.username,
             android_has_internet_permission: c.android_has_internet_permission,
-            android_has_access_network_state_permission: c.android_has_access_network_state_permission,
+            android_has_access_network_state_permission: c
+                .android_has_access_network_state_permission,
         }
     }
 }
@@ -338,7 +339,8 @@ impl From<SyncConfigDto> for crate::sync_service::SyncConfig {
             proxy_host: c.proxy_host,
             proxy_port: c.proxy_port,
             username: c.username,
-            android_has_access_network_state_permission: c.android_has_access_network_state_permission,
+            android_has_access_network_state_permission: c
+                .android_has_access_network_state_permission,
             android_has_internet_permission: c.android_has_internet_permission,
         }
     }
@@ -475,7 +477,8 @@ impl From<crate::sync_service::SyncDiagnosticsResult> for SyncDiagnosticsResultD
             success: d.success,
             backend_type: d.backend_type,
             android_has_internet_permission: d.android_has_internet_permission,
-            android_has_access_network_state_permission: d.android_has_access_network_state_permission,
+            android_has_access_network_state_permission: d
+                .android_has_access_network_state_permission,
             android_network_state: d.android_network_state,
             tcp_probe_ok: false,
             tcp_probe_status: "".to_string(),
@@ -498,7 +501,10 @@ impl From<crate::sync_service::SyncDiagnosticsResult> for SyncDiagnosticsResultD
             raw_error: d.raw_error,
             chosen_network_mode: d.chosen_network_mode,
             network_probe_summary: Some(
-                d.network_probe_summary.into_iter().map(Into::into).collect(),
+                d.network_probe_summary
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             ),
         }
     }
@@ -564,7 +570,10 @@ impl From<crate::sync_service::SyncResult> for SyncResultDto {
             user_message: r.user_message,
             chosen_network_mode: r.chosen_network_mode,
             network_probe_summary: Some(
-                r.network_probe_summary.into_iter().map(Into::into).collect(),
+                r.network_probe_summary
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             ),
         }
     }
@@ -598,9 +607,7 @@ fn sync_status_to_wire(status: &crate::sync_service::SyncStatus) -> String {
 fn first_sync_mode_to_wire(mode: &crate::sync_service::FirstSyncMode) -> String {
     match mode {
         crate::sync_service::FirstSyncMode::NotAttempted => "not_attempted",
-        crate::sync_service::FirstSyncMode::CloneIntoEmptyWorkspace => {
-            "clone_into_empty_workspace"
-        }
+        crate::sync_service::FirstSyncMode::CloneIntoEmptyWorkspace => "clone_into_empty_workspace",
         crate::sync_service::FirstSyncMode::InitExistingWorkspace => "init_existing_workspace",
         crate::sync_service::FirstSyncMode::AlreadyGitRepo => "already_git_repo",
         crate::sync_service::FirstSyncMode::BlockedNonEmptyRemote => "blocked_non_empty_remote",
@@ -608,7 +615,6 @@ fn first_sync_mode_to_wire(mode: &crate::sync_service::FirstSyncMode) -> String 
     }
     .to_string()
 }
-
 
 // MindMap DTOs
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -782,7 +788,9 @@ impl From<crate::mind_map::MindMapGraphNode> for MindMapGraphNodeDto {
             id: n.id,
             title: n.title,
             kind: n.kind.into(),
-            payload: n.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            payload: n
+                .payload
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
             tags: n.tags,
             created_at: n.created_at,
             updated_at: n.updated_at,
@@ -796,7 +804,9 @@ impl From<MindMapGraphNodeDto> for crate::mind_map::MindMapGraphNode {
             id: d.id,
             title: d.title,
             kind: d.kind.into(),
-            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            payload: d
+                .payload
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             tags: d.tags,
             created_at: d.created_at,
             updated_at: d.updated_at,
@@ -825,7 +835,9 @@ impl From<crate::mind_map::MindMapGraphEdge> for MindMapGraphEdgeDto {
             to: e.to,
             kind: e.kind.into(),
             label: e.label,
-            payload: e.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            payload: e
+                .payload
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
             created_at: e.created_at,
             updated_at: e.updated_at,
         }
@@ -840,7 +852,9 @@ impl From<MindMapGraphEdgeDto> for crate::mind_map::MindMapGraphEdge {
             to: d.to,
             kind: d.kind.into(),
             label: d.label,
-            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            payload: d
+                .payload
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             created_at: d.created_at,
             updated_at: d.updated_at,
         }
@@ -1054,7 +1068,9 @@ impl From<MindMapNodePatchDto> for crate::mind_map::edit::MindMapGraphNodePatch 
         Self {
             title: d.title,
             kind: d.kind.map(Into::into),
-            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
+            payload: d.payload.map(|opt| {
+                opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
+            }),
             tags: d.tags,
         }
     }
@@ -1073,11 +1089,12 @@ impl From<MindMapEdgePatchDto> for crate::mind_map::edit::MindMapGraphEdgePatch 
         Self {
             kind: d.kind.map(Into::into),
             label: d.label,
-            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
+            payload: d.payload.map(|opt| {
+                opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
+            }),
         }
     }
 }
-
 
 // StarMap DTOs
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -1220,7 +1237,9 @@ impl From<crate::starmap::types::StarMapNode> for StarMapNodeDto {
             id: n.id,
             title: n.title,
             kind: n.kind.into(),
-            payload: n.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            payload: n
+                .payload
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
             tags: n.tags,
             content: n.content.into(),
             anchors: n.anchors.into_iter().map(Into::into).collect(),
@@ -1240,7 +1259,9 @@ impl From<StarMapNodeDto> for crate::starmap::types::StarMapNode {
             id: d.id,
             title: d.title,
             kind: d.kind.into(),
-            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            payload: d
+                .payload
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             tags: d.tags,
             content: d.content.into(),
             anchors: d.anchors.into_iter().map(Into::into).collect(),
@@ -1286,7 +1307,13 @@ impl From<crate::starmap::semantic::StarMapNodeContent> for StarMapNodeContentDt
                 body,
                 ..Default::default()
             },
-            crate::starmap::semantic::StarMapNodeContent::ChapterRef { project_id, volume_id, chapter_id, range_start, range_end } => Self {
+            crate::starmap::semantic::StarMapNodeContent::ChapterRef {
+                project_id,
+                volume_id,
+                chapter_id,
+                range_start,
+                range_end,
+            } => Self {
                 kind: "chapterRef".to_string(),
                 project_id: Some(project_id),
                 volume_id,
@@ -1295,7 +1322,10 @@ impl From<crate::starmap::semantic::StarMapNodeContent> for StarMapNodeContentDt
                 range_end,
                 ..Default::default()
             },
-            crate::starmap::semantic::StarMapNodeContent::EntityRef { entity_type, entity_id } => Self {
+            crate::starmap::semantic::StarMapNodeContent::EntityRef {
+                entity_type,
+                entity_id,
+            } => Self {
                 kind: "entityRef".to_string(),
                 entity_type: Some(entity_type),
                 entity_id: Some(entity_id),
@@ -1655,10 +1685,12 @@ impl From<StarMapEdgeEndpointDto> for crate::starmap::types::StarMapEdgeEndpoint
             },
             "starmap" => Self::Starmap,
             "deepTarget" => Self::DeepTarget {
-                target: d.target.map(Into::into).unwrap_or_else(|| crate::starmap::semantic::StarMapDeepTarget {
-                    starmap_id: String::new(),
-                    path: vec![],
-                    target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+                target: d.target.map(Into::into).unwrap_or_else(|| {
+                    crate::starmap::semantic::StarMapDeepTarget {
+                        starmap_id: String::new(),
+                        path: vec![],
+                        target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+                    }
                 }),
             },
             _ => Self::Node {
@@ -1697,7 +1729,9 @@ impl From<crate::starmap::types::StarMapEdge> for StarMapEdgeDto {
             to: e.to,
             kind: e.kind.into(),
             label: e.label,
-            payload: e.payload.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            payload: e
+                .payload
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
             from_target: e.from_target.map(Into::into),
             to_target: e.to_target.map(Into::into),
             from_endpoint: e.from_endpoint.map(Into::into),
@@ -1716,7 +1750,9 @@ impl From<StarMapEdgeDto> for crate::starmap::types::StarMapEdge {
             to: d.to,
             kind: d.kind.into(),
             label: d.label,
-            payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            payload: d
+                .payload
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             from_target: d.from_target.map(Into::into),
             to_target: d.to_target.map(Into::into),
             from_endpoint: d.from_endpoint.map(Into::into),
@@ -2021,7 +2057,9 @@ impl From<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
         Self {
             title: d.title,
             kind: d.kind.map(Into::into),
-            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
+            payload: d.payload.map(|opt| {
+                opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
+            }),
             tags: d.tags,
             content: d.content.map(Into::into),
             anchors: d.anchors.map(|v| v.into_iter().map(Into::into).collect()),
@@ -2050,7 +2088,9 @@ impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
         Self {
             kind: d.kind.map(Into::into),
             label: d.label,
-            payload: d.payload.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
+            payload: d.payload.map(|opt| {
+                opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
+            }),
             from_target: d.from_target.map(|v| v.map(Into::into)),
             to_target: d.to_target.map(|v| v.map(Into::into)),
             from_endpoint: d.from_endpoint.map(|v| v.map(Into::into)),
@@ -2195,7 +2235,6 @@ impl From<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {
     }
 }
 
-
 // WritingStats DTOs
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -2294,11 +2333,25 @@ pub struct SpeedCurveSummaryDto {
     pub buckets: Vec<SpeedCurvePointDto>,
 }
 
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum MindMapNodeKindDto {
-    Project, Volume, Chapter, TextAnchor, Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, Custom,
+    Project,
+    Volume,
+    Chapter,
+    TextAnchor,
+    Character,
+    Event,
+    Location,
+    Item,
+    Concept,
+    Theme,
+    Note,
+    Organization,
+    Timeline,
+    Plot,
+    Foreshadowing,
+    Custom,
 }
 
 impl From<crate::mind_map::MindMapNodeKind> for MindMapNodeKindDto {
@@ -2350,7 +2403,19 @@ impl From<MindMapNodeKindDto> for crate::mind_map::MindMapNodeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum MindMapEdgeKindDto {
-    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, Custom,
+    Contains,
+    References,
+    AppearsIn,
+    Causes,
+    RelatedTo,
+    LocatedAt,
+    CharacterRelation,
+    Timeline,
+    Foreshadows,
+    Resolves,
+    DependsOn,
+    ConflictsWith,
+    Custom,
 }
 
 impl From<crate::mind_map::MindMapEdgeKind> for MindMapEdgeKindDto {
@@ -2396,7 +2461,12 @@ impl From<MindMapEdgeKindDto> for crate::mind_map::MindMapEdgeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum MindMapLayoutKindDto {
-    AutoRadial, HorizontalTree, Freeform, Timeline, Relationship, Custom,
+    AutoRadial,
+    HorizontalTree,
+    Freeform,
+    Timeline,
+    Relationship,
+    Custom,
 }
 
 impl From<crate::mind_map::LayoutKind> for MindMapLayoutKindDto {
@@ -2428,7 +2498,19 @@ impl From<MindMapLayoutKindDto> for crate::mind_map::LayoutKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapNodeKindDto {
-    Character, Event, Location, Item, Concept, Theme, Note, Organization, Timeline, Plot, Foreshadowing, Chapter, Custom,
+    Character,
+    Event,
+    Location,
+    Item,
+    Concept,
+    Theme,
+    Note,
+    Organization,
+    Timeline,
+    Plot,
+    Foreshadowing,
+    Chapter,
+    Custom,
 }
 
 impl From<crate::starmap::types::StarMapNodeKind> for StarMapNodeKindDto {
@@ -2474,7 +2556,19 @@ impl From<StarMapNodeKindDto> for crate::starmap::types::StarMapNodeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapEdgeKindDto {
-    Contains, References, AppearsIn, Causes, RelatedTo, LocatedAt, CharacterRelation, Timeline, Foreshadows, Resolves, DependsOn, ConflictsWith, Custom,
+    Contains,
+    References,
+    AppearsIn,
+    Causes,
+    RelatedTo,
+    LocatedAt,
+    CharacterRelation,
+    Timeline,
+    Foreshadows,
+    Resolves,
+    DependsOn,
+    ConflictsWith,
+    Custom,
 }
 
 impl From<crate::starmap::types::StarMapEdgeKind> for StarMapEdgeKindDto {
@@ -2520,7 +2614,9 @@ impl From<StarMapEdgeKindDto> for crate::starmap::types::StarMapEdgeKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapLayoutKindDto {
-    Freeform, AutoRadial, Custom,
+    Freeform,
+    AutoRadial,
+    Custom,
 }
 
 impl From<crate::starmap::types::StarMapLayoutKind> for StarMapLayoutKindDto {
@@ -2564,7 +2660,13 @@ pub struct StarMapAnchorTargetDto {
 impl From<crate::starmap::semantic::StarMapAnchorTarget> for StarMapAnchorTargetDto {
     fn from(t: crate::starmap::semantic::StarMapAnchorTarget) -> Self {
         match t {
-            crate::starmap::semantic::StarMapAnchorTarget::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self {
+            crate::starmap::semantic::StarMapAnchorTarget::ChapterRange {
+                project_id,
+                volume_id,
+                chapter_id,
+                range_start,
+                range_end,
+            } => Self {
                 kind: "chapterRange".to_string(),
                 project_id,
                 volume_id,
@@ -2578,13 +2680,20 @@ impl From<crate::starmap::semantic::StarMapAnchorTarget> for StarMapAnchorTarget
                 project_id: Some(project_id),
                 ..Default::default()
             },
-            crate::starmap::semantic::StarMapAnchorTarget::Volume { project_id, volume_id } => Self {
+            crate::starmap::semantic::StarMapAnchorTarget::Volume {
+                project_id,
+                volume_id,
+            } => Self {
                 kind: "volume".to_string(),
                 project_id,
                 volume_id: Some(volume_id),
                 ..Default::default()
             },
-            crate::starmap::semantic::StarMapAnchorTarget::Chapter { project_id, volume_id, chapter_id } => Self {
+            crate::starmap::semantic::StarMapAnchorTarget::Chapter {
+                project_id,
+                volume_id,
+                chapter_id,
+            } => Self {
                 kind: "chapter".to_string(),
                 project_id,
                 volume_id,
@@ -2668,7 +2777,10 @@ impl From<StarMapAnchorTargetDto> for crate::starmap::semantic::StarMapAnchorTar
                 uri: d.uri.unwrap_or_default(),
             },
             "custom" => Self::Custom {
-                payload: d.payload.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)).unwrap_or(serde_json::Value::Null),
+                payload: d
+                    .payload
+                    .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
+                    .unwrap_or(serde_json::Value::Null),
             },
             _ => Self::ChapterRange {
                 project_id: d.project_id,
@@ -2703,7 +2815,10 @@ impl Default for StarMapAnchorTargetDto {
 #[serde(rename_all = "camelCase")]
 pub enum StarMapAnchorRoleDto {
     #[default]
-    Source, Destination, Reference, Custom,
+    Source,
+    Destination,
+    Reference,
+    Custom,
 }
 
 impl From<crate::starmap::semantic::StarMapAnchorRole> for StarMapAnchorRoleDto {
@@ -2732,7 +2847,9 @@ impl From<StarMapAnchorRoleDto> for crate::starmap::semantic::StarMapAnchorRole 
 #[serde(rename_all = "camelCase")]
 pub enum StarMapPortalModeDto {
     #[default]
-    EnterChild, PreviewInline, ReferenceOnly,
+    EnterChild,
+    PreviewInline,
+    ReferenceOnly,
 }
 
 impl From<crate::starmap::semantic::StarMapPortalMode> for StarMapPortalModeDto {
@@ -2759,7 +2876,9 @@ impl From<StarMapPortalModeDto> for crate::starmap::semantic::StarMapPortalMode 
 #[serde(rename_all = "camelCase")]
 pub enum StarMapPortalPreviewPolicyDto {
     #[default]
-    Auto, Always, Never,
+    Auto,
+    Always,
+    Never,
 }
 
 impl From<crate::starmap::semantic::StarMapPortalPreviewPolicy> for StarMapPortalPreviewPolicyDto {
@@ -2818,7 +2937,13 @@ impl From<crate::starmap::semantic::StarMapTargetDetail> for StarMapTargetDetail
                 anchor_id: Some(anchor_id),
                 ..Default::default()
             },
-            crate::starmap::semantic::StarMapTargetDetail::ChapterRange { project_id, volume_id, chapter_id, range_start, range_end } => Self {
+            crate::starmap::semantic::StarMapTargetDetail::ChapterRange {
+                project_id,
+                volume_id,
+                chapter_id,
+                range_start,
+                range_end,
+            } => Self {
                 kind: "chapterRange".to_string(),
                 project_id,
                 volume_id,
@@ -2827,7 +2952,10 @@ impl From<crate::starmap::semantic::StarMapTargetDetail> for StarMapTargetDetail
                 range_end,
                 ..Default::default()
             },
-            crate::starmap::semantic::StarMapTargetDetail::Entity { entity_type, entity_id } => Self {
+            crate::starmap::semantic::StarMapTargetDetail::Entity {
+                entity_type,
+                entity_id,
+            } => Self {
                 kind: "entity".to_string(),
                 entity_type: Some(entity_type),
                 entity_id: Some(entity_id),
@@ -2892,7 +3020,12 @@ impl Default for StarMapTargetDetailDto {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapSourceKindDto {
-    Human, Import, Plugin, Ai, System, Unknown,
+    Human,
+    Import,
+    Plugin,
+    Ai,
+    System,
+    Unknown,
 }
 
 impl Default for StarMapSourceKindDto {
@@ -2930,7 +3063,11 @@ impl From<StarMapSourceKindDto> for crate::starmap::semantic::StarMapSourceKind 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapReviewStatusDto {
-    Accepted, Draft, NeedsReview, Rejected, Unknown,
+    Accepted,
+    Draft,
+    NeedsReview,
+    Rejected,
+    Unknown,
 }
 
 impl Default for StarMapReviewStatusDto {
@@ -3047,7 +3184,9 @@ impl From<StarMapViewportDto> for crate::starmap::types::StarMapViewport {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ActionKindDto {
-    Query, Preview, Mutation,
+    Query,
+    Preview,
+    Mutation,
 }
 
 impl From<crate::action_registry::ActionKind> for ActionKindDto {
@@ -3073,7 +3212,10 @@ impl From<ActionKindDto> for crate::action_registry::ActionKind {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ActionRiskLevelDto {
-    SafeRead, SafeWrite, ContentWrite, Dangerous,
+    SafeRead,
+    SafeWrite,
+    ContentWrite,
+    Dangerous,
 }
 
 impl From<crate::action_registry::ActionRiskLevel> for ActionRiskLevelDto {
@@ -3126,8 +3268,12 @@ impl From<crate::action_registry::ActionDescriptor> for ActionDescriptorDto {
             confirm_required: d.confirm_required,
             undoable: d.undoable,
             platforms: d.platforms,
-            input_schema: d.input_schema.map(|v| serde_json::to_string(&v).unwrap_or_default()),
-            ui_schema: d.ui_schema.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            input_schema: d
+                .input_schema
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            ui_schema: d
+                .ui_schema
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
         }
     }
 }
@@ -3144,8 +3290,12 @@ impl From<ActionDescriptorDto> for crate::action_registry::ActionDescriptor {
             confirm_required: dto.confirm_required,
             undoable: dto.undoable,
             platforms: dto.platforms,
-            input_schema: dto.input_schema.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
-            ui_schema: dto.ui_schema.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            input_schema: dto
+                .input_schema
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            ui_schema: dto
+                .ui_schema
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
         }
     }
 }
@@ -3165,8 +3315,12 @@ impl From<crate::action_registry::ActionResult> for ActionResultDto {
         Self {
             success: r.success,
             message: r.message,
-            data: r.data.map(|v| serde_json::to_string(&v).unwrap_or_default()),
-            proposed_ui: r.proposed_ui.map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            data: r
+                .data
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
+            proposed_ui: r
+                .proposed_ui
+                .map(|v| serde_json::to_string(&v).unwrap_or_default()),
             requires_confirmation: r.requires_confirmation,
         }
     }
@@ -3177,13 +3331,16 @@ impl From<ActionResultDto> for crate::action_registry::ActionResult {
         Self {
             success: dto.success,
             message: dto.message,
-            data: dto.data.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
-            proposed_ui: dto.proposed_ui.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            data: dto
+                .data
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            proposed_ui: dto
+                .proposed_ui
+                .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
             requires_confirmation: dto.requires_confirmation,
         }
     }
 }
-
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]

@@ -38,9 +38,15 @@ fn main_qml_uses_domain_backend_for_startup_workspace_bool() {
 fn split_backend_context_properties_are_registered_before_qml_load() {
     let main_rs = fs::read_to_string("src/main.rs").expect("read src/main.rs");
     let backend_mod = fs::read_to_string("src/backend/mod.rs").expect("read src/backend/mod.rs");
-    let load_index = main_rs.find("engine.load_file(qml_path.into())").expect("QML load call exists");
-    let runtime_index = main_rs.find("let backend_runtime = BackendRuntime::new()").expect("BackendRuntime is created in main");
-    let register_index = main_rs.find("backend_runtime.register_context_properties(&mut engine)").expect("BackendRuntime registers context properties");
+    let load_index = main_rs
+        .find("engine.load_file(qml_path.into())")
+        .expect("QML load call exists");
+    let runtime_index = main_rs
+        .find("let backend_runtime = BackendRuntime::new()")
+        .expect("BackendRuntime is created in main");
+    let register_index = main_rs
+        .find("backend_runtime.register_context_properties(&mut engine)")
+        .expect("BackendRuntime registers context properties");
 
     assert!(
         runtime_index < register_index && register_index < load_index,
@@ -66,7 +72,9 @@ fn split_backend_context_properties_are_registered_before_qml_load() {
         "starmapBackend",
     ] {
         let registration = format!("engine.set_object_property(\"{name}\".into()");
-        let index = backend_mod.find(&registration).unwrap_or_else(|| panic!("missing context property registration for {name}"));
+        let index = backend_mod
+            .find(&registration)
+            .unwrap_or_else(|| panic!("missing context property registration for {name}"));
         assert!(
             register_fn_index < index,
             "context property {name} must be registered by BackendRuntime"
@@ -94,8 +102,12 @@ fn backend_runtime_owns_all_qml_qobjects_until_after_event_loop() {
         );
     }
 
-    let exec_index = main_rs.find("engine.exec()").expect("event loop call exists");
-    let runtime_index = main_rs.find("let backend_runtime = BackendRuntime::new()").expect("BackendRuntime is created");
+    let exec_index = main_rs
+        .find("engine.exec()")
+        .expect("event loop call exists");
+    let runtime_index = main_rs
+        .find("let backend_runtime = BackendRuntime::new()")
+        .expect("BackendRuntime is created");
     assert!(
         runtime_index < exec_index,
         "BackendRuntime local must be created before engine.exec so it drops only after the event loop returns"
@@ -133,10 +145,13 @@ fn main_qml_has_backend_runtime_startup_diagnostics() {
 
 #[test]
 fn workspace_backend_exposes_has_workspace_bool_property() {
-    let workspace_backend = fs::read_to_string("src/backend/workspace_backend.rs").expect("read workspace backend");
+    let workspace_backend =
+        fs::read_to_string("src/backend/workspace_backend.rs").expect("read workspace backend");
 
     assert!(
-        workspace_backend.contains("has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed)"),
+        workspace_backend.contains(
+            "has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed)"
+        ),
         "WorkspaceBackend must expose has_workspace as a real bool qt_property"
     );
     assert!(

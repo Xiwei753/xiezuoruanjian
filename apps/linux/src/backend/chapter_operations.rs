@@ -14,24 +14,45 @@ impl AppBackend {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
-        self.debug_log("chapter", "get_chapter_content_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
+        self.debug_log(
+            "chapter",
+            "get_chapter_content_start",
+            &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c),
+        );
         if let Some(api) = self.core_api() {
             match api.open_chapter(&p, &v, &c) {
                 Ok(content) => {
-                    self.debug_log("chapter", "get_chapter_content_success", &format!("len={}", content.content.len()));
+                    self.debug_log(
+                        "chapter",
+                        "get_chapter_content_success",
+                        &format!("len={}", content.content.len()),
+                    );
                     return content.content.into();
                 }
                 Err(e) => {
-                    self.debug_error("chapter", "get_chapter_content_failed", &format!("error={}", e));
+                    self.debug_error(
+                        "chapter",
+                        "get_chapter_content_failed",
+                        &format!("error={}", e),
+                    );
                 }
             }
         } else {
-            self.debug_error("chapter", "get_chapter_content_failed", "core_not_initialized");
+            self.debug_error(
+                "chapter",
+                "get_chapter_content_failed",
+                "core_not_initialized",
+            );
         }
         "".into()
     }
 
-    pub(crate) fn open_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString {
+    pub(crate) fn open_chapter_json(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) -> QString {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
@@ -50,7 +71,9 @@ impl AppBackend {
                     "warnings": [],
                     "changedPaths": [],
                     "changedEntities": [],
-                }).to_string().into(),
+                })
+                .to_string()
+                .into(),
                 Err(e) => serde_json::json!({
                     "success": false,
                     "errorCode": "CORE_ERROR",
@@ -59,7 +82,9 @@ impl AppBackend {
                     "warnings": [],
                     "changedPaths": [],
                     "changedEntities": [],
-                }).to_string().into(),
+                })
+                .to_string()
+                .into(),
             };
         }
         serde_json::json!({
@@ -70,15 +95,26 @@ impl AppBackend {
             "warnings": [],
             "changedPaths": [],
             "changedEntities": [],
-        }).to_string().into()
+        })
+        .to_string()
+        .into()
     }
 
-    pub(crate) fn open_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject {
+    pub(crate) fn open_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) -> QJsonObject {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
-        self.debug_log("chapter", "open_chapter_start", &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c));
-        
+        self.debug_log(
+            "chapter",
+            "open_chapter_start",
+            &format!("project_id={}, volume_id={}, chapter_id={}", p, v, c),
+        );
+
         if let Some(core) = self.core_api() {
             match writing_bridge::open_chapter(&core, &p, &v, &c) {
                 Ok(data) => {
@@ -87,9 +123,9 @@ impl AppBackend {
                     self.selected_chapter_id = Some(c.clone());
                     self.selected_item_changed();
                     self.chapter_path_changed();
-                    
+
                     self.debug_log("chapter", "open_chapter_success", "len_loaded");
-                    
+
                     return bridge_success_object(serde_json::to_value(data).unwrap_or_default());
                 }
                 Err(e) => {
@@ -98,27 +134,52 @@ impl AppBackend {
                 }
             }
         }
-        
+
         bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
     }
 
-    pub(crate) fn save_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, content: QString, allow_empty_overwrite: bool) -> QJsonObject {
+    pub(crate) fn save_chapter(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        content: QString,
+        allow_empty_overwrite: bool,
+    ) -> QJsonObject {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
         let text_str = content.to_string();
         let len = text_str.len();
-        self.debug_log("chapter", "save_chapter_start", &format!("len={} allow_empty_overwrite={}", len, allow_empty_overwrite));
+        self.debug_log(
+            "chapter",
+            "save_chapter_start",
+            &format!(
+                "len={} allow_empty_overwrite={}",
+                len, allow_empty_overwrite
+            ),
+        );
         if len == 0 && allow_empty_overwrite {
-            self.debug_log("chapter", "save_chapter_empty_allowed_user_clear", &format!("chapter_id={}", c));
+            self.debug_log(
+                "chapter",
+                "save_chapter_empty_allowed_user_clear",
+                &format!("chapter_id={}", c),
+            );
         }
-        
+
         let save_result = if let Some(core) = self.core_api() {
-            Some(writing_bridge::save_chapter(&core, &p, &v, &c, &text_str, allow_empty_overwrite))
+            Some(writing_bridge::save_chapter(
+                &core,
+                &p,
+                &v,
+                &c,
+                &text_str,
+                allow_empty_overwrite,
+            ))
         } else {
             None
         };
-        
+
         let result_obj = match save_result {
             Some(Ok(receipt)) => {
                 self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
@@ -130,7 +191,11 @@ impl AppBackend {
             Some(Err(e)) => {
                 self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
                 if is_empty_overwrite_blocked(&e) {
-                    self.debug_error("chapter", "blocked_empty_overwrite", &format!("chapter_id={} len={}", c, len));
+                    self.debug_error(
+                        "chapter",
+                        "blocked_empty_overwrite",
+                        &format!("chapter_id={} len={}", c, len),
+                    );
                     let msg = blocked_empty_overwrite_user_message();
                     self.current_save_status = msg.to_string();
                     self.set_error(msg);
@@ -145,16 +210,25 @@ impl AppBackend {
                 bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
             }
         };
-        
+
         self.save_status_changed();
         result_obj
     }
 
-    pub(crate) fn clear_chapter_content(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject {
+    pub(crate) fn clear_chapter_content(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+    ) -> QJsonObject {
         let p = project_id.to_string();
         let v = volume_id.to_string();
         let c = chapter_id.to_string();
-        self.debug_log("chapter", "clear_chapter_content_start", &format!("chapter_id={}", c));
+        self.debug_log(
+            "chapter",
+            "clear_chapter_content_start",
+            &format!("chapter_id={}", c),
+        );
 
         let clear_result = if let Some(core) = self.core_api() {
             Some(writing_bridge::clear_chapter_content(&core, &p, &v, &c))
@@ -164,7 +238,11 @@ impl AppBackend {
 
         match clear_result {
             Some(Ok(receipt)) => {
-                self.debug_log("chapter", "clear_chapter_content_success", &format!("chapter_id={}", c));
+                self.debug_log(
+                    "chapter",
+                    "clear_chapter_content_success",
+                    &format!("chapter_id={}", c),
+                );
                 self.current_save_status = "已清空".to_string();
                 self.save_status_changed();
                 self.workspace_content_changed();
@@ -179,7 +257,11 @@ impl AppBackend {
                 bridge_error_object(&err_msg, "CORE_ERROR")
             }
             None => {
-                self.debug_error("chapter", "clear_chapter_content_failed", "core_not_initialized");
+                self.debug_error(
+                    "chapter",
+                    "clear_chapter_content_failed",
+                    "core_not_initialized",
+                );
                 self.current_save_status = "清空失败".to_string();
                 self.save_status_changed();
                 self.set_error("清空章节失败: 后端未初始化");

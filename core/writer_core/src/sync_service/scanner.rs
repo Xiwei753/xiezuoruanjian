@@ -1,6 +1,6 @@
-use std::path::Path;
 use crate::sync_service::types::{SyncFileEntry, SyncKind, SyncPlan};
 use crate::sync_service::SyncService;
+use std::path::Path;
 
 pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
@@ -68,8 +68,7 @@ pub(crate) fn build_sync_plan_from_workspace(workspace_path: &Path) -> crate::Re
             continue;
         }
 
-        if entry.sync_kind == SyncKind::Upload || entry.sync_kind == SyncKind::ConflictCandidate
-        {
+        if entry.sync_kind == SyncKind::Upload || entry.sync_kind == SyncKind::ConflictCandidate {
             local_files.insert(entry.relative_path.clone());
             let known_hash_opt = state.known_files.get(&entry.relative_path);
             if is_first_sync {

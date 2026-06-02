@@ -1,11 +1,11 @@
-use crate::sync_service::types::SyncDiagnosticsResult;
-use crate::sync_service::types::SyncConfig;
+use crate::sync_service::git_backend::Git2Backend;
 use crate::sync_service::github_backend::GitHubApiBackend;
 use crate::sync_service::service::SyncService;
-use crate::sync_service::git_backend::Git2Backend;
-use crate::sync_service::types::SyncSecrets;
 use crate::sync_service::types::BackendType;
+use crate::sync_service::types::SyncConfig;
+use crate::sync_service::types::SyncDiagnosticsResult;
 use crate::sync_service::types::SyncResult;
+use crate::sync_service::types::SyncSecrets;
 use std::path::Path;
 
 pub trait SyncBackend {
@@ -81,7 +81,9 @@ pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
     }
 }
 
-pub(crate) fn build_http_client(config: Option<&SyncConfig>) -> crate::Result<reqwest::blocking::Client> {
+pub(crate) fn build_http_client(
+    config: Option<&SyncConfig>,
+) -> crate::Result<reqwest::blocking::Client> {
     let mut builder = reqwest::blocking::Client::builder()
         .user_agent("WriterApp/1.0")
         .timeout(std::time::Duration::from_secs(15));

@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 mod tests {
     use crate::sync_service::backends::SyncBackend;
@@ -1409,7 +1408,9 @@ mod tests {
                                 } else if path.contains("/git/commits/mock_commit_sha") {
                                     response_body =
                                         r#"{"tree":{"sha":"mock_tree_sha"}}"#.to_string();
-                                } else if path.contains("/git/trees/mock_tree_sha") || path.contains("/git/trees/main") {
+                                } else if path.contains("/git/trees/mock_tree_sha")
+                                    || path.contains("/git/trees/main")
+                                {
                                     let mut tree_list = Vec::new();
                                     let m = manifest_clone.lock().unwrap();
                                     if !m.is_empty() {
@@ -1429,7 +1430,9 @@ mod tests {
                                     }
                                     response_body =
                                         serde_json::json!({ "tree": tree_list }).to_string();
-                                } else if path.contains("/contents/app-meta/sync/manifest.sync.json") {
+                                } else if path
+                                    .contains("/contents/app-meta/sync/manifest.sync.json")
+                                {
                                     let m = manifest_clone.lock().unwrap();
                                     if method == "GET" {
                                         if m.is_empty() {
@@ -1449,10 +1452,15 @@ mod tests {
                                         drop(m);
                                         if let Some(body_start) = req.find("\r\n\r\n") {
                                             let body = &req[body_start + 4..];
-                                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-                                                if manifest_exists && val["sha"].as_str().is_none() {
-                                                    status_line = "HTTP/1.1 422 Unprocessable Entity";
-                                                    response_body = r#"{"message":"sha required"}"#.to_string();
+                                            if let Ok(val) =
+                                                serde_json::from_str::<serde_json::Value>(body)
+                                            {
+                                                if manifest_exists && val["sha"].as_str().is_none()
+                                                {
+                                                    status_line =
+                                                        "HTTP/1.1 422 Unprocessable Entity";
+                                                    response_body =
+                                                        r#"{"message":"sha required"}"#.to_string();
                                                 }
                                                 if let Some(b64_content) = val["content"].as_str() {
                                                     if status_line == "HTTP/1.1 200 OK" {
@@ -1466,7 +1474,9 @@ mod tests {
                                             }
                                         }
                                         if status_line == "HTTP/1.1 200 OK" {
-                                            response_body = r#"{"content":{"sha":"manifest_new_sha"}}"#.to_string();
+                                            response_body =
+                                                r#"{"content":{"sha":"manifest_new_sha"}}"#
+                                                    .to_string();
                                         }
                                     } else {
                                         status_line = "HTTP/1.1 405 Method Not Allowed";
@@ -1479,8 +1489,9 @@ mod tests {
                                         if method == "GET" {
                                             let fls = files_clone.lock().unwrap();
                                             if let Some(content) = fls.get(file_path) {
-                                                let encoded = base64::engine::general_purpose::STANDARD
-                                                    .encode(content.as_bytes());
+                                                let encoded =
+                                                    base64::engine::general_purpose::STANDARD
+                                                        .encode(content.as_bytes());
                                                 response_body = serde_json::json!({
                                                     "content": encoded,
                                                     "encoding": "base64",
@@ -1493,18 +1504,30 @@ mod tests {
                                         } else if method == "PUT" {
                                             if let Some(body_start) = req.find("\r\n\r\n") {
                                                 let body = &req[body_start + 4..];
-                                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-                                                    let file_exists = files_clone.lock().unwrap().contains_key(file_path);
-                                                    if file_exists && val["sha"].as_str().is_none() {
-                                                        status_line = "HTTP/1.1 422 Unprocessable Entity";
-                                                        response_body = r#"{"message":"sha required"}"#.to_string();
+                                                if let Ok(val) =
+                                                    serde_json::from_str::<serde_json::Value>(body)
+                                                {
+                                                    let file_exists = files_clone
+                                                        .lock()
+                                                        .unwrap()
+                                                        .contains_key(file_path);
+                                                    if file_exists && val["sha"].as_str().is_none()
+                                                    {
+                                                        status_line =
+                                                            "HTTP/1.1 422 Unprocessable Entity";
+                                                        response_body =
+                                                            r#"{"message":"sha required"}"#
+                                                                .to_string();
                                                     }
-                                                    if let Some(b64_content) = val["content"].as_str() {
+                                                    if let Some(b64_content) =
+                                                        val["content"].as_str()
+                                                    {
                                                         if status_line == "HTTP/1.1 200 OK" {
                                                             let decoded = base64::engine::general_purpose::STANDARD
                                                                 .decode(b64_content)
                                                                 .unwrap();
-                                                            let mut fls = files_clone.lock().unwrap();
+                                                            let mut fls =
+                                                                files_clone.lock().unwrap();
                                                             fls.insert(
                                                                 file_path.to_string(),
                                                                 String::from_utf8(decoded).unwrap(),
@@ -1514,19 +1537,25 @@ mod tests {
                                                 }
                                             }
                                             if status_line == "HTTP/1.1 200 OK" {
-                                                response_body = r#"{"content":{"sha":"new_sha"}}"#.to_string();
+                                                response_body =
+                                                    r#"{"content":{"sha":"new_sha"}}"#.to_string();
                                             }
                                         } else if method == "DELETE" {
                                             if let Some(body_start) = req.find("\r\n\r\n") {
                                                 let body = &req[body_start + 4..];
-                                                let val = serde_json::from_str::<serde_json::Value>(body).unwrap_or_default();
+                                                let val =
+                                                    serde_json::from_str::<serde_json::Value>(body)
+                                                        .unwrap_or_default();
                                                 if val["sha"].as_str().is_none() {
-                                                    status_line = "HTTP/1.1 422 Unprocessable Entity";
-                                                    response_body = r#"{"message":"sha required"}"#.to_string();
+                                                    status_line =
+                                                        "HTTP/1.1 422 Unprocessable Entity";
+                                                    response_body =
+                                                        r#"{"message":"sha required"}"#.to_string();
                                                 } else {
                                                     let mut fls = files_clone.lock().unwrap();
                                                     fls.remove(file_path);
-                                                    response_body = r#"{"content":null}"#.to_string();
+                                                    response_body =
+                                                        r#"{"content":null}"#.to_string();
                                                 }
                                             }
                                         } else {
@@ -1561,20 +1590,25 @@ mod tests {
                                             }
                                         }
                                     }
-                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
+                                    response_body =
+                                        r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "POST" && path.contains("/git/trees") {
                                     status_line = "HTTP/1.1 500 Internal Server Error";
-                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
+                                    response_body =
+                                        r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "POST" && path.contains("/git/commits") {
                                     status_line = "HTTP/1.1 500 Internal Server Error";
-                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
+                                    response_body =
+                                        r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "POST" && path.contains("/git/refs") {
                                     status_line = "HTTP/1.1 500 Internal Server Error";
-                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
+                                    response_body =
+                                        r#"{"message":"git db api must not be used"}"#.to_string();
                                 } else if method == "PATCH" && path.contains("/git/refs/heads/main")
                                 {
                                     status_line = "HTTP/1.1 500 Internal Server Error";
-                                    response_body = r#"{"message":"git db api must not be used"}"#.to_string();
+                                    response_body =
+                                        r#"{"message":"git db api must not be used"}"#.to_string();
                                 }
 
                                 let response = format!(
@@ -1660,10 +1694,7 @@ mod tests {
         assert!(local_file_path.exists());
         let local_content = std::fs::read_to_string(local_file_path).unwrap();
         assert_eq!(local_content, "remote content");
-        assert!(dir
-            .path()
-            .join("app-meta/sync/manifest.sync.json")
-            .exists());
+        assert!(dir.path().join("app-meta/sync/manifest.sync.json").exists());
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();

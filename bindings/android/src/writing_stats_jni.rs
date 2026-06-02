@@ -119,11 +119,23 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     start_date_j: JString,
     end_date_j: JString,
 ) -> jstring {
-    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_project(&start_date, &end_date))
+    result_to_jstring(
+        &mut env,
+        api.get_writing_stats_by_project(&start_date, &end_date),
+    )
 }
 
 #[no_mangle]
@@ -134,11 +146,23 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     start_date_j: JString,
     end_date_j: JString,
 ) -> jstring {
-    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_chapter(&start_date, &end_date))
+    result_to_jstring(
+        &mut env,
+        api.get_writing_stats_by_chapter(&start_date, &end_date),
+    )
 }
 
 #[no_mangle]
@@ -149,11 +173,23 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     start_date_j: JString,
     end_date_j: JString,
 ) -> jstring {
-    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_stats_by_device(&start_date, &end_date))
+    result_to_jstring(
+        &mut env,
+        api.get_writing_stats_by_device(&start_date, &end_date),
+    )
 }
 
 #[no_mangle]
@@ -165,11 +201,23 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_getWriting
     end_date_j: JString,
     bucket_minutes: jni::sys::jint,
 ) -> jstring {
-    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let start_date = match jstring_to_string(&mut env, &start_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
-    let end_date = match jstring_to_string(&mut env, &end_date_j) { Ok(s) => s, Err(_) => return std::ptr::null_mut() };
+    let workspace_path = match jstring_to_string(&mut env, &workspace_path_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let start_date = match jstring_to_string(&mut env, &start_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let end_date = match jstring_to_string(&mut env, &end_date_j) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
     let api = api_from_workspace(&workspace_path);
-    result_to_jstring(&mut env, api.get_writing_speed_curve(&start_date, &end_date, bucket_minutes as u32))
+    result_to_jstring(
+        &mut env,
+        api.get_writing_speed_curve(&start_date, &end_date, bucket_minutes as u32),
+    )
 }
 
 #[no_mangle]
@@ -185,7 +233,6 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_calculateW
 
     writer_core::chapter::calculate_word_count(&text) as jni::sys::jint
 }
-
 
 #[no_mangle]
 pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_processWritingEventNative(

@@ -1,15 +1,15 @@
-use crate::sync_service::types::NetworkProbeResult;
 use crate::sync_service::backends::build_http_client;
-use crate::sync_service::types::SyncDiagnosticsResult;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::types::SyncStatus;
-use crate::sync_service::service::SyncService;
-use crate::sync_service::url::mask_token_in_url;
-use crate::sync_service::types::SyncSecrets;
-use crate::sync_service::url::sanitize_remote_url;
-use crate::sync_service::types::FirstSyncMode;
 use crate::sync_service::backends::SyncBackend;
+use crate::sync_service::service::SyncService;
+use crate::sync_service::types::FirstSyncMode;
+use crate::sync_service::types::NetworkProbeResult;
+use crate::sync_service::types::SyncConfig;
+use crate::sync_service::types::SyncDiagnosticsResult;
 use crate::sync_service::types::SyncResult;
+use crate::sync_service::types::SyncSecrets;
+use crate::sync_service::types::SyncStatus;
+use crate::sync_service::url::mask_token_in_url;
+use crate::sync_service::url::sanitize_remote_url;
 use std::path::Path;
 
 pub struct GitHubApiBackend;

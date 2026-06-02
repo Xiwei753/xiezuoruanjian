@@ -18,14 +18,23 @@
 // =============================================================================
 
 use super::*;
-use crate::sync_bridge::{SyncTaskOutcome, mask_sync_error, sync_error_category, sync_error_category_from_code};
+use crate::sync_bridge::{
+    mask_sync_error, sync_error_category, sync_error_category_from_code, SyncTaskOutcome,
+};
 
 use writer_core::api::WriterCoreApi;
 
 impl AppBackend {
     pub(crate) fn handle_sync_outcome(&mut self, outcome: SyncTaskOutcome) {
         if outcome.operation_id != self.current_sync_operation_id {
-            self.debug_log("sync", "sync_outcome_discarded", &format!("Discarded outdated outcome. Expected: {}, got: {}", self.current_sync_operation_id, outcome.operation_id));
+            self.debug_log(
+                "sync",
+                "sync_outcome_discarded",
+                &format!(
+                    "Discarded outdated outcome. Expected: {}, got: {}",
+                    self.current_sync_operation_id, outcome.operation_id
+                ),
+            );
             return;
         }
 
@@ -36,7 +45,11 @@ impl AppBackend {
             outcome.action_result.clone()
         };
         let sanitized_result = mask_sync_error(&result_trunc);
-        self.debug_log("sync", "sync_outcome_received", &format!("status={}, result={}", status, sanitized_result));
+        self.debug_log(
+            "sync",
+            "sync_outcome_received",
+            &format!("status={}, result={}", status, sanitized_result),
+        );
 
         self.current_sync_status = outcome.sync_status.clone();
         self.current_sync_in_progress = false;
@@ -61,7 +74,9 @@ impl AppBackend {
         let sync_success = matches!(status_str, "success" | "branch_missing_recovered");
         if sync_success && self.has_workspace() {
             self.handle_successful_sync_refresh();
-        } else if (status_str == "conflict" || status_str == "unrelated_histories") && self.has_workspace() {
+        } else if (status_str == "conflict" || status_str == "unrelated_histories")
+            && self.has_workspace()
+        {
             self.reload_tree();
             self.trigger_projects_reloaded();
         }
@@ -77,7 +92,8 @@ impl AppBackend {
         if chapter_deleted {
             self.current_save_status = "当前章节已在其他设备删除，已刷新列表。".to_string();
             self.save_status_changed();
-            self.current_sync_operation_state.push_str("\n\n当前章节已在其他设备删除，已刷新列表。");
+            self.current_sync_operation_state
+                .push_str("\n\n当前章节已在其他设备删除，已刷新列表。");
             self.sync_action_completed();
         }
 
@@ -88,7 +104,8 @@ impl AppBackend {
         if self.current_sync_in_progress {
             return false;
         }
-        if !self.current_has_workspace || !self.current_sync_enabled || !self.current_sync_auto_sync {
+        if !self.current_has_workspace || !self.current_sync_enabled || !self.current_sync_auto_sync
+        {
             return false;
         }
         if self.current_sync_remote_url.is_empty() || self.current_sync_token.is_empty() {
@@ -122,7 +139,8 @@ impl AppBackend {
 
         if self.current_sync_token.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_operation_state = "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
+            self.current_sync_operation_state =
+                "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
             return "".into();
@@ -171,10 +189,22 @@ impl AppBackend {
                     Ok(plan) => {
                         let mut msg = String::new();
                         msg.push_str("同步计划检查完成\n");
-                        msg.push_str(&format!("需要上传的文件数: {}\n", plan.files_to_upload.len()));
-                        msg.push_str(&format!("需要下载的文件数: {}\n", plan.files_to_download.len()));
-                        msg.push_str(&format!("本地待删除的文件数: {}\n", plan.files_to_delete_local.len()));
-                        msg.push_str(&format!("远程待删除的文件数: {}\n", plan.files_to_delete_remote.len()));
+                        msg.push_str(&format!(
+                            "需要上传的文件数: {}\n",
+                            plan.files_to_upload.len()
+                        ));
+                        msg.push_str(&format!(
+                            "需要下载的文件数: {}\n",
+                            plan.files_to_download.len()
+                        ));
+                        msg.push_str(&format!(
+                            "本地待删除的文件数: {}\n",
+                            plan.files_to_delete_local.len()
+                        ));
+                        msg.push_str(&format!(
+                            "远程待删除的文件数: {}\n",
+                            plan.files_to_delete_remote.len()
+                        ));
 
                         if !plan.files_to_upload.is_empty() {
                             msg.push_str("\n将要上传的文件:\n");
@@ -192,14 +222,15 @@ impl AppBackend {
                             action_result: msg,
                         }
                     }
-                    Err(e) => {
-                        SyncTaskOutcome {
-                            operation_id: op_id_capture.clone(),
-                            operation_kind: "dry_run".to_string(),
-                            sync_status: "configured_untested".to_string(),
-                            action_result: format!("检查同步计划失败: {}", mask_sync_error(&e.to_string())),
-                        }
-                    }
+                    Err(e) => SyncTaskOutcome {
+                        operation_id: op_id_capture.clone(),
+                        operation_kind: "dry_run".to_string(),
+                        sync_status: "configured_untested".to_string(),
+                        action_result: format!(
+                            "检查同步计划失败: {}",
+                            mask_sync_error(&e.to_string())
+                        ),
+                    },
                 }
             }));
 
@@ -236,14 +267,21 @@ impl AppBackend {
     }
 
     pub(crate) fn maybe_auto_sync_on_foreground(&mut self) {
-        if !self.current_has_workspace || !self.current_sync_auto_sync || self.current_sync_in_progress {
+        if !self.current_has_workspace
+            || !self.current_sync_auto_sync
+            || self.current_sync_in_progress
+        {
             return;
         }
         let interval_secs = self.current_sync_interval.max(60) as i64;
         let now = Self::now_epoch_seconds();
         let elapsed = now.saturating_sub(self.current_last_sync_time);
         if self.current_last_sync_time > 0 && elapsed < interval_secs {
-            self.debug_log("sync", "auto_sync_skipped_foreground", &format!("elapsed={}s, min={}s", elapsed, interval_secs));
+            self.debug_log(
+                "sync",
+                "auto_sync_skipped_foreground",
+                &format!("elapsed={}s, min={}s", elapsed, interval_secs),
+            );
             return;
         }
         self.trigger_auto_sync("auto_sync_on_foreground");
@@ -274,7 +312,10 @@ impl AppBackend {
         self.debug_log(
             "sync",
             "perform_sync_start",
-            &format!("trigger={}, remote_url={}, branch={}, token_present={}", trigger, masked_url, self.current_sync_branch, token_present)
+            &format!(
+                "trigger={}, remote_url={}, branch={}, token_present={}",
+                trigger, masked_url, self.current_sync_branch, token_present
+            ),
         );
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
@@ -286,7 +327,8 @@ impl AppBackend {
 
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_operation_state = "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
+            self.current_sync_operation_state =
+                "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
@@ -295,7 +337,8 @@ impl AppBackend {
 
         if self.current_sync_token.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_operation_state = "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
+            self.current_sync_operation_state =
+                "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "token_empty");
@@ -357,14 +400,34 @@ impl AppBackend {
                 match api.perform_sync(config) {
                     Ok(result) => {
                         if let Some(e) = result.error.as_deref() {
-                            if matches!(result.status.as_str(), "success" | "latest_wins_applied" | "no_changes" | "branch_missing_recovered") {
-                                let cat = sync_error_category_from_code(result.error_category.as_deref(), e);
-                                debug_log_static("sync", "sync_error_prevented_success", &format!("status={}, masked error={}", result.status, mask_sync_error(e)));
+                            if matches!(
+                                result.status.as_str(),
+                                "success"
+                                    | "latest_wins_applied"
+                                    | "no_changes"
+                                    | "branch_missing_recovered"
+                            ) {
+                                let cat = sync_error_category_from_code(
+                                    result.error_category.as_deref(),
+                                    e,
+                                );
+                                debug_log_static(
+                                    "sync",
+                                    "sync_error_prevented_success",
+                                    &format!(
+                                        "status={}, masked error={}",
+                                        result.status,
+                                        mask_sync_error(e)
+                                    ),
+                                );
                                 return SyncTaskOutcome {
                                     operation_id: op_id_capture.clone(),
                                     operation_kind: "sync".to_string(),
                                     sync_status: cat,
-                                    action_result: format!("同步返回异常，已阻止显示成功:\n{}", mask_sync_error(e)),
+                                    action_result: format!(
+                                        "同步返回异常，已阻止显示成功:\n{}",
+                                        mask_sync_error(e)
+                                    ),
                                 };
                             }
                         }
@@ -498,7 +561,14 @@ impl AppBackend {
                         let err_str = e.to_string();
                         let cat = sync_error_category(&err_str);
                         let action_result = if cat == "conflict" {
-                            debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(&err_str)));
+                            debug_log_static(
+                                "sync",
+                                "conflict_detected",
+                                &format!(
+                                    "conflicted file count=unknown, masked error={}",
+                                    mask_sync_error(&err_str)
+                                ),
+                            );
                             format!(
                                 "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
                                 mask_sync_error(&err_str)

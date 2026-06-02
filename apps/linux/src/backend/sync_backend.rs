@@ -20,7 +20,10 @@ mod sync_operations;
 
 use super::*;
 use crate::backend::SafeAppPtr;
-use crate::sync_bridge::{SyncTaskOutcome, mask_sync_error, sync_error_category, determine_diagnostics_status, format_diagnostics_message};
+use crate::sync_bridge::{
+    determine_diagnostics_status, format_diagnostics_message, mask_sync_error, sync_error_category,
+    SyncTaskOutcome,
+};
 use writer_core::api::WriterCoreApi;
 
 #[allow(non_snake_case)]
@@ -61,12 +64,21 @@ pub struct SyncBackend {
 }
 
 impl SyncBackend {
-    pub fn new(app: SafeAppPtr) -> Self { Self { app, ..Default::default() } }
+    pub fn new(app: SafeAppPtr) -> Self {
+        Self {
+            app,
+            ..Default::default()
+        }
+    }
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         if let Some(app) = self.app.get() {
             unsafe { f(&*app) }
         } else {
-            crate::backend::app_backend::debug_error_static("sync", "BACKEND_LINK_BROKEN", "app pointer is null");
+            crate::backend::app_backend::debug_error_static(
+                "sync",
+                "BACKEND_LINK_BROKEN",
+                "app pointer is null",
+            );
             default
         }
     }
@@ -74,68 +86,175 @@ impl SyncBackend {
         if let Some(app) = self.app.get() {
             unsafe { f(&mut *app) }
         } else {
-            crate::backend::app_backend::debug_error_static("sync", "BACKEND_LINK_BROKEN", "app pointer is null");
+            crate::backend::app_backend::debug_error_static(
+                "sync",
+                "BACKEND_LINK_BROKEN",
+                "app pointer is null",
+            );
             default
         }
     }
-    fn sync_enabled(&self) -> bool { self.with_app(false, |app| app.sync_enabled()) }
-    fn set_sync_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_sync_enabled(val)); self.sync_config_changed(); }
-    fn sync_backend_type(&self) -> QString { self.with_app("".into(), |app| app.sync_backend_type()) }
-    fn set_sync_backend_type(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_backend_type(val)); self.sync_config_changed(); }
-    fn sync_remote_url(&self) -> QString { self.with_app("".into(), |app| app.sync_remote_url()) }
-    fn set_sync_remote_url(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_remote_url(val)); self.sync_config_changed(); }
-    fn sync_branch(&self) -> QString { self.with_app("main".into(), |app| app.sync_branch()) }
-    fn set_sync_branch(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_branch(val)); self.sync_config_changed(); }
-    fn sync_auto_sync(&self) -> bool { self.with_app(false, |app| app.sync_auto_sync()) }
-    fn set_sync_auto_sync(&mut self, val: bool) { self.with_app_mut((), |app| app.set_sync_auto_sync(val)); self.sync_config_changed(); }
-    fn sync_interval(&self) -> u32 { self.with_app(300, |app| app.sync_interval()) }
-    fn set_sync_interval(&mut self, val: u32) { self.with_app_mut((), |app| app.set_sync_interval(val)); self.sync_config_changed(); }
-    fn sync_proxy_enabled(&self) -> bool { self.with_app(false, |app| app.sync_proxy_enabled()) }
-    fn set_sync_proxy_enabled(&mut self, val: bool) { self.with_app_mut((), |app| app.set_sync_proxy_enabled(val)); self.sync_config_changed(); }
-    fn sync_proxy_type(&self) -> QString { self.with_app("".into(), |app| app.sync_proxy_type()) }
-    fn set_sync_proxy_type(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_proxy_type(val)); self.sync_config_changed(); }
-    fn sync_proxy_host(&self) -> QString { self.with_app("".into(), |app| app.sync_proxy_host()) }
-    fn set_sync_proxy_host(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_proxy_host(val)); self.sync_config_changed(); }
-    fn sync_proxy_port(&self) -> u16 { self.with_app(0, |app| app.sync_proxy_port()) }
-    fn set_sync_proxy_port(&mut self, val: u16) { self.with_app_mut((), |app| app.set_sync_proxy_port(val)); self.sync_config_changed(); }
-    fn sync_username(&self) -> QString { self.with_app("".into(), |app| app.sync_username()) }
-    fn set_sync_username(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_username(val)); self.sync_config_changed(); }
-    fn has_sync_token(&self) -> bool { self.with_app(false, |app| app.has_sync_token()) }
-    fn sync_operation_state(&self) -> QString { self.with_app("".into(), |app| app.sync_operation_state()) }
-    fn sync_status(&self) -> QString { self.with_app("not_configured".into(), |app| app.sync_status()) }
-    fn sync_in_progress(&self) -> bool { self.with_app(false, |app| app.sync_in_progress()) }
-    fn set_sync_status(&mut self, val: QString) { self.with_app_mut((), |app| app.set_sync_status(val)); self.sync_status_changed(); }
-    fn has_workspace(&self) -> bool { self.with_app(false, |app| app.has_workspace()) }
-    fn set_sync_token(&mut self, token: QString) { self.with_app_mut((), |app| app.set_sync_token(token)); self.sync_config_changed(); }
-    fn load_sync_config(&mut self) { self.with_app_mut((), |app| app.load_sync_config()); self.sync_config_changed(); self.sync_status_changed(); }
-    fn save_sync_config(&mut self) -> bool { let ok = self.with_app_mut(false, |app| app.save_sync_config()); self.sync_config_changed(); ok }
-    fn perform_sync_dry_run(&mut self) -> QString { let id = self.with_app_mut("".into(), |app| app.perform_sync_dry_run()); self.sync_status_changed(); self.sync_action_completed(); id }
-    fn perform_sync(&mut self) -> QString { let id = self.with_app_mut("".into(), |app| app.perform_sync()); self.sync_status_changed(); id }
-    fn perform_sync_diagnostics(&mut self) -> QString { let id = self.with_app_mut("".into(), |app| app.perform_sync_diagnostics()); self.sync_status_changed(); self.sync_action_completed(); id }
-    fn request_auto_sync(&mut self, reason: QString) { self.with_app_mut((), |app| app.request_auto_sync(reason)); self.sync_status_changed(); }
-    fn maybe_auto_sync_on_foreground(&mut self) { self.with_app_mut((), |app| app.maybe_auto_sync_on_foreground()); self.sync_status_changed(); }
-    fn open_workspace_dir(&mut self) { self.with_app_mut((), |app| app.open_workspace_dir()); }
-    fn copy_text_to_clipboard(&mut self, text: QString) -> QString { self.with_app_mut("{}".into(), |app| app.copy_text_to_clipboard(text)) }
+    fn sync_enabled(&self) -> bool {
+        self.with_app(false, |app| app.sync_enabled())
+    }
+    fn set_sync_enabled(&mut self, val: bool) {
+        self.with_app_mut((), |app| app.set_sync_enabled(val));
+        self.sync_config_changed();
+    }
+    fn sync_backend_type(&self) -> QString {
+        self.with_app("".into(), |app| app.sync_backend_type())
+    }
+    fn set_sync_backend_type(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_sync_backend_type(val));
+        self.sync_config_changed();
+    }
+    fn sync_remote_url(&self) -> QString {
+        self.with_app("".into(), |app| app.sync_remote_url())
+    }
+    fn set_sync_remote_url(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_sync_remote_url(val));
+        self.sync_config_changed();
+    }
+    fn sync_branch(&self) -> QString {
+        self.with_app("main".into(), |app| app.sync_branch())
+    }
+    fn set_sync_branch(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_sync_branch(val));
+        self.sync_config_changed();
+    }
+    fn sync_auto_sync(&self) -> bool {
+        self.with_app(false, |app| app.sync_auto_sync())
+    }
+    fn set_sync_auto_sync(&mut self, val: bool) {
+        self.with_app_mut((), |app| app.set_sync_auto_sync(val));
+        self.sync_config_changed();
+    }
+    fn sync_interval(&self) -> u32 {
+        self.with_app(300, |app| app.sync_interval())
+    }
+    fn set_sync_interval(&mut self, val: u32) {
+        self.with_app_mut((), |app| app.set_sync_interval(val));
+        self.sync_config_changed();
+    }
+    fn sync_proxy_enabled(&self) -> bool {
+        self.with_app(false, |app| app.sync_proxy_enabled())
+    }
+    fn set_sync_proxy_enabled(&mut self, val: bool) {
+        self.with_app_mut((), |app| app.set_sync_proxy_enabled(val));
+        self.sync_config_changed();
+    }
+    fn sync_proxy_type(&self) -> QString {
+        self.with_app("".into(), |app| app.sync_proxy_type())
+    }
+    fn set_sync_proxy_type(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_sync_proxy_type(val));
+        self.sync_config_changed();
+    }
+    fn sync_proxy_host(&self) -> QString {
+        self.with_app("".into(), |app| app.sync_proxy_host())
+    }
+    fn set_sync_proxy_host(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_sync_proxy_host(val));
+        self.sync_config_changed();
+    }
+    fn sync_proxy_port(&self) -> u16 {
+        self.with_app(0, |app| app.sync_proxy_port())
+    }
+    fn set_sync_proxy_port(&mut self, val: u16) {
+        self.with_app_mut((), |app| app.set_sync_proxy_port(val));
+        self.sync_config_changed();
+    }
+    fn sync_username(&self) -> QString {
+        self.with_app("".into(), |app| app.sync_username())
+    }
+    fn set_sync_username(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_sync_username(val));
+        self.sync_config_changed();
+    }
+    fn has_sync_token(&self) -> bool {
+        self.with_app(false, |app| app.has_sync_token())
+    }
+    fn sync_operation_state(&self) -> QString {
+        self.with_app("".into(), |app| app.sync_operation_state())
+    }
+    fn sync_status(&self) -> QString {
+        self.with_app("not_configured".into(), |app| app.sync_status())
+    }
+    fn sync_in_progress(&self) -> bool {
+        self.with_app(false, |app| app.sync_in_progress())
+    }
+    fn set_sync_status(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_sync_status(val));
+        self.sync_status_changed();
+    }
+    fn has_workspace(&self) -> bool {
+        self.with_app(false, |app| app.has_workspace())
+    }
+    fn set_sync_token(&mut self, token: QString) {
+        self.with_app_mut((), |app| app.set_sync_token(token));
+        self.sync_config_changed();
+    }
+    fn load_sync_config(&mut self) {
+        self.with_app_mut((), |app| app.load_sync_config());
+        self.sync_config_changed();
+        self.sync_status_changed();
+    }
+    fn save_sync_config(&mut self) -> bool {
+        let ok = self.with_app_mut(false, |app| app.save_sync_config());
+        self.sync_config_changed();
+        ok
+    }
+    fn perform_sync_dry_run(&mut self) -> QString {
+        let id = self.with_app_mut("".into(), |app| app.perform_sync_dry_run());
+        self.sync_status_changed();
+        self.sync_action_completed();
+        id
+    }
+    fn perform_sync(&mut self) -> QString {
+        let id = self.with_app_mut("".into(), |app| app.perform_sync());
+        self.sync_status_changed();
+        id
+    }
+    fn perform_sync_diagnostics(&mut self) -> QString {
+        let id = self.with_app_mut("".into(), |app| app.perform_sync_diagnostics());
+        self.sync_status_changed();
+        self.sync_action_completed();
+        id
+    }
+    fn request_auto_sync(&mut self, reason: QString) {
+        self.with_app_mut((), |app| app.request_auto_sync(reason));
+        self.sync_status_changed();
+    }
+    fn maybe_auto_sync_on_foreground(&mut self) {
+        self.with_app_mut((), |app| app.maybe_auto_sync_on_foreground());
+        self.sync_status_changed();
+    }
+    fn open_workspace_dir(&mut self) {
+        self.with_app_mut((), |app| app.open_workspace_dir());
+    }
+    fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
+        self.with_app_mut("{}".into(), |app| app.copy_text_to_clipboard(text))
+    }
 }
 
 impl AppBackend {
-// AppBackend::sync_status
+    // AppBackend::sync_status
     pub(crate) fn sync_status(&self) -> QString {
         self.current_sync_status.clone().into()
     }
 
-// AppBackend::sync_in_progress
+    // AppBackend::sync_in_progress
     pub(crate) fn sync_in_progress(&self) -> bool {
         self.current_sync_in_progress
     }
 
-// AppBackend::set_sync_status
+    // AppBackend::set_sync_status
     pub(crate) fn set_sync_status(&mut self, val: QString) {
         self.current_sync_status = val.to_string();
         self.sync_status_changed();
     }
 
-// AppBackend::refresh_sync_status_from_config
+    // AppBackend::refresh_sync_status_from_config
     pub(crate) fn refresh_sync_status_from_config(&mut self) {
         if !self.current_has_workspace {
             self.current_sync_status = "not_configured".to_string();
@@ -151,139 +270,139 @@ impl AppBackend {
         self.sync_status_changed();
     }
 
-// AppBackend::sync_enabled
+    // AppBackend::sync_enabled
     pub(crate) fn sync_enabled(&self) -> bool {
         self.current_sync_enabled
     }
 
-// AppBackend::set_sync_enabled
+    // AppBackend::set_sync_enabled
     pub(crate) fn set_sync_enabled(&mut self, val: bool) {
         self.current_sync_enabled = val;
         self.sync_config_changed();
     }
 
-// AppBackend::sync_backend_type
+    // AppBackend::sync_backend_type
     pub(crate) fn sync_backend_type(&self) -> QString {
         self.current_sync_backend_type.clone().into()
     }
 
-// AppBackend::set_sync_backend_type
+    // AppBackend::set_sync_backend_type
     pub(crate) fn set_sync_backend_type(&mut self, val: QString) {
         self.current_sync_backend_type = val.to_string();
         self.sync_config_changed();
     }
 
-// AppBackend::sync_remote_url
+    // AppBackend::sync_remote_url
     pub(crate) fn sync_remote_url(&self) -> QString {
         self.current_sync_remote_url.clone().into()
     }
 
-// AppBackend::set_sync_remote_url
+    // AppBackend::set_sync_remote_url
     pub(crate) fn set_sync_remote_url(&mut self, val: QString) {
         self.current_sync_remote_url = val.to_string();
         self.sync_config_changed();
     }
 
-// AppBackend::sync_branch
+    // AppBackend::sync_branch
     pub(crate) fn sync_branch(&self) -> QString {
         self.current_sync_branch.clone().into()
     }
 
-// AppBackend::set_sync_branch
+    // AppBackend::set_sync_branch
     pub(crate) fn set_sync_branch(&mut self, val: QString) {
         self.current_sync_branch = val.to_string();
         self.sync_config_changed();
     }
 
-// AppBackend::sync_auto_sync
+    // AppBackend::sync_auto_sync
     pub(crate) fn sync_auto_sync(&self) -> bool {
         self.current_sync_auto_sync
     }
 
-// AppBackend::set_sync_auto_sync
+    // AppBackend::set_sync_auto_sync
     pub(crate) fn set_sync_auto_sync(&mut self, val: bool) {
         self.current_sync_auto_sync = val;
         self.sync_config_changed();
     }
 
-// AppBackend::sync_interval
+    // AppBackend::sync_interval
     pub(crate) fn sync_interval(&self) -> u32 {
         self.current_sync_interval
     }
 
-// AppBackend::set_sync_interval
+    // AppBackend::set_sync_interval
     pub(crate) fn set_sync_interval(&mut self, val: u32) {
         self.current_sync_interval = val;
         self.sync_config_changed();
     }
 
-// AppBackend::sync_proxy_type
+    // AppBackend::sync_proxy_type
     pub(crate) fn sync_proxy_type(&self) -> QString {
         self.current_sync_proxy_type.clone().into()
     }
 
-// AppBackend::set_sync_proxy_type
+    // AppBackend::set_sync_proxy_type
     pub(crate) fn set_sync_proxy_type(&mut self, val: QString) {
         self.current_sync_proxy_type = val.to_string();
         self.sync_config_changed();
     }
 
-// AppBackend::sync_proxy_host
+    // AppBackend::sync_proxy_host
     pub(crate) fn sync_proxy_host(&self) -> QString {
         self.current_sync_proxy_host.clone().into()
     }
 
-// AppBackend::set_sync_proxy_host
+    // AppBackend::set_sync_proxy_host
     pub(crate) fn set_sync_proxy_host(&mut self, val: QString) {
         self.current_sync_proxy_host = val.to_string();
         self.sync_config_changed();
     }
 
-// AppBackend::sync_proxy_port
+    // AppBackend::sync_proxy_port
     pub(crate) fn sync_proxy_port(&self) -> u16 {
         self.current_sync_proxy_port
     }
 
-// AppBackend::set_sync_proxy_port
+    // AppBackend::set_sync_proxy_port
     pub(crate) fn set_sync_proxy_port(&mut self, val: u16) {
         self.current_sync_proxy_port = val;
         self.sync_config_changed();
     }
 
-// AppBackend::sync_proxy_enabled
+    // AppBackend::sync_proxy_enabled
     pub(crate) fn sync_proxy_enabled(&self) -> bool {
         self.current_sync_proxy_enabled
     }
 
-// AppBackend::set_sync_proxy_enabled
+    // AppBackend::set_sync_proxy_enabled
     pub(crate) fn set_sync_proxy_enabled(&mut self, val: bool) {
         self.current_sync_proxy_enabled = val;
         self.sync_config_changed();
     }
 
-// AppBackend::sync_username
+    // AppBackend::sync_username
     pub(crate) fn sync_username(&self) -> QString {
         self.current_sync_username.clone().into()
     }
 
-// AppBackend::set_sync_username
+    // AppBackend::set_sync_username
     pub(crate) fn set_sync_username(&mut self, val: QString) {
         self.current_sync_username = val.to_string();
         self.sync_config_changed();
     }
 
-// AppBackend::has_sync_token
+    // AppBackend::has_sync_token
     pub(crate) fn has_sync_token(&self) -> bool {
         !self.current_sync_token.is_empty()
     }
 
-// AppBackend::set_sync_token
+    // AppBackend::set_sync_token
     pub(crate) fn set_sync_token(&mut self, val: QString) {
         self.current_sync_token = val.to_string();
         self.sync_config_changed();
     }
 
-// AppBackend::sync_action_result
+    // AppBackend::sync_action_result
     pub(crate) fn sync_operation_state(&self) -> QString {
         #[derive(serde::Serialize)]
         struct SyncOperationState {
@@ -305,7 +424,7 @@ impl AppBackend {
         serde_json::to_string(&state).unwrap_or_default().into()
     }
 
-// AppBackend::perform_sync_diagnostics
+    // AppBackend::perform_sync_diagnostics
     pub(crate) fn perform_sync_diagnostics(&mut self) -> QString {
         self.debug_log("sync", "perform_sync_diagnostics_start", "");
         let workspace_path = self.current_workspace.clone();
@@ -362,14 +481,15 @@ impl AppBackend {
                             action_result: msg,
                         }
                     }
-                    Err(e) => {
-                        SyncTaskOutcome {
-                            operation_id: op_id_capture.clone(),
-                            operation_kind: "diagnose".to_string(),
-                            sync_status: sync_error_category(&e.to_string()),
-                            action_result: format!("诊断过程发生错误:\n{}", mask_sync_error(&e.to_string())),
-                        }
-                    }
+                    Err(e) => SyncTaskOutcome {
+                        operation_id: op_id_capture.clone(),
+                        operation_kind: "diagnose".to_string(),
+                        sync_status: sync_error_category(&e.to_string()),
+                        action_result: format!(
+                            "诊断过程发生错误:\n{}",
+                            mask_sync_error(&e.to_string())
+                        ),
+                    },
                 }
             }));
 
@@ -396,7 +516,7 @@ impl AppBackend {
         op_id.into()
     }
 
-// AppBackend::load_sync_config
+    // AppBackend::load_sync_config
     pub(crate) fn load_sync_config(&mut self) {
         self.debug_log("sync", "load_sync_config_start", "");
         if let Some(api) = self.core_api() {
@@ -406,7 +526,11 @@ impl AppBackend {
                 self.current_sync_enabled = config.enabled;
                 self.current_sync_backend_type = config.backend_type.clone();
                 self.current_sync_remote_url = config.remote_url.clone();
-                self.current_sync_branch = if config.branch.is_empty() { "main".to_string() } else { config.branch.clone() };
+                self.current_sync_branch = if config.branch.is_empty() {
+                    "main".to_string()
+                } else {
+                    config.branch.clone()
+                };
                 self.current_sync_auto_sync = config.auto_sync;
                 self.current_sync_interval = config.sync_interval_seconds;
                 self.current_sync_proxy_enabled = config.proxy_enabled;
@@ -432,7 +556,10 @@ impl AppBackend {
             self.debug_log(
                 "sync",
                 "load_sync_config_success",
-                &format!("enabled={}, remote_url={}, branch={}, token_present={}", self.current_sync_enabled, masked_url, self.current_sync_branch, token_present)
+                &format!(
+                    "enabled={}, remote_url={}, branch={}, token_present={}",
+                    self.current_sync_enabled, masked_url, self.current_sync_branch, token_present
+                ),
             );
         } else {
             self.current_sync_branch = "main".to_string();
@@ -440,12 +567,11 @@ impl AppBackend {
         }
     }
 
-// AppBackend::save_sync_config
+    // AppBackend::save_sync_config
     pub(crate) fn save_sync_config(&mut self) -> bool {
         self.debug_log("sync", "save_sync_config_start", "");
         let mut error_msg: Option<String> = None;
         if let Some(api) = self.core_api() {
-
             let mut c = api
                 .load_sync_config()
                 .unwrap_or(writer_core::api::types::SyncConfigDto {
@@ -470,11 +596,17 @@ impl AppBackend {
 
             c.enabled = self.current_sync_enabled;
             c.backend_type = match self.current_sync_backend_type.as_str() {
-                "webdav" | "s3" | "local_folder" | "git" | "github_api" => self.current_sync_backend_type.clone(),
+                "webdav" | "s3" | "local_folder" | "git" | "github_api" => {
+                    self.current_sync_backend_type.clone()
+                }
                 _ => "github_api".to_string(),
             };
             c.remote_url = parsed.sanitized_url.clone();
-            c.branch = if self.current_sync_branch.is_empty() { "main".to_string() } else { self.current_sync_branch.clone() };
+            c.branch = if self.current_sync_branch.is_empty() {
+                "main".to_string()
+            } else {
+                self.current_sync_branch.clone()
+            };
             c.auto_sync = self.current_sync_auto_sync;
             c.sync_interval_seconds = self.current_sync_interval;
             c.proxy_enabled = self.current_sync_proxy_enabled;
@@ -489,7 +621,9 @@ impl AppBackend {
                 }
             }
 
-            let mut s = api.load_sync_secrets().unwrap_or(writer_core::api::types::SyncSecretsDto { token: None });
+            let mut s = api
+                .load_sync_secrets()
+                .unwrap_or(writer_core::api::types::SyncSecretsDto { token: None });
             if let Some(ref extracted_token) = parsed.extracted_token {
                 s.token = Some(extracted_token.clone());
             } else if self.current_sync_token.is_empty() {
@@ -523,7 +657,10 @@ impl AppBackend {
         self.debug_log(
             "sync",
             "save_sync_config_success",
-            &format!("enabled={}, remote_url={}, branch={}, token_present={}", self.current_sync_enabled, masked_url, self.current_sync_branch, token_present)
+            &format!(
+                "enabled={}, remote_url={}, branch={}, token_present={}",
+                self.current_sync_enabled, masked_url, self.current_sync_branch, token_present
+            ),
         );
         true
     }

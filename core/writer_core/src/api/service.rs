@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::api::error::WriterError;
-use crate::api::{ChangedEntityDto, ResultEnvelope};
 use crate::api::types::*;
+use crate::api::{ChangedEntityDto, ResultEnvelope};
 use crate::facade::WriterCore;
 
 pub type ApiResult<T> = Result<T, WriterError>;
@@ -66,7 +66,10 @@ impl WriterCoreApi {
     }
 
     pub fn create_workspace_if_needed(&self) -> ApiResult<bool> {
-        self.core().create_workspace().map(|_| true).map_err(Into::into)
+        self.core()
+            .create_workspace()
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
     pub fn validate_workspace(&self) -> ApiResult<bool> {
@@ -147,7 +150,10 @@ impl WriterCoreApi {
 
     fn probe_workspace_writable(path: &Path, is_dir: bool) -> (bool, String) {
         if !is_dir {
-            return (false, "path does not exist or is not a directory".to_string());
+            return (
+                false,
+                "path does not exist or is not a directory".to_string(),
+            );
         }
 
         let nonce = std::time::SystemTime::now()
@@ -200,7 +206,10 @@ impl WriterCoreApi {
     }
 
     pub fn create_project(&self, title: &str) -> ApiResult<ProjectDto> {
-        self.core().create_project(title).map(Into::into).map_err(Into::into)
+        self.core()
+            .create_project(title)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn get_project_stats(&self, project_id: &str) -> ApiResult<ProjectStatsDto> {
@@ -218,7 +227,10 @@ impl WriterCoreApi {
     }
 
     pub fn delete_project(&self, project_id: &str) -> ApiResult<bool> {
-        self.core().delete_project(project_id).map(|_| true).map_err(Into::into)
+        self.core()
+            .delete_project(project_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
     pub fn reorder_projects(&self, ordered_project_ids: &[String]) -> ApiResult<bool> {
@@ -261,7 +273,11 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn reorder_volumes(&self, project_id: &str, ordered_volume_ids: &[String]) -> ApiResult<bool> {
+    pub fn reorder_volumes(
+        &self,
+        project_id: &str,
+        ordered_volume_ids: &[String],
+    ) -> ApiResult<bool> {
         self.core()
             .reorder_volumes(project_id, ordered_volume_ids)
             .map(|_| true)
@@ -399,7 +415,10 @@ impl WriterCoreApi {
     }
 
     pub fn load_local_settings(&self) -> ApiResult<LocalSettingsDto> {
-        self.core().load_local_settings().map(Into::into).map_err(Into::into)
+        self.core()
+            .load_local_settings()
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
@@ -429,12 +448,18 @@ impl WriterCoreApi {
     }
 
     pub fn save_syncable_settings_envelope_json(&self, settings: SyncableSettingsDto) -> String {
-        Self::settings_saved_envelope(self.save_syncable_settings(settings), "settings.syncable.json")
-            .to_json_string()
+        Self::settings_saved_envelope(
+            self.save_syncable_settings(settings),
+            "settings.syncable.json",
+        )
+        .to_json_string()
     }
 
     pub fn load_sync_config(&self) -> ApiResult<SyncConfigDto> {
-        self.core().load_sync_config().map(Into::into).map_err(Into::into)
+        self.core()
+            .load_sync_config()
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn save_sync_config(&self, config: SyncConfigDto) -> ApiResult<bool> {
@@ -445,7 +470,10 @@ impl WriterCoreApi {
     }
 
     pub fn load_sync_secrets(&self) -> ApiResult<SyncSecretsDto> {
-        self.core().load_sync_secrets().map(Into::into).map_err(Into::into)
+        self.core()
+            .load_sync_secrets()
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn save_sync_secrets(&self, secrets: SyncSecretsDto) -> ApiResult<bool> {
@@ -456,7 +484,10 @@ impl WriterCoreApi {
     }
 
     pub fn load_sync_state(&self) -> ApiResult<SyncStateDto> {
-        self.core().load_sync_state().map(Into::into).map_err(Into::into)
+        self.core()
+            .load_sync_state()
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn perform_sync_diagnostics(
@@ -483,7 +514,11 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn get_writing_stats_summary_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_summary_json(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_summary(start_date, end_date)
@@ -491,7 +526,11 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_writing_stats_by_project_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_by_project_json(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_by_project(start_date, end_date)
@@ -499,7 +538,11 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_writing_stats_by_chapter_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_by_chapter_json(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_by_chapter(start_date, end_date)
@@ -507,7 +550,11 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn get_writing_stats_by_device_json(&self, start_date: &str, end_date: &str) -> ApiResult<String> {
+    pub fn get_writing_stats_by_device_json(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<String> {
         let value = self
             .core()
             .get_writing_stats_by_device(start_date, end_date)
@@ -599,8 +646,7 @@ impl WriterCoreApi {
         let inserted_chars = Self::non_negative_counter("inserted_chars", inserted_chars)?;
         let deleted_chars = Self::non_negative_counter("deleted_chars", deleted_chars)?;
         let pasted_chars = Self::non_negative_counter("pasted_chars", pasted_chars)?;
-        let ai_inserted_chars =
-            Self::non_negative_counter("ai_inserted_chars", ai_inserted_chars)?;
+        let ai_inserted_chars = Self::non_negative_counter("ai_inserted_chars", ai_inserted_chars)?;
 
         self.core()
             .record_writing_event(
@@ -749,159 +795,402 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
-    pub fn find_starmap_references(&self, target_starmap_id: &str) -> ApiResult<Vec<crate::api::types::StarMapReferenceDto>> {
+    pub fn find_starmap_references(
+        &self,
+        target_starmap_id: &str,
+    ) -> ApiResult<Vec<crate::api::types::StarMapReferenceDto>> {
         self.core()
             .find_starmap_references(target_starmap_id)
             .map(|list| list.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 
-    pub fn get_mind_map_snapshot(&self, project_id: &str) -> ApiResult<crate::api::types::MindMapSnapshotDto> {
-        self.core().get_mind_map_snapshot(project_id).map(Into::into).map_err(Into::into)
+    pub fn get_mind_map_snapshot(
+        &self,
+        project_id: &str,
+    ) -> ApiResult<crate::api::types::MindMapSnapshotDto> {
+        self.core()
+            .get_mind_map_snapshot(project_id)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn create_mind_map_graph(&self, project_id: &str, title: &str) -> ApiResult<crate::api::types::MindMapGraphDto> {
-        self.core().create_mind_map_graph(project_id, title).map(Into::into).map_err(Into::into)
+    pub fn create_mind_map_graph(
+        &self,
+        project_id: &str,
+        title: &str,
+    ) -> ApiResult<crate::api::types::MindMapGraphDto> {
+        self.core()
+            .create_mind_map_graph(project_id, title)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn list_mind_map_graphs(&self, project_id: &str) -> ApiResult<crate::api::types::MindMapGraphsListDto> {
-        self.core().list_mind_map_graphs(project_id).map(Into::into).map_err(Into::into)
+    pub fn list_mind_map_graphs(
+        &self,
+        project_id: &str,
+    ) -> ApiResult<crate::api::types::MindMapGraphsListDto> {
+        self.core()
+            .list_mind_map_graphs(project_id)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn set_default_mind_map_graph(&self, project_id: &str, graph_id: &str) -> ApiResult<bool> {
-        self.core().set_default_mind_map_graph(project_id, graph_id).map(|_| true).map_err(Into::into)
+        self.core()
+            .set_default_mind_map_graph(project_id, graph_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn create_mind_map_node(&self, project_id: &str, graph_id: &str, node: crate::api::types::MindMapGraphNodeDto) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
-        self.core().create_mind_map_node(project_id, graph_id, node.into()).map(Into::into).map_err(Into::into)
+    pub fn create_mind_map_node(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node: crate::api::types::MindMapGraphNodeDto,
+    ) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
+        self.core()
+            .create_mind_map_node(project_id, graph_id, node.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn update_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, patch: crate::api::types::MindMapNodePatchDto) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
-        self.core().update_mind_map_node(project_id, graph_id, node_id, patch.into()).map(Into::into).map_err(Into::into)
+    pub fn update_mind_map_node(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node_id: &str,
+        patch: crate::api::types::MindMapNodePatchDto,
+    ) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
+        self.core()
+            .update_mind_map_node(project_id, graph_id, node_id, patch.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn delete_mind_map_node(&self, project_id: &str, graph_id: &str, node_id: &str, cascade: bool) -> ApiResult<bool> {
-        self.core().delete_mind_map_node(project_id, graph_id, node_id, cascade).map(|_| true).map_err(Into::into)
+    pub fn delete_mind_map_node(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node_id: &str,
+        cascade: bool,
+    ) -> ApiResult<bool> {
+        self.core()
+            .delete_mind_map_node(project_id, graph_id, node_id, cascade)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn create_mind_map_edge(&self, project_id: &str, graph_id: &str, edge: crate::api::types::MindMapGraphEdgeDto) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
-        self.core().create_mind_map_edge(project_id, graph_id, edge.into()).map(Into::into).map_err(Into::into)
+    pub fn create_mind_map_edge(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        edge: crate::api::types::MindMapGraphEdgeDto,
+    ) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
+        self.core()
+            .create_mind_map_edge(project_id, graph_id, edge.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn update_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str, patch: crate::api::types::MindMapEdgePatchDto) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
-        self.core().update_mind_map_edge(project_id, graph_id, edge_id, patch.into()).map(Into::into).map_err(Into::into)
+    pub fn update_mind_map_edge(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        edge_id: &str,
+        patch: crate::api::types::MindMapEdgePatchDto,
+    ) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
+        self.core()
+            .update_mind_map_edge(project_id, graph_id, edge_id, patch.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn delete_mind_map_edge(&self, project_id: &str, graph_id: &str, edge_id: &str) -> ApiResult<bool> {
-        self.core().delete_mind_map_edge(project_id, graph_id, edge_id).map(|_| true).map_err(Into::into)
+    pub fn delete_mind_map_edge(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        edge_id: &str,
+    ) -> ApiResult<bool> {
+        self.core()
+            .delete_mind_map_edge(project_id, graph_id, edge_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn create_mind_map_anchor(&self, project_id: &str, graph_id: &str, anchor: crate::api::types::MindMapAnchorDto) -> ApiResult<crate::api::types::MindMapAnchorDto> {
-        self.core().create_mind_map_anchor(project_id, graph_id, anchor.into()).map(Into::into).map_err(Into::into)
+    pub fn create_mind_map_anchor(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        anchor: crate::api::types::MindMapAnchorDto,
+    ) -> ApiResult<crate::api::types::MindMapAnchorDto> {
+        self.core()
+            .create_mind_map_anchor(project_id, graph_id, anchor.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn bind_mind_map_node_to_anchor(&self, project_id: &str, graph_id: &str, node_id: &str, anchor_id: &str, link_kind: &str) -> ApiResult<crate::api::types::MindMapLinkDto> {
-        self.core().bind_mind_map_node_to_anchor(project_id, graph_id, node_id, anchor_id, link_kind).map(Into::into).map_err(Into::into)
+    pub fn bind_mind_map_node_to_anchor(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        node_id: &str,
+        anchor_id: &str,
+        link_kind: &str,
+    ) -> ApiResult<crate::api::types::MindMapLinkDto> {
+        self.core()
+            .bind_mind_map_node_to_anchor(project_id, graph_id, node_id, anchor_id, link_kind)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn save_mind_map_layout(&self, project_id: &str, graph_id: &str, layout: crate::api::types::MindMapLayoutDto) -> ApiResult<bool> {
-        self.core().save_mind_map_layout(project_id, graph_id, layout.into()).map(|_| true).map_err(Into::into)
+    pub fn save_mind_map_layout(
+        &self,
+        project_id: &str,
+        graph_id: &str,
+        layout: crate::api::types::MindMapLayoutDto,
+    ) -> ApiResult<bool> {
+        self.core()
+            .save_mind_map_layout(project_id, graph_id, layout.into())
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn get_starmap_layout(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapLayoutDto> {
-        self.core().get_starmap_layout(starmap_id).map(Into::into).map_err(Into::into)
+    pub fn get_starmap_layout(
+        &self,
+        starmap_id: &str,
+    ) -> ApiResult<crate::api::types::StarMapLayoutDto> {
+        self.core()
+            .get_starmap_layout(starmap_id)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn get_starmap_graph(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapGraphDto> {
-        self.core().get_starmap_graph(starmap_id).map(Into::into).map_err(Into::into)
+    pub fn get_starmap_graph(
+        &self,
+        starmap_id: &str,
+    ) -> ApiResult<crate::api::types::StarMapGraphDto> {
+        self.core()
+            .get_starmap_graph(starmap_id)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn list_starmaps(&self) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
-        self.core().list_starmaps().map(|v| v.into_iter().map(Into::into).collect()).map_err(Into::into)
+        self.core()
+            .list_starmaps()
+            .map(|v| v.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
     }
 
-    pub fn list_starmaps_for_project(&self, project_id: &str) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
-        self.core().list_starmaps_for_project(project_id).map(|v| v.into_iter().map(Into::into).collect()).map_err(Into::into)
+    pub fn list_starmaps_for_project(
+        &self,
+        project_id: &str,
+    ) -> ApiResult<Vec<crate::api::types::StarMapMetaDto>> {
+        self.core()
+            .list_starmaps_for_project(project_id)
+            .map(|v| v.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
     }
 
     pub fn get_starmap(&self, starmap_id: &str) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.core().get_starmap(starmap_id).map(Into::into).map_err(Into::into)
+        self.core()
+            .get_starmap(starmap_id)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn create_starmap(&self, title: &str, desc: &str, template_id: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.core().create_starmap(title, desc, template_id).map(Into::into).map_err(Into::into)
+    pub fn create_starmap(
+        &self,
+        title: &str,
+        desc: &str,
+        template_id: Option<&str>,
+    ) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core()
+            .create_starmap(title, desc, template_id)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn add_starmap_node(&self, starmap_id: &str, node: crate::api::types::StarMapNodeDto, x: f32, y: f32) -> ApiResult<crate::api::types::StarMapNodeDto> {
-        self.core().add_starmap_node(starmap_id, node.into(), x, y).map(Into::into).map_err(Into::into)
+    pub fn add_starmap_node(
+        &self,
+        starmap_id: &str,
+        node: crate::api::types::StarMapNodeDto,
+        x: f32,
+        y: f32,
+    ) -> ApiResult<crate::api::types::StarMapNodeDto> {
+        self.core()
+            .add_starmap_node(starmap_id, node.into(), x, y)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn save_starmap_layout(&self, starmap_id: &str, layout: &crate::api::types::StarMapLayoutDto) -> ApiResult<bool> {
-        self.core().save_starmap_layout(starmap_id, &layout.clone().into()).map(|_| true).map_err(Into::into)
+    pub fn save_starmap_layout(
+        &self,
+        starmap_id: &str,
+        layout: &crate::api::types::StarMapLayoutDto,
+    ) -> ApiResult<bool> {
+        self.core()
+            .save_starmap_layout(starmap_id, &layout.clone().into())
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn rename_starmap(&self, starmap_id: &str, new_title: &str) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.core().rename_starmap(starmap_id, new_title).map(Into::into).map_err(Into::into)
+    pub fn rename_starmap(
+        &self,
+        starmap_id: &str,
+        new_title: &str,
+    ) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core()
+            .rename_starmap(starmap_id, new_title)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
-        self.core().delete_starmap(starmap_id).map(|_| true).map_err(Into::into)
+        self.core()
+            .delete_starmap(starmap_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
-        self.core().bind_starmap_to_project(starmap_id, project_id).map(|_| true).map_err(Into::into)
+        self.core()
+            .bind_starmap_to_project(starmap_id, project_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
-        self.core().unbind_starmap_from_project(starmap_id).map(|_| true).map_err(Into::into)
+        self.core()
+            .unbind_starmap_from_project(starmap_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn set_main_starmap_for_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
-        self.core().set_main_starmap_for_project(starmap_id, project_id).map(|_| true).map_err(Into::into)
+    pub fn set_main_starmap_for_project(
+        &self,
+        starmap_id: &str,
+        project_id: &str,
+    ) -> ApiResult<bool> {
+        self.core()
+            .set_main_starmap_for_project(starmap_id, project_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn get_main_starmap_for_project(&self, project_id: &str) -> ApiResult<Option<crate::api::types::StarMapMetaDto>> {
-        self.core().get_main_starmap_for_project(project_id).map(|opt| opt.map(Into::into)).map_err(Into::into)
+    pub fn get_main_starmap_for_project(
+        &self,
+        project_id: &str,
+    ) -> ApiResult<Option<crate::api::types::StarMapMetaDto>> {
+        self.core()
+            .get_main_starmap_for_project(project_id)
+            .map(|opt| opt.map(Into::into))
+            .map_err(Into::into)
     }
 
-    pub fn create_child_starmap(&self, parent_id: &str, title: &str, desc: &str, accent_color: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.core().create_child_starmap(parent_id, title, desc, accent_color).map(Into::into).map_err(Into::into)
+    pub fn create_child_starmap(
+        &self,
+        parent_id: &str,
+        title: &str,
+        desc: &str,
+        accent_color: Option<&str>,
+    ) -> ApiResult<crate::api::types::StarMapMetaDto> {
+        self.core()
+            .create_child_starmap(parent_id, title, desc, accent_color)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn create_child_starmap_legacy(&self, parent_id: &str, title: &str, desc: &str, accent_color: Option<&str>) -> ApiResult<crate::api::types::StarMapMetaDto> {
+    pub fn create_child_starmap_legacy(
+        &self,
+        parent_id: &str,
+        title: &str,
+        desc: &str,
+        accent_color: Option<&str>,
+    ) -> ApiResult<crate::api::types::StarMapMetaDto> {
         self.create_child_starmap(parent_id, title, desc, accent_color)
     }
 
-    pub fn update_starmap_node(&self, starmap_id: &str, node_id: &str, patch: crate::api::types::StarMapNodePatchDto) -> ApiResult<crate::api::types::StarMapNodeDto> {
-        self.core().update_starmap_node(starmap_id, node_id, patch.into()).map(Into::into).map_err(Into::into)
+    pub fn update_starmap_node(
+        &self,
+        starmap_id: &str,
+        node_id: &str,
+        patch: crate::api::types::StarMapNodePatchDto,
+    ) -> ApiResult<crate::api::types::StarMapNodeDto> {
+        self.core()
+            .update_starmap_node(starmap_id, node_id, patch.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> ApiResult<bool> {
-        self.core().delete_starmap_node(starmap_id, node_id).map(|_| true).map_err(Into::into)
+        self.core()
+            .delete_starmap_node(starmap_id, node_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn add_starmap_edge(&self, starmap_id: &str, edge: crate::api::types::StarMapEdgeDto) -> ApiResult<crate::api::types::StarMapEdgeDto> {
-        self.core().add_starmap_edge(starmap_id, edge.into()).map(Into::into).map_err(Into::into)
+    pub fn add_starmap_edge(
+        &self,
+        starmap_id: &str,
+        edge: crate::api::types::StarMapEdgeDto,
+    ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
+        self.core()
+            .add_starmap_edge(starmap_id, edge.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
-    pub fn update_starmap_edge(&self, starmap_id: &str, edge_id: &str, patch: crate::api::types::StarMapEdgePatchDto) -> ApiResult<crate::api::types::StarMapEdgeDto> {
-        self.core().update_starmap_edge(starmap_id, edge_id, patch.into()).map(Into::into).map_err(Into::into)
+    pub fn update_starmap_edge(
+        &self,
+        starmap_id: &str,
+        edge_id: &str,
+        patch: crate::api::types::StarMapEdgePatchDto,
+    ) -> ApiResult<crate::api::types::StarMapEdgeDto> {
+        self.core()
+            .update_starmap_edge(starmap_id, edge_id, patch.into())
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn delete_starmap_edge(&self, starmap_id: &str, edge_id: &str) -> ApiResult<bool> {
-        self.core().delete_starmap_edge(starmap_id, edge_id).map(|_| true).map_err(Into::into)
+        self.core()
+            .delete_starmap_edge(starmap_id, edge_id)
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn save_starmap_graph(&self, starmap_id: &str, graph: &crate::api::types::StarMapGraphDto) -> ApiResult<bool> {
-        self.core().save_starmap_graph(starmap_id, &graph.clone().into()).map(|_| true).map_err(Into::into)
+    pub fn save_starmap_graph(
+        &self,
+        starmap_id: &str,
+        graph: &crate::api::types::StarMapGraphDto,
+    ) -> ApiResult<bool> {
+        self.core()
+            .save_starmap_graph(starmap_id, &graph.clone().into())
+            .map(|_| true)
+            .map_err(Into::into)
     }
 
-    pub fn list_registered_actions(&self) -> ApiResult<Vec<crate::api::types::ActionDescriptorDto>> {
-        self.core().list_registered_actions().map(|list| list.into_iter().map(Into::into).collect()).map_err(Into::into)
+    pub fn list_registered_actions(
+        &self,
+    ) -> ApiResult<Vec<crate::api::types::ActionDescriptorDto>> {
+        self.core()
+            .list_registered_actions()
+            .map(|list| list.into_iter().map(Into::into).collect())
+            .map_err(Into::into)
     }
 
-    pub fn execute_action_ext(&self, action_id: &str, args_json: &str, context_json: &str) -> ApiResult<crate::api::types::ActionResultDto> {
-        self.core().execute_action(action_id, args_json, context_json).map(Into::into).map_err(Into::into)
+    pub fn execute_action_ext(
+        &self,
+        action_id: &str,
+        args_json: &str,
+        context_json: &str,
+    ) -> ApiResult<crate::api::types::ActionResultDto> {
+        self.core()
+            .execute_action(action_id, args_json, context_json)
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     pub fn ai_available(&self) -> bool {
@@ -909,37 +1198,80 @@ impl WriterCoreApi {
     }
 
     pub fn list_registered_actions_json(&self) -> String {
-        let result: ApiResult<Vec<crate::api::types::ActionDescriptorDto>> = self.list_registered_actions();
+        let result: ApiResult<Vec<crate::api::types::ActionDescriptorDto>> =
+            self.list_registered_actions();
         ResultEnvelope::from_api_result(result).to_json_string()
     }
 
-    pub fn execute_action_json(&self, action_id: &str, args_json: &str, context_json: &str) -> String {
-        let result: ApiResult<crate::api::types::ActionResultDto> = self.execute_action_ext(action_id, args_json, context_json);
+    pub fn execute_action_json(
+        &self,
+        action_id: &str,
+        args_json: &str,
+        context_json: &str,
+    ) -> String {
+        let result: ApiResult<crate::api::types::ActionResultDto> =
+            self.execute_action_ext(action_id, args_json, context_json);
         ResultEnvelope::from_api_result(result).to_json_string()
     }
 
-    pub fn get_writing_stats_summary(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
-        let value = self.core().get_writing_stats_summary(start_date, end_date).map_err(Into::<WriterError>::into)?;
+    pub fn get_writing_stats_summary(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
+        let value = self
+            .core()
+            .get_writing_stats_summary(start_date, end_date)
+            .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_stats_by_project(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ProjectStatsSummaryDto> {
-        let value = self.core().get_writing_stats_by_project(start_date, end_date).map_err(Into::<WriterError>::into)?;
+    pub fn get_writing_stats_by_project(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<crate::api::types::ProjectStatsSummaryDto> {
+        let value = self
+            .core()
+            .get_writing_stats_by_project(start_date, end_date)
+            .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_stats_by_chapter(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::ChapterStatsSummaryDto> {
-        let value = self.core().get_writing_stats_by_chapter(start_date, end_date).map_err(Into::<WriterError>::into)?;
+    pub fn get_writing_stats_by_chapter(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<crate::api::types::ChapterStatsSummaryDto> {
+        let value = self
+            .core()
+            .get_writing_stats_by_chapter(start_date, end_date)
+            .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_stats_by_device(&self, start_date: &str, end_date: &str) -> ApiResult<crate::api::types::DeviceStatsSummaryDto> {
-        let value = self.core().get_writing_stats_by_device(start_date, end_date).map_err(Into::<WriterError>::into)?;
+    pub fn get_writing_stats_by_device(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> ApiResult<crate::api::types::DeviceStatsSummaryDto> {
+        let value = self
+            .core()
+            .get_writing_stats_by_device(start_date, end_date)
+            .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 
-    pub fn get_writing_speed_curve(&self, start_date: &str, end_date: &str, bucket_minutes: u32) -> ApiResult<crate::api::types::SpeedCurveSummaryDto> {
-        let value = self.core().get_writing_speed_curve(start_date, end_date, bucket_minutes).map_err(Into::<WriterError>::into)?;
+    pub fn get_writing_speed_curve(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        bucket_minutes: u32,
+    ) -> ApiResult<crate::api::types::SpeedCurveSummaryDto> {
+        let value = self
+            .core()
+            .get_writing_speed_curve(start_date, end_date, bucket_minutes)
+            .map_err(Into::<WriterError>::into)?;
         serde_json::from_value(value).map_err(Into::into)
     }
 }

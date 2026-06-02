@@ -1,14 +1,14 @@
-use std::path::Path;
-use crate::sync_service::types::{
-    SyncConfig, SyncManifest, SyncResult, ManifestFileRecord, SyncStatus, SyncSecrets,
-    SyncState, SyncKind, FirstSyncMode,
-};
 use crate::sync_service::github_api_client::{
-    github_get_content, github_put_content_serial, github_delete_content_serial,
+    github_delete_content_serial, github_get_content, github_put_content_serial,
 };
-use crate::sync_service::scanner::scan_workspace_for_sync;
-use crate::sync_service::SyncService;
 use crate::sync_service::github_backend::GitHubApiBackend;
+use crate::sync_service::scanner::scan_workspace_for_sync;
+use crate::sync_service::types::{
+    FirstSyncMode, ManifestFileRecord, SyncConfig, SyncKind, SyncManifest, SyncResult, SyncSecrets,
+    SyncState, SyncStatus,
+};
+use crate::sync_service::SyncService;
+use std::path::Path;
 
 const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
 
@@ -106,8 +106,10 @@ pub(crate) fn perform_lww_sync(
                         SyncStatus::RecoverableError("api_error".to_string())
                     };
                     result.error = Some(err.clone());
-                    result.user_message =
-                        Some(format!("同步失败，已重试 {} 次。错误: {}", max_retries, err));
+                    result.user_message = Some(format!(
+                        "同步失败，已重试 {} 次。错误: {}",
+                        max_retries, err
+                    ));
                     return Ok(result);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -152,9 +154,7 @@ fn execute_lww_sync_attempt(
         if let Some(tree) = json["tree"].as_array() {
             for item in tree {
                 if item["type"].as_str() == Some("blob") {
-                    if let (Some(path), Some(sha)) =
-                        (item["path"].as_str(), item["sha"].as_str())
-                    {
+                    if let (Some(path), Some(sha)) = (item["path"].as_str(), item["sha"].as_str()) {
                         remote_tree_files.insert(path.to_string(), sha.to_string());
                     }
                 }
@@ -162,7 +162,9 @@ fn execute_lww_sync_attempt(
         }
     } else if tree_status.as_u16() != 404 {
         return Err(crate::sync_service::github_api_client::github_api_error(
-            "get recursive tree", tree_status, tree_body,
+            "get recursive tree",
+            tree_status,
+            tree_body,
         ));
     }
 
@@ -171,8 +173,10 @@ fn execute_lww_sync_attempt(
         if let Some((content_bytes, _)) =
             github_get_content(client, api_base, token, &config.branch, SYNC_MANIFEST_PATH)?
         {
-            remote_manifest = serde_json::from_slice::<SyncManifest>(&content_bytes)
-                .map_err(|e| crate::Error::Other(format!("api_error: invalid remote manifest: {}", e)))?;
+            remote_manifest =
+                serde_json::from_slice::<SyncManifest>(&content_bytes).map_err(|e| {
+                    crate::Error::Other(format!("api_error: invalid remote manifest: {}", e))
+                })?;
         }
     }
 
@@ -241,8 +245,7 @@ fn execute_lww_sync_attempt(
             }
             if !workspace_path.join(path).exists() {
                 let mut updated_at_ms = now_ms;
-                if let Some(tombstone) =
-                    state.tombstones.iter().find(|t| t.original_path == *path)
+                if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path)
                 {
                     updated_at_ms = tombstone.deleted_at * 1000;
                 }
@@ -331,7 +334,9 @@ fn execute_lww_sync_attempt(
                 if remote_time > local_time {
                     remote_wins = true;
                 } else if remote_time == local_time {
-                    if remote_rec.content_hash == local_rec.content_hash && remote_rec.op == local_rec.op {
+                    if remote_rec.content_hash == local_rec.content_hash
+                        && remote_rec.op == local_rec.op
+                    {
                         merged_manifest_files.insert(path.clone(), local_rec.clone());
                         result.ignored_files.push(path);
                         continue;

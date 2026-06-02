@@ -147,10 +147,17 @@ pub struct StarMapNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapEdgeEndpoint {
-    Node { node_id: String },
-    Anchor { node_id: String, anchor_id: String },
+    Node {
+        node_id: String,
+    },
+    Anchor {
+        node_id: String,
+        anchor_id: String,
+    },
     Starmap,
-    DeepTarget { target: crate::starmap::semantic::StarMapDeepTarget },
+    DeepTarget {
+        target: crate::starmap::semantic::StarMapDeepTarget,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

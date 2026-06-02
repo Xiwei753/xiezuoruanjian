@@ -17,9 +17,15 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyn
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json) {
+    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json)
+    {
         Ok(c) => c,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Json(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&workspace_path);
@@ -44,9 +50,15 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyn
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json) {
+    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json)
+    {
         Ok(c) => c,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Json(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&workspace_path);
@@ -70,9 +82,15 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_performSyn
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json) {
+    let config = match serde_json::from_str::<writer_core::api::types::SyncConfigDto>(&config_json)
+    {
         Ok(c) => c,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Json(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&workspace_path);

@@ -44,7 +44,11 @@ impl SafeAppPtr {
     }
     pub fn get(&self) -> Option<*mut AppBackend> {
         let p = self.ptr.get();
-        if p.is_null() { None } else { Some(p) }
+        if p.is_null() {
+            None
+        } else {
+            Some(p)
+        }
     }
 }
 

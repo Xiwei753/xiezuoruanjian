@@ -23,7 +23,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn create_mind_map_graph_json(&mut self, project_id: QString, title: QString) -> QString {
+    pub(crate) fn create_mind_map_graph_json(
+        &mut self,
+        project_id: QString,
+        title: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let t = title.to_string();
         if let Some(api) = self.core_api() {
@@ -42,7 +46,11 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn set_default_mind_map_graph_json(&mut self, project_id: QString, graph_id: QString) -> QString {
+    pub(crate) fn set_default_mind_map_graph_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         if let Some(api) = self.core_api() {
@@ -52,7 +60,12 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn create_mind_map_node_json(&mut self, project_id: QString, graph_id: QString, node_json: QString) -> QString {
+    pub(crate) fn create_mind_map_node_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        node_json: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let nj = node_json.to_string();
@@ -69,7 +82,13 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn update_mind_map_node_json(&mut self, project_id: QString, graph_id: QString, node_id: QString, patch_json: QString) -> QString {
+    pub(crate) fn update_mind_map_node_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        node_id: QString,
+        patch_json: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let nid = node_id.to_string();
@@ -89,13 +108,34 @@ impl AppBackend {
         };
 
         if let Some(api) = self.core_api() {
-            WriterCoreApi::envelope_json(api.update_mind_map_node(&pid, &gid, &nid, writer_core::api::types::MindMapNodePatchDto { title: patch.title, kind: patch.kind, payload: patch.payload.map(|v| Some(serde_json::to_string(&v).unwrap_or_default())), tags: patch.tags })).into()
+            WriterCoreApi::envelope_json(
+                api.update_mind_map_node(
+                    &pid,
+                    &gid,
+                    &nid,
+                    writer_core::api::types::MindMapNodePatchDto {
+                        title: patch.title,
+                        kind: patch.kind,
+                        payload: patch
+                            .payload
+                            .map(|v| Some(serde_json::to_string(&v).unwrap_or_default())),
+                        tags: patch.tags,
+                    },
+                ),
+            )
+            .into()
         } else {
             envelope_not_initialized()
         }
     }
 
-    pub(crate) fn delete_mind_map_node_json(&mut self, project_id: QString, graph_id: QString, node_id: QString, cascade: bool) -> QString {
+    pub(crate) fn delete_mind_map_node_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        node_id: QString,
+        cascade: bool,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let nid = node_id.to_string();
@@ -107,7 +147,12 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn create_mind_map_edge_json(&mut self, project_id: QString, graph_id: QString, edge_json: QString) -> QString {
+    pub(crate) fn create_mind_map_edge_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        edge_json: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let ej = edge_json.to_string();
@@ -124,7 +169,13 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn update_mind_map_edge_json(&mut self, project_id: QString, graph_id: QString, edge_id: QString, patch_json: QString) -> QString {
+    pub(crate) fn update_mind_map_edge_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        edge_id: QString,
+        patch_json: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let eid = edge_id.to_string();
@@ -143,13 +194,34 @@ impl AppBackend {
         };
 
         if let Some(api) = self.core_api() {
-            WriterCoreApi::envelope_json(api.update_mind_map_edge(&pid, &gid, &eid, writer_core::api::types::MindMapEdgePatchDto { kind: patch.kind, label: patch.label.map(|v| Some(serde_json::to_string(&v).unwrap_or_default())), payload: patch.payload.map(|v| Some(serde_json::to_string(&v).unwrap_or_default())) })).into()
+            WriterCoreApi::envelope_json(
+                api.update_mind_map_edge(
+                    &pid,
+                    &gid,
+                    &eid,
+                    writer_core::api::types::MindMapEdgePatchDto {
+                        kind: patch.kind,
+                        label: patch
+                            .label
+                            .map(|v| Some(serde_json::to_string(&v).unwrap_or_default())),
+                        payload: patch
+                            .payload
+                            .map(|v| Some(serde_json::to_string(&v).unwrap_or_default())),
+                    },
+                ),
+            )
+            .into()
         } else {
             envelope_not_initialized()
         }
     }
 
-    pub(crate) fn delete_mind_map_edge_json(&mut self, project_id: QString, graph_id: QString, edge_id: QString) -> QString {
+    pub(crate) fn delete_mind_map_edge_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        edge_id: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let eid = edge_id.to_string();
@@ -161,7 +233,12 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn create_mind_map_anchor_json(&mut self, project_id: QString, graph_id: QString, anchor_json: QString) -> QString {
+    pub(crate) fn create_mind_map_anchor_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        anchor_json: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let aj = anchor_json.to_string();
@@ -178,7 +255,14 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn bind_mind_map_anchor_json(&mut self, project_id: QString, graph_id: QString, node_id: QString, anchor_id: QString, link_kind: QString) -> QString {
+    pub(crate) fn bind_mind_map_anchor_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        node_id: QString,
+        anchor_id: QString,
+        link_kind: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let nid = node_id.to_string();
@@ -186,13 +270,21 @@ impl AppBackend {
         let lk = link_kind.to_string();
 
         if let Some(api) = self.core_api() {
-            WriterCoreApi::envelope_json(api.bind_mind_map_node_to_anchor(&pid, &gid, &nid, &aid, &lk)).into()
+            WriterCoreApi::envelope_json(
+                api.bind_mind_map_node_to_anchor(&pid, &gid, &nid, &aid, &lk),
+            )
+            .into()
         } else {
             envelope_not_initialized()
         }
     }
 
-    pub(crate) fn save_mind_map_layout_json(&mut self, project_id: QString, graph_id: QString, layout_json: QString) -> QString {
+    pub(crate) fn save_mind_map_layout_json(
+        &mut self,
+        project_id: QString,
+        graph_id: QString,
+        layout_json: QString,
+    ) -> QString {
         let pid = project_id.to_string();
         let gid = graph_id.to_string();
         let lj = layout_json.to_string();

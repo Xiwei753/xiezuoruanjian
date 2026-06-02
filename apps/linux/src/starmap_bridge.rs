@@ -16,9 +16,9 @@
 // =============================================================================
 
 use writer_core::api::types::{
-    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto,
-    StarMapEmbedPatchDto, StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchDto,
-    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
+    StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchDto, StarMapNodeContentDto, StarMapNodeDto,
+    StarMapNodeKindDto, StarMapNodePatchDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -61,11 +61,22 @@ pub fn get_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.get_starmap(starmap_id))
 }
 
-pub fn create_starmap(api: &WriterCoreApi, title: &str, description: &str, accent_color: Option<&str>) -> String {
+pub fn create_starmap(
+    api: &WriterCoreApi,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> String {
     envelope(api.create_starmap(title, description, accent_color))
 }
 
-pub fn create_child_starmap(api: &WriterCoreApi, parent_id: &str, title: &str, description: &str, accent_color: Option<&str>) -> String {
+pub fn create_child_starmap(
+    api: &WriterCoreApi,
+    parent_id: &str,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> String {
     envelope(api.create_child_starmap(parent_id, title, description, accent_color))
 }
 
@@ -87,7 +98,14 @@ pub fn get_starmap_graph_and_layout(api: &WriterCoreApi, starmap_id: &str) -> St
     }
 }
 
-pub fn create_starmap_node(api: &WriterCoreApi, starmap_id: &str, title: &str, kind: &str, x: f64, y: f64) -> String {
+pub fn create_starmap_node(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    title: &str,
+    kind: &str,
+    x: f64,
+    y: f64,
+) -> String {
     let now = now_ms();
     let node = StarMapNodeDto {
         id: format!("n_{}", uuid::Uuid::new_v4()),
@@ -108,7 +126,12 @@ pub fn create_starmap_node(api: &WriterCoreApi, starmap_id: &str, title: &str, k
     envelope(api.add_starmap_node(starmap_id, node, x as f32, y as f32))
 }
 
-pub fn update_starmap_node(api: &WriterCoreApi, starmap_id: &str, node_id: &str, patch_json: &str) -> String {
+pub fn update_starmap_node(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    node_id: &str,
+    patch_json: &str,
+) -> String {
     let patch: StarMapNodePatchDto = match serde_json::from_str(patch_json) {
         Ok(p) => p,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
@@ -121,14 +144,25 @@ pub fn delete_starmap_node(api: &WriterCoreApi, starmap_id: &str, node_id: &str)
     envelope(api.delete_starmap_node(starmap_id, node_id))
 }
 
-pub fn create_starmap_edge(api: &WriterCoreApi, starmap_id: &str, from_node_id: &str, to_node_id: &str, kind: &str, label: &str) -> String {
+pub fn create_starmap_edge(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    from_node_id: &str,
+    to_node_id: &str,
+    kind: &str,
+    label: &str,
+) -> String {
     let now = now_ms();
     let edge = StarMapEdgeDto {
         id: format!("e_{}", uuid::Uuid::new_v4()),
         from: Some(from_node_id.to_string()),
         to: Some(to_node_id.to_string()),
         kind: parse_edge_kind(kind),
-        label: if label.is_empty() { None } else { Some(label.to_string()) },
+        label: if label.is_empty() {
+            None
+        } else {
+            Some(label.to_string())
+        },
         payload: None,
         from_target: None,
         to_target: None,
@@ -141,7 +175,12 @@ pub fn create_starmap_edge(api: &WriterCoreApi, starmap_id: &str, from_node_id: 
     envelope(api.add_starmap_edge(starmap_id, edge))
 }
 
-pub fn update_starmap_edge(api: &WriterCoreApi, starmap_id: &str, edge_id: &str, patch_json: &str) -> String {
+pub fn update_starmap_edge(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    edge_id: &str,
+    patch_json: &str,
+) -> String {
     let patch: StarMapEdgePatchDto = match serde_json::from_str(patch_json) {
         Ok(p) => p,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
@@ -187,7 +226,12 @@ pub fn add_starmap_embed(api: &WriterCoreApi, starmap_id: &str, embed_json: &str
     envelope(api.add_starmap_embed(starmap_id, embed))
 }
 
-pub fn update_starmap_embed(api: &WriterCoreApi, starmap_id: &str, instance_id: &str, patch_json: &str) -> String {
+pub fn update_starmap_embed(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    instance_id: &str,
+    patch_json: &str,
+) -> String {
     let patch: StarMapEmbedPatchDto = match serde_json::from_str(patch_json) {
         Ok(p) => p,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
@@ -207,7 +251,12 @@ pub fn add_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_json: &str) 
     envelope(api.add_starmap_link(starmap_id, link))
 }
 
-pub fn update_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_id: &str, patch_json: &str) -> String {
+pub fn update_starmap_link(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    link_id: &str,
+    patch_json: &str,
+) -> String {
     let patch: StarMapLinkPatchDto = match serde_json::from_str(patch_json) {
         Ok(p) => p,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),

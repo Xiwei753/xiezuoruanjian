@@ -9,7 +9,12 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_listRegist
 ) -> jstring {
     let ws_path = match jstring_to_string(&mut env, &workspace_path) {
         Ok(s) => s,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Io(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Io(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&ws_path);
@@ -29,7 +34,12 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_executeAct
 ) -> jstring {
     let ws_path = match jstring_to_string(&mut env, &workspace_path) {
         Ok(s) => s,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Io(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Io(e.to_string())),
+            )
+        }
     };
     let act_id = match jstring_to_string(&mut env, &action_id) {
         Ok(s) => s,
@@ -65,5 +75,9 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_aiAvailabl
     };
 
     let api = api_from_workspace(&workspace_path);
-    if api.ai_available() { 1 } else { 0 }
+    if api.ai_available() {
+        1
+    } else {
+        0
+    }
 }

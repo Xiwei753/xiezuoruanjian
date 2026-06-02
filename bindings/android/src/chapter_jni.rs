@@ -334,7 +334,12 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderVol
 
     let ordered_ids: Vec<String> = match serde_json::from_str(&ordered_ids_json) {
         Ok(ids) => ids,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Json(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&workspace_path);
@@ -440,7 +445,12 @@ pub extern "system" fn Java_com_xiwei_writerapp_data_NativeCoreBridge_reorderCha
 
     let ordered_ids: Vec<String> = match serde_json::from_str(&ordered_ids_json) {
         Ok(ids) => ids,
-        Err(e) => return result_to_jstring::<()>(&mut env, Err(writer_core::api::error::WriterError::Json(e.to_string()))),
+        Err(e) => {
+            return result_to_jstring::<()>(
+                &mut env,
+                Err(writer_core::api::error::WriterError::Json(e.to_string())),
+            )
+        }
     };
 
     let api = api_from_workspace(&workspace_path);
