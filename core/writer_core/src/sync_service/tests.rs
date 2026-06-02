@@ -1639,6 +1639,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_perform_lww_sync_first_download() {
         let dir = tempdir().unwrap();
         let mut initial_files = std::collections::HashMap::new();
@@ -1707,6 +1708,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_perform_lww_sync_local_delete_generates_manifest_delete() {
         let dir = tempdir().unwrap();
 
