@@ -20,6 +20,7 @@ QtObject {
     property var backendRef: null
     property var workspaceBackendRef: null
     property var projectBackendRef: null
+    property var starmapBackendRef: null
     property var appBackendRef: null
     property var appState: ({
         hasWorkspace: false,
@@ -252,6 +253,65 @@ QtObject {
             else if (type === "delete_chapter") raw = projectApi.delete_chapter_json(contextData.projectId, contextData.volumeId, contextData.chapterId, actionId);
             else return false;
             return handleMutationResult(raw, qsTr("删除失败"));
+        } catch (e) {
+            emitError(qsTr("后端调用失败: ") + e);
+            return false;
+        }
+    }
+
+    function listStarmaps() {
+        var starmapApi = starmapBackendRef || backendRef;
+        if (!starmapApi) return [];
+        try {
+            var res = parseJson(starmapApi.list_starmaps_json(), qsTr("加载星图列表失败"));
+            if (!res) return [];
+            if (res.success) return res.data || [];
+            emitError(res.userMessage || res.message || qsTr("加载星图列表失败"));
+            return [];
+        } catch (e) {
+            emitError(qsTr("后端调用失败: ") + e);
+            return [];
+        }
+    }
+
+    function createStarmap(title, description) {
+        var starmapApi = starmapBackendRef || backendRef;
+        if (!starmapApi || !title) return false;
+        try {
+            return handleMutationResult(starmapApi.create_starmap_json(title, description || "", ""), qsTr("创建星图失败"));
+        } catch (e) {
+            emitError(qsTr("后端调用失败: ") + e);
+            return false;
+        }
+    }
+
+    function createChildStarmap(parentId, title, description) {
+        var starmapApi = starmapBackendRef || backendRef;
+        if (!starmapApi || !parentId || !title) return false;
+        try {
+            return handleMutationResult(starmapApi.create_child_starmap_json(parentId, title, description || "", ""), qsTr("创建子星图失败"));
+        } catch (e) {
+            emitError(qsTr("后端调用失败: ") + e);
+            return false;
+        }
+    }
+
+    function renameStarmap(starmapId, title) {
+        var starmapApi = starmapBackendRef || backendRef;
+        if (!starmapApi || !starmapId || !title) return false;
+        try {
+            return handleMutationResult(starmapApi.rename_starmap_json(starmapId, title), qsTr("重命名星图失败"));
+        } catch (e) {
+            emitError(qsTr("后端调用失败: ") + e);
+            return false;
+        }
+    }
+
+    function deleteStarmap(starmapId) {
+        var starmapApi = starmapBackendRef || backendRef;
+        if (!starmapApi || !starmapId) return false;
+        try {
+            return handleMutationResult(starmapApi.delete_starmap_json(starmapId), qsTr("删除星图失败"));
         } catch (e) {
             emitError(qsTr("后端调用失败: ") + e);
             return false;

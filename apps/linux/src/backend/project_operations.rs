@@ -3,8 +3,8 @@
 // =============================================================================
 
 use super::*;
-use qmetaobject::prelude::*;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
+use writer_core::api::{ChapterMetaDto, VolumeDto, WriterError};
 
 impl AppBackend {
     pub(crate) fn reconcile_selection_after_tree_reload(&mut self) -> bool {
@@ -189,6 +189,10 @@ impl AppBackend {
         state.to_string().into()
     }
 
+    fn current_app_state_value(&mut self) -> serde_json::Value {
+        serde_json::from_str(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+    }
+
     pub(crate) fn create_project_json(&mut self, title: QString, _action_id: QString) -> QString {
         let title_str = title.to_string();
         let build_err = |msg: &str| -> String {
@@ -273,22 +277,32 @@ impl AppBackend {
             "create_volume_start",
             &format!("[actionId={}] project_id={}, title={}", action_id_str, project_id.to_string(), title.to_string())
         );
-        let err_before = self.current_error_message.clone();
-        self.create_new_volume(project_id.clone(), title.clone());
-        let success = self.current_error_message == err_before;
-        let mut user_message = "创建卷成功".to_string();
-        if success {
-            self.debug_log("volume", "create_volume_success", &format!("[actionId={}] created successfully", action_id_str));
-        } else {
-            self.debug_error("volume", "create_volume_failed", &format!("[actionId={}] error: {}", action_id_str, self.current_error_message));
-            user_message = format!("创建卷失败: {}", self.current_error_message);
+        match self.create_new_volume(project_id.clone(), title.clone()) {
+            Ok(volume) => {
+                self.debug_log("volume", "create_volume_success", &format!("[actionId={}] volume_id={}", action_id_str, volume.id));
+                serde_json::json!({
+                    "success": true,
+                    "data": { "volume": volume },
+                    "userMessage": "创建卷成功",
+                    "state": self.current_app_state_value(),
+                    "changedEntities": ["WorkspaceTree"]
+                }).to_string().into()
+            }
+            Err(e) => {
+                let raw_error = e.to_string();
+                let user_message = format!("创建卷失败: {}", raw_error);
+                self.set_error(&user_message);
+                self.debug_error("volume", "create_volume_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                serde_json::json!({
+                    "success": false,
+                    "errorCode": "CORE_ERROR",
+                    "userMessage": user_message,
+                    "rawError": raw_error,
+                    "state": self.current_app_state_value(),
+                    "changedEntities": []
+                }).to_string().into()
+            }
         }
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": user_message,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
     }
 
     pub(crate) fn create_chapter_json(&mut self, project_id: QString, volume_id: QString, title: QString, action_id: QString) -> QString {
@@ -298,22 +312,32 @@ impl AppBackend {
             "create_chapter_start",
             &format!("[actionId={}] project_id={}, volume_id={}, title={}", action_id_str, project_id.to_string(), volume_id.to_string(), title.to_string())
         );
-        let err_before = self.current_error_message.clone();
-        self.create_new_chapter(project_id.clone(), volume_id.clone(), title.clone());
-        let success = self.current_error_message == err_before;
-        let mut user_message = "创建章节成功".to_string();
-        if success {
-            self.debug_log("chapter", "create_chapter_success", &format!("[actionId={}] created successfully", action_id_str));
-        } else {
-            self.debug_error("chapter", "create_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, self.current_error_message));
-            user_message = format!("创建章节失败: {}", self.current_error_message);
+        match self.create_new_chapter(project_id.clone(), volume_id.clone(), title.clone()) {
+            Ok(chapter) => {
+                self.debug_log("chapter", "create_chapter_success", &format!("[actionId={}] chapter_id={}", action_id_str, chapter.id));
+                serde_json::json!({
+                    "success": true,
+                    "data": { "chapter": chapter },
+                    "userMessage": "创建章节成功",
+                    "state": self.current_app_state_value(),
+                    "changedEntities": ["WorkspaceTree"]
+                }).to_string().into()
+            }
+            Err(e) => {
+                let raw_error = e.to_string();
+                let user_message = format!("创建章节失败: {}", raw_error);
+                self.set_error(&user_message);
+                self.debug_error("chapter", "create_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                serde_json::json!({
+                    "success": false,
+                    "errorCode": "CORE_ERROR",
+                    "userMessage": user_message,
+                    "rawError": raw_error,
+                    "state": self.current_app_state_value(),
+                    "changedEntities": []
+                }).to_string().into()
+            }
         }
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": user_message,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
     }
 
     pub(crate) fn select_tree_item_json(&mut self, item_type: QString, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString {
@@ -346,109 +370,129 @@ impl AppBackend {
     pub(crate) fn delete_project_json(&mut self, project_id: QString, action_id: QString) -> QString {
         let action_id_str = action_id.to_string();
         self.debug_log("project", "delete_project_start", &format!("[actionId={}] project_id={}", action_id_str, project_id.to_string()));
-        self.current_error_message = "".into();
-        self.delete_project(project_id);
-        let success = self.current_error_message.is_empty();
-        let msg = if success {
-            self.debug_log("project", "delete_project_success", &format!("[actionId={}] project deleted successfully", action_id_str));
-            "删除成功".to_string()
-        } else {
-            let err = self.current_error_message.clone();
-            self.debug_error("project", "delete_project_failed", &format!("[actionId={}] error: {}", action_id_str, err));
-            err
-        };
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": msg,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
+        match self.delete_project(project_id) {
+            Ok(_) => {
+                self.debug_log("project", "delete_project_success", &format!("[actionId={}] project deleted successfully", action_id_str));
+                serde_json::json!({
+                    "success": true,
+                    "data": true,
+                    "userMessage": "删除成功",
+                    "state": self.current_app_state_value(),
+                    "changedEntities": ["WorkspaceTree"]
+                }).to_string().into()
+            }
+            Err(e) => {
+                let raw_error = e.to_string();
+                let user_message = format!("删除作品失败: {}", raw_error);
+                self.set_error(&user_message);
+                self.debug_error("project", "delete_project_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                serde_json::json!({
+                    "success": false,
+                    "errorCode": "CORE_ERROR",
+                    "userMessage": user_message,
+                    "rawError": raw_error,
+                    "state": self.current_app_state_value(),
+                    "changedEntities": []
+                }).to_string().into()
+            }
+        }
     }
 
     pub(crate) fn delete_volume_json(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString {
         let action_id_str = action_id.to_string();
         self.debug_log("volume", "delete_volume_start", &format!("[actionId={}] project_id={}, volume_id={}", action_id_str, project_id.to_string(), volume_id.to_string()));
-        self.current_error_message = "".into();
-        self.delete_volume(project_id, volume_id);
-        let success = self.current_error_message.is_empty();
-        let msg = if success {
-            self.debug_log("volume", "delete_volume_success", &format!("[actionId={}] volume deleted successfully", action_id_str));
-            "删除成功".to_string()
-        } else {
-            let err = self.current_error_message.clone();
-            self.debug_error("volume", "delete_volume_failed", &format!("[actionId={}] error: {}", action_id_str, err));
-            err
-        };
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": msg,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
+        match self.delete_volume(project_id, volume_id) {
+            Ok(_) => {
+                self.debug_log("volume", "delete_volume_success", &format!("[actionId={}] volume deleted successfully", action_id_str));
+                serde_json::json!({
+                    "success": true,
+                    "data": true,
+                    "userMessage": "删除成功",
+                    "state": self.current_app_state_value(),
+                    "changedEntities": ["WorkspaceTree"]
+                }).to_string().into()
+            }
+            Err(e) => {
+                let raw_error = e.to_string();
+                let user_message = format!("删除分卷失败: {}", raw_error);
+                self.set_error(&user_message);
+                self.debug_error("volume", "delete_volume_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                serde_json::json!({
+                    "success": false,
+                    "errorCode": "CORE_ERROR",
+                    "userMessage": user_message,
+                    "rawError": raw_error,
+                    "state": self.current_app_state_value(),
+                    "changedEntities": []
+                }).to_string().into()
+            }
+        }
     }
 
     pub(crate) fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString {
         let action_id_str = action_id.to_string();
         self.debug_log("chapter", "delete_chapter_start", &format!("[actionId={}] project_id={}, volume_id={}, chapter_id={}", action_id_str, project_id.to_string(), volume_id.to_string(), chapter_id.to_string()));
-        self.current_error_message = "".into();
-        self.delete_chapter(project_id, volume_id, chapter_id);
-        let success = self.current_error_message.is_empty();
-        let msg = if success {
-            self.debug_log("chapter", "delete_chapter_success", &format!("[actionId={}] chapter deleted successfully", action_id_str));
-            "删除成功".to_string()
-        } else {
-            let err = self.current_error_message.clone();
-            self.debug_error("chapter", "delete_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, err));
-            err
-        };
-        let final_res = serde_json::json!({
-            "success": success,
-            "userMessage": msg,
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
+        match self.delete_chapter(project_id, volume_id, chapter_id) {
+            Ok(_) => {
+                self.debug_log("chapter", "delete_chapter_success", &format!("[actionId={}] chapter deleted successfully", action_id_str));
+                serde_json::json!({
+                    "success": true,
+                    "data": true,
+                    "userMessage": "删除成功",
+                    "state": self.current_app_state_value(),
+                    "changedEntities": ["WorkspaceTree"]
+                }).to_string().into()
+            }
+            Err(e) => {
+                let raw_error = e.to_string();
+                let user_message = format!("删除章节失败: {}", raw_error);
+                self.set_error(&user_message);
+                self.debug_error("chapter", "delete_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, raw_error));
+                serde_json::json!({
+                    "success": false,
+                    "errorCode": "CORE_ERROR",
+                    "userMessage": user_message,
+                    "rawError": raw_error,
+                    "state": self.current_app_state_value(),
+                    "changedEntities": []
+                }).to_string().into()
+            }
+        }
     }
 
     pub(crate) fn get_tree_model(&self) -> QJsonArray {
         self.cached_tree.clone()
     }
 
-    pub(crate) fn create_new_volume(&mut self, project_id: QString, title: QString) {
-        if let Some(api) = self.core_api() {
-            let result = api.create_volume(&project_id.to_string(), &title.to_string());
-            match result {
-                Ok(vol) => {
-                    self.selected_project_id = Some(project_id.to_string());
-                    self.selected_volume_id = Some(vol.id.clone());
-                    self.selected_item_changed();
-                    self.selected_chapter_id = None;
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                }
-                Err(e) => self.set_error(&format!("创建分卷失败: {}", e)),
-            }
-        }
+    pub(crate) fn create_new_volume(&mut self, project_id: QString, title: QString) -> Result<VolumeDto, WriterError> {
+        let Some(api) = self.core_api() else {
+            return Err(WriterError::InvalidWorkspace);
+        };
+        let project_id_str = project_id.to_string();
+        let vol = api.create_volume(&project_id_str, &title.to_string())?;
+        self.selected_project_id = Some(project_id_str);
+        self.selected_volume_id = Some(vol.id.clone());
+        self.selected_item_changed();
+        self.selected_chapter_id = None;
+        self.reload_tree();
+        self.trigger_projects_reloaded();
+        Ok(vol)
     }
 
-    pub(crate) fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) {
-        if let Some(api) = self.core_api() {
-            let result = api.create_chapter(
-                &project_id.to_string(),
-                &volume_id.to_string(),
-                &title.to_string(),
-            );
-            match result {
-                Ok(chap) => {
-                    self.selected_project_id = Some(project_id.to_string());
-                    self.selected_volume_id = Some(volume_id.to_string());
-                    self.selected_chapter_id = Some(chap.id.clone());
-                    self.selected_item_changed();
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                }
-                Err(e) => self.set_error(&format!("创建章节失败: {}", e)),
-            }
-        }
+    pub(crate) fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) -> Result<ChapterMetaDto, WriterError> {
+        let Some(api) = self.core_api() else {
+            return Err(WriterError::InvalidWorkspace);
+        };
+        let project_id_str = project_id.to_string();
+        let volume_id_str = volume_id.to_string();
+        let chap = api.create_chapter(&project_id_str, &volume_id_str, &title.to_string())?;
+        self.selected_project_id = Some(project_id_str);
+        self.selected_volume_id = Some(volume_id_str);
+        self.selected_chapter_id = Some(chap.id.clone());
+        self.selected_item_changed();
+        self.reload_tree();
+        self.trigger_projects_reloaded();
+        Ok(chap)
     }
 
     pub(crate) fn rename_project_json(&mut self, project_id: QString, new_title: QString) -> QString {
@@ -478,22 +522,20 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    pub(crate) fn delete_project(&mut self, project_id: QString) {
-        if let Some(api) = self.core_api() {
-            let result = api.delete_project(&project_id.to_string());
-            match result {
-                Ok(_) => {
-                    if self.selected_project_id.as_deref() == Some(&project_id.to_string()) {
-                        self.selected_project_id = None;
-                        self.selected_volume_id = None;
-                        self.clear_editor_state();
-                    }
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                }
-                Err(e) => self.set_error(&format!("删除作品失败: {}", e)),
-            }
+    pub(crate) fn delete_project(&mut self, project_id: QString) -> Result<bool, WriterError> {
+        let Some(api) = self.core_api() else {
+            return Err(WriterError::InvalidWorkspace);
+        };
+        let project_id_str = project_id.to_string();
+        api.delete_project(&project_id_str)?;
+        if self.selected_project_id.as_deref() == Some(&project_id_str) {
+            self.selected_project_id = None;
+            self.selected_volume_id = None;
+            self.clear_editor_state();
         }
+        self.reload_tree();
+        self.trigger_projects_reloaded();
+        Ok(true)
     }
 
     pub(crate) fn reorder_projects(&mut self, ordered_ids_joined: QString) {
@@ -538,21 +580,20 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    pub(crate) fn delete_volume(&mut self, project_id: QString, volume_id: QString) {
-        if let Some(api) = self.core_api() {
-            let result = api.delete_volume(&project_id.to_string(), &volume_id.to_string());
-            match result {
-                Ok(_) => {
-                    if self.selected_volume_id.as_deref() == Some(&volume_id.to_string()) {
-                        self.selected_volume_id = None;
-                        self.clear_editor_state();
-                    }
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                }
-                Err(e) => self.set_error(&format!("删除分卷失败: {}", e)),
-            }
+    pub(crate) fn delete_volume(&mut self, project_id: QString, volume_id: QString) -> Result<bool, WriterError> {
+        let Some(api) = self.core_api() else {
+            return Err(WriterError::InvalidWorkspace);
+        };
+        let project_id_str = project_id.to_string();
+        let volume_id_str = volume_id.to_string();
+        api.delete_volume(&project_id_str, &volume_id_str)?;
+        if self.selected_volume_id.as_deref() == Some(&volume_id_str) {
+            self.selected_volume_id = None;
+            self.clear_editor_state();
         }
+        self.reload_tree();
+        self.trigger_projects_reloaded();
+        Ok(true)
     }
 
     pub(crate) fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) {
@@ -602,24 +643,20 @@ impl AppBackend {
         final_res.to_string().into()
     }
 
-    pub(crate) fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {
-        if let Some(api) = self.core_api() {
-            let result = api.delete_chapter(
-                &project_id.to_string(),
-                &volume_id.to_string(),
-                &chapter_id.to_string(),
-            );
-            match result {
-                Ok(_) => {
-                    if self.selected_chapter_id.as_deref() == Some(&chapter_id.to_string()) {
-                        self.clear_editor_state();
-                    }
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-                }
-                Err(e) => self.set_error(&format!("删除章节失败: {}", e)),
-            }
+    pub(crate) fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> Result<bool, WriterError> {
+        let Some(api) = self.core_api() else {
+            return Err(WriterError::InvalidWorkspace);
+        };
+        let project_id_str = project_id.to_string();
+        let volume_id_str = volume_id.to_string();
+        let chapter_id_str = chapter_id.to_string();
+        api.delete_chapter(&project_id_str, &volume_id_str, &chapter_id_str)?;
+        if self.selected_chapter_id.as_deref() == Some(&chapter_id_str) {
+            self.clear_editor_state();
         }
+        self.reload_tree();
+        self.trigger_projects_reloaded();
+        Ok(true)
     }
 
     pub(crate) fn reorder_chapters(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString) {

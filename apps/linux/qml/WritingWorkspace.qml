@@ -21,6 +21,7 @@ Rectangle {
     id: root
     property var dt: null
     property var backendRef: null
+    property var appController: null
     property var appState: ({})
     property var tree: []
     property string projectTitle: ""
@@ -771,6 +772,7 @@ Rectangle {
             visible: root.drawerOpen
             dt: root.dt
             backendRef: root.backendRef
+            appController: root.appController
             isOpen: root.drawerOpen
             currentTab: root.drawerTab
             aiCapable: root.aiCapable

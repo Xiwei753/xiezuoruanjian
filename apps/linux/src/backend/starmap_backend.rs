@@ -33,6 +33,7 @@ pub struct StarMapBackend {
     get_starmap_json: qt_method!(fn(&self, starmap_id: QString) -> QString),
     create_starmap_json: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QString),
     create_starmap: qt_method!(fn(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject),
+    create_child_starmap_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
     create_child_starmap_legacy_json: qt_method!(fn(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString),
     rename_starmap_json: qt_method!(fn(&mut self, starmap_id: QString, new_title: QString) -> QString),
     delete_starmap_json: qt_method!(fn(&mut self, starmap_id: QString) -> QString),
@@ -97,6 +98,7 @@ impl StarMapBackend {
     fn get_starmap_json(&self, starmap_id: QString) -> QString { self.with_app("{}".into(), |app| app.get_starmap_json(starmap_id)) }
     fn create_starmap_json(&mut self, title: QString, description: QString, accent_color: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_starmap_json(title, description, accent_color)) }
     fn create_starmap(&mut self, title: QString, description: QString, accent_color: QString) -> QJsonObject { self.with_app_mut(QJsonObject::default(), |app| app.create_starmap(title, description, accent_color)) }
+    fn create_child_starmap_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_child_starmap_json(parent_id, title, description, accent_color)) }
     fn create_child_starmap_legacy_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString { self.with_app_mut("{}".into(), |app| app.create_child_starmap_legacy_json(parent_id, title, description, accent_color)) }
     fn rename_starmap_json(&mut self, starmap_id: QString, new_title: QString) -> QString { self.with_app_mut("{}".into(), |app| app.rename_starmap_json(starmap_id, new_title)) }
     fn delete_starmap_json(&mut self, starmap_id: QString) -> QString { self.with_app_mut("{}".into(), |app| app.delete_starmap_json(starmap_id)) }
@@ -197,6 +199,10 @@ impl AppBackend {
     }
 
 // AppBackend::create_child_starmap_legacy_json
+    pub(crate) fn create_child_starmap_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
+        self.create_child_starmap_legacy_json(parent_id, title, description, accent_color)
+    }
+
     pub(crate) fn create_child_starmap_legacy_json(&mut self, parent_id: QString, title: QString, description: QString, accent_color: QString) -> QString {
         let pid = parent_id.to_string();
         let t = title.to_string();

@@ -100,6 +100,7 @@ ApplicationWindow {
         backendRef: backend
         workspaceBackendRef: workspaceBackend
         projectBackendRef: projectBackend
+        starmapBackendRef: starmapBackend
         appBackendRef: backend
         onErrorRaised: function(message) {
             errorDialog.message = message;
@@ -230,6 +231,7 @@ ApplicationWindow {
                 backendRef: projectBackend
                 editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
+                appController: appController
                 appState: window.appState
                 tree: window.appState.tree || []
                 aiCapable: settingsBackend.ai_available
@@ -284,6 +286,7 @@ ApplicationWindow {
             sourceComponent: WritingWorkspace {
                 dt: designTokens
                 backendRef: editorBackend
+                appController: appController
                 appState: window.appState
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
