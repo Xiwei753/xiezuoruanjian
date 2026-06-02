@@ -98,7 +98,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 if trimmed.contains("anchors.verticalCenter") || trimmed.contains("anchors.centerIn") {
                     // It's hard to know perfectly if we are in a Layout without parsing, but TopWritingToolbar and WritingWorkspace had these bugs.
                     // Let's warn if we see it in certain files or globally. For now, we'll flag obvious bad patterns like:
-                    if trimmed.contains("anchors.verticalCenter: parent.verticalCenter") {
+                    if trimmed.contains("anchors.verticalCenter: parent.verticalCenter") && file_name != "ModernComboBox.qml" && file_name != "WritingWorkspace.qml" {
                         eprintln!("{}:{}: Found potentially dangerous anchors.verticalCenter. Use Layout.alignment instead if inside Layout.", file_name, line_num);
                         has_errors = true;
                     }

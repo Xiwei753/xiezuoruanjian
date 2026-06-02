@@ -120,7 +120,7 @@ fn fail_if_not_qt6() {
     let version = qt_runtime_version();
     eprintln!("[QtDiagnostics] linked Qt runtime version: {}", version);
     if version.starts_with("5.") {
-        eprintln!("Linux binary is still linked against Qt5; Qt6 migration incomplete.");
+        eprintln!("Linux binary requires Qt6; Qt5 is no longer supported.");
         std::process::exit(1);
     }
     if !version.starts_with("6.") {

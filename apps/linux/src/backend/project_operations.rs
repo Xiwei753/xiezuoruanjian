@@ -276,14 +276,16 @@ impl AppBackend {
         let err_before = self.current_error_message.clone();
         self.create_new_volume(project_id.clone(), title.clone());
         let success = self.current_error_message == err_before;
+        let mut user_message = "创建卷成功".to_string();
         if success {
             self.debug_log("volume", "create_volume_success", &format!("[actionId={}] created successfully", action_id_str));
         } else {
             self.debug_error("volume", "create_volume_failed", &format!("[actionId={}] error: {}", action_id_str, self.current_error_message));
+            user_message = format!("创建卷失败: {}", self.current_error_message);
         }
         let final_res = serde_json::json!({
-            "success": true,
-            "userMessage": "创建卷成功",
+            "success": success,
+            "userMessage": user_message,
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()
@@ -299,14 +301,16 @@ impl AppBackend {
         let err_before = self.current_error_message.clone();
         self.create_new_chapter(project_id.clone(), volume_id.clone(), title.clone());
         let success = self.current_error_message == err_before;
+        let mut user_message = "创建章节成功".to_string();
         if success {
             self.debug_log("chapter", "create_chapter_success", &format!("[actionId={}] created successfully", action_id_str));
         } else {
             self.debug_error("chapter", "create_chapter_failed", &format!("[actionId={}] error: {}", action_id_str, self.current_error_message));
+            user_message = format!("创建章节失败: {}", self.current_error_message);
         }
         let final_res = serde_json::json!({
-            "success": true,
-            "userMessage": "创建章节成功",
+            "success": success,
+            "userMessage": user_message,
             "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
         });
         final_res.to_string().into()
@@ -447,17 +451,31 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn rename_project(&mut self, project_id: QString, new_title: QString) {
+    pub(crate) fn rename_project_json(&mut self, project_id: QString, new_title: QString) -> QString {
+        let mut success = false;
+        let mut user_message = "重命名作品成功".to_string();
         if let Some(api) = self.core_api() {
             let result = api.rename_project(&project_id.to_string(), &new_title.to_string());
             match result {
                 Ok(_) => {
                     self.reload_tree();
                     self.trigger_projects_reloaded();
+                    success = true;
                 }
-                Err(e) => self.set_error(&format!("重命名作品失败: {}", e)),
+                Err(e) => {
+                    self.set_error(&format!("重命名作品失败: {}", e));
+                    user_message = format!("重命名作品失败: {}", e);
+                }
             }
+        } else {
+            user_message = "重命名作品失败: 后端未初始化".to_string();
         }
+        let final_res = serde_json::json!({
+            "success": success,
+            "userMessage": user_message,
+            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+        });
+        final_res.to_string().into()
     }
 
     pub(crate) fn delete_project(&mut self, project_id: QString) {
@@ -493,17 +511,31 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn rename_volume(&mut self, project_id: QString, volume_id: QString, new_title: QString) {
+    pub(crate) fn rename_volume_json(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QString {
+        let mut success = false;
+        let mut user_message = "重命名分卷成功".to_string();
         if let Some(api) = self.core_api() {
             let result = api.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string());
             match result {
                 Ok(_) => {
                     self.reload_tree();
                     self.trigger_projects_reloaded();
+                    success = true;
                 }
-                Err(e) => self.set_error(&format!("重命名分卷失败: {}", e)),
+                Err(e) => {
+                    self.set_error(&format!("重命名分卷失败: {}", e));
+                    user_message = format!("重命名分卷失败: {}", e);
+                }
             }
+        } else {
+            user_message = "重命名分卷失败: 后端未初始化".to_string();
         }
+        let final_res = serde_json::json!({
+            "success": success,
+            "userMessage": user_message,
+            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+        });
+        final_res.to_string().into()
     }
 
     pub(crate) fn delete_volume(&mut self, project_id: QString, volume_id: QString) {
@@ -538,7 +570,9 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn rename_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) {
+    pub(crate) fn rename_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) -> QString {
+        let mut success = false;
+        let mut user_message = "重命名章节成功".to_string();
         if let Some(api) = self.core_api() {
             let result = api.rename_chapter(
                 &project_id.to_string(),
@@ -550,10 +584,22 @@ impl AppBackend {
                 Ok(_) => {
                     self.reload_tree();
                     self.trigger_projects_reloaded();
+                    success = true;
                 }
-                Err(e) => self.set_error(&format!("重命名章节失败: {}", e)),
+                Err(e) => {
+                    self.set_error(&format!("重命名章节失败: {}", e));
+                    user_message = format!("重命名章节失败: {}", e);
+                }
             }
+        } else {
+            user_message = "重命名章节失败: 后端未初始化".to_string();
         }
+        let final_res = serde_json::json!({
+            "success": success,
+            "userMessage": user_message,
+            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
+        });
+        final_res.to_string().into()
     }
 
     pub(crate) fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {

@@ -309,6 +309,7 @@ ApplicationWindow {
                     inputDialog.projectId = projectId;
                     inputDialog.volumeId = "";
                     inputDialog.dialogTitle = qsTr("新建卷");
+                    inputDialog.defaultText = "";
                     inputDialog.open();
                 }
 
