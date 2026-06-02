@@ -258,6 +258,7 @@ fn configure_cpp_standard(config: &mut cpp_build::Config) {
     config.flag(CPP_STANDARD_FLAG);
     if std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc" {
         config.flag("/Zc:__cplusplus");
+        config.flag("/permissive-");
     }
 }
 
