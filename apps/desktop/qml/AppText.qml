@@ -17,15 +17,13 @@ Label {
     property var theme: null
     property string variant: "primary"
 
-    color: {
-        if (!control.theme) return "#E2E2E5"
-        if (control.variant === "secondary") return control.theme.textSecondary
-        if (control.variant === "muted") return control.theme.textMuted
-        if (control.variant === "disabled") return control.theme.textDisabled
-        if (control.variant === "onPrimary") return control.theme.onPrimary
-        if (control.variant === "selected") return control.theme.selectedText
-        return control.theme.textPrimary
-    }
+    color: !control.theme ? "#E2E2E5" :
+           control.variant === "secondary" ? control.theme.textSecondary :
+           control.variant === "muted" ? control.theme.textMuted :
+           control.variant === "disabled" ? control.theme.textDisabled :
+           control.variant === "onPrimary" ? control.theme.onPrimary :
+           control.variant === "selected" ? control.theme.selectedText :
+           control.theme.textPrimary
     font.pixelSize: control.theme ? control.theme.fontMd : 13
     wrapMode: Text.WordWrap
 }

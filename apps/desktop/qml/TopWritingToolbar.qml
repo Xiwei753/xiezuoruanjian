@@ -538,7 +538,7 @@ Rectangle {
                         Layout.fillWidth: true
                         theme: dt
                         from: 480
-                        to: 1200
+                        to: 3840
                         stepSize: 10
                         value: settingsBackend && settingsBackend.setting_linux_editor_width > 0 ? settingsBackend.setting_linux_editor_width : 820
                         onMoved: {
@@ -549,7 +549,7 @@ Rectangle {
                     }
 
                     AppText {
-                        text: "1200"
+                        text: "3840"
                         color: dt ? dt.textMuted : "#8C9198"
                         font.pixelSize: dt ? dt.fontXs : 11
                     }
