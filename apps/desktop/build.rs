@@ -1,4 +1,4 @@
-//! # 构建脚本（Linux UI 层 - Build）
+//! # 构建脚本（Desktop UI 层 - Build）
 //!
 //! Cargo 构建脚本，负责：
 //! 1. 声明 QML 文件依赖（rerun-if-changed）
@@ -170,7 +170,7 @@ fn detect_qt6_from_env() -> Option<Qt6BuildInfo> {
         .parse::<Version>()
         .unwrap_or_else(|_| panic!("Unable to parse Qt version from QT_INCLUDE_PATH: {version}"));
     if parsed.major != 6 {
-        panic!("Linux binary requires Qt6; Qt5 is no longer supported. QT_INCLUDE_PATH points to Qt {version}.");
+        panic!("Desktop binary requires Qt6; Qt5 is no longer supported. QT_INCLUDE_PATH points to Qt {version}.");
     }
     let header_root = PathBuf::from(include_path);
     let mut include_paths = vec![header_root.clone()];
@@ -314,16 +314,16 @@ fn main() {
     configure_cpp_standard(&mut config);
     qt_info.apply_to(&mut config);
     println!(
-        "cargo:warning=Linux Qt binding selected Qt {} via {}",
+        "cargo:warning=Desktop Qt binding selected Qt {} via {}",
         qt_info.version, qt_info.source
     );
-    println!("cargo:warning=Linux Qt C++ standard: {CPP_STANDARD_FLAG}");
+    println!("cargo:warning=Desktop Qt C++ standard: {CPP_STANDARD_FLAG}");
     println!(
-        "cargo:warning=Linux Qt include path: {}",
+        "cargo:warning=Desktop Qt include path: {}",
         format_paths(&qt_info.include_paths)
     );
     println!(
-        "cargo:warning=Linux Qt library path: {}",
+        "cargo:warning=Desktop Qt library path: {}",
         format_paths(&qt_info.library_paths)
     );
     config.build("src/main.rs");

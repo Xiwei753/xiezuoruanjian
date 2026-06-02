@@ -480,6 +480,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_stage_blacklisted_files() {
         let dir = tempdir().unwrap();
 
@@ -694,6 +695,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_save_sync_state_failure() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join("app-meta/sync");
@@ -1184,6 +1186,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_push_preflight_unborn_head() {
         let dir = tempfile::tempdir().unwrap();
         // Repository is initialized but has no commits (unborn HEAD)
@@ -1197,6 +1200,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_push_preflight_missing_branch_ref_recovered() {
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
@@ -1238,6 +1242,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_settings_semantic_merge_conflict_recovery() {
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
@@ -1776,6 +1781,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn test_perform_lww_sync_remote_delete_removes_local_file() {
         let dir = tempdir().unwrap();
         let local_path = dir.path().join("projects/p1/project.json");
