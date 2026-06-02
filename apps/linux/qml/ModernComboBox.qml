@@ -102,8 +102,8 @@ Item {
                         anchors {
                             left: parent.left
                             leftMargin: dt ? dt.sp10 : 10
-                            verticalCenter: parent.verticalCenter
                         }
+                        anchors.verticalCenter: parent.verticalCenter
                         text: (root.displayModel && root.displayModel.length > index) ? String(root.displayModel[index]) : String(modelData)
                         color: index === root.currentIndex ? (dt ? dt.onPrimaryContainer : "#001E31") : (dt ? dt.textPrimary : "#E2E4E9")
                         font.pixelSize: dt ? dt.label : 13

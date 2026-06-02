@@ -30,13 +30,13 @@ pub struct ProjectBackend {
     delete_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
     create_new_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
-    rename_project: qt_method!(fn(&mut self, project_id: QString, new_title: QString)),
+    rename_project_json: qt_method!(fn(&mut self, project_id: QString, new_title: QString) -> QString),
     delete_project: qt_method!(fn(&mut self, project_id: QString)),
     reorder_projects: qt_method!(fn(&mut self, ordered_ids_joined: QString)),
-    rename_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, new_title: QString)),
+    rename_volume_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QString),
     delete_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
     reorder_volumes: qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString)),
-    rename_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString)),
+    rename_chapter_json: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) -> QString),
     delete_chapter: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
     reorder_chapters: qt_method!(fn(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString)),
     select_project: qt_method!(fn(&mut self, project_id: QString)),
@@ -77,13 +77,13 @@ impl ProjectBackend {
     fn delete_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, action_id: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.delete_chapter_json(project_id, volume_id, chapter_id, action_id)); self.emit_changed(); out }
     fn create_new_volume(&mut self, project_id: QString, title: QString) { self.with_app_mut((), |app| app.create_new_volume(project_id, title)); self.emit_changed(); }
     fn create_new_chapter(&mut self, project_id: QString, volume_id: QString, title: QString) { self.with_app_mut((), |app| app.create_new_chapter(project_id, volume_id, title)); self.emit_changed(); }
-    fn rename_project(&mut self, project_id: QString, new_title: QString) { self.with_app_mut((), |app| app.rename_project(project_id, new_title)); self.emit_changed(); }
+    fn rename_project_json(&mut self, project_id: QString, new_title: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.rename_project_json(project_id, new_title)); self.emit_changed(); out }
     fn delete_project(&mut self, project_id: QString) { self.with_app_mut((), |app| app.delete_project(project_id)); self.emit_changed(); }
     fn reorder_projects(&mut self, ordered_ids_joined: QString) { self.with_app_mut((), |app| app.reorder_projects(ordered_ids_joined)); self.emit_changed(); }
-    fn rename_volume(&mut self, project_id: QString, volume_id: QString, new_title: QString) { self.with_app_mut((), |app| app.rename_volume(project_id, volume_id, new_title)); self.emit_changed(); }
+    fn rename_volume_json(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.rename_volume_json(project_id, volume_id, new_title)); self.emit_changed(); out }
     fn delete_volume(&mut self, project_id: QString, volume_id: QString) { self.with_app_mut((), |app| app.delete_volume(project_id, volume_id)); self.emit_changed(); }
     fn reorder_volumes(&mut self, project_id: QString, ordered_ids_joined: QString) { self.with_app_mut((), |app| app.reorder_volumes(project_id, ordered_ids_joined)); self.emit_changed(); }
-    fn rename_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) { self.with_app_mut((), |app| app.rename_chapter(project_id, volume_id, chapter_id, new_title)); self.emit_changed(); }
+    fn rename_chapter_json(&mut self, project_id: QString, volume_id: QString, chapter_id: QString, new_title: QString) -> QString { let out = self.with_app_mut("{}".into(), |app| app.rename_chapter_json(project_id, volume_id, chapter_id, new_title)); self.emit_changed(); out }
     fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) { self.with_app_mut((), |app| app.delete_chapter(project_id, volume_id, chapter_id)); self.emit_changed(); }
     fn reorder_chapters(&mut self, project_id: QString, volume_id: QString, ordered_ids_joined: QString) { self.with_app_mut((), |app| app.reorder_chapters(project_id, volume_id, ordered_ids_joined)); self.emit_changed(); }
     fn select_project(&mut self, project_id: QString) { self.with_app_mut((), |app| app.select_project(project_id)); self.selected_item_changed(); }

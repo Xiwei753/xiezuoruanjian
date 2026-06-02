@@ -330,8 +330,8 @@ Rectangle {
                                         anchors {
                                             right: parent.right
                                             rightMargin: dt ? dt.sp8 : 8
-                                            verticalCenter: parent.verticalCenter
                                         }
+                                        anchors.verticalCenter: parent.verticalCenter
 
                                         AppText {
                                             anchors.centerIn: parent

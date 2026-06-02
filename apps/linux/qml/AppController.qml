@@ -188,9 +188,7 @@ QtObject {
         var projectApi = projectBackendRef || backendRef;
         if (!projectApi || !projectId || !title) return false;
         try {
-            projectApi.rename_project(projectId, title);
-            refreshState(qsTr("刷新重命名结果失败"));
-            return true;
+            return handleMutationResult(projectApi.rename_project_json(projectId, title), qsTr("重命名作品失败"));
         } catch (e) {
             emitError(qsTr("后端调用失败: ") + e);
             return false;
@@ -201,9 +199,7 @@ QtObject {
         var projectApi = projectBackendRef || backendRef;
         if (!projectApi || !projectId || !volumeId || !title) return false;
         try {
-            projectApi.rename_volume(projectId, volumeId, title);
-            refreshState(qsTr("刷新重命名结果失败"));
-            return true;
+            return handleMutationResult(projectApi.rename_volume_json(projectId, volumeId, title), qsTr("重命名卷失败"));
         } catch (e) {
             emitError(qsTr("后端调用失败: ") + e);
             return false;
@@ -214,9 +210,7 @@ QtObject {
         var projectApi = projectBackendRef || backendRef;
         if (!projectApi || !projectId || !volumeId || !chapterId || !title) return false;
         try {
-            projectApi.rename_chapter(projectId, volumeId, chapterId, title);
-            refreshState(qsTr("刷新重命名结果失败"));
-            return true;
+            return handleMutationResult(projectApi.rename_chapter_json(projectId, volumeId, chapterId, title), qsTr("重命名章节失败"));
         } catch (e) {
             emitError(qsTr("后端调用失败: ") + e);
             return false;

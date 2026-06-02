@@ -153,7 +153,7 @@ fn detect_qt6_from_env() -> Option<Qt6BuildInfo> {
         .parse::<Version>()
         .unwrap_or_else(|_| panic!("Unable to parse Qt version from QT_INCLUDE_PATH: {version}"));
     if parsed.major != 6 {
-        println!("cargo:warning=Linux binary is still linked against Qt5; Qt6 migration incomplete. QT_INCLUDE_PATH points to Qt {version}.");
+        panic!("Linux binary requires Qt6; Qt5 is no longer supported. QT_INCLUDE_PATH points to Qt {version}.");
     }
     let header_root = PathBuf::from(include_path);
     let mut include_paths = vec![header_root.clone()];
