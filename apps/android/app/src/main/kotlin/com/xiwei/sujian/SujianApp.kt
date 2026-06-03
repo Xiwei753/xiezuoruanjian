@@ -28,6 +28,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleObserver
 import androidx.lifecycle.OnLifecycleEvent
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.google.android.material.color.DynamicColors
 import com.xiwei.sujian.data.AutoSyncScheduler
 
 class SujianApp : Application(), LifecycleObserver {
@@ -36,6 +37,7 @@ class SujianApp : Application(), LifecycleObserver {
 
     override fun onCreate() {
         super.onCreate()
+        DynamicColors.applyToActivitiesIfAvailable(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
