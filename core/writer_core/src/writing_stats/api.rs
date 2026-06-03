@@ -80,17 +80,17 @@ impl StatsApi {
 
         Ok(serde_json::json!({
             "range": {
-                "start_date": range.start_date,
-                "end_date": range.end_date,
+                "startDate": range.start_date,
+                "endDate": range.end_date,
             },
-            "total_human_typed_chars": total_human_typed,
-            "total_pasted_chars": total_pasted,
-            "total_deleted_chars": total_deleted,
-            "total_ai_inserted_chars": total_ai_inserted,
-            "total_net_delta_chars": total_net_delta,
-            "total_active_seconds": total_active_seconds,
-            "total_sessions": total_sessions,
-            "days_count": daily_stats.len() as u32,
+            "totalHumanTypedChars": total_human_typed,
+            "totalPastedChars": total_pasted,
+            "totalDeletedChars": total_deleted,
+            "totalAiInsertedChars": total_ai_inserted,
+            "totalNetDeltaChars": total_net_delta,
+            "totalActiveSeconds": total_active_seconds,
+            "totalSessions": total_sessions,
+            "daysCount": daily_stats.len() as u32,
         }))
     }
 
@@ -107,39 +107,39 @@ impl StatsApi {
             for (project_id, proj_stats) in &stats.per_project {
                 let entry = by_project.entry(project_id.clone()).or_insert_with(|| {
                     serde_json::json!({
-                        "project_id": project_id,
-                        "human_typed_chars": 0u64,
-                        "pasted_chars": 0u64,
-                        "deleted_chars": 0u64,
-                        "ai_inserted_chars": 0u64,
-                        "net_delta_chars": 0i64,
-                        "active_seconds": 0u64,
+                        "projectId": project_id,
+                        "humanTypedChars": 0u64,
+                        "pastedChars": 0u64,
+                        "deletedChars": 0u64,
+                        "aiInsertedChars": 0u64,
+                        "netDeltaChars": 0i64,
+                        "activeSeconds": 0u64,
                     })
                 });
 
                 if let Some(obj) = entry.as_object_mut() {
-                    *obj.get_mut("human_typed_chars").unwrap() = serde_json::json!(
-                        obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("humanTypedChars").unwrap() = serde_json::json!(
+                        obj.get("humanTypedChars").unwrap().as_u64().unwrap_or(0)
                             + proj_stats.human_typed_chars
                     );
-                    *obj.get_mut("pasted_chars").unwrap() = serde_json::json!(
-                        obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("pastedChars").unwrap() = serde_json::json!(
+                        obj.get("pastedChars").unwrap().as_u64().unwrap_or(0)
                             + proj_stats.pasted_chars
                     );
-                    *obj.get_mut("deleted_chars").unwrap() = serde_json::json!(
-                        obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("deletedChars").unwrap() = serde_json::json!(
+                        obj.get("deletedChars").unwrap().as_u64().unwrap_or(0)
                             + proj_stats.deleted_chars
                     );
-                    *obj.get_mut("ai_inserted_chars").unwrap() = serde_json::json!(
-                        obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("aiInsertedChars").unwrap() = serde_json::json!(
+                        obj.get("aiInsertedChars").unwrap().as_u64().unwrap_or(0)
                             + proj_stats.ai_inserted_chars
                     );
-                    *obj.get_mut("net_delta_chars").unwrap() = serde_json::json!(
-                        obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0)
+                    *obj.get_mut("netDeltaChars").unwrap() = serde_json::json!(
+                        obj.get("netDeltaChars").unwrap().as_i64().unwrap_or(0)
                             + proj_stats.net_delta_chars
                     );
-                    *obj.get_mut("active_seconds").unwrap() = serde_json::json!(
-                        obj.get("active_seconds").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("activeSeconds").unwrap() = serde_json::json!(
+                        obj.get("activeSeconds").unwrap().as_u64().unwrap_or(0)
                             + proj_stats.active_seconds
                     );
                 }
@@ -149,8 +149,8 @@ impl StatsApi {
         let projects: Vec<Value> = by_project.into_values().collect();
         Ok(serde_json::json!({
             "range": {
-                "start_date": range.start_date,
-                "end_date": range.end_date,
+                "startDate": range.start_date,
+                "endDate": range.end_date,
             },
             "projects": projects,
         }))
@@ -169,39 +169,39 @@ impl StatsApi {
             for (chapter_id, chap_stats) in &stats.per_chapter {
                 let entry = by_chapter.entry(chapter_id.clone()).or_insert_with(|| {
                     serde_json::json!({
-                        "chapter_id": chapter_id,
-                        "human_typed_chars": 0u64,
-                        "pasted_chars": 0u64,
-                        "deleted_chars": 0u64,
-                        "ai_inserted_chars": 0u64,
-                        "net_delta_chars": 0i64,
-                        "active_seconds": 0u64,
+                        "chapterId": chapter_id,
+                        "humanTypedChars": 0u64,
+                        "pastedChars": 0u64,
+                        "deletedChars": 0u64,
+                        "aiInsertedChars": 0u64,
+                        "netDeltaChars": 0i64,
+                        "activeSeconds": 0u64,
                     })
                 });
 
                 if let Some(obj) = entry.as_object_mut() {
-                    *obj.get_mut("human_typed_chars").unwrap() = serde_json::json!(
-                        obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("humanTypedChars").unwrap() = serde_json::json!(
+                        obj.get("humanTypedChars").unwrap().as_u64().unwrap_or(0)
                             + chap_stats.human_typed_chars
                     );
-                    *obj.get_mut("pasted_chars").unwrap() = serde_json::json!(
-                        obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("pastedChars").unwrap() = serde_json::json!(
+                        obj.get("pastedChars").unwrap().as_u64().unwrap_or(0)
                             + chap_stats.pasted_chars
                     );
-                    *obj.get_mut("deleted_chars").unwrap() = serde_json::json!(
-                        obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("deletedChars").unwrap() = serde_json::json!(
+                        obj.get("deletedChars").unwrap().as_u64().unwrap_or(0)
                             + chap_stats.deleted_chars
                     );
-                    *obj.get_mut("ai_inserted_chars").unwrap() = serde_json::json!(
-                        obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("aiInsertedChars").unwrap() = serde_json::json!(
+                        obj.get("aiInsertedChars").unwrap().as_u64().unwrap_or(0)
                             + chap_stats.ai_inserted_chars
                     );
-                    *obj.get_mut("net_delta_chars").unwrap() = serde_json::json!(
-                        obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0)
+                    *obj.get_mut("netDeltaChars").unwrap() = serde_json::json!(
+                        obj.get("netDeltaChars").unwrap().as_i64().unwrap_or(0)
                             + chap_stats.net_delta_chars
                     );
-                    *obj.get_mut("active_seconds").unwrap() = serde_json::json!(
-                        obj.get("active_seconds").unwrap().as_u64().unwrap_or(0)
+                    *obj.get_mut("activeSeconds").unwrap() = serde_json::json!(
+                        obj.get("activeSeconds").unwrap().as_u64().unwrap_or(0)
                             + chap_stats.active_seconds
                     );
                 }
@@ -211,8 +211,8 @@ impl StatsApi {
         let chapters: Vec<Value> = by_chapter.into_values().collect();
         Ok(serde_json::json!({
             "range": {
-                "start_date": range.start_date,
-                "end_date": range.end_date,
+                "startDate": range.start_date,
+                "endDate": range.end_date,
             },
             "chapters": chapters,
         }))
@@ -230,44 +230,44 @@ impl StatsApi {
         for stats in &daily_stats {
             let entry = by_device.entry(stats.device_id.clone()).or_insert_with(|| {
                 serde_json::json!({
-                    "device_id": stats.device_id,
+                    "deviceId": stats.device_id,
                     "platform": stats.platform,
-                    "human_typed_chars": 0u64,
-                    "pasted_chars": 0u64,
-                    "deleted_chars": 0u64,
-                    "ai_inserted_chars": 0u64,
-                    "net_delta_chars": 0i64,
-                    "active_seconds": 0u64,
-                    "sessions_count": 0u32,
+                    "humanTypedChars": 0u64,
+                    "pastedChars": 0u64,
+                    "deletedChars": 0u64,
+                    "aiInsertedChars": 0u64,
+                    "netDeltaChars": 0i64,
+                    "activeSeconds": 0u64,
+                    "sessionsCount": 0u32,
                 })
             });
 
             if let Some(obj) = entry.as_object_mut() {
-                *obj.get_mut("human_typed_chars").unwrap() = serde_json::json!(
-                    obj.get("human_typed_chars").unwrap().as_u64().unwrap_or(0)
+                *obj.get_mut("humanTypedChars").unwrap() = serde_json::json!(
+                    obj.get("humanTypedChars").unwrap().as_u64().unwrap_or(0)
                         + stats.total_human_typed_chars
                 );
-                *obj.get_mut("pasted_chars").unwrap() = serde_json::json!(
-                    obj.get("pasted_chars").unwrap().as_u64().unwrap_or(0)
+                *obj.get_mut("pastedChars").unwrap() = serde_json::json!(
+                    obj.get("pastedChars").unwrap().as_u64().unwrap_or(0)
                         + stats.total_pasted_chars
                 );
-                *obj.get_mut("deleted_chars").unwrap() = serde_json::json!(
-                    obj.get("deleted_chars").unwrap().as_u64().unwrap_or(0)
+                *obj.get_mut("deletedChars").unwrap() = serde_json::json!(
+                    obj.get("deletedChars").unwrap().as_u64().unwrap_or(0)
                         + stats.total_deleted_chars
                 );
-                *obj.get_mut("ai_inserted_chars").unwrap() = serde_json::json!(
-                    obj.get("ai_inserted_chars").unwrap().as_u64().unwrap_or(0)
+                *obj.get_mut("aiInsertedChars").unwrap() = serde_json::json!(
+                    obj.get("aiInsertedChars").unwrap().as_u64().unwrap_or(0)
                         + stats.total_ai_inserted_chars
                 );
-                *obj.get_mut("net_delta_chars").unwrap() = serde_json::json!(
-                    obj.get("net_delta_chars").unwrap().as_i64().unwrap_or(0)
+                *obj.get_mut("netDeltaChars").unwrap() = serde_json::json!(
+                    obj.get("netDeltaChars").unwrap().as_i64().unwrap_or(0)
                         + stats.total_net_delta_chars
                 );
-                *obj.get_mut("active_seconds").unwrap() = serde_json::json!(
-                    obj.get("active_seconds").unwrap().as_u64().unwrap_or(0) + stats.active_seconds
+                *obj.get_mut("activeSeconds").unwrap() = serde_json::json!(
+                    obj.get("activeSeconds").unwrap().as_u64().unwrap_or(0) + stats.active_seconds
                 );
-                *obj.get_mut("sessions_count").unwrap() = serde_json::json!(
-                    obj.get("sessions_count").unwrap().as_u64().unwrap_or(0)
+                *obj.get_mut("sessionsCount").unwrap() = serde_json::json!(
+                    obj.get("sessionsCount").unwrap().as_u64().unwrap_or(0)
                         + stats.sessions_count as u64
                 );
             }
@@ -276,8 +276,8 @@ impl StatsApi {
         let devices: Vec<Value> = by_device.into_values().collect();
         Ok(serde_json::json!({
             "range": {
-                "start_date": range.start_date,
-                "end_date": range.end_date,
+                "startDate": range.start_date,
+                "endDate": range.end_date,
             },
             "devices": devices,
         }))
@@ -292,20 +292,20 @@ impl StatsApi {
             .iter()
             .map(|b| {
                 serde_json::json!({
-                    "start_ms": b.start_ms,
-                    "end_ms": b.end_ms,
-                    "chars_typed": b.chars_typed,
-                    "chars_per_minute": b.chars_per_minute,
+                    "startMs": b.start_ms,
+                    "endMs": b.end_ms,
+                    "charsTyped": b.chars_typed,
+                    "charsPerMinute": b.chars_per_minute,
                 })
             })
             .collect();
 
         Ok(serde_json::json!({
             "range": {
-                "start_date": range.start_date,
-                "end_date": range.end_date,
+                "startDate": range.start_date,
+                "endDate": range.end_date,
             },
-            "bucket_minutes": bucket_minutes,
+            "bucketMinutes": bucket_minutes,
             "buckets": bucket_json,
         }))
     }

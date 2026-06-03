@@ -136,23 +136,21 @@
         android:layout_gravity="bottom"
         app:menu="@menu/menu_main_bottom_nav" />
 
-    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabNewProject"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        android:text="@string/action_new_project"
-        app:icon="@drawable/ic_add"
+        android:src="@drawable/ic_add"
         app:layout_anchor="@id/toolbar"
         app:layout_anchorGravity="bottom|end" />
 
-    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabNewStarMapNode"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        android:text="新建节点"
-        app:icon="@drawable/ic_add"
+        android:src="@drawable/ic_add"
         app:layout_anchor="@id/bottomNav"
         app:layout_anchorGravity="top|end"
         android:visibility="gone" />

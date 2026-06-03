@@ -15,7 +15,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.WorkspaceRepository
 import kotlinx.coroutines.*
@@ -39,7 +39,7 @@ import kotlinx.coroutines.*
  */
 class ChapterListActivity : AppCompatActivity() {
     private lateinit var chapterRecyclerView: RecyclerView
-    private lateinit var fabNewVolume: ExtendedFloatingActionButton
+    private lateinit var fabNewVolume: FloatingActionButton
     private lateinit var emptyStateLayout: View
     private lateinit var statsHeaderLayout: View
     private lateinit var tvStatsTotalWords: TextView
