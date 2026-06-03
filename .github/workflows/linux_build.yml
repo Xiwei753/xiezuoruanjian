@@ -74,6 +74,7 @@ jobs:
             libfuse2 \
             file \
             wget \
+            xauth \
             xvfb
           wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20240109-1/linuxdeploy-x86_64.AppImage
           wget -O linuxdeploy-plugin-qt-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20240109-1/linuxdeploy-plugin-qt-x86_64.AppImage
@@ -138,10 +139,15 @@ jobs:
           status=$?
           set -e
           cat appimage-smoke.log
-          if grep -E 'QML load failed|module ".*" is not installed|Could not find the Qt platform plugin' appimage-smoke.log; then
+          failure_patterns='QML load failed|module ".*" is not installed|Could not find the Qt platform plugin'
+          if grep -E "$failure_patterns" appimage-smoke.log; then
+            summary="$(grep -E "$failure_patterns" appimage-smoke.log | tr '\n' ' ' | cut -c1-800)"
+            echo "::error title=AppImage smoke test failed::$summary"
             exit 1
           fi
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            summary="$(tr '\n' ' ' < appimage-smoke.log | cut -c1-800)"
+            echo "::error title=AppImage exited unexpectedly::status $status; $summary"
             exit "$status"
           fi
 
