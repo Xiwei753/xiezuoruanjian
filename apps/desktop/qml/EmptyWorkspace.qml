@@ -12,7 +12,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Dialogs
+import Qt.labs.platform as Platform
 
 Item {
     id: root
@@ -23,21 +23,21 @@ Item {
     signal openWorkspaceWithPath(string path)
     signal initFromGithub()
 
-    FolderDialog {
+    Platform.FolderDialog {
         id: createWorkspaceDialog
         title: qsTr("选择或创建空文件夹作为新工作区")
         onAccepted: {
-            var path = String(currentFolder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
+            var path = String(folder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
             path = decodeURIComponent(path);
             root.createWorkspaceWithPath(path);
         }
     }
 
-    FolderDialog {
+    Platform.FolderDialog {
         id: openWorkspaceDialog
         title: qsTr("选择已有工作区文件夹")
         onAccepted: {
-            var path = String(currentFolder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
+            var path = String(folder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
             path = decodeURIComponent(path);
             root.openWorkspaceWithPath(path);
         }
