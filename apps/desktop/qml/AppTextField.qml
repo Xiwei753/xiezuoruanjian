@@ -34,7 +34,7 @@ Item {
         anchors.fill: parent
         spacing: control.theme ? control.theme.sp4 : 4
 
-        Label {
+        Text {
             text: control.label
             font.pixelSize: control.theme ? control.theme.label : 13
             color: control.theme ? control.theme.textSecondary : "#8C9198"
@@ -49,9 +49,9 @@ Item {
             implicitHeight: control.theme ? control.theme.settingsControlHeight : 40
             placeholderText: control.placeholder
             color: control.theme ? control.theme.textPrimary : "#E2E2E5"
-            placeholderTextColor: control.theme ? control.theme.textMuted : control.palette.placeholderText
-            selectionColor: control.theme ? control.theme.primary : control.palette.highlight
-            selectedTextColor: control.theme ? control.theme.onPrimary : control.palette.highlightedText
+            placeholderTextColor: control.theme ? control.theme.textMuted : "#8C9198"
+            selectionColor: control.theme ? control.theme.primary : "#006497"
+            selectedTextColor: control.theme ? control.theme.onPrimary : "#FFFFFF"
             activeFocusOnTab: control.fieldTabFocus
             onAccepted: control.accepted()
             onEditingFinished: control.editingFinished()

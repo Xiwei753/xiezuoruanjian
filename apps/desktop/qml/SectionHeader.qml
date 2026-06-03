@@ -12,7 +12,7 @@
 import QtQuick
 import QtQuick.Controls
 
-Label {
+Text {
     id: control
     property var theme: null
 

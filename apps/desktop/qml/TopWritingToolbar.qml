@@ -360,14 +360,14 @@ Rectangle {
                     Layout.fillWidth: true
                     theme: dt
                     from: 10
-                    to: 40
+                    to: 120
                     stepSize: 1
                     value: root.currentFontSize
                     onMoved: root.fontSizeChanged(value)
                 }
 
                 AppText {
-                    text: "40"
+                    text: "120"
                     color: dt ? dt.textMuted : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
                 }

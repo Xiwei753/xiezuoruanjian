@@ -33,14 +33,14 @@ ScrollView {
         spacing: root.appTheme ? root.appTheme.sp12 : 10
 
         // Header
-        Label {
+        Text {
             text: qsTr("Action 调试")
             font.pixelSize: root.appTheme ? root.appTheme.fontXl : 18
             font.weight: Font.Bold
             color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
         }
 
-        Label {
+        Text {
             text: qsTr("列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。")
             color: root.appTheme ? root.appTheme.textSecondary : "#475569"
             font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
@@ -124,14 +124,14 @@ ScrollView {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Label {
+                        Text {
                             text: modelData.title || modelData.id || ""
                             font.pixelSize: root.appTheme ? root.appTheme.fontMd : 14
                             font.weight: Font.DemiBold
                             color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
                             Layout.fillWidth: true
                         }
-                        Label {
+                        Text {
                             text: {
                                 var risk = modelData.riskLevel || ""
                                 if (risk === "dangerous") return qsTr("危险")
@@ -150,14 +150,14 @@ ScrollView {
                         }
                     }
 
-                    Label {
+                    Text {
                         text: modelData.id || ""
                         font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
                         color: root.appTheme ? root.appTheme.textSecondary : "#475569"
                         font.family: "monospace"
                     }
 
-                    Label {
+                    Text {
                         text: modelData.description || ""
                         font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                         color: root.appTheme ? root.appTheme.textSecondary : "#475569"
@@ -250,7 +250,7 @@ ScrollView {
                                 radius: root.appTheme ? root.appTheme.radiusSm : 6
                             }
                         }
-                        Label {
+                        Text {
                             text: qsTr("危险操作已阻断")
                             visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
                             color: root.appTheme ? root.appTheme.danger : "#ef4444"
@@ -298,7 +298,7 @@ ScrollView {
                 anchors.fill: parent
                 anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
                 spacing: root.appTheme ? root.appTheme.sp8 : 8
-                Label {
+                Text {
                     text: qsTr("获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。")
                     font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
                     color: root.appTheme ? root.appTheme.textSecondary : "#475569"

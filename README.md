@@ -1,5 +1,7 @@
 # 素笺写作
 
+![素笺写作应用图标](packaging/web/icon-192.png)
+
 本仓库包含“素笺写作”的源代码，目前已过渡到“Rust 核心 + 各平台轻量客户端”的单仓库架构。
 
 ## 架构
@@ -24,6 +26,7 @@
 ### 工具
 
 - `tools/build_core.sh`: 构建 Rust 核心库。
+- `scripts/generate_icons.py`: 从 `assets/brand/icon/source` 生成各平台应用图标资源。
 
 ### Rust 核心
 

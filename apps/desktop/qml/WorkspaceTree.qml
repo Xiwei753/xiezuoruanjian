@@ -86,8 +86,11 @@ Rectangle {
                 property bool isSelected: root.selectedId !== "" && root.selectedId === model.id
                 property bool isHovered: hoverArea.containsMouse
                 
-                color: isSelected ? (theme ? theme.primaryContainer : "#CCE5FF") :
-                       isHovered ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent"
+                color: {
+                    if (isSelected) return theme ? theme.primaryContainer : "#CCE5FF";
+                    if (isHovered) return theme ? theme.surfaceVariant : "#DFE3EB";
+                    return "transparent";
+                }
 
                 RowLayout {
                     anchors.fill: parent
@@ -107,14 +110,20 @@ Rectangle {
                             if (model.type === "chapter") return "●";
                             return "";
                         }
-                        color: delegateRect.isSelected ? (root.theme ? root.theme.onPrimaryContainer : "#CCE5FF") : (root.theme ? root.theme.textSecondary : "#8C9198")
+                        color: {
+                            if (delegateRect.isSelected) return root.theme ? root.theme.onPrimaryContainer : "#CCE5FF";
+                            return root.theme ? root.theme.textSecondary : "#8C9198";
+                        }
                         font.pixelSize: 14
                     }
 
                     AppText {
                         Layout.fillWidth: true
                         text: model.title || ""
-                        color: delegateRect.isSelected ? (root.theme ? root.theme.onPrimaryContainer : "#CCE5FF") : (root.theme ? root.theme.textPrimary : "#E2E2E5")
+                        color: {
+                            if (delegateRect.isSelected) return root.theme ? root.theme.onPrimaryContainer : "#CCE5FF";
+                            return root.theme ? root.theme.textPrimary : "#E2E2E5";
+                        }
                         font.pixelSize: 14
                         elide: Text.ElideRight
                     }

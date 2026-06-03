@@ -41,6 +41,8 @@ use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_stat
 use backend::{AppBackend, BackendRuntime};
 
 cpp! {{
+    #include <QGuiApplication>
+    #include <QIcon>
     #include <QtGlobal>
 }}
 
@@ -101,6 +103,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/CreateProjectDialog.qml" as "CreateProjectDialog.qml",
     "qml/StatusPill.qml" as "StatusPill.qml",
     "qml/ToolbarButton.qml" as "ToolbarButton.qml",
+    "resources/icons/sujian.svg" as "icons/sujian.svg",
 });
 
 static QML_LOAD_FAILED: AtomicBool = AtomicBool::new(false);
@@ -204,6 +207,12 @@ fn probe_hub_header_resource() {
     }
 }
 
+fn set_application_icon() {
+    cpp!(unsafe [] {
+        QGuiApplication::setWindowIcon(QIcon(":/icons/sujian.svg"));
+    });
+}
+
 fn main() {
     debug_log_static("app", "app_startup", "Sujian application starting...");
     fail_if_not_qt6();
@@ -234,6 +243,7 @@ fn main() {
     remember_qml_load_error("");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
+    set_application_icon();
 
     let backend_runtime = BackendRuntime::new();
     backend_runtime.register_context_properties(&mut engine);

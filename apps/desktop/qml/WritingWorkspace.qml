@@ -267,10 +267,11 @@ Rectangle {
                                     anchors.leftMargin: dt ? dt.sp8 : 8
                                     anchors.rightMargin: dt ? dt.sp8 : 8
                                     radius: dt ? dt.radiusPill : 999
-                                    color: isSelected ?
-                                           (dt ? dt.primaryContainer : "#CCE5FF") :
-                                           delegateHover.containsMouse ?
-                                           (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                                    color: {
+                                        if (isSelected) return dt ? dt.primaryContainer : "#CCE5FF";
+                                        if (delegateHover.containsMouse) return dt ? dt.surfaceVariant : "#DFE3EB";
+                                        return "transparent";
+                                    }
 
                                     property bool isSelected: model.itemId === editorController.chapterId
 
@@ -289,9 +290,10 @@ Rectangle {
 
                                         AppText {
                                             text: model.itemTitle || ""
-                                            color: delegateBg.isSelected ?
-                                                   (dt ? dt.onPrimaryContainer : "#CCE5FF") :
-                                                   (dt ? dt.textPrimary : "#E2E2E5")
+                                            color: {
+                                                if (delegateBg.isSelected) return dt ? dt.onPrimaryContainer : "#CCE5FF";
+                                                return dt ? dt.textPrimary : "#E2E2E5";
+                                            }
                                             font.pixelSize: dt ? dt.label : 13
                                             font.family: dt ? dt.fontFamily : "sans-serif"
                                             font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal

@@ -51,7 +51,7 @@ ComboBox {
         text: control.displayText
         color: control.enabled
             ? (control.theme ? control.theme.textPrimary : "#E2E2E5")
-            : (control.theme ? control.theme.textDisabled : control.palette.placeholderText)
+            : (control.theme ? control.theme.textDisabled : "#8C9198")
         font.pixelSize: control.theme ? control.theme.label : 13
         font.family: control.theme ? control.theme.fontFamily : "sans-serif"
         leftPadding: control.leftPadding
@@ -75,7 +75,7 @@ ComboBox {
             context.closePath()
             context.fillStyle = control.enabled
                 ? (control.theme ? control.theme.textSecondary : "#E2E2E5")
-                : (control.theme ? control.theme.textDisabled : control.palette.placeholderText)
+                : (control.theme ? control.theme.textDisabled : "#8C9198")
             context.fill()
         }
     }
@@ -97,14 +97,14 @@ ComboBox {
         contentItem: AppText {
             text: modelData
             color: control.highlightedIndex === index
-                ? (control.theme ? control.theme.onPrimaryContainer : control.palette.highlightedText)
+                ? (control.theme ? control.theme.onPrimaryContainer : "#001E31")
                 : (control.theme ? control.theme.textPrimary : "#E2E2E5")
             font.pixelSize: control.theme ? control.theme.fontMd : 13
             verticalAlignment: Text.AlignVCenter
         }
         background: Rectangle {
             color: control.highlightedIndex === index
-                ? (control.theme ? control.theme.primaryContainer : control.palette.highlight)
+                ? (control.theme ? control.theme.primaryContainer : "#CCE5FF")
                 : "transparent"
         }
     }

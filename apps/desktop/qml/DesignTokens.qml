@@ -17,46 +17,47 @@ QtObject {
 
     property bool isDark: true
     property string monetColor: ""
+    property color _monetColorObj: monetColor
 
     // --- Material 3 color roles (aligned with Android colors.xml) ---
     property bool hasMonetColor: monetColor.length === 7 && monetColor.startsWith("#")
-    property color primary: hasMonetColor ? monetColor : (isDark ? "#92CCFF" : "#006497")
-    property color onPrimary: isDark ? "#003351" : "#FFFFFF"
-    property color primaryContainer: isDark ? "#004B73" : "#CCE5FF"
-    property color onPrimaryContainer: isDark ? "#CCE5FF" : "#001E31"
-    property color secondary: isDark ? "#B8C8DA" : "#51606F"
-    property color onSecondary: isDark ? "#233240" : "#FFFFFF"
-    property color secondaryContainer: isDark ? "#394857" : "#D4E4F6"
-    property color onSecondaryContainer: isDark ? "#D4E4F6" : "#0E1D2A"
-    property color background: isDark ? "#1A1C1E" : "#FCFCFF"
-    property color onBackground: isDark ? "#E2E2E5" : "#1A1C1E"
-    property color surface: isDark ? "#1A1C1E" : "#FCFCFF"
-    property color onSurface: isDark ? "#E2E2E5" : "#1A1C1E"
-    property color surfaceVariant: isDark ? "#42474E" : "#DFE3EB"
-    property color onSurfaceVariant: isDark ? "#C3C6CF" : "#42474E"
-    property color outline: isDark ? "#8C9198" : "#72787E"
-    property color error: isDark ? "#FFB4AB" : "#BA1A1A"
-    property color onError: isDark ? "#690005" : "#FFFFFF"
+    property color primary: hasMonetColor ? _monetColorObj : (isDark ? Qt.rgba(0.573, 0.800, 1.000, 1) : Qt.rgba(0.000, 0.392, 0.592, 1))
+    property color onPrimary: isDark ? Qt.rgba(0.000, 0.200, 0.318, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
+    property color primaryContainer: isDark ? Qt.rgba(0.000, 0.294, 0.451, 1) : Qt.rgba(0.800, 0.898, 1.000, 1)
+    property color onPrimaryContainer: isDark ? Qt.rgba(0.800, 0.898, 1.000, 1) : Qt.rgba(0.000, 0.118, 0.192, 1)
+    property color secondary: isDark ? Qt.rgba(0.722, 0.784, 0.855, 1) : Qt.rgba(0.318, 0.376, 0.435, 1)
+    property color onSecondary: isDark ? Qt.rgba(0.137, 0.196, 0.251, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
+    property color secondaryContainer: isDark ? Qt.rgba(0.224, 0.282, 0.341, 1) : Qt.rgba(0.831, 0.894, 0.965, 1)
+    property color onSecondaryContainer: isDark ? Qt.rgba(0.831, 0.894, 0.965, 1) : Qt.rgba(0.055, 0.114, 0.165, 1)
+    property color background: isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1)
+    property color onBackground: isDark ? Qt.rgba(0.886, 0.886, 0.898, 1) : Qt.rgba(0.102, 0.110, 0.118, 1)
+    property color surface: isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1)
+    property color onSurface: isDark ? Qt.rgba(0.886, 0.886, 0.898, 1) : Qt.rgba(0.102, 0.110, 0.118, 1)
+    property color surfaceVariant: isDark ? Qt.rgba(0.259, 0.278, 0.306, 1) : Qt.rgba(0.875, 0.890, 0.922, 1)
+    property color onSurfaceVariant: isDark ? Qt.rgba(0.765, 0.776, 0.812, 1) : Qt.rgba(0.259, 0.278, 0.306, 1)
+    property color outline: isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.447, 0.471, 0.494, 1)
+    property color error: isDark ? Qt.rgba(1.000, 0.706, 0.671, 1) : Qt.rgba(0.729, 0.102, 0.102, 1)
+    property color onError: isDark ? Qt.rgba(0.412, 0.000, 0.020, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
 
     // --- Desktop surfaces ---
-    property color surfaceContainerLowest: isDark ? "#0F1113" : "#FFFFFF"
-    property color surfaceContainerLow: isDark ? "#1F2225" : "#F6F8FB"
-    property color surfaceContainer: isDark ? "#23272A" : "#F0F3F7"
-    property color surfaceContainerHigh: isDark ? "#2D3135" : "#EAEFF5"
-    property color surfaceContainerHighest: isDark ? "#383C40" : "#E4E9EF"
-    property color inverseSurface: isDark ? "#E2E2E5" : "#2F3033"
-    property color inverseOnSurface: isDark ? "#2F3033" : "#F1F0F4"
-    property color scrim: "#000000"
+    property color surfaceContainerLowest: isDark ? Qt.rgba(0.059, 0.067, 0.075, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
+    property color surfaceContainerLow: isDark ? Qt.rgba(0.122, 0.133, 0.145, 1) : Qt.rgba(0.965, 0.973, 0.984, 1)
+    property color surfaceContainer: isDark ? Qt.rgba(0.137, 0.153, 0.165, 1) : Qt.rgba(0.941, 0.953, 0.969, 1)
+    property color surfaceContainerHigh: isDark ? Qt.rgba(0.176, 0.192, 0.208, 1) : Qt.rgba(0.918, 0.937, 0.961, 1)
+    property color surfaceContainerHighest: isDark ? Qt.rgba(0.220, 0.235, 0.251, 1) : Qt.rgba(0.894, 0.914, 0.937, 1)
+    property color inverseSurface: isDark ? Qt.rgba(0.886, 0.886, 0.898, 1) : Qt.rgba(0.184, 0.188, 0.200, 1)
+    property color inverseOnSurface: isDark ? Qt.rgba(0.184, 0.188, 0.200, 1) : Qt.rgba(0.945, 0.941, 0.957, 1)
+    property color scrim: Qt.rgba(0.000, 0.000, 0.000, 1)
 
     // --- Semantic colors ---
-    property color success: isDark ? "#8FD6A3" : "#1F7A45"
-    property color onSuccess: isDark ? "#00391D" : "#FFFFFF"
-    property color successContainer: isDark ? "#0F5A30" : "#B9F0C8"
-    property color onSuccessContainer: isDark ? "#B9F0C8" : "#00210F"
-    property color warning: isDark ? "#F4C56A" : "#7A5800"
-    property color onWarning: isDark ? "#402D00" : "#FFFFFF"
-    property color warningContainer: isDark ? "#5D4200" : "#FFE2A8"
-    property color onWarningContainer: isDark ? "#FFE2A8" : "#261A00"
+    property color success: isDark ? Qt.rgba(0.561, 0.839, 0.639, 1) : Qt.rgba(0.122, 0.478, 0.271, 1)
+    property color onSuccess: isDark ? Qt.rgba(0.000, 0.224, 0.114, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
+    property color successContainer: isDark ? Qt.rgba(0.059, 0.353, 0.188, 1) : Qt.rgba(0.725, 0.941, 0.784, 1)
+    property color onSuccessContainer: isDark ? Qt.rgba(0.725, 0.941, 0.784, 1) : Qt.rgba(0.000, 0.129, 0.059, 1)
+    property color warning: isDark ? Qt.rgba(0.957, 0.773, 0.416, 1) : Qt.rgba(0.478, 0.345, 0.000, 1)
+    property color onWarning: isDark ? Qt.rgba(0.251, 0.176, 0.000, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
+    property color warningContainer: isDark ? Qt.rgba(0.365, 0.259, 0.000, 1) : Qt.rgba(1.000, 0.886, 0.659, 1)
+    property color onWarningContainer: isDark ? Qt.rgba(1.000, 0.886, 0.659, 1) : Qt.rgba(0.149, 0.102, 0.000, 1)
     property color info: primary
     property color onInfo: onPrimary
     property color infoContainer: primaryContainer
@@ -64,17 +65,17 @@ QtObject {
 
     // --- Derived app roles ---
     property color bg: background
-    property color paper: isDark ? "#202326" : "#FFFFFF"
+    property color paper: isDark ? Qt.rgba(0.125, 0.137, 0.149, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
     property color border: isDark ? Qt.rgba(outline.r, outline.g, outline.b, 0.42) : Qt.rgba(outline.r, outline.g, outline.b, 0.34)
     property color borderStrong: outline
-    property color sidebar: isDark ? "#15181B" : "#F3F7FC"
+    property color sidebar: isDark ? Qt.rgba(0.082, 0.094, 0.106, 1) : Qt.rgba(0.953, 0.969, 0.988, 1)
     property color card: surfaceContainerLow
     property color cardHover: surfaceContainer
     property color selected: primaryContainer
     property color selectedText: onPrimaryContainer
     property color textPrimary: onSurface
     property color textSecondary: onSurfaceVariant
-    property color textMuted: isDark ? "#8C9198" : "#74787F"
+    property color textMuted: isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.455, 0.471, 0.498, 1)
     property color textDisabled: isDark ? Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38) : Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38)
     property color defaultAccent: primary
     property color defaultAccentHover: isDark ? Qt.lighter(primary, 1.08) : Qt.darker(primary, 1.08)
@@ -84,11 +85,11 @@ QtObject {
     property color accentHover: defaultAccentHover
     property color accentText: onPrimaryContainer
     property color danger: error
-    property color dangerContainer: isDark ? "#93000A" : "#FFDAD6"
-    property color onDangerContainer: isDark ? "#FFDAD6" : "#410002"
+    property color dangerContainer: isDark ? Qt.rgba(0.576, 0.000, 0.039, 1) : Qt.rgba(1.000, 0.855, 0.839, 1)
+    property color onDangerContainer: isDark ? Qt.rgba(1.000, 0.855, 0.839, 1) : Qt.rgba(0.255, 0.000, 0.008, 1)
 
     // --- Editor ---
-    property color editorBackground: isDark ? "#202326" : "#FFFFFF"
+    property color editorBackground: isDark ? Qt.rgba(0.125, 0.137, 0.149, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
     property color editorText: onSurface
     property string editorTextHex: isDark ? "#E2E2E5" : "#1A1C1E"
     property string textPrimaryHex: isDark ? "#E2E2E5" : "#1A1C1E"
@@ -136,7 +137,7 @@ QtObject {
     property color inputBg: surfaceContainerLow
     property color switchTrackOn: primary
     property color switchTrackOff: surfaceVariant
-    property color switchThumb: isDark ? "#D8EFFF" : "#FFFFFF"
+    property color switchThumb: isDark ? Qt.rgba(0.847, 0.937, 1.000, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
 
     // --- Typography ---
     property string fontFamily: "sans-serif"

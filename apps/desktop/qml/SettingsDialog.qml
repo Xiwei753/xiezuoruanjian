@@ -101,7 +101,7 @@ Dialog {
                     label: qsTr("字体大小")
                     valueText: Math.round(value) + " px"
                     from: 12.0
-                    to: 32.0
+                    to: 120.0
                     stepSize: 1.0
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.saveAndNotify() }
                 }
