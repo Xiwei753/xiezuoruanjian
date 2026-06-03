@@ -127,7 +127,7 @@ class MainActivity : AppCompatActivity() {
                 tabWorks.visibility = View.VISIBLE
                 tabStarMap.visibility = View.GONE
                 tabStats.visibility = View.GONE
-                toolbar.title = "作品"
+                toolbar.title = getString(R.string.title_projects)
                 fabNewProject.show()
                 fabNewStarMapNode.hide()
             }
@@ -135,7 +135,7 @@ class MainActivity : AppCompatActivity() {
                 tabWorks.visibility = View.GONE
                 tabStarMap.visibility = View.VISIBLE
                 tabStats.visibility = View.GONE
-                toolbar.title = "星图"
+                toolbar.title = getString(R.string.title_starmap)
                 starMapController.initialize(starmapId)
                 fabNewProject.hide()
                 fabNewStarMapNode.show()
@@ -144,7 +144,7 @@ class MainActivity : AppCompatActivity() {
                 tabWorks.visibility = View.GONE
                 tabStarMap.visibility = View.GONE
                 tabStats.visibility = View.VISIBLE
-                toolbar.title = "统计"
+                toolbar.title = getString(R.string.title_stats)
                 statsController.initialize()
                 fabNewProject.hide()
                 fabNewStarMapNode.hide()
@@ -157,7 +157,7 @@ class MainActivity : AppCompatActivity() {
                     tabWorks.visibility = View.VISIBLE
                     tabStarMap.visibility = View.GONE
                     tabStats.visibility = View.GONE
-                    toolbar.title = "作品"
+                    toolbar.title = getString(R.string.title_projects)
                     fabNewProject.show()
                     fabNewStarMapNode.hide()
                     true
@@ -166,7 +166,7 @@ class MainActivity : AppCompatActivity() {
                     tabWorks.visibility = View.GONE
                     tabStarMap.visibility = View.VISIBLE
                     tabStats.visibility = View.GONE
-                    toolbar.title = "星图"
+                    toolbar.title = getString(R.string.title_starmap)
                     starMapController.initialize(starmapId)
                     fabNewProject.hide()
                     fabNewStarMapNode.show()
@@ -176,7 +176,7 @@ class MainActivity : AppCompatActivity() {
                     tabWorks.visibility = View.GONE
                     tabStarMap.visibility = View.GONE
                     tabStats.visibility = View.VISIBLE
-                    toolbar.title = "统计"
+                    toolbar.title = getString(R.string.title_stats)
                     statsController.initialize()
                     fabNewProject.hide()
                     fabNewStarMapNode.hide()
@@ -378,7 +378,7 @@ class MainActivity : AppCompatActivity() {
     private fun showDeleteProjectDialog(project: Project) {
         AlertDialog.Builder(this)
             .setTitle(R.string.confirm_delete_project)
-            .setMessage("确定要删除作品 \"${project.title}\" 吗？此操作无法恢复。")
+            .setMessage(getString(R.string.confirm_delete_project_message, project.title))
             .setPositiveButton(R.string.action_delete) { _, _ ->
                 lifecycleScope.launch {
                     ErrorUtil.safeRunSuspend(this@MainActivity) {
