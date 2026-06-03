@@ -23,6 +23,8 @@ Rectangle {
     property bool firstLineIndent: false
     property string saveStatus: ""
     property string currentProjectId: ""
+    readonly property int minFontSize: 10
+    readonly property int maxFontSize: 120
 
     signal fontSizeChanged(real size)
     signal lineSpacingChanged(real spacing)
@@ -30,6 +32,37 @@ Rectangle {
     signal formatOneClick()
     signal linkToStarMap()
     signal openStats()
+
+    function syncFontSizeInput() {
+        if (fontSizeInput) {
+            fontSizeInput.text = Math.round(root.currentFontSize).toString()
+        }
+    }
+
+    function commitFontSizeInput(finalize) {
+        if (!fontSizeInput) return
+        var rawText = fontSizeInput.text.trim()
+        if (rawText.length === 0) {
+            if (finalize) root.syncFontSizeInput()
+            return
+        }
+
+        var nextSize = Number(rawText)
+        if (!isFinite(nextSize)) {
+            if (finalize) root.syncFontSizeInput()
+            return
+        }
+
+        if (!finalize && (nextSize < root.minFontSize || nextSize > root.maxFontSize)) return
+
+        nextSize = Math.max(root.minFontSize, Math.min(root.maxFontSize, Math.round(nextSize)))
+        if (Math.round(root.currentFontSize) !== nextSize) {
+            root.fontSizeChanged(nextSize)
+        }
+        if (finalize) fontSizeInput.text = nextSize.toString()
+    }
+
+    onCurrentFontSizeChanged: root.syncFontSizeInput()
 
     color: dt ? dt.surface : "#FCFCFF"
     height: 48
@@ -359,8 +392,8 @@ Rectangle {
                     id: fontSlider
                     Layout.fillWidth: true
                     theme: dt
-                    from: 10
-                    to: 120
+                    from: root.minFontSize
+                    to: root.maxFontSize
                     stepSize: 1
                     value: root.currentFontSize
                     onMoved: root.fontSizeChanged(value)
@@ -373,11 +406,46 @@ Rectangle {
                 }
             }
 
-            AppText {
-                text: Math.round(root.currentFontSize) + " px"
-                color: dt ? dt.textSecondary : "#9CA0AB"
-                font.pixelSize: dt ? dt.fontSm : 12
+            RowLayout {
                 Layout.alignment: Qt.AlignHCenter
+                spacing: dt ? dt.sp6 : 6
+
+                TextField {
+                    id: fontSizeInput
+                    Layout.preferredWidth: 68
+                    Layout.preferredHeight: 34
+                    text: Math.round(root.currentFontSize).toString()
+                    horizontalAlignment: TextInput.AlignHCenter
+                    selectByMouse: true
+                    inputMethodHints: Qt.ImhDigitsOnly
+                    validator: IntValidator { bottom: root.minFontSize; top: root.maxFontSize }
+                    color: dt ? dt.textPrimary : "#E2E4E9"
+                    selectionColor: dt ? dt.primary : "#006497"
+                    selectedTextColor: dt ? dt.onPrimary : "#FFFFFF"
+                    font.pixelSize: dt ? dt.body : 14
+                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    leftPadding: dt ? dt.sp8 : 8
+                    rightPadding: dt ? dt.sp8 : 8
+                    topPadding: dt ? dt.sp4 : 4
+                    bottomPadding: dt ? dt.sp4 : 4
+                    onTextEdited: root.commitFontSizeInput(false)
+                    onAccepted: root.commitFontSizeInput(true)
+                    onEditingFinished: root.commitFontSizeInput(true)
+                    background: Rectangle {
+                        color: dt ? dt.surfaceContainerLow : "#ffffff"
+                        border.color: fontSizeInput.activeFocus ? (dt ? dt.primary : "#006497") : (dt ? dt.border : "#2A2E36")
+                        border.width: fontSizeInput.activeFocus ? 2 : 1
+                        radius: dt ? dt.radiusMd : 12
+                    }
+                }
+
+                AppText {
+                    text: "px"
+                    color: dt ? dt.textSecondary : "#9CA0AB"
+                    font.pixelSize: dt ? dt.fontSm : 12
+                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    Layout.alignment: Qt.AlignVCenter
+                }
             }
         }
     }
