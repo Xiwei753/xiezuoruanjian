@@ -272,6 +272,63 @@ impl WriterAppService {
         self.api.perform_sync(config)
     }
 
+    // --- Sync envelope_json methods ---
+
+    pub fn perform_sync_envelope_json(&self, config: SyncConfigDto) -> String {
+        self.api.perform_sync_envelope_json(config)
+    }
+
+    pub fn perform_sync_dry_run_envelope_json(&self, config: SyncConfigDto) -> String {
+        self.api.perform_sync_dry_run_envelope_json(config)
+    }
+
+    pub fn perform_sync_diagnostics_envelope_json(&self, config: SyncConfigDto) -> String {
+        self.api.perform_sync_diagnostics_envelope_json(config)
+    }
+
+    pub fn save_sync_config_envelope_json(&self, config: SyncConfigDto) -> String {
+        self.api.save_sync_config_envelope_json(config)
+    }
+
+    pub fn save_sync_secrets_envelope_json(&self, secrets: SyncSecretsDto) -> String {
+        self.api.save_sync_secrets_envelope_json(secrets)
+    }
+
+    // --- Chapter/Project envelope_json methods ---
+
+    pub fn save_chapter_content_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        content: String,
+    ) -> String {
+        self.api.save_chapter_content_envelope_json(
+            &project_id,
+            &volume_id,
+            &chapter_id,
+            &content,
+        )
+    }
+
+    pub fn delete_project_envelope_json(&self, project_id: String) -> String {
+        self.api.delete_project_envelope_json(&project_id)
+    }
+
+    pub fn delete_volume_envelope_json(&self, project_id: String, volume_id: String) -> String {
+        self.api.delete_volume_envelope_json(&project_id, &volume_id)
+    }
+
+    pub fn delete_chapter_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+    ) -> String {
+        self.api
+            .delete_chapter_envelope_json(&project_id, &volume_id, &chapter_id)
+    }
+
     pub fn get_writing_stats_summary(
         &self,
         start_date: String,

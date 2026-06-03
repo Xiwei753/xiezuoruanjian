@@ -399,39 +399,6 @@ impl AppBackend {
 
                 match api.perform_sync(config) {
                     Ok(result) => {
-                        if let Some(e) = result.error.as_deref() {
-                            if matches!(
-                                result.status.as_str(),
-                                "success"
-                                    | "latest_wins_applied"
-                                    | "no_changes"
-                                    | "branch_missing_recovered"
-                            ) {
-                                let cat = sync_error_category_from_code(
-                                    result.error_category.as_deref(),
-                                    e,
-                                );
-                                debug_log_static(
-                                    "sync",
-                                    "sync_error_prevented_success",
-                                    &format!(
-                                        "status={}, masked error={}",
-                                        result.status,
-                                        mask_sync_error(e)
-                                    ),
-                                );
-                                return SyncTaskOutcome {
-                                    operation_id: op_id_capture.clone(),
-                                    operation_kind: "sync".to_string(),
-                                    sync_status: cat,
-                                    action_result: format!(
-                                        "同步返回异常，已阻止显示成功:\n{}",
-                                        mask_sync_error(e)
-                                    ),
-                                };
-                            }
-                        }
-
                         let (status, msg) = match result.status.as_str() {
                             "success" => {
                                 let mut m = format!(
@@ -559,7 +526,15 @@ impl AppBackend {
                     }
                     Err(e) => {
                         let err_str = e.to_string();
-                        let cat = sync_error_category(&err_str);
+                        let err_code = e.code();
+                        let cat = match err_code {
+                            "SYNC_CONFLICT" => "conflict".to_string(),
+                            "SYNC_FAILED" => sync_error_category_from_code(
+                                None,
+                                &err_str,
+                            ),
+                            _ => sync_error_category(&err_str),
+                        };
                         let action_result = if cat == "conflict" {
                             debug_log_static(
                                 "sync",

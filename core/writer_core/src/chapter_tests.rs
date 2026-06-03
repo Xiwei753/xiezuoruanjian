@@ -260,4 +260,116 @@ mod tests {
         assert!(file_name.ends_with(".md"));
         assert_eq!(fs::read_to_string(&backups[0]).unwrap(), "First draft");
     }
+
+    #[test]
+    fn end_to_end_write_save_reopen_verify_hash_and_word_count() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "My Novel").unwrap();
+        let volume = create_volume(workspace_path, &project.id, "Volume 1").unwrap();
+        let chapter =
+            create_chapter(workspace_path, &project.id, &volume.id, "Chapter 1").unwrap();
+
+        let content = "这是一个测试章节的内容。\n它包含多行中文文本，用于验证字数统计和哈希校验。\n第三行内容，确保换行符被正确处理。";
+        let receipt = save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            content,
+        )
+        .unwrap();
+
+        assert_eq!(receipt.content_len, content.len());
+        assert!(receipt.word_count > 0);
+        assert!(!receipt.content_hash.is_empty());
+
+        let reopened = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+        assert_eq!(reopened.content, content);
+        assert_eq!(reopened.meta.hash, receipt.content_hash);
+        assert_eq!(reopened.meta.word_count, receipt.word_count);
+    }
+
+    #[test]
+    fn end_to_end_overwrite_with_new_content_updates_hash() {
+        let (dir, project, volume, chapter) = setup_chapter();
+        let workspace_path = dir.path();
+
+        let first_content = "First draft content";
+        let receipt1 = save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            first_content,
+        )
+        .unwrap();
+
+        let second_content = "Second draft with more words and different content";
+        let receipt2 = save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            second_content,
+        )
+        .unwrap();
+
+        assert_ne!(receipt1.content_hash, receipt2.content_hash);
+        assert_ne!(receipt1.word_count, receipt2.word_count);
+
+        let reopened = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+        assert_eq!(reopened.content, second_content);
+        assert_eq!(reopened.meta.hash, receipt2.content_hash);
+    }
+
+    #[test]
+    fn end_to_end_empty_overwrite_blocked_for_non_empty_chapter() {
+        let (dir, project, volume, chapter) = setup_chapter();
+        let workspace_path = dir.path();
+
+        save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "Some content",
+        )
+        .unwrap();
+
+        let result = save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "",
+        );
+        assert!(matches!(result, Err(Error::EmptyOverwriteBlocked { .. })));
+
+        let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+        assert_eq!(content.content, "Some content");
+    }
+
+    #[test]
+    fn end_to_end_clear_chapter_content_explicit() {
+        let (dir, project, volume, chapter) = setup_chapter();
+        let workspace_path = dir.path();
+
+        save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "Content to be cleared",
+        )
+        .unwrap();
+
+        clear_chapter_content(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+
+        let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+        assert_eq!(content.content, "");
+        assert_eq!(content.meta.word_count, 0);
+    }
 }

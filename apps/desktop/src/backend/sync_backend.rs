@@ -632,10 +632,28 @@ impl AppBackend {
                 s.token = Some(self.current_sync_token.clone());
             }
 
-            if let Err(e) = api.save_sync_config(c) {
-                error_msg = Some(format!("保存同步配置失败: {}", e));
-            } else if let Err(e) = api.save_sync_secrets(s) {
-                error_msg = Some(format!("保存同步凭证失败: {}", e));
+            let config_json = api.save_sync_config_envelope_json(c);
+            let config_envelope: serde_json::Value = serde_json::from_str(&config_json)
+                .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+            if config_envelope["success"] != true {
+                let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
+                let user_message = config_envelope["userMessage"]
+                    .as_str()
+                    .unwrap_or("保存同步配置失败");
+                error_msg = Some(format!("{} ({})", user_message, error_code));
+            } else {
+                let secrets_json = api.save_sync_secrets_envelope_json(s);
+                let secrets_envelope: serde_json::Value = serde_json::from_str(&secrets_json)
+                    .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+                if secrets_envelope["success"] != true {
+                    let error_code = secrets_envelope["errorCode"]
+                        .as_str()
+                        .unwrap_or("UNKNOWN");
+                    let user_message = secrets_envelope["userMessage"]
+                        .as_str()
+                        .unwrap_or("保存同步凭证失败");
+                    error_msg = Some(format!("{} ({})", user_message, error_code));
+                }
             }
         } else {
             error_msg = Some("Core 未初始化".to_string());

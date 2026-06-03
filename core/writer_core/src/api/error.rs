@@ -27,6 +27,10 @@ pub enum WriterError {
     RefuseToDeleteWorkspaceRoot,
     #[error("Invalid delete target: {0}")]
     InvalidDeleteTarget(String),
+    #[error("Sync conflict: {0}")]
+    SyncConflict(String),
+    #[error("Sync failed: {0}")]
+    SyncFailed(String),
     #[error("Other error: {0}")]
     Other(String),
 }
@@ -44,6 +48,8 @@ impl WriterError {
             WriterError::NotImplemented => "NOT_IMPLEMENTED",
             WriterError::RefuseToDeleteWorkspaceRoot => "REFUSE_DELETE_WORKSPACE_ROOT",
             WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
+            WriterError::SyncConflict(_) => "SYNC_CONFLICT",
+            WriterError::SyncFailed(_) => "SYNC_FAILED",
             WriterError::Other(_) => "OTHER",
         }
     }
@@ -60,6 +66,8 @@ impl WriterError {
             WriterError::NotImplemented => "该功能尚未实现",
             WriterError::RefuseToDeleteWorkspaceRoot => "拒绝删除工作区根目录",
             WriterError::InvalidDeleteTarget(_) => "删除目标无效",
+            WriterError::SyncConflict(_) => "同步冲突，请手动处理冲突文件后重试",
+            WriterError::SyncFailed(_) => "同步失败，请检查网络和配置",
             WriterError::Other(_) => "操作失败",
         }
     }
@@ -90,6 +98,18 @@ impl From<crate::error::Error> for WriterError {
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),
             Error::Other(s) => WriterError::Other(s),
         }
+    }
+}
+
+impl WriterError {
+    /// Create a sync conflict error with conflict details.
+    pub fn sync_conflict(detail: String) -> Self {
+        WriterError::SyncConflict(detail)
+    }
+
+    /// Create a sync failed error with error message and optional error category.
+    pub fn sync_failed(detail: String) -> Self {
+        WriterError::SyncFailed(detail)
     }
 }
 

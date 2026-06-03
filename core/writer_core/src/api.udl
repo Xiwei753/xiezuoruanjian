@@ -221,6 +221,8 @@ enum WriterError {
     "NotImplemented",
     "RefuseToDeleteWorkspaceRoot",
     "InvalidDeleteTarget",
+    "SyncConflict",
+    "SyncFailed",
     "Other"
 };
 
@@ -981,6 +983,24 @@ interface WriterAppService {
 
     [Throws=WriterError]
     SyncResultDto perform_sync(SyncConfigDto config);
+
+    string perform_sync_envelope_json(SyncConfigDto config);
+
+    string perform_sync_dry_run_envelope_json(SyncConfigDto config);
+
+    string perform_sync_diagnostics_envelope_json(SyncConfigDto config);
+
+    string save_sync_config_envelope_json(SyncConfigDto config);
+
+    string save_sync_secrets_envelope_json(SyncSecretsDto secrets);
+
+    string save_chapter_content_envelope_json(string project_id, string volume_id, string chapter_id, string content);
+
+    string delete_project_envelope_json(string project_id);
+
+    string delete_volume_envelope_json(string project_id, string volume_id);
+
+    string delete_chapter_envelope_json(string project_id, string volume_id, string chapter_id);
 
     [Throws=WriterError]
     WritingStatsSummaryDto get_writing_stats_summary(string start_date, string end_date);

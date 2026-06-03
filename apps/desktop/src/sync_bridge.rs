@@ -227,9 +227,31 @@ pub fn save_sync_configs(
     secrets: &SyncSecrets,
 ) -> Result<(), String> {
     let api = WriterCoreApi::new(path);
-    api.save_sync_config(config.clone().into())
-        .map_err(|e| format!("保存同步配置失败: {}", e))?;
-    api.save_sync_secrets(secrets.clone().into())
-        .map_err(|e| format!("保存同步凭证失败: {}", e))?;
+    let config_json = api.save_sync_config_envelope_json(config.clone().into());
+    let config_envelope: serde_json::Value =
+        serde_json::from_str(&config_json).map_err(|e| format!("解析配置保存结果失败: {}", e))?;
+    if config_envelope["success"] != true {
+        let error_code = config_envelope["errorCode"]
+            .as_str()
+            .unwrap_or("UNKNOWN");
+        let user_message = config_envelope["userMessage"]
+            .as_str()
+            .unwrap_or("保存同步配置失败");
+        return Err(format!("{} ({})", user_message, error_code));
+    }
+
+    let secrets_json = api.save_sync_secrets_envelope_json(secrets.clone().into());
+    let secrets_envelope: serde_json::Value =
+        serde_json::from_str(&secrets_json).map_err(|e| format!("解析凭证保存结果失败: {}", e))?;
+    if secrets_envelope["success"] != true {
+        let error_code = secrets_envelope["errorCode"]
+            .as_str()
+            .unwrap_or("UNKNOWN");
+        let user_message = secrets_envelope["userMessage"]
+            .as_str()
+            .unwrap_or("保存同步凭证失败");
+        return Err(format!("{} ({})", user_message, error_code));
+    }
+
     Ok(())
 }

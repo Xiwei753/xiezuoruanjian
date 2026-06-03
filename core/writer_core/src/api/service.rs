@@ -414,6 +414,85 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    // --- Chapter/Project envelope_json methods ---
+
+    fn chapter_save_envelope(
+        result: ApiResult<ChapterSaveReceiptDto>,
+        chapter_id: &str,
+    ) -> ResultEnvelope<ChapterSaveReceiptDto> {
+        match result {
+            Ok(receipt) => ResultEnvelope::success_with_changes(
+                receipt,
+                Vec::new(),
+                vec![ChangedEntityDto {
+                    entity_type: "ChapterSaved".to_string(),
+                    entity_id: Some(chapter_id.to_string()),
+                }],
+            ),
+            Err(error) => ResultEnvelope::error(error),
+        }
+    }
+
+    pub fn save_chapter_content_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        content: &str,
+    ) -> String {
+        Self::chapter_save_envelope(
+            self.save_chapter_content(project_id, volume_id, chapter_id, content),
+            chapter_id,
+        )
+        .to_json_string()
+    }
+
+    fn delete_envelope(
+        result: ApiResult<bool>,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> ResultEnvelope<bool> {
+        match result {
+            Ok(_) => ResultEnvelope::success_with_changes(
+                true,
+                Vec::new(),
+                vec![ChangedEntityDto {
+                    entity_type: format!("{}Deleted", entity_type),
+                    entity_id: Some(entity_id.to_string()),
+                }],
+            ),
+            Err(error) => ResultEnvelope::error(error),
+        }
+    }
+
+    pub fn delete_project_envelope_json(&self, project_id: &str) -> String {
+        Self::delete_envelope(self.delete_project(project_id), "Project", project_id)
+            .to_json_string()
+    }
+
+    pub fn delete_volume_envelope_json(&self, project_id: &str, volume_id: &str) -> String {
+        Self::delete_envelope(
+            self.delete_volume(project_id, volume_id),
+            "Volume",
+            volume_id,
+        )
+        .to_json_string()
+    }
+
+    pub fn delete_chapter_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> String {
+        Self::delete_envelope(
+            self.delete_chapter(project_id, volume_id, chapter_id),
+            "Chapter",
+            chapter_id,
+        )
+        .to_json_string()
+    }
+
     pub fn load_local_settings(&self) -> ApiResult<LocalSettingsDto> {
         self.core()
             .load_local_settings()
@@ -512,6 +591,129 @@ impl WriterCoreApi {
             .perform_sync(&config.into())
             .map(Into::into)
             .map_err(Into::into)
+    }
+
+    // --- Sync envelope_json methods (unified ResultEnvelope for platform adapters) ---
+
+    fn sync_saved_envelope(result: ApiResult<bool>, path: &str) -> ResultEnvelope<bool> {
+        match result {
+            Ok(data) => ResultEnvelope::success_with_changes(
+                data,
+                vec![path.to_string()],
+                vec![ChangedEntityDto {
+                    entity_type: "SyncConfigSaved".to_string(),
+                    entity_id: None,
+                }],
+            ),
+            Err(error) => ResultEnvelope::error(error),
+        }
+    }
+
+    pub fn save_sync_config_envelope_json(&self, config: SyncConfigDto) -> String {
+        Self::sync_saved_envelope(self.save_sync_config(config), "sync_config.json").to_json_string()
+    }
+
+    pub fn save_sync_secrets_envelope_json(&self, secrets: SyncSecretsDto) -> String {
+        Self::sync_saved_envelope(self.save_sync_secrets(secrets), "sync_secrets.local.json")
+            .to_json_string()
+    }
+
+    fn sync_result_envelope(result: ApiResult<SyncResultDto>) -> ResultEnvelope<SyncResultDto> {
+        match result {
+            Ok(dto) => {
+                let status = dto.status.clone();
+                let is_success = matches!(
+                    status.as_str(),
+                    "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
+                );
+                let is_conflict = status == "conflict";
+
+                if is_success {
+                    let mut changed_paths = Vec::new();
+                    changed_paths.extend(dto.uploaded_files.clone());
+                    changed_paths.extend(dto.downloaded_files.clone());
+                    ResultEnvelope::success_with_changes(
+                        dto,
+                        changed_paths,
+                        vec![ChangedEntityDto {
+                            entity_type: "SyncCompleted".to_string(),
+                            entity_id: None,
+                        }],
+                    )
+                } else if is_conflict {
+                    let conflict_files: Vec<String> =
+                        dto.conflicts.iter().map(|c| c.local_path.clone()).collect();
+                    let detail = if conflict_files.is_empty() {
+                        "checkout_conflict".to_string()
+                    } else {
+                        format!("checkout_conflict: {}", conflict_files.join(", "))
+                    };
+                    ResultEnvelope {
+                        success: false,
+                        data: Some(dto),
+                        error_code: Some("SYNC_CONFLICT".to_string()),
+                        user_message: Some("同步冲突，请手动处理冲突文件后重试".to_string()),
+                        raw_error: Some(detail),
+                        warnings: Vec::new(),
+                        changed_paths: Vec::new(),
+                        changed_entities: Vec::new(),
+                    }
+                } else {
+                    // recoverable_error, fatal_error, dirty_repo_blocked, error, etc.
+                    let error_msg = dto
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| format!("sync status: {}", status));
+                    let error_code = dto.error_category.clone().unwrap_or_else(|| {
+                        match status.as_str() {
+                            "dirty_repo_blocked" => "DIRTY_REPO_BLOCKED".to_string(),
+                            "fatal_error" => "SYNC_FATAL_ERROR".to_string(),
+                            "recoverable_error" => "SYNC_RECOVERABLE_ERROR".to_string(),
+                            _ => "SYNC_FAILED".to_string(),
+                        }
+                    });
+                    ResultEnvelope {
+                        success: false,
+                        data: Some(dto),
+                        error_code: Some(error_code),
+                        user_message: Some("同步失败，请检查网络和配置".to_string()),
+                        raw_error: Some(error_msg),
+                        warnings: Vec::new(),
+                        changed_paths: Vec::new(),
+                        changed_entities: Vec::new(),
+                    }
+                }
+            }
+            Err(error) => ResultEnvelope::error(error),
+        }
+    }
+
+    fn sync_plan_envelope(result: ApiResult<SyncPlanDto>) -> ResultEnvelope<SyncPlanDto> {
+        match result {
+            Ok(dto) => ResultEnvelope::success(dto),
+            Err(error) => ResultEnvelope::error(error),
+        }
+    }
+
+    fn sync_diagnostics_envelope(
+        result: ApiResult<SyncDiagnosticsResultDto>,
+    ) -> ResultEnvelope<SyncDiagnosticsResultDto> {
+        match result {
+            Ok(dto) => ResultEnvelope::success(dto),
+            Err(error) => ResultEnvelope::error(error),
+        }
+    }
+
+    pub fn perform_sync_envelope_json(&self, config: SyncConfigDto) -> String {
+        Self::sync_result_envelope(self.perform_sync(config)).to_json_string()
+    }
+
+    pub fn perform_sync_dry_run_envelope_json(&self, config: SyncConfigDto) -> String {
+        Self::sync_plan_envelope(self.perform_sync_dry_run(config)).to_json_string()
+    }
+
+    pub fn perform_sync_diagnostics_envelope_json(&self, config: SyncConfigDto) -> String {
+        Self::sync_diagnostics_envelope(self.perform_sync_diagnostics(config)).to_json_string()
     }
 
     pub fn get_writing_stats_summary_json(
@@ -1543,5 +1745,229 @@ mod tests {
             err,
             WriterError::Io(message) if message.contains("UnsupportedSchemaVersion")
         ));
+    }
+
+    #[test]
+    fn save_chapter_content_envelope_json_returns_success_with_changed_entities() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+
+        let json = api.save_chapter_content_envelope_json(
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "Hello World",
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["success"], true);
+        assert!(value["data"].is_object());
+        assert_eq!(value["data"]["content_len"], 11u32);
+        assert!(value["changedEntities"].is_array());
+        assert_eq!(value["changedEntities"][0]["entityType"], "ChapterSaved");
+        assert_eq!(value["changedEntities"][0]["entityId"], chapter.id);
+    }
+
+    #[test]
+    fn delete_chapter_envelope_json_returns_success_with_changed_entities() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+
+        let json = api.delete_chapter_envelope_json(&project.id, &volume.id, &chapter.id);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["success"], true);
+        assert_eq!(value["data"], true);
+        assert_eq!(value["changedEntities"][0]["entityType"], "ChapterDeleted");
+        assert_eq!(value["changedEntities"][0]["entityId"], chapter.id);
+    }
+
+    #[test]
+    fn delete_project_envelope_json_returns_success_with_changed_entities() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test").unwrap();
+
+        let json = api.delete_project_envelope_json(&project.id);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["success"], true);
+        assert_eq!(value["changedEntities"][0]["entityType"], "ProjectDeleted");
+        assert_eq!(value["changedEntities"][0]["entityId"], project.id);
+    }
+
+    #[test]
+    fn save_sync_config_envelope_json_returns_success_with_changed_entities() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let config = crate::api::types::SyncConfigDto {
+            enabled: true,
+            backend_type: "github_api".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            transport: "https_token".to_string(),
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            proxy_enabled: false,
+            proxy_type: "auto".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            username: "".to_string(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let json = api.save_sync_config_envelope_json(config);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["success"], true);
+        assert_eq!(value["data"], true);
+        assert_eq!(value["changedEntities"][0]["entityType"], "SyncConfigSaved");
+    }
+
+    #[test]
+    fn end_to_end_api_chapter_write_reopen_verify() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("E2E Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+
+        let content = "端到端测试内容。\n第二行文本。\n第三行。";
+        let receipt = api
+            .save_chapter_content(&project.id, &volume.id, &chapter.id, content)
+            .unwrap();
+
+        assert_eq!(receipt.content_len, content.len() as u32);        assert!(receipt.word_count > 0);
+        assert!(!receipt.content_hash.is_empty());
+
+        let reopened = api
+            .open_chapter(&project.id, &volume.id, &chapter.id)
+            .unwrap();
+        assert_eq!(reopened.content, content);
+        assert_eq!(reopened.meta.hash, receipt.content_hash);
+        assert_eq!(reopened.meta.word_count, receipt.word_count);
+    }
+
+    #[test]
+    fn perform_sync_envelope_json_returns_envelope_with_sync_result() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let config = crate::api::types::SyncConfigDto {
+            enabled: true,
+            backend_type: "github_api".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            transport: "https_token".to_string(),
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            proxy_enabled: false,
+            proxy_type: "auto".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            username: "".to_string(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let json = api.perform_sync_envelope_json(config);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(value["success"].is_boolean());
+        assert!(value["data"].is_object());
+        assert!(value["data"]["status"].is_string());
+    }
+
+    #[test]
+    fn perform_sync_dry_run_envelope_json_returns_envelope_with_plan() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let config = crate::api::types::SyncConfigDto {
+            enabled: true,
+            backend_type: "github_api".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            transport: "https_token".to_string(),
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            proxy_enabled: false,
+            proxy_type: "auto".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            username: "".to_string(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let json = api.perform_sync_dry_run_envelope_json(config);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(value["success"].is_boolean());
+        if value["success"] == true {
+            assert!(value["data"]["files_to_upload"].is_array());
+        }
+    }
+
+    #[test]
+    fn perform_sync_diagnostics_envelope_json_returns_envelope_with_diagnostics() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let config = crate::api::types::SyncConfigDto {
+            enabled: true,
+            backend_type: "github_api".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            transport: "https_token".to_string(),
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            proxy_enabled: false,
+            proxy_type: "auto".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            username: "".to_string(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let json = api.perform_sync_diagnostics_envelope_json(config);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(value["success"].is_boolean());
+        assert!(value["data"].is_object());
+        assert!(value["data"]["backend_type"].is_string() || value["data"]["backendType"].is_string());
+    }
+
+    #[test]
+    fn delete_volume_envelope_json_returns_success_with_changed_entities() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+
+        let json = api.delete_volume_envelope_json(&project.id, &volume.id);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["success"], true);
+        assert_eq!(value["changedEntities"][0]["entityType"], "VolumeDeleted");
+        assert_eq!(value["changedEntities"][0]["entityId"], volume.id);
     }
 }
