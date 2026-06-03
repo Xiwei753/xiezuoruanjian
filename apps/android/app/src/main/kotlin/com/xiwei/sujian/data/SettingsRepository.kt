@@ -27,11 +27,26 @@ class SettingsRepository(context: Context) {
     private val settingsBridge = BridgeProvider.getSettingsBridge(context)
     private val syncBridge = BridgeProvider.getSyncBridge(context)
 
+    @Volatile
+    var lastWarning: String? = null
+        private set
+
+    fun consumeWarning(): String? {
+        val w = lastWarning
+        lastWarning = null
+        return w
+    }
+
+    private fun warn(msg: String) {
+        lastWarning = msg
+        android.util.Log.w("SettingsRepository", msg)
+    }
+
     fun getLocalSettings(): LocalSettings {
         return when (val result = settingsBridge.getLocalSettings()) {
             is BridgeResult.Success -> result.data ?: LocalSettings()
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "加载本地设置失败: ${result.message}")
+                warn("加载本地设置失败: ${result.message}")
                 LocalSettings()
             }
             BridgeResult.NotLoaded -> LocalSettings()
@@ -45,7 +60,7 @@ class SettingsRepository(context: Context) {
                 result.data
             }
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "保存本地设置失败: ${result.message}")
+                warn("保存本地设置失败: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -56,7 +71,7 @@ class SettingsRepository(context: Context) {
         return when (val result = settingsBridge.getSyncableSettings()) {
             is BridgeResult.Success -> result.data ?: SyncableSettings()
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "加载同步设置失败: ${result.message}")
+                warn("加载同步设置失败: ${result.message}")
                 val defaultSettings = SyncableSettings()
                 defaultSettings
             }
@@ -71,7 +86,7 @@ class SettingsRepository(context: Context) {
                 result.data
             }
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "保存同步设置失败: ${result.message}")
+                warn("保存同步设置失败: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -99,7 +114,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.loadSyncState()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "加载同步状态失败: ${result.message}")
+                warn("加载同步状态失败: ${result.message}")
                 SyncState()
             }
             BridgeResult.NotLoaded -> SyncState()
@@ -110,7 +125,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.loadSyncConfig()) {
             is BridgeResult.Success -> result.data.normalize()
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "加载同步配置失败: ${result.message}")
+                warn("加载同步配置失败: ${result.message}")
                 SyncConfig().normalize()
             }
             BridgeResult.NotLoaded -> SyncConfig().normalize()
@@ -124,7 +139,7 @@ class SettingsRepository(context: Context) {
                 result.data
             }
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "保存同步配置失败: ${result.message}")
+                warn("保存同步配置失败: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -135,7 +150,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.loadSyncSecrets()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "加载同步密钥失败: ${result.message}")
+                warn("加载同步密钥失败: ${result.message}")
                 SyncSecrets()
             }
             BridgeResult.NotLoaded -> SyncSecrets()
@@ -146,7 +161,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.saveSyncSecrets(secrets)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                android.util.Log.w("SettingsRepository", "保存同步密钥失败: ${result.message}")
+                warn("保存同步密钥失败: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false

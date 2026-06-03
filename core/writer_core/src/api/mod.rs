@@ -4,9 +4,12 @@
 //! platform frontends. It wraps the internal facade and exposes stable DTOs and
 //! API errors without depending on any platform UI or binding implementation.
 
+pub mod chapter_api;
 pub mod envelope;
 pub mod error;
 pub mod service;
+pub mod settings_api;
+pub mod sync_api;
 pub mod types;
 
 pub use envelope::{ChangedEntityDto, ResultEnvelope};

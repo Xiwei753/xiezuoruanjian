@@ -23,7 +23,10 @@ class WorkspaceRepository(private val context: Context) {
     fun getRecentEdits(): List<RecentEdit> {
         return when (val result = workspaceBridge.getRecentEdits()) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> emptyList() // fail silently for recent edits
+            is BridgeResult.Error -> {
+                android.util.Log.w("WorkspaceRepository", "获取最近编辑失败: ${result.message}")
+                emptyList()
+            }
             BridgeResult.NotLoaded -> emptyList()
         }
     }

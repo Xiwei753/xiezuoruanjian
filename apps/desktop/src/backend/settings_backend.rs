@@ -487,14 +487,22 @@ impl AppBackend {
             local.desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
             local.desktop_editor_width = self.current_setting_desktop_editor_width;
 
-            let local_save = core.save_local_settings(local.clone());
+            let local_json = core.save_local_settings_envelope_json(local.clone());
+            let local_envelope: serde_json::Value = serde_json::from_str(&local_json)
+                .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
             self.debug_log(
                 "settings",
                 "save_local_settings_result",
-                &format!("success={}", local_save.is_ok()),
+                &format!("success={}", local_envelope["success"]),
             );
-            if let Err(e) = local_save {
-                error_msg = Some(format!("保存本地设置失败: {}", e));
+            if local_envelope["success"] != true {
+                let error_code = local_envelope["errorCode"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN");
+                let user_message = local_envelope["userMessage"]
+                    .as_str()
+                    .unwrap_or("保存本地设置失败");
+                error_msg = Some(format!("{} ({})", user_message, error_code));
             }
 
             let mut syncable = core.load_syncable_settings().unwrap_or_else(|_| {
@@ -506,14 +514,22 @@ impl AppBackend {
             syncable.theme_mode = self.current_setting_theme_mode.clone();
             syncable.monet_color = self.current_setting_monet_color.clone();
 
-            let syncable_save = core.save_syncable_settings(syncable.clone());
+            let syncable_json = core.save_syncable_settings_envelope_json(syncable.clone());
+            let syncable_envelope: serde_json::Value = serde_json::from_str(&syncable_json)
+                .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
             self.debug_log(
                 "settings",
                 "save_syncable_settings_result",
-                &format!("success={}", syncable_save.is_ok()),
+                &format!("success={}", syncable_envelope["success"]),
             );
-            if let Err(e) = syncable_save {
-                error_msg = Some(format!("保存同步设置失败: {}", e));
+            if syncable_envelope["success"] != true {
+                let error_code = syncable_envelope["errorCode"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN");
+                let user_message = syncable_envelope["userMessage"]
+                    .as_str()
+                    .unwrap_or("保存同步设置失败");
+                error_msg = Some(format!("{} ({})", user_message, error_code));
             }
         } else {
             error_msg = Some("Core 未初始化".to_string());
