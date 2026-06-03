@@ -7,6 +7,7 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'core/writer_core/**'
+      - '.github/workflows/linux_build.yml'
       - 'Cargo.lock'
       - 'Cargo.toml'
   pull_request:
@@ -15,6 +16,7 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'core/writer_core/**'
+      - '.github/workflows/linux_build.yml'
       - 'Cargo.lock'
       - 'Cargo.toml'
   workflow_dispatch:
