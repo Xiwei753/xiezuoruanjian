@@ -18,7 +18,7 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    color: appTheme ? appTheme.editorBg : "#1a1a2e"
+    color: appTheme ? appTheme.editorBackground : "#1a1a2e"
 
     property var backendRef: null
     property var appTheme: null
@@ -43,7 +43,7 @@ Rectangle {
 
     Rectangle {
         anchors.fill: parent
-        color: root.appTheme ? root.appTheme.editorBg : "#1a1a2e"
+        color: root.appTheme ? root.appTheme.editorBackground : "#1a1a2e"
         clip: true
 
         // Placeholder

@@ -548,7 +548,7 @@ Rectangle {
                                Math.min(parent.width, 820)
                         height: parent.height
                         anchors.horizontalCenter: parent.horizontalCenter
-                        color: dt ? dt.editorBg : "#191C21"
+                        color: dt ? dt.editorBackground : "#191C21"
                         radius: dt ? dt.radiusMd : 12
                         border.color: dt ? dt.border : "#2A2E36"
                         border.width: 1
