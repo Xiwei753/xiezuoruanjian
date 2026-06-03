@@ -56,8 +56,12 @@ jobs:
             qt6-declarative-dev \
             qt6-tools-dev \
             qt6-tools-dev-tools \
+            qt6-wayland \
+            qml6-module-qtqml \
+            qml6-module-qtqml-workerscript \
             qml6-module-qtquick \
             qml6-module-qtquick-controls \
+            qml6-module-qtquick-dialogs \
             qml6-module-qtquick-layouts \
             qml6-module-qtquick-window \
             build-essential \
@@ -67,7 +71,8 @@ jobs:
             libayatana-appindicator3-dev \
             libfuse2 \
             file \
-            wget
+            wget \
+            xvfb
           wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20240109-1/linuxdeploy-x86_64.AppImage
           wget -O linuxdeploy-plugin-qt-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20240109-1/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
@@ -123,6 +128,20 @@ jobs:
               --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/sujian-desktop.svg \
               --plugin qt \
               --output appimage
+
+      - name: Smoke test AppImage startup
+        run: |
+          set +e
+          xvfb-run -a timeout 10s ./sujian-desktop-${{ matrix.flavor }}.AppImage > appimage-smoke.log 2>&1
+          status=$?
+          set -e
+          cat appimage-smoke.log
+          if grep -E 'QML load failed|module ".*" is not installed|Could not find the Qt platform plugin' appimage-smoke.log; then
+            exit 1
+          fi
+          if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
+            exit "$status"
+          fi
 
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
