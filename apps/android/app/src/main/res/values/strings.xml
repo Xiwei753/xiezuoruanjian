@@ -2,6 +2,8 @@
 <resources>
     <string name="app_name">素笺写作</string>
     <string name="title_projects">作品</string>
+    <string name="title_starmap">星图</string>
+    <string name="title_stats">统计</string>
     <string name="action_new_project">新建作品</string>
     <string name="action_new_volume">新建分卷</string>
     <string name="action_new_chapter">新建章节</string>
@@ -116,6 +118,7 @@
     <string name="action_move_up">上移</string>
     <string name="action_move_down">下移</string>
     <string name="confirm_delete_project">确认删除作品</string>
+    <string name="confirm_delete_project_message">确定要删除作品 "%1$s" 吗？此操作无法恢复。</string>
     <string name="confirm_delete_volume">确认删除分卷</string>
     <string name="confirm_delete_chapter">确认删除章节</string>
     <string name="warning_delete_volume">删除分卷会同时删除其中所有章节</string>

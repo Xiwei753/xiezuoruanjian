@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "core/writer_core",
-    "bindings/android"
+    "core/writer_core"
 , "apps/desktop"]
 resolver = "2"

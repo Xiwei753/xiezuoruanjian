@@ -69,17 +69,19 @@ if ! command -v cargo-ndk &> /dev/null; then
     echo "要构建 Rust JNI 库，请通过以下命令安装: cargo install cargo-ndk"
     echo "确保 ANDROID_NDK_HOME 环境变量已正确设置。"
     echo ""
-    echo "中止构建以防止缺少 libwriter_core_jni.so 文件。"
+    echo "中止构建以防止缺少 libuniffi_writer_core.so 文件。"
     exit 1
 fi
 
 echo "使用 cargo-ndk 编译 arm64-v8a 架构..."
-cd "$WORKSPACE_ROOT/bindings/android"
+cd "$WORKSPACE_ROOT/core/writer_core"
 
 # shellcheck disable=SC2086
 cargo ndk -t arm64-v8a -o "$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs" build --release $RUST_FEATURES
 
 if [ $? -eq 0 ]; then
+    # rename libwriter_core.so to libuniffi_writer_core.so
+    mv "$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs/arm64-v8a/libwriter_core.so" "$WORKSPACE_ROOT/apps/android/app/src/main/jniLibs/arm64-v8a/libuniffi_writer_core.so"
     echo "Rust JNI 库构建成功并已复制到 jniLibs 目录。"
 else
     echo "Rust JNI 库构建失败。"
@@ -107,10 +109,10 @@ if [ $? -eq 0 ]; then
 
     # 验证 JNI 库是否正确打包到 APK 中
     echo "验证 APK 中的 JNI .so 文件..."
-    if unzip -l "$APK_PATH" | grep -q "lib/arm64-v8a/libwriter_core_jni.so"; then
-        echo "验证通过: 在 arm64-v8a 目录中找到 libwriter_core_jni.so"
+    if unzip -l "$APK_PATH" | grep -q "lib/arm64-v8a/libuniffi_writer_core.so"; then
+        echo "验证通过: 在 arm64-v8a 目录中找到 libuniffi_writer_core.so"
     else
-        echo "错误: 在 APK 的 arm64-v8a 目录中未找到 libwriter_core_jni.so！"
+        echo "错误: 在 APK 的 arm64-v8a 目录中未找到 libuniffi_writer_core.so！"
         exit 1
     fi
 else

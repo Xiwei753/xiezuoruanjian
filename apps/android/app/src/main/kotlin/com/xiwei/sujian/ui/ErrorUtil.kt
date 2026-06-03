@@ -19,7 +19,7 @@ import com.xiwei.sujian.data.RepositoryException
  * - 各种 Activity 中的错误处理
  */
 object ErrorUtil {
-    private const val TAG = "WriterError"
+    private const val TAG = "SujianError"
 
     fun <T> safeRun(context: Context, fallback: T, action: () -> T): T {
         return try {
