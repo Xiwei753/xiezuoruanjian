@@ -652,7 +652,7 @@ Rectangle {
                             color: dt ? dt.editorText : "#E2E2E5"
                             selectedTextColor: dt ? dt.selectedText : "#CCE5FF"
                             selectionColor: dt ? dt.primary : "#006497"
-                            font.pixelSize: root.backendRef ? root.backendRef.setting_font_size : 16
+                            font.pixelSize: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
                             font.family: "serif"
                             wrapMode: TextArea.Wrap
                             verticalAlignment: TextInput.AlignTop
