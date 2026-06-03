@@ -1,4 +1,4 @@
-//! # Qt C++ 互操作测试（Linux UI 层 - 测试）
+//! # Qt C++ 互操作测试（Desktop UI 层 - 测试）
 //!
 //! 测试 Rust 与 Qt C++ 的互操作能力，验证 QTextDocument 的格式化功能。
 //!

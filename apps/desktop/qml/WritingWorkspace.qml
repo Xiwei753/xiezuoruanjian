@@ -2,7 +2,7 @@
 // WritingWorkspace.qml — 写作工作区
 // =============================================================================
 //
-// 层级：Linux UI 层（QML 页面）
+// 层级：Desktop UI 层（QML 页面）
 // 职责：写作区整体布局（侧栏树 + 编辑区 + 工具栏）
 // 约束：
 //   - 纯布局容器，业务逻辑委托给 EditorController
@@ -543,8 +543,8 @@ Rectangle {
                     // Paper background - adapts to available space up to 820px, leaving a small side gap
                     Rectangle {
                         id: paperBg
-                        width: settingsBackend && settingsBackend.setting_linux_editor_width > 0 ?
-                               Math.min(parent.width, settingsBackend.setting_linux_editor_width) :
+                        width: settingsBackend && settingsBackend.setting_desktop_editor_width > 0 ?
+                               Math.min(parent.width, settingsBackend.setting_desktop_editor_width) :
                                Math.min(parent.width, 820)
                         height: parent.height
                         anchors.horizontalCenter: parent.horizontalCenter
@@ -586,7 +586,7 @@ Rectangle {
                             if (pressed && settingsBackend) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
-                                settingsBackend.setting_linux_editor_width = newWidth;
+                                settingsBackend.setting_desktop_editor_width = newWidth;
                             }
                         }
                     }
@@ -623,7 +623,7 @@ Rectangle {
                             if (pressed && settingsBackend) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
-                                settingsBackend.setting_linux_editor_width = newWidth;
+                                settingsBackend.setting_desktop_editor_width = newWidth;
                             }
                         }
                     }

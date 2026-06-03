@@ -17,7 +17,7 @@
 // - 被 apps/desktop/qml/EditorController.qml 实例化并绑定至 TextArea。
 // =============================================================================
 
-//! # QTextDocument 排版操作（Linux UI 层 - Backend Adapter）
+//! # QTextDocument 排版操作（Desktop UI 层 - Backend Adapter）
 //!
 //! 负责纯文本的视觉排版（行距、首行缩进），不改变正文内容。
 //!

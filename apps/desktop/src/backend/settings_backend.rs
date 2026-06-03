@@ -37,7 +37,7 @@ pub struct SettingsBackend {
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
     setting_linux_sidebar_width: qt_property!(f64; READ setting_linux_sidebar_width WRITE set_setting_linux_sidebar_width NOTIFY settings_changed),
-    setting_linux_editor_width: qt_property!(f64; READ setting_linux_editor_width WRITE set_setting_linux_editor_width NOTIFY settings_changed),
+    setting_desktop_editor_width: qt_property!(f64; READ setting_desktop_editor_width WRITE set_setting_desktop_editor_width NOTIFY settings_changed),
     settings_changed: qt_signal!(),
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),
@@ -182,11 +182,11 @@ impl SettingsBackend {
         self.with_app_mut((), |app| app.set_setting_linux_sidebar_width(val));
         self.settings_changed();
     }
-    fn setting_linux_editor_width(&self) -> f64 {
-        self.with_app(0.0, |app| app.setting_linux_editor_width())
+    fn setting_desktop_editor_width(&self) -> f64 {
+        self.with_app(0.0, |app| app.setting_desktop_editor_width())
     }
-    fn set_setting_linux_editor_width(&mut self, val: f64) {
-        self.with_app_mut((), |app| app.set_setting_linux_editor_width(val));
+    fn set_setting_desktop_editor_width(&mut self, val: f64) {
+        self.with_app_mut((), |app| app.set_setting_desktop_editor_width(val));
         self.settings_changed();
     }
     fn load_local_settings(&mut self) {
@@ -360,14 +360,14 @@ impl AppBackend {
         self.save_local_settings();
     }
 
-    // AppBackend::setting_linux_editor_width
-    pub(crate) fn setting_linux_editor_width(&self) -> f64 {
-        self.current_setting_linux_editor_width
+    // AppBackend::setting_desktop_editor_width
+    pub(crate) fn setting_desktop_editor_width(&self) -> f64 {
+        self.current_setting_desktop_editor_width
     }
 
-    // AppBackend::set_setting_linux_editor_width
-    pub(crate) fn set_setting_linux_editor_width(&mut self, val: f64) {
-        self.current_setting_linux_editor_width = val;
+    // AppBackend::set_setting_desktop_editor_width
+    pub(crate) fn set_setting_desktop_editor_width(&mut self, val: f64) {
+        self.current_setting_desktop_editor_width = val;
         self.settings_changed();
         self.save_local_settings();
     }
@@ -411,7 +411,7 @@ impl AppBackend {
                     }
                 }
                 self.current_setting_linux_sidebar_width = settings.linux_sidebar_width;
-                self.current_setting_linux_editor_width = settings.linux_editor_width;
+                self.current_setting_desktop_editor_width = settings.desktop_editor_width;
             }
 
             let syncable_load = core.load_syncable_settings();
@@ -485,7 +485,7 @@ impl AppBackend {
                 self.current_setting_smooth_cursor_duration_ms as u64;
             local.ai_enabled = self.current_ai_enabled;
             local.linux_sidebar_width = self.current_setting_linux_sidebar_width;
-            local.linux_editor_width = self.current_setting_linux_editor_width;
+            local.desktop_editor_width = self.current_setting_desktop_editor_width;
 
             let local_save = core.save_local_settings(local.clone());
             self.debug_log(
