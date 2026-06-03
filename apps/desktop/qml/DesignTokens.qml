@@ -163,21 +163,4 @@ QtObject {
     // --- Transition ---
     property int animFast: 120
     property int animNormal: 200
-
-    // --- Legacy aliases (kept so existing pages do not duplicate color logic) ---
-    property color bgDark: bg
-    property color bgDarker: surfaceContainerLowest
-    property color surfaceAlt: surfaceContainer
-    property color divider: border
-    property color primaryHover: accentHover
-    property color primaryText: accentText
-    property color textMain: textPrimary
-    property color textDim: textMuted
-    property color sidebarBg: sidebar
-    property color sidebarHover: surfaceContainer
-    property color buttonBg: surface
-    property color buttonHover: cardHover
-    property color editorBg: editorBackground
-    property color hover: cardHover
-    property color text: textPrimary
 }

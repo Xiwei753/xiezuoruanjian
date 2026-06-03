@@ -92,7 +92,7 @@ Item {
                 height: width
                 radius: width / 2
                 color: slider.pressed
-                    ? (root.theme ? root.theme.primaryHover : "#006497")
+                    ? (root.theme ? root.theme.accentHover : "#006497")
                     : (slider.enabled
                         ? (root.theme ? root.theme.primary : "#006497")
                         : (root.theme ? root.theme.border : "#e2e8f0"))

@@ -16,6 +16,13 @@ ComboBox {
     id: control
     property var theme: null
 
+    readonly property color normalTextColor: control.theme ? control.theme.onSurface : "#E2E2E5"
+    readonly property color disabledTextColor: control.theme ? control.theme.textDisabled : "#8C9198"
+    readonly property color highlightedTextColor: control.theme ? control.theme.onPrimaryContainer : "#001E31"
+    readonly property color highlightedBackground: control.theme ? control.theme.primaryContainer : "#CCE5FF"
+    readonly property color defaultBackground: control.theme ? control.theme.surfaceContainerLow : "#f1f5f9"
+    readonly property color indicatorColor: control.theme ? control.theme.onSurfaceVariant : "#E2E2E5"
+
     implicitWidth: 180
     implicitHeight: Math.max(control.theme ? control.theme.settingsControlHeight : 36, 40)
     leftPadding: control.theme ? control.theme.sp12 : 12
@@ -49,9 +56,7 @@ ComboBox {
 
     contentItem: AppText {
         text: control.displayText
-        color: control.enabled
-            ? (control.theme ? control.theme.textPrimary : "#E2E2E5")
-            : (control.theme ? control.theme.textDisabled : "#8C9198")
+        color: control.enabled ? control.normalTextColor : control.disabledTextColor
         font.pixelSize: control.theme ? control.theme.label : 13
         font.family: control.theme ? control.theme.fontFamily : "sans-serif"
         leftPadding: control.leftPadding
@@ -73,15 +78,13 @@ ComboBox {
             context.lineTo(width, 0)
             context.lineTo(width / 2, height)
             context.closePath()
-            context.fillStyle = control.enabled
-                ? (control.theme ? control.theme.textSecondary : "#E2E2E5")
-                : (control.theme ? control.theme.textDisabled : "#8C9198")
+            context.fillStyle = control.enabled ? control.indicatorColor : control.disabledTextColor
             context.fill()
         }
     }
 
     background: Rectangle {
-        color: control.theme ? control.theme.inputBg : "#f1f5f9"
+        color: control.defaultBackground
         border.color: {
             if (!control.theme) return "#e2e8f0"
             if (control.activeFocus) return control.theme.borderFocus
@@ -96,16 +99,12 @@ ComboBox {
         width: control.width
         contentItem: AppText {
             text: modelData
-            color: control.highlightedIndex === index
-                ? (control.theme ? control.theme.onPrimaryContainer : "#001E31")
-                : (control.theme ? control.theme.textPrimary : "#E2E2E5")
+            color: control.highlightedIndex === index ? control.highlightedTextColor : control.normalTextColor
             font.pixelSize: control.theme ? control.theme.fontMd : 13
             verticalAlignment: Text.AlignVCenter
         }
         background: Rectangle {
-            color: control.highlightedIndex === index
-                ? (control.theme ? control.theme.primaryContainer : "#CCE5FF")
-                : "transparent"
+            color: control.highlightedIndex === index ? control.highlightedBackground : "transparent"
         }
     }
 

@@ -189,7 +189,7 @@ pub struct LocalSettingsDto {
     pub editor_smooth_cursor_duration_ms: u64,
     pub ai_enabled: bool,
     pub stats_device_id: Option<String>,
-    pub linux_sidebar_width: f64,
+    pub desktop_sidebar_width: f64,
     pub desktop_editor_width: f64,
 }
 
@@ -212,7 +212,7 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
             editor_smooth_cursor_duration_ms: s.editor_smooth_cursor_duration_ms,
             ai_enabled: s.ai_enabled,
             stats_device_id: s.stats_device_id,
-            linux_sidebar_width: s.linux_sidebar_width,
+            desktop_sidebar_width: s.desktop_sidebar_width,
             desktop_editor_width: s.desktop_editor_width,
         }
     }
@@ -237,7 +237,7 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             editor_smooth_cursor_duration_ms: s.editor_smooth_cursor_duration_ms,
             ai_enabled: s.ai_enabled,
             stats_device_id: s.stats_device_id,
-            linux_sidebar_width: s.linux_sidebar_width,
+            desktop_sidebar_width: s.desktop_sidebar_width,
             desktop_editor_width: s.desktop_editor_width,
         }
     }

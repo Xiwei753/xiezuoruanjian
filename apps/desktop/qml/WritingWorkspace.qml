@@ -172,7 +172,7 @@ Rectangle {
         // Left sidebar: volume/chapter tree
         Rectangle {
             id: sidebarRect
-            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_linux_sidebar_width > 0 ? root.backendRef.setting_linux_sidebar_width : 240
+            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_desktop_sidebar_width > 0 ? root.backendRef.setting_desktop_sidebar_width : 240
             SplitView.minimumWidth: 180
             SplitView.maximumWidth: 420
             color: dt ? dt.sidebar : "#14161B"
@@ -184,8 +184,8 @@ Rectangle {
                 interval: 300
                 repeat: false
                 onTriggered: {
-                    if (root.backendRef && sidebarRect.width > 0 && Math.abs(root.backendRef.setting_linux_sidebar_width - sidebarRect.width) >= 1.0) {
-                        root.backendRef.setting_linux_sidebar_width = sidebarRect.width;
+                    if (root.backendRef && sidebarRect.width > 0 && Math.abs(root.backendRef.setting_desktop_sidebar_width - sidebarRect.width) >= 1.0) {
+                        root.backendRef.setting_desktop_sidebar_width = sidebarRect.width;
                     }
                 }
             }
