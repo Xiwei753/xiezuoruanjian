@@ -178,6 +178,9 @@ ApplicationWindow {
             appController.refreshState(qsTr("刷新工作区状态失败"));
         }
         function onWorkspace_opened() {
+            if (settingsBackend) {
+                settingsBackend.load_local_settings();
+            }
             workspaceOpenAutoSyncTimer.restart();
         }
         function onWorkspace_content_changed() {
