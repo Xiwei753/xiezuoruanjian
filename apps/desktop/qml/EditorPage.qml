@@ -2,7 +2,7 @@
 // EditorPage.qml — 编辑器页面
 // =============================================================================
 //
-// 层级：Linux UI 层（QML UI 组件）
+// 层级：Desktop UI 层（QML UI 组件）
 // 职责：正文编辑区域、TextArea 绑定、DocumentHandler 排版绑定
 // 约束：
 //   - 纯 UI 组件，业务逻辑委托给 EditorController

@@ -18,7 +18,7 @@
 // - 被 apps/desktop/src/backend/editor_backend.rs 引用，作为主写作编辑器的后端状态控制器与统计源。
 // =============================================================================
 
-//! # 写作桥接函数（Linux UI 层 - Backend Adapter）
+//! # 写作桥接函数（Desktop UI 层 - Backend Adapter）
 //!
 //! 将 WriterCoreApi 的写作 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。
 

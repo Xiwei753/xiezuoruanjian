@@ -264,7 +264,7 @@ pub struct AppBackend {
     current_pending_github_init_path: String,
     pub current_ai_enabled: bool,
     pub current_setting_linux_sidebar_width: f64,
-    pub current_setting_linux_editor_width: f64,
+    pub current_setting_desktop_editor_width: f64,
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
     current_setting_auto_save_enabled: bool,

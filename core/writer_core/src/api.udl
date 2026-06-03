@@ -93,7 +93,7 @@ dictionary LocalSettingsDto {
     boolean ai_enabled;
     string? stats_device_id;
     f64 linux_sidebar_width;
-    f64 linux_editor_width;
+    f64 desktop_editor_width;
 };
 
 dictionary SyncableSettingsDto {

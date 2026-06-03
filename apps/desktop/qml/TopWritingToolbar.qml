@@ -2,7 +2,7 @@
 // TopWritingToolbar.qml — 写作工具栏
 // =============================================================================
 //
-// 层级：Linux UI 层（QML UI 组件）
+// 层级：Desktop UI 层（QML UI 组件）
 // 职责：字号/行距/首行缩进控制、一键排版、星图链接入口
 // 约束：
 //   - 只发出信号，不直接修改 backend
@@ -540,10 +540,10 @@ Rectangle {
                         from: 480
                         to: 3840
                         stepSize: 10
-                        value: settingsBackend && settingsBackend.setting_linux_editor_width > 0 ? settingsBackend.setting_linux_editor_width : 820
+                        value: settingsBackend && settingsBackend.setting_desktop_editor_width > 0 ? settingsBackend.setting_desktop_editor_width : 820
                         onMoved: {
                             if (settingsBackend) {
-                                settingsBackend.setting_linux_editor_width = value;
+                                settingsBackend.setting_desktop_editor_width = value;
                             }
                         }
                     }

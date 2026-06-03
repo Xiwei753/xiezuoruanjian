@@ -2,7 +2,7 @@
 // AppText.qml — 通用文本组件
 // =============================================================================
 //
-// 层级：Linux UI 层（QML 基础组件）
+// 层级：Desktop UI 层（QML 基础组件）
 // 职责：统一风格的文本组件，支持 primary/secondary 等变体
 // 约束：
 //   - 纯 UI 组件，文本通过 text property 传入
@@ -17,13 +17,25 @@ Text {
     property var theme: null
     property string variant: "primary"
 
-    color: !control.theme ? "#E2E2E5" :
-           control.variant === "secondary" ? control.theme.textSecondary :
-           control.variant === "muted" ? control.theme.textMuted :
-           control.variant === "disabled" ? control.theme.textDisabled :
-           control.variant === "onPrimary" ? control.theme.onPrimary :
-           control.variant === "selected" ? control.theme.selectedText :
-           control.theme.textPrimary
+    color: {
+        if (!control.theme) return "#E2E2E5";
+        switch (control.variant) {
+            case "secondary": return control.theme.textSecondary;
+            case "muted": return control.theme.textMuted;
+            case "disabled": return control.theme.textDisabled;
+            case "onPrimary": return control.theme.onPrimary;
+            case "selected": return control.theme.selectedText;
+            case "onSurface": return control.theme.onSurface;
+            case "onSurfaceVariant": return control.theme.onSurfaceVariant;
+            case "onPrimaryContainer": return control.theme.onPrimaryContainer;
+            case "onSecondaryContainer": return control.theme.onSecondaryContainer;
+            case "onError": return control.theme.onError;
+            case "onDangerContainer": return control.theme.onDangerContainer;
+            case "primary":
+            default:
+                return control.theme.textPrimary;
+        }
+    }
     font.pixelSize: control.theme ? control.theme.fontMd : 13
     wrapMode: Text.WordWrap
 }

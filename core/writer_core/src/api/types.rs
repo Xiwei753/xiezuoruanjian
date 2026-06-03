@@ -190,7 +190,7 @@ pub struct LocalSettingsDto {
     pub ai_enabled: bool,
     pub stats_device_id: Option<String>,
     pub linux_sidebar_width: f64,
-    pub linux_editor_width: f64,
+    pub desktop_editor_width: f64,
 }
 
 impl From<crate::settings::LocalSettings> for LocalSettingsDto {
@@ -213,7 +213,7 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
             ai_enabled: s.ai_enabled,
             stats_device_id: s.stats_device_id,
             linux_sidebar_width: s.linux_sidebar_width,
-            linux_editor_width: s.linux_editor_width,
+            desktop_editor_width: s.desktop_editor_width,
         }
     }
 }
@@ -238,7 +238,7 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             ai_enabled: s.ai_enabled,
             stats_device_id: s.stats_device_id,
             linux_sidebar_width: s.linux_sidebar_width,
-            linux_editor_width: s.linux_editor_width,
+            desktop_editor_width: s.desktop_editor_width,
         }
     }
 }
