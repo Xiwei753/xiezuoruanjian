@@ -24,6 +24,15 @@ Item {
     property alias validator: inputField.validator
     property bool fieldTabFocus: true
 
+    readonly property color normalTextColor: control.theme ? control.theme.onSurface : "#E2E2E5"
+    readonly property color placeholderColor: control.theme ? control.theme.textMuted : "#8C9198"
+    readonly property color backgroundColor: control.theme ? control.theme.surfaceContainerLow : "#ffffff"
+    readonly property color labelColor: control.theme ? control.theme.onSurfaceVariant : "#8C9198"
+    readonly property color activeBorderColor: control.theme ? control.theme.primary : "#006497"
+    readonly property color inactiveBorderColor: control.theme ? control.theme.outline : "#cbd5e1"
+    readonly property color highlightColor: control.theme ? control.theme.primary : "#006497"
+    readonly property color highlightTextColor: control.theme ? control.theme.onPrimary : "#FFFFFF"
+
     signal accepted()
     signal editingFinished()
 
@@ -37,7 +46,7 @@ Item {
         Text {
             text: control.label
             font.pixelSize: control.theme ? control.theme.label : 13
-            color: control.theme ? control.theme.textSecondary : "#8C9198"
+            color: control.labelColor
             font.weight: Font.Medium
             font.family: control.theme ? control.theme.fontFamily : "sans-serif"
             visible: control.label.length > 0
@@ -48,16 +57,16 @@ Item {
             Layout.fillWidth: true
             implicitHeight: control.theme ? control.theme.settingsControlHeight : 40
             placeholderText: control.placeholder
-            color: control.theme ? control.theme.textPrimary : "#E2E2E5"
-            placeholderTextColor: control.theme ? control.theme.textMuted : "#8C9198"
-            selectionColor: control.theme ? control.theme.primary : "#006497"
-            selectedTextColor: control.theme ? control.theme.onPrimary : "#FFFFFF"
+            color: control.normalTextColor
+            placeholderTextColor: control.placeholderColor
+            selectionColor: control.highlightColor
+            selectedTextColor: control.highlightTextColor
             activeFocusOnTab: control.fieldTabFocus
             onAccepted: control.accepted()
             onEditingFinished: control.editingFinished()
             background: Rectangle {
-                color: control.theme ? control.theme.inputBg : "#ffffff"
-                border.color: inputField.activeFocus ? (control.theme ? control.theme.borderFocus : "#006497") : (control.theme ? control.theme.controlBorder : "#cbd5e1")
+                color: control.backgroundColor
+                border.color: inputField.activeFocus ? control.activeBorderColor : control.inactiveBorderColor
                 border.width: inputField.activeFocus ? 2 : 1
                 radius: control.theme ? control.theme.radiusMd : 12
             }
