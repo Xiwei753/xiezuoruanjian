@@ -32,10 +32,10 @@ fn test_human_typed_counts_as_pure_input() {
         })
         .unwrap();
 
-    assert_eq!(summary["total_human_typed_chars"], 10);
-    assert_eq!(summary["total_pasted_chars"], 0);
-    assert_eq!(summary["total_deleted_chars"], 0);
-    assert_eq!(summary["total_ai_inserted_chars"], 0);
+    assert_eq!(summary["totalHumanTypedChars"], 10);
+    assert_eq!(summary["totalPastedChars"], 0);
+    assert_eq!(summary["totalDeletedChars"], 0);
+    assert_eq!(summary["totalAiInsertedChars"], 0);
 }
 
 #[test]
@@ -66,8 +66,8 @@ fn test_pasted_does_not_count_as_human_typed() {
         })
         .unwrap();
 
-    assert_eq!(summary["total_human_typed_chars"], 0);
-    assert_eq!(summary["total_pasted_chars"], 20);
+    assert_eq!(summary["totalHumanTypedChars"], 0);
+    assert_eq!(summary["totalPastedChars"], 20);
 }
 
 #[test]
@@ -113,9 +113,9 @@ fn test_deleted_does_not_cancel_human_typed() {
         })
         .unwrap();
 
-    assert_eq!(summary["total_human_typed_chars"], 10);
-    assert_eq!(summary["total_deleted_chars"], 3);
-    assert_eq!(summary["total_net_delta_chars"], 7);
+    assert_eq!(summary["totalHumanTypedChars"], 10);
+    assert_eq!(summary["totalDeletedChars"], 3);
+    assert_eq!(summary["totalNetDeltaChars"], 7);
 }
 
 #[test]
@@ -146,8 +146,8 @@ fn test_ai_inserted_not_counted_as_human() {
         })
         .unwrap();
 
-    assert_eq!(summary["total_human_typed_chars"], 0);
-    assert_eq!(summary["total_ai_inserted_chars"], 50);
+    assert_eq!(summary["totalHumanTypedChars"], 0);
+    assert_eq!(summary["totalAiInsertedChars"], 50);
 }
 
 #[test]
@@ -178,8 +178,8 @@ fn test_sync_remote_not_counted_as_local_input() {
         })
         .unwrap();
 
-    assert_eq!(summary["total_human_typed_chars"], 0);
-    assert_eq!(summary["total_net_delta_chars"], 0);
+    assert_eq!(summary["totalHumanTypedChars"], 0);
+    assert_eq!(summary["totalNetDeltaChars"], 0);
 }
 
 #[test]
@@ -263,15 +263,15 @@ fn test_multi_device_no_overlap() {
 
     let linux_dev = devices
         .iter()
-        .find(|d| d["device_id"] == "dev-linux")
+        .find(|d| d["deviceId"] == "dev-linux")
         .unwrap();
-    assert_eq!(linux_dev["human_typed_chars"], 10);
+    assert_eq!(linux_dev["humanTypedChars"], 10);
 
     let android_dev = devices
         .iter()
-        .find(|d| d["device_id"] == "dev-android")
+        .find(|d| d["deviceId"] == "dev-android")
         .unwrap();
-    assert_eq!(android_dev["human_typed_chars"], 20);
+    assert_eq!(android_dev["humanTypedChars"], 20);
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn test_speed_buckets_generation() {
     assert!(!buckets.is_empty());
     assert!(buckets
         .iter()
-        .any(|b| b["chars_typed"].as_u64().unwrap() > 0));
+        .any(|b| b["charsTyped"].as_u64().unwrap() > 0));
 }
 
 #[test]
@@ -347,8 +347,8 @@ fn test_per_project_tracking() {
         .unwrap();
     let projects = project_stats["projects"].as_array().unwrap();
     assert_eq!(projects.len(), 1);
-    assert_eq!(projects[0]["project_id"], "proj-abc");
-    assert_eq!(projects[0]["human_typed_chars"], 15);
+    assert_eq!(projects[0]["projectId"], "proj-abc");
+    assert_eq!(projects[0]["humanTypedChars"], 15);
 }
 
 #[test]
@@ -380,8 +380,8 @@ fn test_per_chapter_tracking() {
         .unwrap();
     let chapters = chapter_stats["chapters"].as_array().unwrap();
     assert_eq!(chapters.len(), 1);
-    assert_eq!(chapters[0]["chapter_id"], "chap-xyz");
-    assert_eq!(chapters[0]["human_typed_chars"], 25);
+    assert_eq!(chapters[0]["chapterId"], "chap-xyz");
+    assert_eq!(chapters[0]["humanTypedChars"], 25);
 }
 
 #[test]
@@ -516,7 +516,7 @@ fn test_char_count_uses_unicode_scalar() {
         })
         .unwrap();
 
-    assert_eq!(summary["total_human_typed_chars"], 4);
+    assert_eq!(summary["totalHumanTypedChars"], 4);
 }
 
 #[test]
@@ -569,11 +569,11 @@ fn test_facade_record_writing_event() {
 
     let today = StatsApi::today_date();
     let summary = core.get_writing_stats_summary(&today, &today).unwrap();
-    assert_eq!(summary["total_human_typed_chars"], 10);
-    assert_eq!(summary["total_pasted_chars"], 20);
-    assert_eq!(summary["total_deleted_chars"], 5);
-    assert_eq!(summary["total_ai_inserted_chars"], 30);
-    assert_eq!(summary["total_net_delta_chars"], 55);
+    assert_eq!(summary["totalHumanTypedChars"], 10);
+    assert_eq!(summary["totalPastedChars"], 20);
+    assert_eq!(summary["totalDeletedChars"], 5);
+    assert_eq!(summary["totalAiInsertedChars"], 30);
+    assert_eq!(summary["totalNetDeltaChars"], 55);
 }
 
 #[test]

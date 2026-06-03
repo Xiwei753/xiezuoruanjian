@@ -17,7 +17,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
@@ -58,8 +58,8 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
     private lateinit var projectRecyclerView: RecyclerView
     private lateinit var recentEditsRecyclerView: RecyclerView
-    private lateinit var fabNewProject: ExtendedFloatingActionButton
-    private lateinit var fabNewStarMapNode: ExtendedFloatingActionButton
+    private lateinit var fabNewProject: FloatingActionButton
+    private lateinit var fabNewStarMapNode: FloatingActionButton
     private lateinit var emptyStateLayout: View
     private lateinit var recentEditsLayout: View
     private lateinit var btnSettings: ImageView
