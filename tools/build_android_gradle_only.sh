@@ -3,7 +3,7 @@
 # Android Gradle 构建脚本（仅 Gradle 部分）
 # =============================================================================
 #
-# 本脚本用于仅构建 Android 应用的 Gradle 部分，不包含 Rust JNI 库编译。
+# 本脚本用于仅构建 Android 应用的 Gradle 部分，不包含 Rust native library 编译。
 #
 # 使用方法：
 #   ./build_android_gradle_only.sh
@@ -22,13 +22,13 @@
 #   - Android APK: apps/android/app/build/outputs/apk/*/debug/sujian-android-*.apk
 #
 # 适用场景：
-#   - 当 Rust JNI 库已经编译完成，只需要重新构建 Android 应用时
+#   - 当 Rust native library 已经编译完成，只需要重新构建 Android 应用时
 #   - 快速测试 Android 代码修改（不涉及 Rust 代码变更）
 #   - 开发调试阶段的快速迭代
 #
 # 注意事项：
-#   - 本脚本不会编译 Rust JNI 库，需要先运行 build_android.sh 或手动编译
-#   - 如果 JNI 库文件不存在，构建可能会失败
+#   - 本脚本不会编译 Rust native library，需要先运行 build_android.sh 或手动编译
+#   - 如果 native library 文件不存在，构建可能会失败
 #   - 适用于 arm64-v8a 架构（官方只支持 64 位 ARM 设备）
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
