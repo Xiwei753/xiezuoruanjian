@@ -122,7 +122,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 height: 1
-                color: root.appTheme ? root.appTheme.divider : "#e2e8f0"
+                color: root.appTheme ? root.appTheme.border : "#e2e8f0"
                 Layout.topMargin: root.appTheme ? root.appTheme.sp4 : 4
                 Layout.bottomMargin: root.appTheme ? root.appTheme.sp4 : 4
             }

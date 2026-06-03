@@ -115,7 +115,7 @@ ApplicationWindow {
     }
 
     StarMapController {
-        id: starMapController
+        id: globalStarMapController
         backendRef: backend
         starmapBackendRef: starmapBackend
         appController: appController
@@ -244,7 +244,7 @@ ApplicationWindow {
                 backendRef: projectBackend
                 editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
-                starMapController: starMapController
+                starMapController: globalStarMapController
                 appState: window.appState
                 tree: window.appState.tree || []
                 aiCapable: settingsBackend.ai_available
@@ -299,7 +299,7 @@ ApplicationWindow {
             sourceComponent: WritingWorkspace {
                 dt: designTokens
                 backendRef: editorBackend
-                starMapController: starMapController
+                starMapController: globalStarMapController
                 appState: window.appState
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
