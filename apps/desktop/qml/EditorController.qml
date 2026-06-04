@@ -43,7 +43,6 @@ QtObject {
     property bool isLoadingChapter: false
     property bool isApplyingFormat: false
     property bool isApplyingSettings: false
-    property bool isApplyingTextColor: false
     property bool pendingAutoSaveAfterGuard: false
     property bool explicitEmptySavePending: false
     property double lastPotentialExplicitClearAtMs: 0
@@ -90,7 +89,6 @@ QtObject {
         document: targetTextArea ? targetTextArea.textDocument : null
         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
         text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
-        text_color: dt ? dt.editorTextHex : "#E2E2E5"
     }
 
     // Autosync timer
@@ -107,22 +105,8 @@ QtObject {
     // Connections to TextArea signals
     property var textConnections: Connections {
         target: targetTextArea
-        function onCursorPositionChanged() {
-            if (controller.saveGuardActive() || controller.isApplyingTextColor) return;
-            if (targetTextArea && docHandler) {
-                controller.isApplyingTextColor = true;
-                docHandler.apply_current_text_color(targetTextArea.cursorPosition);
-                controller.isApplyingTextColor = false;
-            }
-        }
         function onTextChanged() {
             if (controller.saveGuardActive()) return;
-
-            if (targetTextArea && docHandler && !controller.isApplyingTextColor) {
-                controller.isApplyingTextColor = true;
-                docHandler.apply_current_text_color(targetTextArea.cursorPosition);
-                controller.isApplyingTextColor = false;
-            }
 
             var read = controller.readEditorPlainText();
             if (read.suspiciousEmpty) {

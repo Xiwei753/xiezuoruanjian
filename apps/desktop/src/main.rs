@@ -41,8 +41,11 @@ use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_stat
 use backend::{AppBackend, BackendRuntime};
 
 cpp! {{
+    #include <QCoreApplication>
+    #include <QFileInfo>
     #include <QGuiApplication>
     #include <QIcon>
+    #include <QStringList>
     #include <QtGlobal>
 }}
 
@@ -214,6 +217,36 @@ fn set_application_icon() {
     });
 }
 
+fn log_input_method_diagnostics() {
+    let qt_im_module = std::env::var("QT_IM_MODULE").unwrap_or_else(|_| "<unset>".to_string());
+    let xmodifiers = std::env::var("XMODIFIERS").unwrap_or_else(|_| "<unset>".to_string());
+    let xdg_session_type =
+        std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "<unset>".to_string());
+    let qt_library_paths = cpp!(unsafe [] -> QString as "QString" {
+        return QCoreApplication::libraryPaths().join(QStringLiteral(";"));
+    });
+    let fcitx_plugins = cpp!(unsafe [] -> QString as "QString" {
+        QStringList matches;
+        const QString relative = QStringLiteral("/platforminputcontexts/libfcitx5platforminputcontextplugin.so");
+        for (const QString& base : QCoreApplication::libraryPaths()) {
+            const QString candidate = base + relative;
+            if (QFileInfo::exists(candidate)) {
+                matches << candidate;
+            }
+        }
+        return matches.join(QStringLiteral(";"));
+    });
+
+    eprintln!(
+        "[QtInputMethodDiagnostics] QT_IM_MODULE={} XMODIFIERS={} XDG_SESSION_TYPE={} qt_library_paths={} fcitx5_qt6_plugins={}",
+        qt_im_module,
+        xmodifiers,
+        xdg_session_type,
+        qt_library_paths,
+        fcitx_plugins
+    );
+}
+
 fn main() {
     debug_log_static("app", "app_startup", "Sujian application starting...");
     fail_if_not_qt6();
@@ -244,6 +277,7 @@ fn main() {
     remember_qml_load_error("");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();
+    log_input_method_diagnostics();
     set_application_icon();
 
     let backend_runtime = BackendRuntime::new();

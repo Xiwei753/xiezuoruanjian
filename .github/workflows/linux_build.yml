@@ -59,6 +59,7 @@ jobs:
             qt6-tools-dev \
             qt6-tools-dev-tools \
             qt6-wayland \
+            fcitx5-frontend-qt6 \
             qml6-module-qt-labs-platform \
             qml6-module-qtqml \
             qml6-module-qtqml-workerscript \
@@ -124,8 +125,17 @@ jobs:
             <path d="M48 50h32M48 64h32M48 78h22" stroke="#2f5d50" stroke-width="7" stroke-linecap="round"/>
           </svg>
           EOF
+          QT_PLUGIN_DIR="$($QMAKE -query QT_INSTALL_PLUGINS)"
+          FCITX_QT_PLUGIN="$QT_PLUGIN_DIR/platforminputcontexts/libfcitx5platforminputcontextplugin.so"
+          if [ ! -f "$FCITX_QT_PLUGIN" ]; then
+            echo "::error title=fcitx5 Qt6 input context missing::Expected $FCITX_QT_PLUGIN from fcitx5-frontend-qt6"
+            exit 1
+          fi
+          mkdir -p AppDir/usr/plugins/platforminputcontexts
+          cp -v "$FCITX_QT_PLUGIN" AppDir/usr/plugins/platforminputcontexts/
           OUTPUT="sujian-desktop-${{ matrix.flavor }}.AppImage" \
             QML_SOURCES_PATHS="$PWD/apps/desktop/qml" \
+            EXTRA_QT_PLUGINS="platforminputcontexts/libfcitx5platforminputcontextplugin.so" \
             ./linuxdeploy-x86_64.AppImage \
               --appdir AppDir \
               --executable AppDir/usr/bin/sujian-desktop \
@@ -133,6 +143,10 @@ jobs:
               --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/sujian-desktop.svg \
               --plugin qt \
               --output appimage
+          if [ ! -f AppDir/usr/plugins/platforminputcontexts/libfcitx5platforminputcontextplugin.so ]; then
+            echo "::error title=AppImage fcitx5 plugin missing::Qt platform input context plugin was not packaged"
+            exit 1
+          fi
 
       - name: Smoke test AppImage startup
         run: |

@@ -11,7 +11,7 @@
 
 import QtQuick
 
-Rectangle {
+Item {
     id: root
 
     property var targetTextArea: null
@@ -25,14 +25,9 @@ Rectangle {
     property string lastTextString: targetTextArea ? targetTextArea.text : ""
     property real fallbackCursorHeight: targetTextArea ? Math.max(targetTextArea.font.pixelSize * 1.2, 18) : 18
 
-    width: 2
-    height: cursorHeight()
-    color: dt ? dt.accent : "#7B8CDE"
-    visible: smoothCursorEnabled && targetTextArea && targetTextArea.focus && targetTextArea.enabled && height > 0
+    anchors.fill: parent
+    visible: targetTextArea && targetTextArea.enabled
     z: 3
-    
-    x: cursorX()
-    y: cursorY()
 
     // Padding properties required by static contract check
     readonly property real _leftPaddingCheck: targetTextArea ? targetTextArea.leftPadding : 0
@@ -48,7 +43,8 @@ Rectangle {
     function cursorHeight() {
         if (!targetTextArea) return 0;
         var rect = targetTextArea.cursorRectangle;
-        return Math.max(rect.height || 0, fallbackCursorHeight);
+        var baseHeight = Math.max(rect.height || 0, fallbackCursorHeight);
+        return Math.min(baseHeight, fallbackCursorHeight * 1.35);
     }
 
     function cursorX() {
@@ -76,17 +72,19 @@ Rectangle {
     }
 
     function textPositionRect(position) {
-        if (!targetTextArea || !overlayItem) return { "x": root.x, "y": root.y, "height": root.height };
+        if (!targetTextArea || !overlayItem) return { "x": cursorRect.x, "y": cursorRect.y, "height": cursorRect.height };
         try {
             var rect = targetTextArea.positionToRectangle(position);
             var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
+            var baseHeight = Math.max(rect.height || 0, fallbackCursorHeight);
+            var clampedHeight = Math.min(baseHeight, fallbackCursorHeight * 1.35);
             return {
-                "x": pt ? pt.x : root.x,
-                "y": pt ? pt.y : root.y,
-                "height": Math.max(rect.height || 0, fallbackCursorHeight)
+                "x": pt ? pt.x : cursorRect.x,
+                "y": pt ? pt.y : cursorRect.y,
+                "height": clampedHeight
             };
         } catch (e) {
-            return { "x": root.x, "y": root.y, "height": root.height };
+            return { "x": cursorRect.x, "y": cursorRect.y, "height": cursorRect.height };
         }
     }
 
@@ -117,20 +115,37 @@ Rectangle {
         });
     }
 
-    Behavior on x {
-        id: xBehavior
-        enabled: root.smoothCursorEnabled
-        NumberAnimation {
-            duration: root.cursorAnimationDuration
-            easing.type: Easing.OutCubic
+    Rectangle {
+        id: cursorRect
+        width: 2
+        height: root.cursorHeight()
+        color: root.dt ? root.dt.accent : "#7B8CDE"
+        visible: root.smoothCursorEnabled && root.targetTextArea && root.targetTextArea.focus && root.targetTextArea.enabled && height > 0
+        z: 3
+        x: root.cursorX()
+        y: root.cursorY()
+
+        Behavior on x {
+            enabled: root.smoothCursorEnabled
+            NumberAnimation {
+                duration: root.cursorAnimationDuration
+                easing.type: Easing.OutCubic
+            }
         }
-    }
-    Behavior on y {
-        id: yBehavior
-        enabled: root.smoothCursorEnabled
-        NumberAnimation {
-            duration: root.cursorAnimationDuration
-            easing.type: Easing.OutCubic
+        Behavior on y {
+            enabled: root.smoothCursorEnabled
+            NumberAnimation {
+                duration: root.cursorAnimationDuration
+                easing.type: Easing.OutCubic
+            }
+        }
+
+        // Breathing pulse animation when idle
+        SequentialAnimation on opacity {
+            loops: Animation.Infinite
+            running: root.smoothCursorEnabled && root.targetTextArea && root.targetTextArea.focus
+            NumberAnimation { from: 1.0; to: 0.2; duration: 600; easing.type: Easing.InOutQuad }
+            NumberAnimation { from: 0.2; to: 1.0; duration: 600; easing.type: Easing.InOutQuad }
         }
     }
 
@@ -142,7 +157,7 @@ Rectangle {
             x: startXPos
             y: startYPos
             opacity: 1.0
-            z: -1
+            z: 2
             scale: 1.0
 
             Component.onCompleted: {
@@ -232,11 +247,4 @@ Rectangle {
         }
     }
 
-    // Breathing pulse animation when idle
-    SequentialAnimation on opacity {
-        loops: Animation.Infinite
-        running: root.smoothCursorEnabled && targetTextArea && targetTextArea.focus
-        NumberAnimation { from: 1.0; to: 0.2; duration: 600; easing.type: Easing.InOutQuad }
-        NumberAnimation { from: 0.2; to: 1.0; duration: 600; easing.type: Easing.InOutQuad }
-    }
 }

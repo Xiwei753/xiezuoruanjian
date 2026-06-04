@@ -8,7 +8,7 @@
 //
 // 干什么的：
 // - 接管 QML TextArea 关联的 QTextDocument 实例。
-// - 负责纯文本的视觉排版调整，例如行高比例（QTextBlockFormat::setLineHeight）、段首首行缩进（setTextIndent）及文本颜色。
+// - 负责纯文本的视觉排版调整，例如行高比例（QTextBlockFormat::setLineHeight）和段首首行缩进（setTextIndent）。
 // - 实现纯文本的安全提取（doc->toPlainText()）以及按行安全插入纯文本，杜绝 HTML 字符串或富文本内容物理污染磁盘正文。
 // - 提供在切换章节时一键清空撤销栈（clearUndoRedoStacks()）的底层实现。
 //
@@ -56,8 +56,6 @@ cpp! {{
     #include <QtGui/QTextDocument>
     #include <QtGui/QTextCursor>
     #include <QtGui/QTextBlockFormat>
-    #include <QtGui/QTextCharFormat>
-    #include <QtGui/QColor>
     #include <QtCore/QDebug>
 }}
 
@@ -69,23 +67,19 @@ pub struct DocumentHandler {
     document: qt_property!(QVariant; READ document WRITE set_document NOTIFY document_changed),
     line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY line_spacing_changed),
     text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY text_indent_changed),
-    text_color: qt_property!(QString; READ text_color WRITE set_text_color NOTIFY text_color_changed),
 
     document_changed: qt_signal!(),
     line_spacing_changed: qt_signal!(),
     text_indent_changed: qt_signal!(),
-    text_color_changed: qt_signal!(),
 
     apply_format: qt_method!(fn(&self)),
     set_plain_text: qt_method!(fn(&self, text: QString)),
     get_plain_text: qt_method!(fn(&self) -> QString),
     clear_undo_stack: qt_method!(fn(&self)),
-    apply_current_text_color: qt_method!(fn(&self, cursor_position: i32)),
 
     current_doc: QVariant,
     current_line_spacing: f32,
     current_text_indent: f32,
-    current_text_color: QString,
 }
 
 impl DocumentHandler {
@@ -120,24 +114,12 @@ impl DocumentHandler {
         }
     }
 
-    fn text_color(&self) -> QString {
-        self.current_text_color.clone()
-    }
-    fn set_text_color(&mut self, val: QString) {
-        if self.current_text_color != val {
-            self.current_text_color = val;
-            self.text_color_changed();
-            self.apply_format();
-        }
-    }
-
     fn apply_format(&self) {
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
-        let text_color = self.current_text_color.clone();
 
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text_color as "QString"] {
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -154,18 +136,6 @@ impl DocumentHandler {
             blockFormat.setTextIndent(indent);
             cursor.mergeBlockFormat(blockFormat);
 
-            QTextCharFormat charFormat;
-            QColor color(text_color);
-            static bool first_log = true;
-            if (first_log) {
-                qDebug("[SujianDebug][DocumentHandler] apply_format text_color: %s, valid: %d", text_color.toUtf8().constData(), color.isValid());
-                first_log = false;
-            }
-            if (color.isValid()) {
-                charFormat.setForeground(color);
-                cursor.mergeCharFormat(charFormat);
-            }
-
             cursor.endEditBlock();
         });
     }
@@ -174,9 +144,8 @@ impl DocumentHandler {
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
-        let text_color = self.current_text_color.clone();
 
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text as "QString", text_color as "QString"] {
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text as "QString"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -200,13 +169,6 @@ impl DocumentHandler {
             formatCursor.beginEditBlock();
             formatCursor.select(QTextCursor::Document);
             formatCursor.mergeBlockFormat(blockFormat);
-
-            QTextCharFormat charFormat;
-            QColor color(text_color);
-            if (color.isValid()) {
-                charFormat.setForeground(color);
-                formatCursor.mergeCharFormat(charFormat);
-            }
 
             formatCursor.endEditBlock();
 
@@ -238,43 +200,6 @@ impl DocumentHandler {
             QTextDocument* doc = qquick_doc->textDocument();
             if (!doc) return;
             doc->clearUndoRedoStacks();
-        });
-    }
-
-    fn apply_current_text_color(&self, cursor_position: i32) {
-        let doc_variant = self.current_doc.clone();
-        let text_color = self.current_text_color.clone();
-
-        cpp!(unsafe [doc_variant as "QVariant", text_color as "QString", cursor_position as "int"] {
-            QObject* obj = doc_variant.value<QObject*>();
-            if (!obj) return;
-            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
-            if (!qquick_doc) return;
-            QTextDocument* doc = qquick_doc->textDocument();
-            if (!doc) return;
-
-            QColor color(text_color);
-            if (!color.isValid()) return;
-
-            QTextCursor cursor(doc);
-            cursor.beginEditBlock();
-
-            if (cursor_position >= 0 && cursor_position <= doc->characterCount()) {
-                cursor.setPosition(cursor_position);
-
-                // Select the current block (paragraph) and apply color
-                cursor.select(QTextCursor::BlockUnderCursor);
-                QTextCharFormat charFormat;
-                charFormat.setForeground(color);
-                cursor.mergeCharFormat(charFormat);
-
-                // Also set block char format for future insertions in this block
-                QTextCharFormat blockCharFormat = cursor.blockCharFormat();
-                blockCharFormat.setForeground(color);
-                cursor.setBlockCharFormat(blockCharFormat);
-            }
-
-            cursor.endEditBlock();
         });
     }
 }
