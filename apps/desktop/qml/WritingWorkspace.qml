@@ -654,6 +654,7 @@ Rectangle {
                             selectionColor: dt ? dt.primary : "#006497"
                             font.pixelSize: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
                             font.family: "serif"
+                            textFormat: TextEdit.PlainText
                             wrapMode: TextArea.Wrap
                             verticalAlignment: TextInput.AlignTop
                             background: Rectangle { color: "transparent" }

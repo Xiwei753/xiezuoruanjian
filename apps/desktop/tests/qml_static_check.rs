@@ -373,7 +373,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 }
 
 #[test]
-fn test_editor_text_color_is_theme_only() {
+fn test_editor_foreground_is_theme_only() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let document_handler = fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
     let editor_controller = fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
@@ -384,6 +384,8 @@ fn test_editor_text_color_is_theme_only() {
         ["QText", "CharFormat"].concat(),
         ["set", "Foreground"].concat(),
         ["merge", "CharFormat"].concat(),
+        ["set", "PlainText"].concat(),
+        ["set", "_plain", "_text"].concat(),
         ["text", "_color"].concat(),
         ["current", "_text", "_color"].concat(),
         ["apply", "_current", "_text", "_color"].concat(),
@@ -397,6 +399,7 @@ fn test_editor_text_color_is_theme_only() {
     for token in [
         ["apply", "_current", "_text", "_color"].concat(),
         ["is", "Applying", "Text", "Color"].concat(),
+        ["docHandler", ".", "set", "_plain", "_text"].concat(),
         ["text", "_color:"].concat(),
         ["editor", "Text", "Hex"].concat(),
     ] {
@@ -413,5 +416,15 @@ fn test_editor_text_color_is_theme_only() {
     assert!(
         writing_workspace.contains("color: dt ? dt.editorText : \"#E2E2E5\""),
         "WritingWorkspace TextArea must read editor text color from DesignTokens"
+    );
+    assert!(
+        writing_workspace.contains("textFormat: TextEdit.PlainText"),
+        "WritingWorkspace TextArea must own plain text display in PlainText mode"
+    );
+    assert!(
+        editor_controller.contains("targetTextArea.text = content")
+            && editor_controller.contains("targetTextArea.text = plain")
+            && editor_controller.contains("docHandler.apply_format()"),
+        "EditorController must load and format text through TextArea.text, then apply block formatting"
     );
 }

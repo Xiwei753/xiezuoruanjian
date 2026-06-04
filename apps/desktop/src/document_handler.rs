@@ -9,7 +9,7 @@
 // 干什么的：
 // - 接管 QML TextArea 关联的 QTextDocument 实例。
 // - 负责纯文本的视觉排版调整，例如行高比例（QTextBlockFormat::setLineHeight）和段首首行缩进（setTextIndent）。
-// - 实现纯文本的安全提取（doc->toPlainText()）以及按行安全插入纯文本，杜绝 HTML 字符串或富文本内容物理污染磁盘正文。
+// - 实现纯文本的安全提取（doc->toPlainText()），杜绝 HTML 字符串或富文本内容物理污染磁盘正文。
 // - 提供在切换章节时一键清空撤销栈（clearUndoRedoStacks()）的底层实现。
 //
 // 被什么引用：
@@ -29,7 +29,7 @@
 //!
 //! ## 职责边界
 //!
-//! - **做**：应用行距、首行缩进、设置纯文本、获取纯文本、清空撤销栈
+//! - **做**：应用行距、首行缩进、获取纯文本、清空撤销栈
 //! - **不做**：正文内容管理（由 WriterCore 负责）
 //! - **不做**：业务逻辑（只做视觉排版）
 //!
@@ -42,7 +42,6 @@
 //! ## 关键方法
 //!
 //! - `apply_format()`：将行距和首行缩进应用到 QTextDocument
-//! - `set_plain_text()`：按行插入纯文本（不接受 HTML）
 //! - `get_plain_text()`：获取纯文本（替换 `\u2029` 为 `\n`）
 //! - `clear_undo_stack()`：清空撤销栈（章节切换时调用）
 
@@ -73,7 +72,6 @@ pub struct DocumentHandler {
     text_indent_changed: qt_signal!(),
 
     apply_format: qt_method!(fn(&self)),
-    set_plain_text: qt_method!(fn(&self, text: QString)),
     get_plain_text: qt_method!(fn(&self) -> QString),
     clear_undo_stack: qt_method!(fn(&self)),
 
@@ -135,42 +133,6 @@ impl DocumentHandler {
             blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
             blockFormat.setTextIndent(indent);
             cursor.mergeBlockFormat(blockFormat);
-
-            cursor.endEditBlock();
-        });
-    }
-
-    fn set_plain_text(&self, text: QString) {
-        let doc_variant = self.current_doc.clone();
-        let line_spacing = self.current_line_spacing;
-        let indent = self.current_text_indent;
-
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text as "QString"] {
-            QObject* obj = doc_variant.value<QObject*>();
-            if (!obj) return;
-            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
-            if (!qquick_doc) return;
-            QTextDocument* doc = qquick_doc->textDocument();
-            if (!doc) return;
-
-            QTextCursor cursor(doc);
-            cursor.beginEditBlock();
-
-            cursor.select(QTextCursor::Document);
-            cursor.removeSelectedText();
-
-            QTextBlockFormat blockFormat;
-            blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
-            blockFormat.setTextIndent(indent);
-
-            doc->setPlainText(text);
-
-            QTextCursor formatCursor(doc);
-            formatCursor.beginEditBlock();
-            formatCursor.select(QTextCursor::Document);
-            formatCursor.mergeBlockFormat(blockFormat);
-
-            formatCursor.endEditBlock();
 
             cursor.endEditBlock();
         });

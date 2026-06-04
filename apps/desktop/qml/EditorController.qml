@@ -11,7 +11,7 @@
 //   - 通过 documentHandler 调用 DocumentHandler (Rust QObject) 做排版
 //
 // 关键流程：
-//   openChapter() → read_chapter → set_plain_text → apply_format
+//   openChapter() → read_chapter → TextArea.text → apply_format
 //   saveCurrentChapter() → get_plain_text → sanitize → save_chapter
 //
 // 防死循环机制：
@@ -285,10 +285,11 @@ QtObject {
 
         var content = normalizePlainText(result.data ? result.data.content || "" : "");
 
-        // Use PlainText mode: line spacing/indent are applied via QTextDocument
-        // block formats in DocumentHandler, not via HTML.
+        // TextArea owns the visible plain-text content and foreground color.
+        // DocumentHandler only applies QTextBlockFormat visual layout.
         targetTextArea.textFormat = TextEdit.PlainText;
-        docHandler.set_plain_text(content);
+        targetTextArea.text = content;
+        docHandler.apply_format();
         docHandler.clear_undo_stack();
 
         previousEditorText = content;
@@ -352,7 +353,9 @@ QtObject {
         autoSaveTimer.stop();
         var cursor = targetTextArea.cursorPosition;
         try {
-            docHandler.set_plain_text(plain);
+            targetTextArea.textFormat = TextEdit.PlainText;
+            targetTextArea.text = plain;
+            docHandler.apply_format();
             targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
         } finally {
             isApplyingFormat = false;
