@@ -58,8 +58,8 @@ jobs:
             qt6-declarative-dev \
             qt6-tools-dev \
             qt6-tools-dev-tools \
+            qt6-base-private-dev \
             qt6-wayland \
-            fcitx5-frontend-qt6 \
             qml6-module-qt-labs-platform \
             qml6-module-qtqml \
             qml6-module-qtqml-workerscript \
@@ -69,11 +69,17 @@ jobs:
             qml6-module-qtquick-layouts \
             qml6-module-qtquick-templates \
             qml6-module-qtquick-window \
+            cmake \
+            extra-cmake-modules \
+            ninja-build \
             build-essential \
             pkg-config \
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libx11-dev \
             libfuse2 \
             file \
             wget \
@@ -90,6 +96,26 @@ jobs:
           echo "QT_INCLUDE_PATH=$($QMAKE_PATH -query QT_INSTALL_HEADERS)" >> "$GITHUB_ENV"
           echo "QT_LIBRARY_PATH=$($QMAKE_PATH -query QT_INSTALL_LIBS)" >> "$GITHUB_ENV"
           echo "QT_VERSION_MAJOR=6" >> "$GITHUB_ENV"
+
+      - name: Build fcitx5 Qt6 input context
+        run: |
+          wget -O fcitx5-qt-5.0.10.tar.gz https://github.com/fcitx/fcitx5-qt/archive/refs/tags/5.0.10.tar.gz
+          tar -xzf fcitx5-qt-5.0.10.tar.gz
+          cmake -S fcitx5-qt-5.0.10 -B fcitx5-qt-build -G Ninja \
+            -DENABLE_QT4=OFF \
+            -DENABLE_QT5=OFF \
+            -DENABLE_QT6=ON \
+            -DBUILD_ONLY_PLUGIN=ON \
+            -DBUILD_STATIC_PLUGIN=OFF \
+            -DWITH_FCITX_PLUGIN_NAME=ON \
+            -DCMAKE_PREFIX_PATH="$($QMAKE -query QT_INSTALL_PREFIX)"
+          cmake --build fcitx5-qt-build --target fcitx5platforminputcontextplugin-qt6
+          FCITX_QT_PLUGIN="$(find "$PWD/fcitx5-qt-build" -path '*/platforminputcontext/libfcitx5platforminputcontextplugin.so' -print -quit)"
+          if [ ! -f "$FCITX_QT_PLUGIN" ]; then
+            echo "::error title=fcitx5 Qt6 input context build failed::Built plugin was not found"
+            exit 1
+          fi
+          echo "FCITX_QT_PLUGIN=$FCITX_QT_PLUGIN" >> "$GITHUB_ENV"
 
       - name: Test Rust core
         run: cargo test -p writer_core ${{ matrix.features }}
@@ -125,10 +151,8 @@ jobs:
             <path d="M48 50h32M48 64h32M48 78h22" stroke="#2f5d50" stroke-width="7" stroke-linecap="round"/>
           </svg>
           EOF
-          QT_PLUGIN_DIR="$($QMAKE -query QT_INSTALL_PLUGINS)"
-          FCITX_QT_PLUGIN="$QT_PLUGIN_DIR/platforminputcontexts/libfcitx5platforminputcontextplugin.so"
           if [ ! -f "$FCITX_QT_PLUGIN" ]; then
-            echo "::error title=fcitx5 Qt6 input context missing::Expected $FCITX_QT_PLUGIN from fcitx5-frontend-qt6"
+            echo "::error title=fcitx5 Qt6 input context missing::Expected built plugin at $FCITX_QT_PLUGIN"
             exit 1
           fi
           mkdir -p AppDir/usr/plugins/platforminputcontexts
