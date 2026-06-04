@@ -19,6 +19,7 @@ Item {
     property var dt: null
     property bool smoothCursorEnabled: true
     property bool typingAnimationEnabled: true
+    property bool isScrolling: false
     property int cursorAnimationDuration: 80
     property int typingAnimationDuration: 100
     property int lastTextLength: targetTextArea ? targetTextArea.length : 0
@@ -107,6 +108,7 @@ Item {
     }
 
     function appendTypingParticle(charText, position, isDeletion) {
+        if (root.isScrolling) return;
         if (!charText || charText === "\n" || charText === "\r") return;
         if (typingParticlesModel.count > 40) typingParticlesModel.remove(0, typingParticlesModel.count - 40);
         var rect = textPositionRect(position);
@@ -130,14 +132,14 @@ Item {
         y: root.cursorY()
 
         Behavior on x {
-            enabled: root.smoothCursorEnabled
+            enabled: root.smoothCursorEnabled && !root.isScrolling
             NumberAnimation {
                 duration: root.cursorAnimationDuration
                 easing.type: Easing.OutCubic
             }
         }
         Behavior on y {
-            enabled: root.smoothCursorEnabled
+            enabled: root.smoothCursorEnabled && !root.isScrolling
             NumberAnimation {
                 duration: root.cursorAnimationDuration
                 easing.type: Easing.OutCubic
@@ -147,7 +149,7 @@ Item {
         // Breathing pulse animation when idle
         SequentialAnimation on opacity {
             loops: Animation.Infinite
-            running: root.smoothCursorEnabled && root.targetTextArea && root.targetTextArea.focus
+            running: root.smoothCursorEnabled && !root.isScrolling && root.targetTextArea && root.targetTextArea.focus
             NumberAnimation { from: 1.0; to: 0.2; duration: 600; easing.type: Easing.InOutQuad }
             NumberAnimation { from: 0.2; to: 1.0; duration: 600; easing.type: Easing.InOutQuad }
         }
@@ -156,6 +158,7 @@ Item {
     Item {
         id: typingLayer
         anchors.fill: parent
+        visible: !root.isScrolling
         z: 2
 
         Repeater {
@@ -213,7 +216,7 @@ Item {
         id: garbageCollector
         interval: 500
         repeat: true
-        running: typingParticlesModel.count > 0
+        running: typingParticlesModel.count > 0 && !root.isScrolling
         onTriggered: {
             var now = Date.now();
             var i = 0;
@@ -234,7 +237,7 @@ Item {
         function onTextChanged() {
             var len = root.targetTextArea ? root.targetTextArea.length : 0;
             var newText = root.targetTextArea ? root.targetTextArea.text : "";
-            if (root.typingAnimationEnabled && root.targetTextArea && root.targetTextArea.activeFocus) {
+            if (root.typingAnimationEnabled && !root.isScrolling && root.targetTextArea && root.targetTextArea.activeFocus) {
                 var prefix = commonPrefixLength(root.lastTextString, newText);
                 var suffix = commonSuffixLength(root.lastTextString, newText, prefix);
                 var addedText = newText.substring(prefix, newText.length - suffix);
@@ -253,6 +256,12 @@ Item {
             }
             root.lastTextLength = len;
             root.lastTextString = newText;
+        }
+    }
+
+    onIsScrollingChanged: {
+        if (isScrolling && typingParticlesModel.count > 0) {
+            typingParticlesModel.clear();
         }
     }
 

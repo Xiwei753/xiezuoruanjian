@@ -26,6 +26,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         private set
     var smoothCursorDurationMs: Long = 80L
         private set
+    private var pausedForScroll = false
 
     private var currentCursorX = -1f
     private var currentCursorTop = -1f
@@ -50,7 +51,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
 
     private val cursorBlinkRunnable = object : Runnable {
         override fun run() {
-            if (editText.isFocused && smoothCursorEnabled && editText.selectionStart == editText.selectionEnd) {
+            if (!pausedForScroll && editText.isFocused && smoothCursorEnabled && editText.selectionStart == editText.selectionEnd) {
                 isCursorBlinkVisible = !isCursorBlinkVisible
                 invalidateCursorRect()
                 editText.postDelayed(this, 500)
@@ -80,7 +81,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
     }
 
     fun invalidateCursorRectAt(x: Float, t: Float, b: Float) {
-        if (!cursorRuntimeReady || !smoothCursorEnabled || x < 0 || editText.width <= 0 || editText.height <= 0) return
+        if (pausedForScroll || !cursorRuntimeReady || !smoothCursorEnabled || x < 0 || editText.width <= 0 || editText.height <= 0) return
         val left = (x + editText.compoundPaddingLeft - editText.scrollX - 8f).toInt()
         val top = (t + editText.compoundPaddingTop - editText.scrollY - 8f).toInt()
         val right = (x + editText.compoundPaddingLeft - editText.scrollX + 16f).toInt()
@@ -93,6 +94,13 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
     }
 
     override fun onAnimationStep(frameTimeNanos: Long): Boolean {
+        if (pausedForScroll) {
+            currentCursorX = targetX
+            currentCursorTop = targetTop
+            currentCursorBottom = targetBottom
+            isAnimating = false
+            return false
+        }
         if (!smoothCursorEnabled || smoothCursorDurationMs <= 0) {
             invalidateCursorRectAt(currentCursorX, currentCursorTop, currentCursorBottom)
             currentCursorX = targetX
@@ -159,6 +167,33 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         }
     }
 
+    fun setScrolling(scrolling: Boolean) {
+        if (pausedForScroll == scrolling) return
+        if (scrolling) {
+            invalidateCursorRectAt(currentCursorX, currentCursorTop, currentCursorBottom)
+            pausedForScroll = true
+            isAnimating = false
+            editText.animationRuntime?.unregister(this)
+            stopCursorBlink()
+            if (editText.layout != null && editText.selectionStart == editText.selectionEnd) {
+                val coords = computeCursorTarget(editText.selectionStart)
+                currentCursorX = coords.x
+                currentCursorTop = coords.top
+                currentCursorBottom = coords.bottom
+                targetX = coords.x
+                targetTop = coords.top
+                targetBottom = coords.bottom
+            }
+        } else {
+            pausedForScroll = false
+            if (smoothCursorEnabled && editText.isFocused && editText.selectionStart == editText.selectionEnd) {
+                updateCursorTarget(false)
+                startCursorBlink()
+                invalidateCursorRect()
+            }
+        }
+    }
+
     fun startCursorBlink() {
         editText.removeCallbacks(cursorBlinkRunnable)
         isCursorBlinkVisible = true
@@ -190,7 +225,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         val newTargetTop = coords.top
         val newTargetBottom = coords.bottom
 
-        if (currentCursorX < 0 || !animate || smoothCursorDurationMs <= 0 || !smoothCursorEnabled) {
+        if (currentCursorX < 0 || !animate || pausedForScroll || smoothCursorDurationMs <= 0 || !smoothCursorEnabled) {
             invalidateCursorRectAt(currentCursorX, currentCursorTop, currentCursorBottom)
             isAnimating = false
             editText.animationRuntime?.unregister(this)
@@ -232,7 +267,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
 
     fun onEditorResume() {
         if (smoothCursorEnabled) editText.isCursorVisible = false
-        if (!cursorRuntimeReady || !smoothCursorEnabled) return
+        if (pausedForScroll || !cursorRuntimeReady || !smoothCursorEnabled) return
         if (!editText.isFocused || editText.selectionStart != editText.selectionEnd) {
             stopCursorBlink()
             return
@@ -249,7 +284,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
 
     fun onFocusChanged(focused: Boolean) {
         if (smoothCursorEnabled) editText.isCursorVisible = false
-        if (!cursorRuntimeReady) return
+        if (pausedForScroll || !cursorRuntimeReady) return
         if (smoothCursorEnabled) {
             if (focused) startCursorBlink() else stopCursorBlink()
             invalidateCursorRect()
@@ -260,15 +295,16 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         if (smoothCursorEnabled) editText.isCursorVisible = false
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && selStart == selEnd) {
-            updateCursorTarget(true)
-            startCursorBlink()
+            updateCursorTarget(!pausedForScroll)
+            if (!pausedForScroll) startCursorBlink()
         } else if (smoothCursorEnabled) {
-            updateCursorTarget(true) // will stop animating and hide
+            updateCursorTarget(!pausedForScroll) // will stop animating and hide
         }
     }
 
     fun draw(canvas: Canvas) {
         if (smoothCursorEnabled) editText.isCursorVisible = false
+        if (pausedForScroll) return
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && editText.isFocused && editText.selectionStart == editText.selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
             cursorPaint.color = editText.currentTextColor

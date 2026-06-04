@@ -84,11 +84,24 @@ QtObject {
         }
     }
 
+    function colorToHex(colorValue, fallback) {
+        if (colorValue === undefined || colorValue === null) return fallback;
+        var r = Math.round(Math.max(0, Math.min(1, colorValue.r)) * 255);
+        var g = Math.round(Math.max(0, Math.min(1, colorValue.g)) * 255);
+        var b = Math.round(Math.max(0, Math.min(1, colorValue.b)) * 255);
+        function componentHex(value) {
+            var hex = value.toString(16).toUpperCase();
+            return hex.length === 1 ? "0" + hex : hex;
+        }
+        return "#" + componentHex(r) + componentHex(g) + componentHex(b);
+    }
+
     property DocumentHandler docHandler: DocumentHandler {
         id: docHandler
         document: targetTextArea ? targetTextArea.textDocument : null
         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
         text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
+        text_color: dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "#E2E2E5"
     }
 
     // Autosync timer
@@ -285,8 +298,7 @@ QtObject {
 
         var content = normalizePlainText(result.data ? result.data.content || "" : "");
 
-        // TextArea owns the visible plain-text content and foreground color.
-        // DocumentHandler only applies QTextBlockFormat visual layout.
+        // TextArea/Core own plain-text content; DocumentHandler owns display format.
         targetTextArea.textFormat = TextEdit.PlainText;
         targetTextArea.text = content;
         docHandler.apply_format();

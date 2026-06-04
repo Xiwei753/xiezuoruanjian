@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.AttributeSet
+import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import androidx.appcompat.widget.AppCompatEditText
@@ -48,6 +49,9 @@ class WriterEditText @JvmOverloads constructor(
     private var lastAutoIndentEnabled: Boolean? = null
     private var lastAutoIndentWidth: Float? = null
     private var needsDelayedIndentFullRebuild = false
+    private var isEditorScrolling = false
+    private val scrollIdleDelayMs = 140L
+    private val scrollIdleRunnable = Runnable { setEditorScrolling(false) }
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
@@ -73,6 +77,23 @@ class WriterEditText @JvmOverloads constructor(
 
     fun typingAnimationDurationMs(): Long = typingAnimationController?.typingAnimationDurationMs ?: 0L
     fun cursorAnimationDurationMs(): Long = renderLayer?.smoothCursorRenderer?.smoothCursorDurationMs ?: 0L
+
+    private fun setEditorScrolling(scrolling: Boolean) {
+        removeCallbacks(scrollIdleRunnable)
+        if (isEditorScrolling != scrolling) {
+            isEditorScrolling = scrolling
+            typingAnimationController?.isScrollAnimationsSuppressed = scrolling
+            renderLayer?.setScrolling(scrolling)
+        }
+        if (scrolling) {
+            postDelayed(scrollIdleRunnable, scrollIdleDelayMs)
+        }
+    }
+
+    private fun markEditorScrolling() {
+        if (!controllersReady) return
+        setEditorScrolling(true)
+    }
 
     fun runWithoutTextAnimations(block: () -> Unit) {
         if (!controllersReady) {
@@ -175,9 +196,33 @@ class WriterEditText @JvmOverloads constructor(
         renderLayer?.onSelectionChanged(selStart, selEnd)
     }
 
+    override fun onScrollChanged(horiz: Int, vert: Int, oldHoriz: Int, oldVert: Int) {
+        super.onScrollChanged(horiz, vert, oldHoriz, oldVert)
+        if (!controllersReady) return
+        if (horiz != oldHoriz || vert != oldVert) {
+            markEditorScrolling()
+        }
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (controllersReady) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> markEditorScrolling()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (isEditorScrolling) {
+                        removeCallbacks(scrollIdleRunnable)
+                        postDelayed(scrollIdleRunnable, scrollIdleDelayMs)
+                    }
+                }
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         if (!controllersReady) return
+        removeCallbacks(scrollIdleRunnable)
         renderLayer?.onDetachedFromWindow()
         typingAnimationController?.onDetachedFromWindow()
         animationRuntime?.clear()

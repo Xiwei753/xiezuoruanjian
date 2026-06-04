@@ -22,12 +22,26 @@ class EditorRenderLayer(private val editText: WriterEditText) {
 
     val typingOverlayRenderer = TypingOverlayRenderer(editText)
     val smoothCursorRenderer = SmoothCursorRenderer(editText)
+    private var isScrolling = false
+
+    fun setScrolling(scrolling: Boolean) {
+        if (isScrolling == scrolling) return
+        isScrolling = scrolling
+        typingOverlayRenderer.setPausedForScroll(scrolling)
+        smoothCursorRenderer.setScrolling(scrolling)
+    }
 
     /**
      * 在系统文本绘制之前调用。
      * 负责隐藏原生 cursor（当 smooth cursor 开启时）。
      */
     fun beforeTextDraw() {
+        if (isScrolling) {
+            if (smoothCursorRenderer.smoothCursorEnabled) {
+                editText.isCursorVisible = false
+            }
+            return
+        }
         if (smoothCursorRenderer.smoothCursorEnabled && editText.selectionStart == editText.selectionEnd) {
             editText.isCursorVisible = false
         }
@@ -39,6 +53,7 @@ class EditorRenderLayer(private val editText: WriterEditText) {
      */
     fun drawAfterText(canvas: Canvas) {
         smoothCursorRenderer.draw(canvas)
+        if (isScrolling) return
         typingOverlayRenderer.onDraw(canvas)
     }
 
@@ -47,6 +62,10 @@ class EditorRenderLayer(private val editText: WriterEditText) {
      * TypingAnimationController 应通过此方法添加动画，而不是直接操作 TypingOverlayRenderer。
      */
     fun addTypingAnim(anim: OverlayAnim) {
+        if (isScrolling) {
+            typingOverlayRenderer.removeAnim(anim)
+            return
+        }
         typingOverlayRenderer.addAnim(anim)
     }
 

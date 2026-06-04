@@ -8,7 +8,7 @@
 //
 // 干什么的：
 // - 接管 QML TextArea 关联的 QTextDocument 实例。
-// - 负责纯文本的视觉排版调整，例如行高比例（QTextBlockFormat::setLineHeight）和段首首行缩进（setTextIndent）。
+// - 负责纯文本的视觉排版调整，例如行高比例、段首首行缩进和主题正文前景色。
 // - 实现纯文本的安全提取（doc->toPlainText()），杜绝 HTML 字符串或富文本内容物理污染磁盘正文。
 // - 提供在切换章节时一键清空撤销栈（clearUndoRedoStacks()）的底层实现。
 //
@@ -19,7 +19,7 @@
 
 //! # QTextDocument 排版操作（Desktop UI 层 - Backend Adapter）
 //!
-//! 负责纯文本的视觉排版（行距、首行缩进），不改变正文内容。
+//! 负责纯文本的视觉排版（行距、首行缩进、主题正文前景色），不改变正文内容。
 //!
 //! ## 架构定位
 //!
@@ -29,19 +29,19 @@
 //!
 //! ## 职责边界
 //!
-//! - **做**：应用行距、首行缩进、获取纯文本、清空撤销栈
+//! - **做**：应用行距、首行缩进、主题正文前景色、获取纯文本、清空撤销栈
 //! - **不做**：正文内容管理（由 WriterCore 负责）
 //! - **不做**：业务逻辑（只做视觉排版）
 //!
 //! ## 设计原则
 //!
 //! - 只做视觉排版，不改变正文文件内容
-//! - 字号、行距、首行缩进只影响显示，不改变正文文件
+//! - 字号、行距、首行缩进和正文前景色只影响显示，不改变正文文件
 //! - 正文文件永远是纯文本
 //!
 //! ## 关键方法
 //!
-//! - `apply_format()`：将行距和首行缩进应用到 QTextDocument
+//! - `apply_format()`：将行距、首行缩进和主题正文前景色应用到 QTextDocument
 //! - `get_plain_text()`：获取纯文本（替换 `\u2029` 为 `\n`）
 //! - `clear_undo_stack()`：清空撤销栈（章节切换时调用）
 
@@ -55,6 +55,8 @@ cpp! {{
     #include <QtGui/QTextDocument>
     #include <QtGui/QTextCursor>
     #include <QtGui/QTextBlockFormat>
+    #include <QtGui/QTextCharFormat>
+    #include <QtGui/QColor>
     #include <QtCore/QDebug>
 }}
 
@@ -66,10 +68,12 @@ pub struct DocumentHandler {
     document: qt_property!(QVariant; READ document WRITE set_document NOTIFY document_changed),
     line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY line_spacing_changed),
     text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY text_indent_changed),
+    text_color: qt_property!(QString; READ text_color WRITE set_text_color NOTIFY text_color_changed),
 
     document_changed: qt_signal!(),
     line_spacing_changed: qt_signal!(),
     text_indent_changed: qt_signal!(),
+    text_color_changed: qt_signal!(),
 
     apply_format: qt_method!(fn(&self)),
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -78,6 +82,7 @@ pub struct DocumentHandler {
     current_doc: QVariant,
     current_line_spacing: f32,
     current_text_indent: f32,
+    current_text_color: QString,
 }
 
 impl DocumentHandler {
@@ -112,12 +117,24 @@ impl DocumentHandler {
         }
     }
 
+    fn text_color(&self) -> QString {
+        self.current_text_color.clone()
+    }
+    fn set_text_color(&mut self, val: QString) {
+        if self.current_text_color.to_string() != val.to_string() {
+            self.current_text_color = val;
+            self.text_color_changed();
+            self.apply_format();
+        }
+    }
+
     fn apply_format(&self) {
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
+        let text_color = self.current_text_color.clone();
 
-        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float"] {
+        cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text_color as "QString"] {
             QObject* obj = doc_variant.value<QObject*>();
             if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
@@ -133,6 +150,13 @@ impl DocumentHandler {
             blockFormat.setLineHeight(line_spacing * 100, QTextBlockFormat::ProportionalHeight);
             blockFormat.setTextIndent(indent);
             cursor.mergeBlockFormat(blockFormat);
+
+            QColor color(text_color);
+            if (color.isValid()) {
+                QTextCharFormat charFormat;
+                charFormat.setForeground(color);
+                cursor.mergeCharFormat(charFormat);
+            }
 
             cursor.endEditBlock();
         });

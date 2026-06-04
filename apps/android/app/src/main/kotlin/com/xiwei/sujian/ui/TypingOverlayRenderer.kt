@@ -54,8 +54,21 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
     private val TAG = "WriterEditorAnim"
     private val activeAnims = CopyOnWriteArrayList<OverlayAnim>()
     private val MAX_ANIMATIONS = 24
+    private var pausedForScroll = false
+
+    fun setPausedForScroll(paused: Boolean) {
+        if (pausedForScroll == paused) return
+        pausedForScroll = paused
+        if (paused) {
+            clear()
+        }
+    }
 
     fun addAnim(anim: OverlayAnim) {
+        if (pausedForScroll) {
+            removeSpan(anim)
+            return
+        }
         if (activeAnims.size >= MAX_ANIMATIONS) {
             val oldest = activeAnims.removeAt(0)
             removeSpan(oldest)
@@ -91,6 +104,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
     }
 
     fun onEditorResume() {
+        if (pausedForScroll) return
         if (activeAnims.isNotEmpty()) {
             editText.animationRuntime?.register(this)
             editText.postInvalidateOnAnimation()
@@ -98,6 +112,10 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
     }
 
     override fun onAnimationStep(frameTimeNanos: Long): Boolean {
+        if (pausedForScroll) {
+            clear()
+            return false
+        }
         if (activeAnims.isEmpty()) return false
 
         val iterator = activeAnims.iterator()
@@ -152,6 +170,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
     }
 
     fun onDraw(canvas: Canvas) {
+        if (pausedForScroll) return
         if (activeAnims.isEmpty()) return
 
         val layout = editText.layout ?: return

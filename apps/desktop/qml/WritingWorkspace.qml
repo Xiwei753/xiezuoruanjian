@@ -630,6 +630,7 @@ Rectangle {
                     
                     ScrollView {
                         id: editorScroll
+                        readonly property bool editorIsScrolling: ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
                         anchors.fill: paperBg
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
@@ -642,6 +643,15 @@ Rectangle {
                             anchors.top: editorScroll.top
                             anchors.bottom: editorScroll.bottom
                             anchors.right: editorScroll.right
+                        }
+
+                        Component.onCompleted: {
+                            if (contentItem && contentItem.maximumFlickVelocity !== undefined) {
+                                contentItem.maximumFlickVelocity = 2200;
+                            }
+                            if (contentItem && contentItem.flickDeceleration !== undefined) {
+                                contentItem.flickDeceleration = 9000;
+                            }
                         }
 
                         TextArea {
@@ -701,6 +711,7 @@ Rectangle {
                             dt: root.dt
                             smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
                             typingAnimationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
+                            isScrolling: editorScroll.editorIsScrolling
                             cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                             typingAnimationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
                         }

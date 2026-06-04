@@ -373,7 +373,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 }
 
 #[test]
-fn test_editor_foreground_is_theme_only() {
+fn test_editor_render_format_is_unified() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let document_handler = fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
     let editor_controller = fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
@@ -381,33 +381,41 @@ fn test_editor_foreground_is_theme_only() {
     let design_tokens = fs::read_to_string(manifest_dir.join("qml/DesignTokens.qml")).unwrap();
 
     for token in [
-        ["QText", "CharFormat"].concat(),
-        ["set", "Foreground"].concat(),
-        ["merge", "CharFormat"].concat(),
         ["set", "PlainText"].concat(),
         ["set", "_plain", "_text"].concat(),
-        ["text", "_color"].concat(),
-        ["current", "_text", "_color"].concat(),
         ["apply", "_current", "_text", "_color"].concat(),
     ] {
         assert!(
             !document_handler.contains(&token),
-            "DocumentHandler must not write or own editor foreground color: {token}"
+            "DocumentHandler must not own content loading or per-cursor text color refresh: {token}"
         );
     }
+
+    assert!(
+        document_handler.contains(["QText", "CharFormat"].concat().as_str())
+            && document_handler.contains(["set", "Foreground"].concat().as_str())
+            && document_handler.contains(["merge", "CharFormat"].concat().as_str())
+            && document_handler.contains(["text", "_color"].concat().as_str()),
+        "DocumentHandler must apply theme foreground as part of unified render formatting"
+    );
 
     for token in [
         ["apply", "_current", "_text", "_color"].concat(),
         ["is", "Applying", "Text", "Color"].concat(),
         ["docHandler", ".", "set", "_plain", "_text"].concat(),
-        ["text", "_color:"].concat(),
         ["editor", "Text", "Hex"].concat(),
     ] {
         assert!(
             !editor_controller.contains(&token),
-            "EditorController must not push theme colors into QTextDocument: {token}"
+            "EditorController must not restore old per-cursor text color path: {token}"
         );
     }
+
+    assert!(
+        editor_controller.contains(["text", "_color:"].concat().as_str())
+            && editor_controller.contains("controller.colorToHex(dt.editorText"),
+        "EditorController must bind the semantic editor foreground into DocumentHandler's unified render format"
+    );
 
     assert!(
         design_tokens.contains("property color editorText: onSurface"),

@@ -35,6 +35,15 @@ class TypingAnimationController(
         private set
 
     var isSuppressAnimations = false
+    var isScrollAnimationsSuppressed = false
+        set(value) {
+            field = value
+            if (value) {
+                lastAddedStart = -1
+                lastAddedCount = 0
+                renderLayer.clear()
+            }
+        }
 
     private var lastAddedStart = -1
     private var lastAddedCount = 0
@@ -51,7 +60,7 @@ class TypingAnimationController(
     }
 
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
-        if (isSuppressAnimations) {
+        if (isSuppressAnimations || isScrollAnimationsSuppressed) {
             renderLayer.clear()
             if (DEBUG_ANIM) {
                 android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")
@@ -109,7 +118,7 @@ class TypingAnimationController(
     }
 
     fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-        if (isSuppressAnimations) {
+        if (isSuppressAnimations || isScrollAnimationsSuppressed) {
             lastAddedStart = -1
             lastAddedCount = 0
             return
@@ -126,7 +135,7 @@ class TypingAnimationController(
 
     fun afterTextChanged(editable: Editable?) {
         if (editable == null) return
-        if (isSuppressAnimations) return
+        if (isSuppressAnimations || isScrollAnimationsSuppressed) return
 
         val composingStart = BaseInputConnection.getComposingSpanStart(editable)
         val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
