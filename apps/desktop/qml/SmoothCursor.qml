@@ -1,13 +1,6 @@
 // =============================================================================
 // SmoothCursor.qml — 平滑光标组件
 // =============================================================================
-//
-// 层级：Desktop UI 层（QML UI 组件）
-// 职责：在 TextArea 上叠加平滑光标动画，替代系统默认光标
-// 约束：
-//   - 纯渲染组件，位置通过 TextArea.cursorRectangle 计算
-//   - 动画参数通过 property 传入
-// =============================================================================
 
 import QtQuick
 
@@ -30,12 +23,7 @@ Item {
     visible: targetTextArea && targetTextArea.enabled
     z: 3
 
-    // Padding properties required by static contract check
-    readonly property real _leftPaddingCheck: targetTextArea ? targetTextArea.leftPadding : 0
-    readonly property real _topPaddingCheck: targetTextArea ? targetTextArea.topPadding : 0
-    readonly property real _bottomPaddingCheck: targetTextArea ? targetTextArea.bottomPadding : 0
-
-    property bool isTyping: false
+    property bool hasSelection: targetTextArea ? (targetTextArea.selectedText.length > 0) : false
 
     ListModel {
         id: typingParticlesModel
@@ -75,6 +63,13 @@ Item {
         } catch (e) {
             return 0;
         }
+    }
+
+    function updateCursorRect() {
+        if (!targetTextArea || isScrolling || scrollDebounceTimer.running) return;
+        cursorRect.x = root.cursorX();
+        cursorRect.y = root.cursorY();
+        cursorRect.height = root.cursorHeight();
     }
 
     function textPositionRect(position) {
@@ -121,35 +116,93 @@ Item {
         });
     }
 
+    Timer {
+        id: scrollDebounceTimer
+        interval: 200
+        repeat: false
+        onTriggered: {
+            cursorRect.xBehaviorEnabled = false;
+            cursorRect.yBehaviorEnabled = false;
+            updateCursorRect();
+            Qt.callLater(function() {
+                cursorRect.xBehaviorEnabled = true;
+                cursorRect.yBehaviorEnabled = true;
+            });
+        }
+    }
+
+    onIsScrollingChanged: {
+        if (isScrolling) {
+            scrollDebounceTimer.stop();
+            if (typingParticlesModel.count > 0) {
+                typingParticlesModel.clear();
+            }
+        } else {
+            scrollDebounceTimer.restart();
+        }
+    }
+
+    Connections {
+        target: root.targetTextArea
+        function onCursorRectangleChanged() {
+            updateCursorRect();
+        }
+        function onTextChanged() {
+            var len = root.targetTextArea ? root.targetTextArea.length : 0;
+            var newText = root.targetTextArea ? root.targetTextArea.text : "";
+            var isComposing = root.targetTextArea && root.targetTextArea.inputMethodComposing;
+            
+            if (root.typingAnimationEnabled && !root.isScrolling && !isComposing && root.targetTextArea && root.targetTextArea.activeFocus) {
+                var prefix = commonPrefixLength(root.lastTextString, newText);
+                var suffix = commonSuffixLength(root.lastTextString, newText, prefix);
+                var addedText = newText.substring(prefix, newText.length - suffix);
+                var deletedText = root.lastTextString.substring(prefix, root.lastTextString.length - suffix);
+
+                // 只对短输入生成粒子，避开大段粘贴、章节加载、一键排版
+                if (addedText.length > 0 && addedText.length <= 3 && deletedText.length === 0) {
+                    for (var addIndex = 0; addIndex < addedText.length; addIndex++) {
+                        appendTypingParticle(addedText.charAt(addIndex), prefix + addIndex, false);
+                    }
+                } else if (deletedText.length > 0 && deletedText.length <= 3 && addedText.length === 0) {
+                    for (var delIndex = 0; delIndex < deletedText.length; delIndex++) {
+                        appendTypingParticle(deletedText.charAt(delIndex), Math.min(prefix, newText.length), true);
+                    }
+                }
+            }
+            root.lastTextLength = len;
+            root.lastTextString = newText;
+        }
+    }
+
     Rectangle {
         id: cursorRect
         width: 2
-        height: root.cursorHeight()
-        color: root.dt ? root.dt.accent : "#7B8CDE"
-        visible: root.smoothCursorEnabled && root.targetTextArea && root.targetTextArea.focus && root.targetTextArea.enabled && height > 0
+        height: root.fallbackCursorHeight
+        color: root.dt ? root.dt.editorText : "#E2E2E5"
+        visible: root.smoothCursorEnabled && root.targetTextArea && root.targetTextArea.focus && root.targetTextArea.enabled && height > 0 && !root.isScrolling && !scrollDebounceTimer.running && !root.hasSelection
         z: 3
-        x: root.cursorX()
-        y: root.cursorY()
+        
+        property bool xBehaviorEnabled: true
+        property bool yBehaviorEnabled: true
 
         Behavior on x {
-            enabled: root.smoothCursorEnabled && !root.isScrolling
+            enabled: root.smoothCursorEnabled && cursorRect.xBehaviorEnabled
             NumberAnimation {
                 duration: root.cursorAnimationDuration
                 easing.type: Easing.OutCubic
             }
         }
         Behavior on y {
-            enabled: root.smoothCursorEnabled && !root.isScrolling
+            enabled: root.smoothCursorEnabled && cursorRect.yBehaviorEnabled
             NumberAnimation {
                 duration: root.cursorAnimationDuration
                 easing.type: Easing.OutCubic
             }
         }
 
-        // Breathing pulse animation when idle
         SequentialAnimation on opacity {
             loops: Animation.Infinite
-            running: root.smoothCursorEnabled && !root.isScrolling && root.targetTextArea && root.targetTextArea.focus
+            running: cursorRect.visible
             NumberAnimation { from: 1.0; to: 0.2; duration: 600; easing.type: Easing.InOutQuad }
             NumberAnimation { from: 0.2; to: 1.0; duration: 600; easing.type: Easing.InOutQuad }
         }
@@ -165,7 +218,7 @@ Item {
             model: typingParticlesModel
             delegate: Text {
                 text: charText
-                color: root.targetTextArea ? root.targetTextArea.color : (root.dt ? root.dt.onSurface : "#000")
+                color: root.targetTextArea ? root.targetTextArea.color : (root.dt ? root.dt.editorText : "#E2E2E5")
                 x: startXPos
                 y: startYPos
                 opacity: 1.0
@@ -204,9 +257,6 @@ Item {
                         duration: root.typingAnimationDuration * 1.5
                         easing.type: Easing.OutSine
                     }
-                    onFinished: {
-                        // It will be cleaned up by garbageCollector
-                    }
                 }
             }
         }
@@ -231,38 +281,4 @@ Item {
             }
         }
     }
-
-    Connections {
-        target: root.targetTextArea
-        function onTextChanged() {
-            var len = root.targetTextArea ? root.targetTextArea.length : 0;
-            var newText = root.targetTextArea ? root.targetTextArea.text : "";
-            if (root.typingAnimationEnabled && !root.isScrolling && root.targetTextArea && root.targetTextArea.activeFocus) {
-                var prefix = commonPrefixLength(root.lastTextString, newText);
-                var suffix = commonSuffixLength(root.lastTextString, newText, prefix);
-                var addedText = newText.substring(prefix, newText.length - suffix);
-                var deletedText = root.lastTextString.substring(prefix, root.lastTextString.length - suffix);
-                var maxParticles = 16;
-
-                if (addedText.length > 0 && deletedText.length === 0) {
-                    for (var addIndex = 0; addIndex < Math.min(addedText.length, maxParticles); addIndex++) {
-                        appendTypingParticle(addedText.charAt(addIndex), prefix + addIndex, false);
-                    }
-                } else if (deletedText.length > 0 && addedText.length === 0) {
-                    for (var delIndex = 0; delIndex < Math.min(deletedText.length, maxParticles); delIndex++) {
-                        appendTypingParticle(deletedText.charAt(delIndex), Math.min(prefix, newText.length), true);
-                    }
-                }
-            }
-            root.lastTextLength = len;
-            root.lastTextString = newText;
-        }
-    }
-
-    onIsScrollingChanged: {
-        if (isScrolling && typingParticlesModel.count > 0) {
-            typingParticlesModel.clear();
-        }
-    }
-
 }

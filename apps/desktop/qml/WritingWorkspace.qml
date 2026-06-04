@@ -680,11 +680,7 @@ Rectangle {
                             implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
 
                             cursorVisible: activeFocus && enabled
-                            cursorDelegate: Rectangle {
-                                width: 2
-                                radius: 1
-                                color: editorArea.color
-                            }
+                            cursorDelegate: Item {} // 隐藏原生光标，使用 SmoothCursor
 
                             text: ""
 
@@ -698,9 +694,14 @@ Rectangle {
                         }
                     }
 
-                    // Stable editor mode: native Qt cursor and no typing overlay.
-                    // SmoothCursor.qml remains available for a future isolated restoration,
-                    // but the writing area does not instantiate it while color/scroll/input are being stabilized.
+                    SmoothCursor {
+                        targetTextArea: editorArea
+                        overlayItem: paperBg
+                        dt: root.dt
+                        isScrolling: editorScroll.editorIsScrolling
+                        smoothCursorEnabled: true
+                        typingAnimationEnabled: true
+                    }
                 }
 
                 // Empty state
