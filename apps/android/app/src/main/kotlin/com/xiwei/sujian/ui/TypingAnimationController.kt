@@ -81,10 +81,26 @@ class TypingAnimationController(
             isPasteOrDelete = false
         }
 
-        if (after > 0 && editText.layout != null) {
+        if ((after > 0 || count > 0) && editText.layout != null) {
             val line = editText.layout.getLineForOffset(start)
             cursorBeforeX = editText.layout.getPrimaryHorizontal(start)
             cursorBeforeY = editText.layout.getLineBaseline(line).toFloat()
+        }
+
+        if (count > 0 && after == 0 && typingAnimationEnabled && typingAnimationDurationMs > 0 && s != null) {
+            val deletedText = s.subSequence(start, start + count).toString()
+            val anim = OverlayAnim(
+                insertedStart = start,
+                insertedText = deletedText,
+                startX = cursorBeforeX,
+                startY = cursorBeforeY,
+                progress = 0f,
+                startTimeNanos = -1L,
+                durationMs = typingAnimationDurationMs,
+                hiddenSpan = null,
+                isDeletion = true
+            )
+            renderLayer.addTypingAnim(anim)
         }
 
         if (DEBUG_ANIM) {

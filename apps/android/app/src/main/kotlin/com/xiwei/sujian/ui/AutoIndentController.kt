@@ -118,26 +118,11 @@ class AutoIndentController(private val editText: EditText) {
                     spansToRemove.remove(span)
                 }
             } else if (paragraphEnd > paragraphStart && !(paragraphEnd - paragraphStart == 1 && editable[paragraphStart] == '\n')) {
-                val currentSpanEnd = spanRanges[paragraphStart]
-
-                // Only replace spans if their boundaries or properties have fundamentally changed.
-                // Avoid replacing during single character inputs when span range end updates naturally.
-                if (currentSpanEnd != paragraphEnd) {
-                    val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && it.getLeadingMargin(true) == autoIndentPx }
-                    if (span != null && editable.getSpanEnd(span) == paragraphEnd - 1 && editable.length >= paragraphEnd) {
-                         // The text grew by 1 naturally at the end of the span, let the span grow.
-                         spansToRemove.remove(span)
-                         editable.setSpan(span, paragraphStart, paragraphEnd, Spanned.SPAN_PARAGRAPH)
-                    } else {
-                         editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_PARAGRAPH)
-                    }
+                val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && editable.getSpanEnd(it) == paragraphEnd && it.getLeadingMargin(true) == autoIndentPx }
+                if (span != null) {
+                    spansToRemove.remove(span)
                 } else {
-                    val span = existingSpans.firstOrNull { editable.getSpanStart(it) == paragraphStart && editable.getSpanEnd(it) == paragraphEnd && it.getLeadingMargin(true) == autoIndentPx }
-                    if (span != null) {
-                        spansToRemove.remove(span)
-                    } else {
-                        editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_PARAGRAPH)
-                    }
+                    editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_PARAGRAPH)
                 }
             }
 
