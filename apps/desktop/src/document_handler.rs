@@ -152,10 +152,16 @@ impl DocumentHandler {
             cursor.mergeBlockFormat(blockFormat);
 
             QColor color(text_color);
+            qWarning().noquote()
+                << "[SujianThemeDiagnostics] DocumentHandler.apply_format"
+                << "text_color=" << text_color
+                << "valid=" << color.isValid()
+                << "line_spacing=" << line_spacing
+                << "indent=" << indent;
             if (color.isValid()) {
                 QTextCharFormat charFormat;
                 charFormat.setForeground(color);
-                cursor.mergeCharFormat(charFormat);
+                cursor.setCharFormat(charFormat);
             }
 
             cursor.endEditBlock();

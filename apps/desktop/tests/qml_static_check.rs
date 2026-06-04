@@ -284,13 +284,12 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
                     has_errors = true;
                 }
-                if !content.contains("id: cursorOverlay")
-                    || !content.contains("overlayItem: cursorOverlay")
-                {
-                    eprintln!(
-                        "{}: SmoothCursor must be hosted by an overlay above the TextArea",
-                        file_name
-                    );
+                if content.contains("SmoothCursor {") || content.contains("id: cursorOverlay") {
+                    eprintln!("{}: Stable editor mode must not instantiate SmoothCursor overlay", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("cursorVisible: activeFocus && enabled") {
+                    eprintln!("{}: Stable editor mode must use the native Qt cursor", file_name);
                     has_errors = true;
                 }
                 if content.contains("#606470") {
@@ -394,7 +393,7 @@ fn test_editor_render_format_is_unified() {
     assert!(
         document_handler.contains(["QText", "CharFormat"].concat().as_str())
             && document_handler.contains(["set", "Foreground"].concat().as_str())
-            && document_handler.contains(["merge", "CharFormat"].concat().as_str())
+            && document_handler.contains(["set", "CharFormat"].concat().as_str())
             && document_handler.contains(["text", "_color"].concat().as_str()),
         "DocumentHandler must apply theme foreground as part of unified render formatting"
     );

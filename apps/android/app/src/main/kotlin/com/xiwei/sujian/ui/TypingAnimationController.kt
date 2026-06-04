@@ -60,7 +60,12 @@ class TypingAnimationController(
     }
 
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
-        if (isSuppressAnimations || isScrollAnimationsSuppressed) {
+        if (isScrollAnimationsSuppressed) {
+            lastAddedStart = -1
+            lastAddedCount = 0
+            return
+        }
+        if (isSuppressAnimations) {
             renderLayer.clear()
             if (DEBUG_ANIM) {
                 android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")

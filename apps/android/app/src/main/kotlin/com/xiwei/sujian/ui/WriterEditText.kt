@@ -259,6 +259,13 @@ class WriterEditText @JvmOverloads constructor(
             super.onDraw(canvas)
             return
         }
+        if (isEditorScrolling) {
+            if (lastSmoothEnabled == true) {
+                isCursorVisible = false
+            }
+            super.onDraw(canvas)
+            return
+        }
         renderLayer?.beforeTextDraw()
         super.onDraw(canvas)
         renderLayer?.drawAfterText(canvas)

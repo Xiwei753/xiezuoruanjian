@@ -679,13 +679,7 @@ Rectangle {
                             bottomPadding: dt ? dt.sp16 : 16
                             implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
 
-                            cursorVisible: false
-                            cursorDelegate: Component { Item {} }
-                            onCursorVisibleChanged: {
-                                if (cursorVisible) {
-                                    cursorVisible = false;
-                                }
-                            }
+                            cursorVisible: activeFocus && enabled
 
                             text: ""
 
@@ -699,23 +693,9 @@ Rectangle {
                         }
                     }
 
-                    Item {
-                        id: cursorOverlay
-                        anchors.fill: editorScroll
-                        clip: false
-                        z: editorScroll.z + 1
-
-                        SmoothCursor {
-                            targetTextArea: editorArea
-                            overlayItem: cursorOverlay
-                            dt: root.dt
-                            smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                            typingAnimationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
-                            isScrolling: editorScroll.editorIsScrolling
-                            cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
-                            typingAnimationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
-                        }
-                    }
+                    // Stable editor mode: native Qt cursor and no typing overlay.
+                    // SmoothCursor.qml remains available for a future isolated restoration,
+                    // but the writing area does not instantiate it while color/scroll/input are being stabilized.
                 }
 
                 // Empty state

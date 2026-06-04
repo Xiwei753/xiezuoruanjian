@@ -103,10 +103,21 @@ ApplicationWindow {
         isDark: {
             if (appState.settings && appState.settings.themeMode === "dark") return true;
             if (appState.settings && appState.settings.themeMode === "light") return false;
-            if (systemPalette.window !== undefined && systemPalette.windowText !== undefined) return window.systemPaletteIsDark();
-            return appBackend !== null && appBackend.system_color_scheme !== "light";
+            return true;
         }
         monetColor: settingsBackend !== null ? settingsBackend.setting_monet_color : ""
+    }
+
+    Connections {
+        target: designTokens
+        function onIsDarkChanged() {
+            console.log("[SujianThemeDiagnostics] themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
+                        + " isDark=" + designTokens.isDark
+                        + " editorText=" + designTokens.editorText);
+        }
+        function onEditorTextChanged() {
+            console.log("[SujianThemeDiagnostics] editorText changed=" + designTokens.editorText);
+        }
     }
 
     AppController {
@@ -138,6 +149,9 @@ ApplicationWindow {
     Component.onCompleted: {
         window.verifyBackendRuntime();
         window.debugLog("app", "qml_completed", "QML components fully loaded");
+        console.log("[SujianThemeDiagnostics] startup themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
+                    + " isDark=" + designTokens.isDark
+                    + " editorText=" + designTokens.editorText);
         appController.restoreWorkspace();
     }
 
