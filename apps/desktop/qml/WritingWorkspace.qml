@@ -680,6 +680,11 @@ Rectangle {
                             implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
 
                             cursorVisible: activeFocus && enabled
+                            cursorDelegate: Rectangle {
+                                width: 2
+                                radius: 1
+                                color: editorArea.color
+                            }
 
                             text: ""
 

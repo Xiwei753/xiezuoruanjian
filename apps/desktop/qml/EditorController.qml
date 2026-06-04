@@ -124,9 +124,7 @@ QtObject {
         document: targetTextArea ? targetTextArea.textDocument : null
         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
         text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
-        // Temporary color-chain bisection: prove whether DocumentHandler/QTextDocument
-        // can render a known light foreground before re-enabling DesignTokens binding.
-        text_color: "#E2E2E5"
+        text_color: dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "#E2E2E5"
     }
 
     // Autosync timer

@@ -292,6 +292,12 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: Stable editor mode must use the native Qt cursor", file_name);
                     has_errors = true;
                 }
+                if !content.contains("cursorDelegate: Rectangle")
+                    || !content.contains("color: editorArea.color")
+                {
+                    eprintln!("{}: Editor cursor delegate must use the same visible color as the TextArea", file_name);
+                    has_errors = true;
+                }
                 if content.contains("#606470") {
                     eprintln!(
                         "{}: Found low-contrast muted text fallback #606470 in writing workspace",
@@ -411,15 +417,17 @@ fn test_editor_render_format_is_unified() {
     }
 
     assert!(
-        editor_controller.contains("text_color: \"#E2E2E5\"")
+        editor_controller.contains("text_color: dt ? controller.colorToHex(dt.editorText, \"#E2E2E5\") : \"#E2E2E5\"")
             && editor_controller.contains("theme_color_probe")
             && editor_controller.contains("colorToHex(editorText)=")
             && editor_controller.contains("docHandler.text_color="),
-        "EditorController must keep the temporary hardcoded color bisection and log the QML color chain"
+        "EditorController must bind the semantic editor foreground into DocumentHandler and log the QML color chain"
     );
 
     assert!(
-        design_tokens.contains("property color editorText: onSurface"),
+        design_tokens.contains("property color onSurface: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
+            && design_tokens.contains("property color textPrimary: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
+            && design_tokens.contains("property color editorText: textPrimary"),
         "DesignTokens.editorText must remain the semantic editor foreground token"
     );
     assert!(

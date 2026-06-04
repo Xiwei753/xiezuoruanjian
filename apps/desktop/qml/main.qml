@@ -24,6 +24,14 @@ ApplicationWindow {
     height: 768
     title: qsTr("素笺写作")
     color: designTokens.bg
+    palette.window: designTokens.bg
+    palette.windowText: designTokens.textPrimary
+    palette.base: designTokens.surfaceContainerLow
+    palette.text: designTokens.textPrimary
+    palette.button: designTokens.surfaceContainer
+    palette.buttonText: designTokens.textPrimary
+    palette.highlight: designTokens.primary
+    palette.highlightedText: designTokens.onPrimary
 
     function reportNullBackend(name) {
         var message = "Required QML context property is null: " + name;
@@ -97,6 +105,16 @@ ApplicationWindow {
         return colorLuminance(systemPalette.window) < colorLuminance(systemPalette.windowText);
     }
 
+    function logThemeDiagnostics(event) {
+        if (backend === null || !backend.log_qml) return;
+        backend.log_qml("info", "theme", event,
+                        "themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
+                        + " isDark=" + designTokens.isDark
+                        + " textPrimary=" + designTokens.textPrimary
+                        + " textSecondary=" + designTokens.textSecondary
+                        + " editorText=" + designTokens.editorText);
+    }
+
     // Design tokens
     DesignTokens {
         id: designTokens
@@ -111,12 +129,10 @@ ApplicationWindow {
     Connections {
         target: designTokens
         function onIsDarkChanged() {
-            console.log("[SujianThemeDiagnostics] themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
-                        + " isDark=" + designTokens.isDark
-                        + " editorText=" + designTokens.editorText);
+            window.logThemeDiagnostics("is_dark_changed");
         }
         function onEditorTextChanged() {
-            console.log("[SujianThemeDiagnostics] editorText changed=" + designTokens.editorText);
+            window.logThemeDiagnostics("editor_text_changed");
         }
     }
 
@@ -149,9 +165,7 @@ ApplicationWindow {
     Component.onCompleted: {
         window.verifyBackendRuntime();
         window.debugLog("app", "qml_completed", "QML components fully loaded");
-        console.log("[SujianThemeDiagnostics] startup themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
-                    + " isDark=" + designTokens.isDark
-                    + " editorText=" + designTokens.editorText);
+        window.logThemeDiagnostics("startup");
         appController.restoreWorkspace();
     }
 

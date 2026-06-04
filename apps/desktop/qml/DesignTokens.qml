@@ -30,11 +30,11 @@ QtObject {
     property color secondaryContainer: isDark ? Qt.rgba(0.224, 0.282, 0.341, 1) : Qt.rgba(0.831, 0.894, 0.965, 1)
     property color onSecondaryContainer: isDark ? Qt.rgba(0.831, 0.894, 0.965, 1) : Qt.rgba(0.055, 0.114, 0.165, 1)
     property color background: isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1)
-    property color onBackground: isDark ? Qt.rgba(0.886, 0.886, 0.898, 1) : Qt.rgba(0.102, 0.110, 0.118, 1)
+    property color onBackground: isDark ? "#E2E2E5" : "#1A1C1E"
     property color surface: isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1)
-    property color onSurface: isDark ? Qt.rgba(0.886, 0.886, 0.898, 1) : Qt.rgba(0.102, 0.110, 0.118, 1)
+    property color onSurface: isDark ? "#E2E2E5" : "#1A1C1E"
     property color surfaceVariant: isDark ? Qt.rgba(0.259, 0.278, 0.306, 1) : Qt.rgba(0.875, 0.890, 0.922, 1)
-    property color onSurfaceVariant: isDark ? Qt.rgba(0.765, 0.776, 0.812, 1) : Qt.rgba(0.259, 0.278, 0.306, 1)
+    property color onSurfaceVariant: isDark ? "#C3C6CF" : "#42474E"
     property color outline: isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.447, 0.471, 0.494, 1)
     property color error: isDark ? Qt.rgba(1.000, 0.706, 0.671, 1) : Qt.rgba(0.729, 0.102, 0.102, 1)
     property color onError: isDark ? Qt.rgba(0.412, 0.000, 0.020, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
@@ -73,8 +73,8 @@ QtObject {
     property color cardHover: surfaceContainer
     property color selected: primaryContainer
     property color selectedText: onPrimaryContainer
-    property color textPrimary: onSurface
-    property color textSecondary: onSurfaceVariant
+    property color textPrimary: isDark ? "#E2E2E5" : "#1A1C1E"
+    property color textSecondary: isDark ? "#C3C6CF" : "#42474E"
     property color textMuted: isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.455, 0.471, 0.498, 1)
     property color textDisabled: isDark ? Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38) : Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38)
     property color defaultAccent: primary
@@ -90,7 +90,7 @@ QtObject {
 
     // --- Editor ---
     property color editorBackground: isDark ? Qt.rgba(0.125, 0.137, 0.149, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
-    property color editorText: onSurface
+    property color editorText: textPrimary
     property string textPrimaryHex: isDark ? "#E2E2E5" : "#1A1C1E"
     property string textSecondaryHex: isDark ? "#C3C6CF" : "#42474E"
 
