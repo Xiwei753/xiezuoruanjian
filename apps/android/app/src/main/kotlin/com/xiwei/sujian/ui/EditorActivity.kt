@@ -339,6 +339,7 @@ class EditorActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (!::editorEditText.isInitialized) return
+        editorEditText.onEditorResume()
         if (SyncChangeBus.consumeChanged()) {
             val pid = projectId
             val vid = volumeId

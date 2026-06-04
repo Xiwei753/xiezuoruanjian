@@ -121,6 +121,19 @@ class EditorAnimationRuntime(private val editText: WriterEditText) {
         }
     }
 
+    fun resumeAfterVisibilityRestored() {
+        if (!editText.isAttachedToWindow || !editText.isShown) return
+        choreographer.removeFrameCallback(frameCallback)
+        lastFrameTimeNanos = -1L
+        if (animatables.isNotEmpty()) {
+            isRunning = true
+            choreographer.postFrameCallback(frameCallback)
+            requestHighRefreshRate()
+        } else {
+            isRunning = false
+        }
+    }
+
     fun unregister(anim: Animatable) {
         animatables.remove(anim)
         if (animatables.isEmpty()) {

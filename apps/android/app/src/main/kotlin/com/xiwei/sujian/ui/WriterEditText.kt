@@ -5,7 +5,8 @@ import android.graphics.Canvas
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.AttributeSet
-import android.view.MotionEvent
+import android.view.View
+import android.view.inputmethod.BaseInputConnection
 import androidx.appcompat.widget.AppCompatEditText
 
 /**
@@ -46,6 +47,7 @@ class WriterEditText @JvmOverloads constructor(
     private var lastSmoothDuration: Long? = null
     private var lastAutoIndentEnabled: Boolean? = null
     private var lastAutoIndentWidth: Float? = null
+    private var needsDelayedIndentFullRebuild = false
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
@@ -105,12 +107,27 @@ class WriterEditText @JvmOverloads constructor(
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
                 if (!controllersReady) return
                 if (isUpdatingSpanWrapper || autoIndentController?.isUpdatingSpan == true) return
+                if (count > 0 && s != null) {
+                    val end = (start + count).coerceAtMost(s.length)
+                    if (start in 0..end && s.subSequence(start, end).contains('\n')) {
+                        needsDelayedIndentFullRebuild = true
+                    }
+                }
                 typingAnimationController?.beforeTextChanged(s, start, count, after)
             }
 
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (!controllersReady) return
                 if (isUpdatingSpanWrapper || autoIndentController?.isUpdatingSpan == true) return
+                if (count > 0 && s != null) {
+                    val end = (start + count).coerceAtMost(s.length)
+                    if (start in 0..end && s.subSequence(start, end).contains('\n')) {
+                        needsDelayedIndentFullRebuild = true
+                    }
+                }
+                if (before > 1 || count > 1) {
+                    needsDelayedIndentFullRebuild = true
+                }
                 typingAnimationController?.onTextChanged(s, start, before, count)
             }
 
@@ -122,6 +139,12 @@ class WriterEditText @JvmOverloads constructor(
                 typingAnimationController?.afterTextChanged(editable)
 
                 autoIndentController?.updateParagraphIndentSpans(editable, updateStartPos = selectionStart)
+                val composingStart = BaseInputConnection.getComposingSpanStart(editable)
+                val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
+                if (needsDelayedIndentFullRebuild || (composingStart != -1 && composingEnd != -1)) {
+                    autoIndentController?.requestDelayedFullRebuild()
+                }
+                needsDelayedIndentFullRebuild = false
             }
         })
 
@@ -134,6 +157,16 @@ class WriterEditText @JvmOverloads constructor(
         }
 
         typeface = android.graphics.Typeface.create("sans-serif", typeface?.style ?: android.graphics.Typeface.NORMAL)
+    }
+
+    fun onEditorResume() {
+        if (!controllersReady) return
+        post {
+            if (!isAttachedToWindow || !isShown) return@post
+            animationRuntime?.resumeAfterVisibilityRestored()
+            renderLayer?.onEditorResume()
+            text?.let { autoIndentController?.requestDelayedFullRebuild() }
+        }
     }
 
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
@@ -150,6 +183,18 @@ class WriterEditText @JvmOverloads constructor(
         animationRuntime?.clear()
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        onEditorResume()
+    }
+
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (visibility == View.VISIBLE) {
+            onEditorResume()
+        }
+    }
+
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
         if (!controllersReady) return
@@ -159,9 +204,8 @@ class WriterEditText @JvmOverloads constructor(
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         if (!controllersReady) return
-        if (hasWindowFocus && isFocused && renderLayer?.smoothCursorRenderer?.smoothCursorEnabled == true) {
-            renderLayer?.smoothCursorRenderer?.updateCursorTarget(false)
-            renderLayer?.smoothCursorRenderer?.startCursorBlink()
+        if (hasWindowFocus) {
+            onEditorResume()
         }
     }
 

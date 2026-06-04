@@ -90,6 +90,13 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
         editText.animationRuntime?.unregister(this)
     }
 
+    fun onEditorResume() {
+        if (activeAnims.isNotEmpty()) {
+            editText.animationRuntime?.register(this)
+            editText.postInvalidateOnAnimation()
+        }
+    }
+
     override fun onAnimationStep(frameTimeNanos: Long): Boolean {
         if (activeAnims.isEmpty()) return false
 

@@ -75,6 +75,48 @@ Rectangle {
         }
     }
 
+    function textPositionRect(position) {
+        if (!targetTextArea || !overlayItem) return { "x": root.x, "y": root.y, "height": root.height };
+        try {
+            var rect = targetTextArea.positionToRectangle(position);
+            var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
+            return {
+                "x": pt ? pt.x : root.x,
+                "y": pt ? pt.y : root.y,
+                "height": Math.max(rect.height || 0, fallbackCursorHeight)
+            };
+        } catch (e) {
+            return { "x": root.x, "y": root.y, "height": root.height };
+        }
+    }
+
+    function commonPrefixLength(a, b) {
+        var limit = Math.min(a.length, b.length);
+        var i = 0;
+        while (i < limit && a.charAt(i) === b.charAt(i)) i++;
+        return i;
+    }
+
+    function commonSuffixLength(a, b, prefix) {
+        var maxSuffix = Math.min(a.length, b.length) - prefix;
+        var i = 0;
+        while (i < maxSuffix && a.charAt(a.length - 1 - i) === b.charAt(b.length - 1 - i)) i++;
+        return i;
+    }
+
+    function appendTypingParticle(charText, position, isDeletion) {
+        if (!charText || charText === "\n" || charText === "\r") return;
+        if (typingParticlesModel.count > 40) typingParticlesModel.remove(0, typingParticlesModel.count - 40);
+        var rect = textPositionRect(position);
+        typingParticlesModel.append({
+            charText: charText,
+            startXPos: rect.x,
+            startYPos: rect.y + rect.height * 0.75,
+            createdAt: Date.now(),
+            isDeletion: isDeletion
+        });
+    }
+
     Behavior on x {
         id: xBehavior
         enabled: root.smoothCursorEnabled
@@ -169,38 +211,19 @@ Rectangle {
             var len = root.targetTextArea ? root.targetTextArea.length : 0;
             var newText = root.targetTextArea ? root.targetTextArea.text : "";
             if (root.typingAnimationEnabled && root.targetTextArea && root.targetTextArea.activeFocus) {
-                var cursorPosition = root.targetTextArea.cursorPosition;
-                if (len > root.lastTextLength) {
-                    // Addition
-                    if (cursorPosition > 0 && cursorPosition <= newText.length) {
-                        var lastChar = newText.charAt(cursorPosition - 1);
-                        if (lastChar !== '\n' && lastChar !== '\r' && lastChar !== ' ') {
-                            typingParticlesModel.append({
-                                charText: lastChar,
-                                startXPos: root.x - root.targetTextArea.font.pixelSize / 2,
-                                startYPos: root.y,
-                                createdAt: Date.now(),
-                                isDeletion: false
-                            });
-                        }
+                var prefix = commonPrefixLength(root.lastTextString, newText);
+                var suffix = commonSuffixLength(root.lastTextString, newText, prefix);
+                var addedText = newText.substring(prefix, newText.length - suffix);
+                var deletedText = root.lastTextString.substring(prefix, root.lastTextString.length - suffix);
+                var maxParticles = 16;
+
+                if (addedText.length > 0 && deletedText.length === 0) {
+                    for (var addIndex = 0; addIndex < Math.min(addedText.length, maxParticles); addIndex++) {
+                        appendTypingParticle(addedText.charAt(addIndex), prefix + addIndex, false);
                     }
-                } else if (len < root.lastTextLength) {
-                    // Deletion
-                    // Attempt to find what was deleted. Usually the character just after the cursor in the old string, or just before
-                    // For simplicity, we just use the cursor position to extract from the old string.
-                    // This works best for single-char backspace.
-                    var diff = root.lastTextLength - len;
-                    if (diff === 1 && cursorPosition >= 0 && cursorPosition < root.lastTextString.length) {
-                        var deletedChar = root.lastTextString.charAt(cursorPosition);
-                        if (deletedChar !== '\n' && deletedChar !== '\r' && deletedChar !== ' ') {
-                            typingParticlesModel.append({
-                                charText: deletedChar,
-                                startXPos: root.x, // Start at cursor
-                                startYPos: root.y,
-                                createdAt: Date.now(),
-                                isDeletion: true
-                            });
-                        }
+                } else if (deletedText.length > 0 && addedText.length === 0) {
+                    for (var delIndex = 0; delIndex < Math.min(deletedText.length, maxParticles); delIndex++) {
+                        appendTypingParticle(deletedText.charAt(delIndex), Math.min(prefix, newText.length), true);
                     }
                 }
             }

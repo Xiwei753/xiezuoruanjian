@@ -230,6 +230,23 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         editText.animationRuntime?.unregister(this)
     }
 
+    fun onEditorResume() {
+        if (smoothCursorEnabled) editText.isCursorVisible = false
+        if (!cursorRuntimeReady || !smoothCursorEnabled) return
+        if (!editText.isFocused || editText.selectionStart != editText.selectionEnd) {
+            stopCursorBlink()
+            return
+        }
+        startTimeNanos = -1L
+        if (editText.layout == null) {
+            editText.post { updateCursorTarget(false) }
+        } else {
+            updateCursorTarget(false)
+        }
+        startCursorBlink()
+        invalidateCursorRect()
+    }
+
     fun onFocusChanged(focused: Boolean) {
         if (smoothCursorEnabled) editText.isCursorVisible = false
         if (!cursorRuntimeReady) return

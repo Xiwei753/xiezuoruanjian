@@ -70,6 +70,11 @@ class EditorRenderLayer(private val editText: WriterEditText) {
         typingOverlayRenderer.clear()
     }
 
+    fun onEditorResume() {
+        smoothCursorRenderer.onEditorResume()
+        typingOverlayRenderer.onEditorResume()
+    }
+
     fun onFocusChanged(focused: Boolean) {
         smoothCursorRenderer.onFocusChanged(focused)
     }
