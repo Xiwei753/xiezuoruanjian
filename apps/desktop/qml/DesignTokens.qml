@@ -91,7 +91,6 @@ QtObject {
     // --- Editor ---
     property color editorBackground: isDark ? Qt.rgba(0.125, 0.137, 0.149, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
     property color editorText: onSurface
-    property string editorTextHex: isDark ? "#E2E2E5" : "#1A1C1E"
     property string textPrimaryHex: isDark ? "#E2E2E5" : "#1A1C1E"
     property string textSecondaryHex: isDark ? "#C3C6CF" : "#42474E"
 

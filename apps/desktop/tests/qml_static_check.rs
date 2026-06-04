@@ -117,7 +117,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             || trimmed.contains(&binding.replace("\"", "'"))
                         {
                             eprintln!(
-                                "{}:{}: Found forbidden text_color binding '{}'",
+                                "{}:{}: Found forbidden editor color binding '{}'",
                                 file_name, line_num, binding
                             );
                             has_errors = true;
@@ -369,5 +369,49 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
     assert!(
         !has_errors,
         "QML static checks failed. See stderr for details."
+    );
+}
+
+#[test]
+fn test_editor_text_color_is_theme_only() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let document_handler = fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
+    let editor_controller = fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
+    let writing_workspace = fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
+    let design_tokens = fs::read_to_string(manifest_dir.join("qml/DesignTokens.qml")).unwrap();
+
+    for token in [
+        ["QText", "CharFormat"].concat(),
+        ["set", "Foreground"].concat(),
+        ["merge", "CharFormat"].concat(),
+        ["text", "_color"].concat(),
+        ["current", "_text", "_color"].concat(),
+        ["apply", "_current", "_text", "_color"].concat(),
+    ] {
+        assert!(
+            !document_handler.contains(&token),
+            "DocumentHandler must not write or own editor foreground color: {token}"
+        );
+    }
+
+    for token in [
+        ["apply", "_current", "_text", "_color"].concat(),
+        ["is", "Applying", "Text", "Color"].concat(),
+        ["text", "_color:"].concat(),
+        ["editor", "Text", "Hex"].concat(),
+    ] {
+        assert!(
+            !editor_controller.contains(&token),
+            "EditorController must not push theme colors into QTextDocument: {token}"
+        );
+    }
+
+    assert!(
+        design_tokens.contains("property color editorText: onSurface"),
+        "DesignTokens.editorText must remain the semantic editor foreground token"
+    );
+    assert!(
+        writing_workspace.contains("color: dt ? dt.editorText : \"#E2E2E5\""),
+        "WritingWorkspace TextArea must read editor text color from DesignTokens"
     );
 }
