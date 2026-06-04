@@ -96,12 +96,37 @@ QtObject {
         return "#" + componentHex(r) + componentHex(g) + componentHex(b);
     }
 
+    function logRenderColorProbe(reason) {
+        if (!backendRef || !backendRef.log_qml) return;
+
+        var themeMode = "<unset>";
+        try {
+            themeMode = appState && appState.settings ? appState.settings.themeMode : "<unset>";
+        } catch (e) {
+            themeMode = "<unavailable>";
+        }
+
+        var isDark = dt ? dt.isDark : "<no-dt>";
+        var editorText = dt ? String(dt.editorText) : "<no-dt>";
+        var convertedEditorText = dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "<no-dt>";
+        var handlerColor = docHandler ? docHandler.text_color : "<no-docHandler>";
+        backendRef.log_qml("info", "editor", "theme_color_probe",
+                           "reason=" + reason
+                           + " themeMode=" + themeMode
+                           + " designTokens.isDark=" + isDark
+                           + " designTokens.editorText=" + editorText
+                           + " colorToHex(editorText)=" + convertedEditorText
+                           + " docHandler.text_color=" + handlerColor);
+    }
+
     property DocumentHandler docHandler: DocumentHandler {
         id: docHandler
         document: targetTextArea ? targetTextArea.textDocument : null
         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
         text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
-        text_color: dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "#E2E2E5"
+        // Temporary color-chain bisection: prove whether DocumentHandler/QTextDocument
+        // can render a known light foreground before re-enabling DesignTokens binding.
+        text_color: "#E2E2E5"
     }
 
     // Autosync timer
@@ -301,6 +326,7 @@ QtObject {
         // TextArea/Core own plain-text content; DocumentHandler owns display format.
         targetTextArea.textFormat = TextEdit.PlainText;
         targetTextArea.text = content;
+        logRenderColorProbe("open_chapter_before_apply_format");
         docHandler.apply_format();
         docHandler.clear_undo_stack();
 
@@ -331,6 +357,7 @@ QtObject {
             autoSaveTimer.stop();
         }
         if (docHandler) {
+            logRenderColorProbe("apply_settings_before_apply_format");
             docHandler.apply_format();
         }
         settingsGuardTimer.restart();
@@ -367,6 +394,7 @@ QtObject {
         try {
             targetTextArea.textFormat = TextEdit.PlainText;
             targetTextArea.text = plain;
+            logRenderColorProbe("format_text_before_apply_format");
             docHandler.apply_format();
             targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
         } finally {

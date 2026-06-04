@@ -411,9 +411,11 @@ fn test_editor_render_format_is_unified() {
     }
 
     assert!(
-        editor_controller.contains(["text", "_color:"].concat().as_str())
-            && editor_controller.contains("controller.colorToHex(dt.editorText"),
-        "EditorController must bind the semantic editor foreground into DocumentHandler's unified render format"
+        editor_controller.contains("text_color: \"#E2E2E5\"")
+            && editor_controller.contains("theme_color_probe")
+            && editor_controller.contains("colorToHex(editorText)=")
+            && editor_controller.contains("docHandler.text_color="),
+        "EditorController must keep the temporary hardcoded color bisection and log the QML color chain"
     );
 
     assert!(
