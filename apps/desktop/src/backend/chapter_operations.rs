@@ -167,48 +167,68 @@ impl AppBackend {
             );
         }
 
-        let save_result = if let Some(core) = self.core_api() {
-            Some(writing_bridge::save_chapter(
-                &core,
+        let result_obj = if let Some(api) = self.core_api() {
+            match api.save_chapter_content_with_options(
                 &p,
                 &v,
                 &c,
                 &text_str,
                 allow_empty_overwrite,
-            ))
-        } else {
-            None
-        };
-
-        let result_obj = match save_result {
-            Some(Ok(receipt)) => {
-                self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
-                self.current_save_status = "已保存".to_string();
-                self.workspace_content_changed();
-                self.flush_writing_stats();
-                bridge_success_object(serde_json::to_value(receipt).unwrap())
-            }
-            Some(Err(e)) => {
-                self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
-                if is_empty_overwrite_blocked(&e) {
+            ) {
+                Ok(receipt) => {
+                    self.debug_log(
+                        "chapter",
+                        "save_chapter_success",
+                        &format!("len={}", len),
+                    );
+                    self.current_save_status = "已保存".to_string();
+                    self.workspace_content_changed();
+                    self.flush_writing_stats();
+                    serde_to_qjson_object(serde_json::json!({
+                        "success": true,
+                        "data": serde_json::to_value(receipt).unwrap_or_default(),
+                        "userMessage": "保存成功",
+                        "changedEntities": ["ChapterContent"]
+                    }))
+                }
+                Err(e) => {
                     self.debug_error(
                         "chapter",
-                        "blocked_empty_overwrite",
-                        &format!("chapter_id={} len={}", c, len),
+                        "save_chapter_failed",
+                        &format!("error={}", e),
                     );
-                    let msg = blocked_empty_overwrite_user_message();
-                    self.current_save_status = msg.to_string();
-                    self.set_error(msg);
-                    bridge_error_object(msg, blocked_empty_overwrite_error_code())
-                } else {
-                    self.current_save_status = "保存失败".to_string();
-                    bridge_error_object(&format!("保存失败: {}", e), "CORE_ERROR")
+                    if is_empty_overwrite_blocked(&e) {
+                        self.debug_error(
+                            "chapter",
+                            "blocked_empty_overwrite",
+                            &format!("chapter_id={} len={}", c, len),
+                        );
+                        let msg = blocked_empty_overwrite_user_message();
+                        self.current_save_status = msg.to_string();
+                        self.set_error(msg);
+                        serde_to_qjson_object(serde_json::json!({
+                            "success": false,
+                            "errorCode": blocked_empty_overwrite_error_code(),
+                            "userMessage": msg,
+                            "rawError": e.to_string(),
+                            "changedEntities": []
+                        }))
+                    } else {
+                        self.current_save_status = "保存失败".to_string();
+                        serde_to_qjson_object(serde_json::json!({
+                            "success": false,
+                            "errorCode": "CORE_ERROR",
+                            "userMessage": format!("保存失败: {}", e),
+                            "rawError": e.to_string(),
+                            "changedEntities": []
+                        }))
+                    }
                 }
             }
-            None => {
-                self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
-                bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
-            }
+        } else {
+            self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
+            self.current_save_status = "保存失败".to_string();
+            bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
         };
 
         self.save_status_changed();
@@ -230,43 +250,55 @@ impl AppBackend {
             &format!("chapter_id={}", c),
         );
 
-        let clear_result = if let Some(core) = self.core_api() {
-            Some(writing_bridge::clear_chapter_content(&core, &p, &v, &c))
+        if let Some(api) = self.core_api() {
+            let envelope_json = api.clear_chapter_content_envelope_json(&p, &v, &c);
+            match serde_json::from_str::<serde_json::Value>(&envelope_json) {
+                Ok(envelope) => {
+                    let is_success = envelope
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_success {
+                        self.debug_log(
+                            "chapter",
+                            "clear_chapter_content_success",
+                            &format!("chapter_id={}", c),
+                        );
+                        self.current_save_status = "已清空".to_string();
+                    } else {
+                        let err_msg = format!(
+                            "清空章节失败: {}",
+                            envelope
+                                .get("userMessage")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("未知错误")
+                        );
+                        self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
+                        self.current_save_status = "清空失败".to_string();
+                        self.set_error(&err_msg);
+                    }
+                    self.save_status_changed();
+                    self.workspace_content_changed();
+                    serde_to_qjson_object(envelope)
+                }
+                Err(e) => {
+                    let err_msg = format!("解析 envelope 失败: {}", e);
+                    self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
+                    self.current_save_status = "清空失败".to_string();
+                    self.save_status_changed();
+                    bridge_error_object(&err_msg, "JSON_ERROR")
+                }
+            }
         } else {
-            None
-        };
-
-        match clear_result {
-            Some(Ok(receipt)) => {
-                self.debug_log(
-                    "chapter",
-                    "clear_chapter_content_success",
-                    &format!("chapter_id={}", c),
-                );
-                self.current_save_status = "已清空".to_string();
-                self.save_status_changed();
-                self.workspace_content_changed();
-                bridge_success_object(serde_json::to_value(receipt).unwrap())
-            }
-            Some(Err(e)) => {
-                let err_msg = format!("清空章节失败: {}", e);
-                self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
-                self.current_save_status = "清空失败".to_string();
-                self.save_status_changed();
-                self.set_error(&err_msg);
-                bridge_error_object(&err_msg, "CORE_ERROR")
-            }
-            None => {
-                self.debug_error(
-                    "chapter",
-                    "clear_chapter_content_failed",
-                    "core_not_initialized",
-                );
-                self.current_save_status = "清空失败".to_string();
-                self.save_status_changed();
-                self.set_error("清空章节失败: 后端未初始化");
-                bridge_error_object("清空章节失败: 后端未初始化", "INVALID_WORKSPACE")
-            }
+            self.debug_error(
+                "chapter",
+                "clear_chapter_content_failed",
+                "core_not_initialized",
+            );
+            self.current_save_status = "清空失败".to_string();
+            self.save_status_changed();
+            self.set_error("清空章节失败: 后端未初始化");
+            bridge_error_object("清空章节失败: 后端未初始化", "INVALID_WORKSPACE")
         }
     }
 }

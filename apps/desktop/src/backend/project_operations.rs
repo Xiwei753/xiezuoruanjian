@@ -275,6 +275,41 @@ impl AppBackend {
         .into()
     }
 
+    // -------------------------------------------------------------------------
+    // Envelope 消费辅助函数
+    // -------------------------------------------------------------------------
+    fn core_envelope_to_result(
+        &mut self,
+        envelope_json: &str,
+        on_success: impl FnOnce(&mut Self, &serde_json::Value),
+    ) -> QString {
+        match serde_json::from_str::<serde_json::Value>(envelope_json) {
+            Ok(mut envelope) => {
+                if envelope.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    on_success(self, &envelope);
+                    envelope["state"] = self.current_app_state_value();
+                    envelope.to_string().into()
+                } else {
+                    let user_msg = envelope
+                        .get("userMessage")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("操作失败")
+                        .to_string();
+                    let raw_error = envelope
+                        .get("rawError")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&user_msg)
+                        .to_string();
+                    self.mutation_error_json(user_msg, raw_error)
+                }
+            }
+            Err(e) => {
+                let msg = format!("解析 envelope 失败: {}", e);
+                self.mutation_error_json(msg.clone(), msg)
+            }
+        }
+    }
+
     pub(crate) fn create_project_json(&mut self, title: QString, _action_id: QString) -> QString {
         let title_str = title.to_string();
 
@@ -289,39 +324,33 @@ impl AppBackend {
         }
 
         if let Some(api) = self.core_api() {
-            match api.create_project(&title_str) {
-                Ok(proj) => {
-                    self.selected_project_id = Some(proj.id.clone());
-                    self.selected_item_changed();
-                    self.selected_volume_id = None;
-                    self.selected_chapter_id = None;
+            let envelope = api.create_project_envelope_json(&title_str);
+            self.core_envelope_to_result(&envelope, |app, value| {
+                if let Some(proj_id) = value
+                    .get("data")
+                    .and_then(|d| d.get("id"))
+                    .and_then(|v| v.as_str())
+                {
+                    app.selected_project_id = Some(proj_id.to_string());
+                    app.selected_item_changed();
+                    app.selected_volume_id = None;
+                    app.selected_chapter_id = None;
 
                     let default_volume_id = {
-                        if let Ok(volumes) = api.list_volumes(&proj.id) {
+                        if let Ok(volumes) = api.list_volumes(proj_id) {
                             volumes.first().map(|v| v.id.clone())
                         } else {
                             None
                         }
                     };
                     if let Some(ref vol_id) = default_volume_id {
-                        self.selected_volume_id = Some(vol_id.clone());
+                        app.selected_volume_id = Some(vol_id.clone());
                     }
 
-                    self.reload_tree();
-                    self.trigger_projects_reloaded();
-
-                    self.mutation_success_json(
-                        serde_json::json!({ "project": proj }),
-                        "创建作品成功",
-                        vec!["ProjectList", "WorkspaceTree"],
-                    )
+                    app.reload_tree();
+                    app.trigger_projects_reloaded();
                 }
-                Err(e) => {
-                    let err_display = format!("{}", e);
-                    let msg = format!("创建作品失败: {}", e);
-                    self.mutation_error_json(msg, err_display)
-                }
-            }
+            })
         } else {
             let msg = "核心模块未初始化";
             self.mutation_error_json(msg.to_string(), msg.to_string())
@@ -345,43 +374,33 @@ impl AppBackend {
                 title.to_string()
             ),
         );
-        match self.create_new_volume(project_id.clone(), title.clone()) {
-            Ok(volume) => {
-                self.debug_log(
+        if let Some(api) = self.core_api() {
+            let envelope = api.create_volume_envelope_json(
+                &project_id.to_string(),
+                &title.to_string(),
+            );
+            self.core_envelope_to_result(&envelope, |app, value| {
+                if let Some(vol_id) = value
+                    .get("data")
+                    .and_then(|d| d.get("id"))
+                    .and_then(|v| v.as_str())
+                {
+                    app.selected_project_id = Some(project_id.to_string());
+                    app.selected_volume_id = Some(vol_id.to_string());
+                    app.selected_item_changed();
+                    app.selected_chapter_id = None;
+                    app.reload_tree();
+                    app.trigger_projects_reloaded();
+                }
+                app.debug_log(
                     "volume",
                     "create_volume_success",
-                    &format!("[actionId={}] volume_id={}", action_id_str, volume.id),
+                    &format!("[actionId={}] volume_id", action_id_str),
                 );
-                serde_json::json!({
-                    "success": true,
-                    "data": { "volume": volume },
-                    "userMessage": "创建卷成功",
-                    "state": self.current_app_state_value(),
-                    "changedEntities": ["WorkspaceTree"]
-                })
-                .to_string()
-                .into()
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                let user_message = format!("创建卷失败: {}", raw_error);
-                self.set_error(&user_message);
-                self.debug_error(
-                    "volume",
-                    "create_volume_failed",
-                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
-                );
-                serde_json::json!({
-                    "success": false,
-                    "errorCode": "CORE_ERROR",
-                    "userMessage": user_message,
-                    "rawError": raw_error,
-                    "state": self.current_app_state_value(),
-                    "changedEntities": []
-                })
-                .to_string()
-                .into()
-            }
+            })
+        } else {
+            let msg = "核心模块未初始化";
+            self.mutation_error_json(msg.to_string(), msg.to_string())
         }
     }
 
@@ -404,43 +423,34 @@ impl AppBackend {
                 title.to_string()
             ),
         );
-        match self.create_new_chapter(project_id.clone(), volume_id.clone(), title.clone()) {
-            Ok(chapter) => {
-                self.debug_log(
+        if let Some(api) = self.core_api() {
+            let envelope = api.create_chapter_envelope_json(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &title.to_string(),
+            );
+            self.core_envelope_to_result(&envelope, |app, value| {
+                if let Some(chap_id) = value
+                    .get("data")
+                    .and_then(|d| d.get("id"))
+                    .and_then(|v| v.as_str())
+                {
+                    app.selected_project_id = Some(project_id.to_string());
+                    app.selected_volume_id = Some(volume_id.to_string());
+                    app.selected_chapter_id = Some(chap_id.to_string());
+                    app.selected_item_changed();
+                    app.reload_tree();
+                    app.trigger_projects_reloaded();
+                }
+                app.debug_log(
                     "chapter",
                     "create_chapter_success",
-                    &format!("[actionId={}] chapter_id={}", action_id_str, chapter.id),
+                    &format!("[actionId={}]", action_id_str),
                 );
-                serde_json::json!({
-                    "success": true,
-                    "data": { "chapter": chapter },
-                    "userMessage": "创建章节成功",
-                    "state": self.current_app_state_value(),
-                    "changedEntities": ["WorkspaceTree"]
-                })
-                .to_string()
-                .into()
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                let user_message = format!("创建章节失败: {}", raw_error);
-                self.set_error(&user_message);
-                self.debug_error(
-                    "chapter",
-                    "create_chapter_failed",
-                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
-                );
-                serde_json::json!({
-                    "success": false,
-                    "errorCode": "CORE_ERROR",
-                    "userMessage": user_message,
-                    "rawError": raw_error,
-                    "state": self.current_app_state_value(),
-                    "changedEntities": []
-                })
-                .to_string()
-                .into()
-            }
+            })
+        } else {
+            let msg = "核心模块未初始化";
+            self.mutation_error_json(msg.to_string(), msg.to_string())
         }
     }
 
@@ -491,53 +501,32 @@ impl AppBackend {
         project_id: QString,
         action_id: QString,
     ) -> QString {
+        let project_id_str = project_id.to_string();
         let action_id_str = action_id.to_string();
         self.debug_log(
             "project",
             "delete_project_start",
-            &format!(
-                "[actionId={}] project_id={}",
-                action_id_str,
-                project_id.to_string()
-            ),
+            &format!("[actionId={}] project_id={}", action_id_str, project_id_str),
         );
-        match self.delete_project(project_id) {
-            Ok(_) => {
-                self.debug_log(
+        if let Some(api) = self.core_api() {
+            let envelope = api.delete_project_envelope_json(&project_id_str);
+            self.core_envelope_to_result(&envelope, |app, _value| {
+                if app.selected_project_id.as_deref() == Some(&project_id_str) {
+                    app.selected_project_id = None;
+                    app.selected_volume_id = None;
+                    app.clear_editor_state();
+                }
+                app.reload_tree();
+                app.trigger_projects_reloaded();
+                app.debug_log(
                     "project",
                     "delete_project_success",
-                    &format!("[actionId={}] project deleted successfully", action_id_str),
+                    &format!("[actionId={}] deleted", action_id_str),
                 );
-                serde_json::json!({
-                    "success": true,
-                    "data": true,
-                    "userMessage": "删除成功",
-                    "state": self.current_app_state_value(),
-                    "changedEntities": ["WorkspaceTree"]
-                })
-                .to_string()
-                .into()
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                let user_message = format!("删除作品失败: {}", raw_error);
-                self.set_error(&user_message);
-                self.debug_error(
-                    "project",
-                    "delete_project_failed",
-                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
-                );
-                serde_json::json!({
-                    "success": false,
-                    "errorCode": "CORE_ERROR",
-                    "userMessage": user_message,
-                    "rawError": raw_error,
-                    "state": self.current_app_state_value(),
-                    "changedEntities": []
-                })
-                .to_string()
-                .into()
-            }
+            })
+        } else {
+            let msg = "核心模块未初始化";
+            self.mutation_error_json(msg.to_string(), msg.to_string())
         }
     }
 
@@ -547,54 +536,35 @@ impl AppBackend {
         volume_id: QString,
         action_id: QString,
     ) -> QString {
+        let project_id_str = project_id.to_string();
+        let volume_id_str = volume_id.to_string();
         let action_id_str = action_id.to_string();
         self.debug_log(
             "volume",
             "delete_volume_start",
             &format!(
                 "[actionId={}] project_id={}, volume_id={}",
-                action_id_str,
-                project_id.to_string(),
-                volume_id.to_string()
+                action_id_str, project_id_str, volume_id_str
             ),
         );
-        match self.delete_volume(project_id, volume_id) {
-            Ok(_) => {
-                self.debug_log(
+        if let Some(api) = self.core_api() {
+            let envelope = api.delete_volume_envelope_json(&project_id_str, &volume_id_str);
+            self.core_envelope_to_result(&envelope, |app, _value| {
+                if app.selected_volume_id.as_deref() == Some(&volume_id_str) {
+                    app.selected_volume_id = None;
+                    app.clear_editor_state();
+                }
+                app.reload_tree();
+                app.trigger_projects_reloaded();
+                app.debug_log(
                     "volume",
                     "delete_volume_success",
-                    &format!("[actionId={}] volume deleted successfully", action_id_str),
+                    &format!("[actionId={}] deleted", action_id_str),
                 );
-                serde_json::json!({
-                    "success": true,
-                    "data": true,
-                    "userMessage": "删除成功",
-                    "state": self.current_app_state_value(),
-                    "changedEntities": ["WorkspaceTree"]
-                })
-                .to_string()
-                .into()
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                let user_message = format!("删除分卷失败: {}", raw_error);
-                self.set_error(&user_message);
-                self.debug_error(
-                    "volume",
-                    "delete_volume_failed",
-                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
-                );
-                serde_json::json!({
-                    "success": false,
-                    "errorCode": "CORE_ERROR",
-                    "userMessage": user_message,
-                    "rawError": raw_error,
-                    "state": self.current_app_state_value(),
-                    "changedEntities": []
-                })
-                .to_string()
-                .into()
-            }
+            })
+        } else {
+            let msg = "核心模块未初始化";
+            self.mutation_error_json(msg.to_string(), msg.to_string())
         }
     }
 
@@ -605,55 +575,36 @@ impl AppBackend {
         chapter_id: QString,
         action_id: QString,
     ) -> QString {
+        let project_id_str = project_id.to_string();
+        let volume_id_str = volume_id.to_string();
+        let chapter_id_str = chapter_id.to_string();
         let action_id_str = action_id.to_string();
         self.debug_log(
             "chapter",
             "delete_chapter_start",
             &format!(
                 "[actionId={}] project_id={}, volume_id={}, chapter_id={}",
-                action_id_str,
-                project_id.to_string(),
-                volume_id.to_string(),
-                chapter_id.to_string()
+                action_id_str, project_id_str, volume_id_str, chapter_id_str
             ),
         );
-        match self.delete_chapter(project_id, volume_id, chapter_id) {
-            Ok(_) => {
-                self.debug_log(
+        if let Some(api) = self.core_api() {
+            let envelope =
+                api.delete_chapter_envelope_json(&project_id_str, &volume_id_str, &chapter_id_str);
+            self.core_envelope_to_result(&envelope, |app, _value| {
+                if app.selected_chapter_id.as_deref() == Some(&chapter_id_str) {
+                    app.clear_editor_state();
+                }
+                app.reload_tree();
+                app.trigger_projects_reloaded();
+                app.debug_log(
                     "chapter",
                     "delete_chapter_success",
-                    &format!("[actionId={}] chapter deleted successfully", action_id_str),
+                    &format!("[actionId={}] deleted", action_id_str),
                 );
-                serde_json::json!({
-                    "success": true,
-                    "data": true,
-                    "userMessage": "删除成功",
-                    "state": self.current_app_state_value(),
-                    "changedEntities": ["WorkspaceTree"]
-                })
-                .to_string()
-                .into()
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                let user_message = format!("删除章节失败: {}", raw_error);
-                self.set_error(&user_message);
-                self.debug_error(
-                    "chapter",
-                    "delete_chapter_failed",
-                    &format!("[actionId={}] error: {}", action_id_str, raw_error),
-                );
-                serde_json::json!({
-                    "success": false,
-                    "errorCode": "CORE_ERROR",
-                    "userMessage": user_message,
-                    "rawError": raw_error,
-                    "state": self.current_app_state_value(),
-                    "changedEntities": []
-                })
-                .to_string()
-                .into()
-            }
+            })
+        } else {
+            let msg = "核心模块未初始化";
+            self.mutation_error_json(msg.to_string(), msg.to_string())
         }
     }
 
@@ -706,24 +657,16 @@ impl AppBackend {
         project_id: QString,
         new_title: QString,
     ) -> QString {
-        let Some(api) = self.core_api() else {
+        if let Some(api) = self.core_api() {
+            let envelope =
+                api.rename_project_envelope_json(&project_id.to_string(), &new_title.to_string());
+            self.core_envelope_to_result(&envelope, |app, _value| {
+                app.reload_tree();
+                app.trigger_projects_reloaded();
+            })
+        } else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
-            return self.mutation_error_json(format!("重命名作品失败: {}", raw_error), raw_error);
-        };
-        match api.rename_project(&project_id.to_string(), &new_title.to_string()) {
-            Ok(value) => {
-                self.reload_tree();
-                self.trigger_projects_reloaded();
-                self.mutation_success_json(
-                    serde_json::json!(value),
-                    "重命名作品成功",
-                    vec!["WorkspaceTree"],
-                )
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                self.mutation_error_json(format!("重命名作品失败: {}", raw_error), raw_error)
-            }
+            self.mutation_error_json(format!("重命名作品失败: {}", raw_error), raw_error)
         }
     }
 
@@ -768,28 +711,19 @@ impl AppBackend {
         volume_id: QString,
         new_title: QString,
     ) -> QString {
-        let Some(api) = self.core_api() else {
+        if let Some(api) = self.core_api() {
+            let envelope = api.rename_volume_envelope_json(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &new_title.to_string(),
+            );
+            self.core_envelope_to_result(&envelope, |app, _value| {
+                app.reload_tree();
+                app.trigger_projects_reloaded();
+            })
+        } else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
-            return self.mutation_error_json(format!("重命名分卷失败: {}", raw_error), raw_error);
-        };
-        match api.rename_volume(
-            &project_id.to_string(),
-            &volume_id.to_string(),
-            &new_title.to_string(),
-        ) {
-            Ok(value) => {
-                self.reload_tree();
-                self.trigger_projects_reloaded();
-                self.mutation_success_json(
-                    serde_json::json!(value),
-                    "重命名分卷成功",
-                    vec!["WorkspaceTree"],
-                )
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                self.mutation_error_json(format!("重命名分卷失败: {}", raw_error), raw_error)
-            }
+            self.mutation_error_json(format!("重命名分卷失败: {}", raw_error), raw_error)
         }
     }
 
@@ -839,29 +773,20 @@ impl AppBackend {
         chapter_id: QString,
         new_title: QString,
     ) -> QString {
-        let Some(api) = self.core_api() else {
+        if let Some(api) = self.core_api() {
+            let envelope = api.rename_chapter_envelope_json(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &chapter_id.to_string(),
+                &new_title.to_string(),
+            );
+            self.core_envelope_to_result(&envelope, |app, _value| {
+                app.reload_tree();
+                app.trigger_projects_reloaded();
+            })
+        } else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
-            return self.mutation_error_json(format!("重命名章节失败: {}", raw_error), raw_error);
-        };
-        match api.rename_chapter(
-            &project_id.to_string(),
-            &volume_id.to_string(),
-            &chapter_id.to_string(),
-            &new_title.to_string(),
-        ) {
-            Ok(value) => {
-                self.reload_tree();
-                self.trigger_projects_reloaded();
-                self.mutation_success_json(
-                    serde_json::json!(value),
-                    "重命名章节成功",
-                    vec!["WorkspaceTree"],
-                )
-            }
-            Err(e) => {
-                let raw_error = e.to_string();
-                self.mutation_error_json(format!("重命名章节失败: {}", raw_error), raw_error)
-            }
+            self.mutation_error_json(format!("重命名章节失败: {}", raw_error), raw_error)
         }
     }
 
