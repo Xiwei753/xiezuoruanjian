@@ -147,81 +147,66 @@ class AppServiceBridge(workspacePath: String) {
         service.createWorkspaceIfNeeded()
     }
 
-    fun createProject(title: String): BridgeResult<Project> = wrapResult {
-        service.createProject(title).toModel()
-    }
+    fun createProject(title: String): BridgeResult<Project> =
+        envelopeJsonCall { service.createProjectEnvelopeJson(title) }
 
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> = wrapResult {
         service.getProjectStats(projectId).toModel()
     }
 
-    fun renameProject(projectId: String, newTitle: String): BridgeResult<Boolean> = wrapResult {
-        service.renameProject(projectId, newTitle)
-    }
+    fun renameProject(projectId: String, newTitle: String): BridgeResult<Boolean> =
+        envelopeJsonCall { service.renameProjectEnvelopeJson(projectId, newTitle) }
 
-    fun deleteProject(projectId: String): BridgeResult<Boolean> = wrapResult {
-        service.deleteProject(projectId)
-    }
+    fun deleteProject(projectId: String): BridgeResult<Boolean> =
+        envelopeJsonCall { service.deleteProjectEnvelopeJson(projectId) }
 
-    fun reorderProjects(orderedIds: List<String>): BridgeResult<Boolean> = wrapResult {
-        service.reorderProjects(orderedIds)
-    }
+    fun reorderProjects(orderedIds: List<String>): BridgeResult<Boolean> =
+        envelopeJsonCall { service.reorderProjectsEnvelopeJson(orderedIds) }
 
     fun listVolumes(projectId: String): BridgeResult<List<Volume>> = wrapResult {
         service.listVolumes(projectId).map { it.toModel() }
     }
 
-    fun createVolume(projectId: String, title: String): BridgeResult<Volume> = wrapResult {
-        service.createVolume(projectId, title).toModel()
-    }
+    fun createVolume(projectId: String, title: String): BridgeResult<Volume> =
+        envelopeJsonCall { service.createVolumeEnvelopeJson(projectId, title) }
 
-    fun renameVolume(projectId: String, volumeId: String, newTitle: String): BridgeResult<Boolean> = wrapResult {
-        service.renameVolume(projectId, volumeId, newTitle)
-    }
+    fun renameVolume(projectId: String, volumeId: String, newTitle: String): BridgeResult<Boolean> =
+        envelopeJsonCall { service.renameVolumeEnvelopeJson(projectId, volumeId, newTitle) }
 
-    fun deleteVolume(projectId: String, volumeId: String): BridgeResult<Boolean> = wrapResult {
-        service.deleteVolume(projectId, volumeId)
-    }
+    fun deleteVolume(projectId: String, volumeId: String): BridgeResult<Boolean> =
+        envelopeJsonCall { service.deleteVolumeEnvelopeJson(projectId, volumeId) }
 
-    fun reorderVolumes(projectId: String, orderedIds: List<String>): BridgeResult<Boolean> = wrapResult {
-        service.reorderVolumes(projectId, orderedIds)
-    }
+    fun reorderVolumes(projectId: String, orderedIds: List<String>): BridgeResult<Boolean> =
+        envelopeJsonCall { service.reorderVolumesEnvelopeJson(projectId, orderedIds) }
 
     fun listChapters(projectId: String, volumeId: String): BridgeResult<List<ChapterMeta>> = wrapResult {
         service.listChapters(projectId, volumeId).map { it.toModel() }
     }
 
-    fun createChapter(projectId: String, volumeId: String, title: String): BridgeResult<ChapterMeta> = wrapResult {
-        service.createChapter(projectId, volumeId, title).toModel()
-    }
+    fun createChapter(projectId: String, volumeId: String, title: String): BridgeResult<ChapterMeta> =
+        envelopeJsonCall { service.createChapterEnvelopeJson(projectId, volumeId, title) }
 
-    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String): BridgeResult<Boolean> = wrapResult {
-        service.renameChapter(projectId, volumeId, chapterId, newTitle)
-    }
+    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String): BridgeResult<Boolean> =
+        envelopeJsonCall { service.renameChapterEnvelopeJson(projectId, volumeId, chapterId, newTitle) }
 
-    fun deleteChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<Boolean> = wrapResult {
-        service.deleteChapter(projectId, volumeId, chapterId)
-    }
+    fun deleteChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<Boolean> =
+        envelopeJsonCall { service.deleteChapterEnvelopeJson(projectId, volumeId, chapterId) }
 
-    fun reorderChapters(projectId: String, volumeId: String, orderedIds: List<String>): BridgeResult<Boolean> = wrapResult {
-        service.reorderChapters(projectId, volumeId, orderedIds)
-    }
+    fun reorderChapters(projectId: String, volumeId: String, orderedIds: List<String>): BridgeResult<Boolean> =
+        envelopeJsonCall { service.reorderChaptersEnvelopeJson(projectId, volumeId, orderedIds) }
 
     fun openChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterOpenResult> = wrapResult {
         service.openChapter(projectId, volumeId, chapterId).toModel()
     }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> = wrapResult {
-        service.saveChapterContent(projectId, volumeId, chapterId, content).toModel()
-    }
+    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> =
+        envelopeJsonCall { service.saveChapterContentEnvelopeJson(projectId, volumeId, chapterId, content) }
 
-    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterSaveReceipt> = wrapResult {
-        service.clearChapterContent(projectId, volumeId, chapterId).toModel()
-    }
+    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterSaveReceipt> =
+        envelopeJsonCall { service.clearChapterContentEnvelopeJson(projectId, volumeId, chapterId) }
 
-    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): BridgeResult<Boolean> = wrapResult {
-        service.updateChapterNote(projectId, volumeId, chapterId, note)
-    }
+    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): BridgeResult<Boolean> =
+        envelopeJsonCall { service.updateChapterNoteEnvelopeJson(projectId, volumeId, chapterId, note) }
 
     fun calculateWordCount(text: String): Int {
         return try {
@@ -250,33 +235,28 @@ class AppServiceBridge(workspacePath: String) {
         service.loadSyncConfig().toModel()
     }
 
-    fun saveSyncConfig(config: SyncConfig): BridgeResult<Boolean> = wrapResult {
-        service.saveSyncConfig(config.toDto())
-    }
+    fun saveSyncConfig(config: SyncConfig): BridgeResult<Boolean> =
+        envelopeJsonCall { service.saveSyncConfigEnvelopeJson(config.toDto()) }
 
     fun loadSyncSecrets(): BridgeResult<SyncSecrets> = wrapResult {
         service.loadSyncSecrets().toModel()
     }
 
-    fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> = wrapResult {
-        service.saveSyncSecrets(secrets.toDto())
-    }
+    fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> =
+        envelopeJsonCall { service.saveSyncSecretsEnvelopeJson(secrets.toDto()) }
 
     fun loadSyncState(): BridgeResult<SyncState> = wrapResult {
         service.loadSyncState().toModel()
     }
 
-    fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> = wrapResult {
-        service.performSyncDiagnostics(config.toDto()).toModel()
-    }
+    fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> =
+        envelopeJsonCall { service.performSyncDiagnosticsEnvelopeJson(config.toDto()) }
 
-    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> = wrapResult {
-        service.performSyncDryRun(config.toDto()).toModel()
-    }
+    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> =
+        envelopeJsonCall { service.performSyncDryRunEnvelopeJson(config.toDto()) }
 
-    fun performSync(config: SyncConfig): BridgeResult<SyncResult> = wrapResult {
-        service.performSync(config.toDto()).toModel()
-    }
+    fun performSync(config: SyncConfig): BridgeResult<SyncResult> =
+        envelopeJsonCall { service.performSyncEnvelopeJson(config.toDto()) }
 
     fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<WritingStatsSummary> = wrapResult {
         service.getWritingStatsSummary(startDate, endDate).toModel()
@@ -388,6 +368,8 @@ private fun WriterException.toWireErrorCode(): String = when (this) {
     is WriterException.NotImplemented -> "NOT_IMPLEMENTED"
     is WriterException.RefuseToDeleteWorkspaceRoot -> "REFUSE_DELETE_WORKSPACE_ROOT"
     is WriterException.InvalidDeleteTarget -> "INVALID_DELETE_TARGET"
+    is WriterException.SyncConflict -> "SYNC_CONFLICT"
+    is WriterException.SyncFailed -> "SYNC_FAILED"
     is WriterException.Other -> "OTHER"
 }
 
@@ -446,8 +428,8 @@ private fun LocalSettingsDto.toModel() = LocalSettings(
     editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toInt(),
     aiEnabled = aiEnabled,
     statsDeviceId = statsDeviceId,
-    linuxSidebarWidth = linuxSidebarWidth,
-    linuxEditorWidth = linuxEditorWidth
+    linuxSidebarWidth = desktopSidebarWidth,
+    linuxEditorWidth = desktopEditorWidth
 )
 
 private fun LocalSettings.toDto() = LocalSettingsDto(
@@ -467,8 +449,8 @@ private fun LocalSettings.toDto() = LocalSettingsDto(
     editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toULong(),
     aiEnabled = aiEnabled,
     statsDeviceId = statsDeviceId,
-    linuxSidebarWidth = linuxSidebarWidth,
-    linuxEditorWidth = linuxEditorWidth
+    desktopSidebarWidth = linuxSidebarWidth,
+    desktopEditorWidth = linuxEditorWidth
 )
 
 private fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode, monetColor)

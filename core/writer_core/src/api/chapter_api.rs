@@ -133,7 +133,145 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    // --- Chapter/Project envelope_json methods ---
+    // --- Chapter/Project/Volume envelope_json methods ---
+
+    fn changed_value_envelope<T: serde::Serialize>(
+        data: T,
+        entity_type: &str,
+        entity_id: Option<String>,
+    ) -> ResultEnvelope<T> {
+        ResultEnvelope::success_with_changes(
+            data,
+            Vec::new(),
+            vec![ChangedEntityDto {
+                entity_type: entity_type.to_string(),
+                entity_id,
+            }],
+        )
+    }
+
+    fn changed_result_envelope<T: serde::Serialize>(
+        result: ApiResult<T>,
+        entity_type: &str,
+        entity_id: Option<String>,
+    ) -> ResultEnvelope<T> {
+        match result {
+            Ok(data) => Self::changed_value_envelope(data, entity_type, entity_id),
+            Err(error) => ResultEnvelope::error(error),
+        }
+    }
+
+    pub fn create_project_envelope_json(&self, title: &str) -> String {
+        match self.create_project(title) {
+            Ok(project) => {
+                let project_id = project.id.clone();
+                Self::changed_value_envelope(project, "ProjectCreated", Some(project_id))
+            }
+            Err(error) => ResultEnvelope::error(error),
+        }
+        .to_json_string()
+    }
+
+    pub fn rename_project_envelope_json(&self, project_id: &str, new_title: &str) -> String {
+        Self::changed_result_envelope(
+            self.rename_project(project_id, new_title),
+            "ProjectRenamed",
+            Some(project_id.to_string()),
+        )
+        .to_json_string()
+    }
+
+    pub fn reorder_projects_envelope_json(&self, ordered_project_ids: &[String]) -> String {
+        Self::changed_result_envelope(
+            self.reorder_projects(ordered_project_ids),
+            "ProjectsReordered",
+            None,
+        )
+        .to_json_string()
+    }
+
+    pub fn create_volume_envelope_json(&self, project_id: &str, title: &str) -> String {
+        match self.create_volume(project_id, title) {
+            Ok(volume) => {
+                let volume_id = volume.id.clone();
+                Self::changed_value_envelope(volume, "VolumeCreated", Some(volume_id))
+            }
+            Err(error) => ResultEnvelope::error(error),
+        }
+        .to_json_string()
+    }
+
+    pub fn rename_volume_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        new_title: &str,
+    ) -> String {
+        Self::changed_result_envelope(
+            self.rename_volume(project_id, volume_id, new_title),
+            "VolumeRenamed",
+            Some(volume_id.to_string()),
+        )
+        .to_json_string()
+    }
+
+    pub fn reorder_volumes_envelope_json(
+        &self,
+        project_id: &str,
+        ordered_volume_ids: &[String],
+    ) -> String {
+        Self::changed_result_envelope(
+            self.reorder_volumes(project_id, ordered_volume_ids),
+            "VolumesReordered",
+            Some(project_id.to_string()),
+        )
+        .to_json_string()
+    }
+
+    pub fn create_chapter_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        title: &str,
+    ) -> String {
+        match self.create_chapter(project_id, volume_id, title) {
+            Ok(chapter) => {
+                let chapter_id = chapter.id.clone();
+                Self::changed_value_envelope(chapter, "ChapterCreated", Some(chapter_id))
+            }
+            Err(error) => ResultEnvelope::error(error),
+        }
+        .to_json_string()
+    }
+
+    pub fn rename_chapter_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        new_title: &str,
+    ) -> String {
+        Self::changed_result_envelope(
+            self.rename_chapter(project_id, volume_id, chapter_id, new_title),
+            "ChapterRenamed",
+            Some(chapter_id.to_string()),
+        )
+        .to_json_string()
+    }
+
+    pub fn reorder_chapters_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        ordered_chapter_ids: &[String],
+    ) -> String {
+        Self::changed_result_envelope(
+            self.reorder_chapters(project_id, volume_id, ordered_chapter_ids),
+            "ChaptersReordered",
+            Some(volume_id.to_string()),
+        )
+        .to_json_string()
+    }
 
     fn chapter_save_envelope(
         result: ApiResult<ChapterSaveReceiptDto>,
@@ -162,6 +300,35 @@ impl WriterCoreApi {
         Self::chapter_save_envelope(
             self.save_chapter_content(project_id, volume_id, chapter_id, content),
             chapter_id,
+        )
+        .to_json_string()
+    }
+
+    pub fn clear_chapter_content_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> String {
+        Self::changed_result_envelope(
+            self.clear_chapter_content(project_id, volume_id, chapter_id),
+            "ChapterCleared",
+            Some(chapter_id.to_string()),
+        )
+        .to_json_string()
+    }
+
+    pub fn update_chapter_note_envelope_json(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        note: &str,
+    ) -> String {
+        Self::changed_result_envelope(
+            self.update_chapter_note(project_id, volume_id, chapter_id, note),
+            "ChapterNoteUpdated",
+            Some(chapter_id.to_string()),
         )
         .to_json_string()
     }

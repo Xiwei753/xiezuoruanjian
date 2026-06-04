@@ -47,6 +47,10 @@ impl WriterAppService {
         self.api.create_project(&title)
     }
 
+    pub fn create_project_envelope_json(&self, title: String) -> String {
+        self.api.create_project_envelope_json(&title)
+    }
+
     pub fn get_project_stats(&self, project_id: String) -> Result<ProjectStatsDto, WriterError> {
         self.api.get_project_stats(&project_id)
     }
@@ -59,12 +63,22 @@ impl WriterAppService {
         self.api.rename_project(&project_id, &new_title)
     }
 
+    pub fn rename_project_envelope_json(&self, project_id: String, new_title: String) -> String {
+        self.api
+            .rename_project_envelope_json(&project_id, &new_title)
+    }
+
     pub fn delete_project(&self, project_id: String) -> Result<bool, WriterError> {
         self.api.delete_project(&project_id)
     }
 
     pub fn reorder_projects(&self, ordered_project_ids: Vec<String>) -> Result<bool, WriterError> {
         self.api.reorder_projects(&ordered_project_ids)
+    }
+
+    pub fn reorder_projects_envelope_json(&self, ordered_project_ids: Vec<String>) -> String {
+        self.api
+            .reorder_projects_envelope_json(&ordered_project_ids)
     }
 
     pub fn list_volumes(&self, project_id: String) -> Result<Vec<VolumeDto>, WriterError> {
@@ -79,6 +93,10 @@ impl WriterAppService {
         self.api.create_volume(&project_id, &title)
     }
 
+    pub fn create_volume_envelope_json(&self, project_id: String, title: String) -> String {
+        self.api.create_volume_envelope_json(&project_id, &title)
+    }
+
     pub fn rename_volume(
         &self,
         project_id: String,
@@ -86,6 +104,16 @@ impl WriterAppService {
         new_title: String,
     ) -> Result<bool, WriterError> {
         self.api.rename_volume(&project_id, &volume_id, &new_title)
+    }
+
+    pub fn rename_volume_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        new_title: String,
+    ) -> String {
+        self.api
+            .rename_volume_envelope_json(&project_id, &volume_id, &new_title)
     }
 
     pub fn delete_volume(
@@ -102,6 +130,15 @@ impl WriterAppService {
         ordered_volume_ids: Vec<String>,
     ) -> Result<bool, WriterError> {
         self.api.reorder_volumes(&project_id, &ordered_volume_ids)
+    }
+
+    pub fn reorder_volumes_envelope_json(
+        &self,
+        project_id: String,
+        ordered_volume_ids: Vec<String>,
+    ) -> String {
+        self.api
+            .reorder_volumes_envelope_json(&project_id, &ordered_volume_ids)
     }
 
     pub fn list_chapters(
@@ -121,6 +158,16 @@ impl WriterAppService {
         self.api.create_chapter(&project_id, &volume_id, &title)
     }
 
+    pub fn create_chapter_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        title: String,
+    ) -> String {
+        self.api
+            .create_chapter_envelope_json(&project_id, &volume_id, &title)
+    }
+
     pub fn rename_chapter(
         &self,
         project_id: String,
@@ -130,6 +177,17 @@ impl WriterAppService {
     ) -> Result<bool, WriterError> {
         self.api
             .rename_chapter(&project_id, &volume_id, &chapter_id, &new_title)
+    }
+
+    pub fn rename_chapter_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        new_title: String,
+    ) -> String {
+        self.api
+            .rename_chapter_envelope_json(&project_id, &volume_id, &chapter_id, &new_title)
     }
 
     pub fn delete_chapter(
@@ -150,6 +208,16 @@ impl WriterAppService {
     ) -> Result<bool, WriterError> {
         self.api
             .reorder_chapters(&project_id, &volume_id, &ordered_chapter_ids)
+    }
+
+    pub fn reorder_chapters_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        ordered_chapter_ids: Vec<String>,
+    ) -> String {
+        self.api
+            .reorder_chapters_envelope_json(&project_id, &volume_id, &ordered_chapter_ids)
     }
 
     pub fn open_chapter(
@@ -199,6 +267,16 @@ impl WriterAppService {
             .clear_chapter_content(&project_id, &volume_id, &chapter_id)
     }
 
+    pub fn clear_chapter_content_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+    ) -> String {
+        self.api
+            .clear_chapter_content_envelope_json(&project_id, &volume_id, &chapter_id)
+    }
+
     pub fn update_chapter_note(
         &self,
         project_id: String,
@@ -208,6 +286,17 @@ impl WriterAppService {
     ) -> Result<bool, WriterError> {
         self.api
             .update_chapter_note(&project_id, &volume_id, &chapter_id, &note)
+    }
+
+    pub fn update_chapter_note_envelope_json(
+        &self,
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+        note: String,
+    ) -> String {
+        self.api
+            .update_chapter_note_envelope_json(&project_id, &volume_id, &chapter_id, &note)
     }
 
     pub fn load_local_settings(&self) -> Result<LocalSettingsDto, WriterError> {
@@ -294,7 +383,7 @@ impl WriterAppService {
         self.api.save_sync_secrets_envelope_json(secrets)
     }
 
-    // --- Chapter/Project envelope_json methods ---
+    // --- Chapter/Project/Volume envelope_json methods ---
 
     pub fn save_chapter_content_envelope_json(
         &self,

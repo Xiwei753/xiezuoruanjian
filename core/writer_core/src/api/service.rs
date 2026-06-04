@@ -1331,6 +1331,112 @@ mod tests {
     }
 
     #[test]
+    fn create_project_volume_chapter_envelope_json_returns_changed_entities() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let project_json = api.create_project_envelope_json("Test");
+        let project_value: serde_json::Value = serde_json::from_str(&project_json).unwrap();
+        let project_id = project_value["data"]["id"].as_str().unwrap().to_string();
+        assert_eq!(project_value["success"], true);
+        assert_eq!(
+            project_value["changedEntities"][0]["entityType"],
+            "ProjectCreated"
+        );
+        assert_eq!(project_value["changedEntities"][0]["entityId"], project_id);
+
+        let volume_json = api.create_volume_envelope_json(&project_id, "Vol 1");
+        let volume_value: serde_json::Value = serde_json::from_str(&volume_json).unwrap();
+        let volume_id = volume_value["data"]["id"].as_str().unwrap().to_string();
+        assert_eq!(volume_value["success"], true);
+        assert_eq!(
+            volume_value["changedEntities"][0]["entityType"],
+            "VolumeCreated"
+        );
+        assert_eq!(volume_value["changedEntities"][0]["entityId"], volume_id);
+
+        let chapter_json = api.create_chapter_envelope_json(&project_id, &volume_id, "Ch 1");
+        let chapter_value: serde_json::Value = serde_json::from_str(&chapter_json).unwrap();
+        let chapter_id = chapter_value["data"]["id"].as_str().unwrap().to_string();
+        assert_eq!(chapter_value["success"], true);
+        assert_eq!(
+            chapter_value["changedEntities"][0]["entityType"],
+            "ChapterCreated"
+        );
+        assert_eq!(chapter_value["changedEntities"][0]["entityId"], chapter_id);
+    }
+
+    #[test]
+    fn project_volume_chapter_mutation_envelopes_return_changed_entities() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+        let volume_ids: Vec<String> = api
+            .list_volumes(&project.id)
+            .unwrap()
+            .into_iter()
+            .map(|volume| volume.id)
+            .collect();
+
+        let cases = vec![
+            (
+                api.rename_project_envelope_json(&project.id, "Renamed"),
+                "ProjectRenamed",
+                Some(project.id.clone()),
+            ),
+            (
+                api.reorder_projects_envelope_json(&vec![project.id.clone()]),
+                "ProjectsReordered",
+                None,
+            ),
+            (
+                api.rename_volume_envelope_json(&project.id, &volume.id, "Vol 2"),
+                "VolumeRenamed",
+                Some(volume.id.clone()),
+            ),
+            (
+                api.reorder_volumes_envelope_json(&project.id, &volume_ids),
+                "VolumesReordered",
+                Some(project.id.clone()),
+            ),
+            (
+                api.rename_chapter_envelope_json(&project.id, &volume.id, &chapter.id, "Ch 2"),
+                "ChapterRenamed",
+                Some(chapter.id.clone()),
+            ),
+            (
+                api.reorder_chapters_envelope_json(&project.id, &volume.id, &vec![chapter.id.clone()]),
+                "ChaptersReordered",
+                Some(volume.id.clone()),
+            ),
+            (
+                api.update_chapter_note_envelope_json(&project.id, &volume.id, &chapter.id, "note"),
+                "ChapterNoteUpdated",
+                Some(chapter.id.clone()),
+            ),
+            (
+                api.clear_chapter_content_envelope_json(&project.id, &volume.id, &chapter.id),
+                "ChapterCleared",
+                Some(chapter.id.clone()),
+            ),
+        ];
+
+        for (json, entity_type, entity_id) in cases {
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(value["success"], true, "{entity_type} envelope failed: {json}");
+            assert_eq!(value["changedEntities"][0]["entityType"], entity_type);
+            match entity_id {
+                Some(id) => assert_eq!(value["changedEntities"][0]["entityId"], id),
+                None => assert!(value["changedEntities"][0].get("entityId").is_none()),
+            }
+        }
+    }
+
+    #[test]
     fn delete_chapter_envelope_json_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();

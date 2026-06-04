@@ -890,11 +890,15 @@ interface WriterAppService {
     [Throws=WriterError]
     ProjectDto create_project(string title);
 
+    string create_project_envelope_json(string title);
+
     [Throws=WriterError]
     ProjectStatsDto get_project_stats(string project_id);
 
     [Throws=WriterError]
     boolean rename_project(string project_id, string new_title);
+
+    string rename_project_envelope_json(string project_id, string new_title);
 
     [Throws=WriterError]
     boolean delete_project(string project_id);
@@ -902,14 +906,20 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean reorder_projects(sequence<string> ordered_project_ids);
 
+    string reorder_projects_envelope_json(sequence<string> ordered_project_ids);
+
     [Throws=WriterError]
     sequence<VolumeDto> list_volumes(string project_id);
 
     [Throws=WriterError]
     VolumeDto create_volume(string project_id, string title);
 
+    string create_volume_envelope_json(string project_id, string title);
+
     [Throws=WriterError]
     boolean rename_volume(string project_id, string volume_id, string new_title);
+
+    string rename_volume_envelope_json(string project_id, string volume_id, string new_title);
 
     [Throws=WriterError]
     boolean delete_volume(string project_id, string volume_id);
@@ -917,20 +927,28 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean reorder_volumes(string project_id, sequence<string> ordered_volume_ids);
 
+    string reorder_volumes_envelope_json(string project_id, sequence<string> ordered_volume_ids);
+
     [Throws=WriterError]
     sequence<ChapterMetaDto> list_chapters(string project_id, string volume_id);
 
     [Throws=WriterError]
     ChapterMetaDto create_chapter(string project_id, string volume_id, string title);
 
+    string create_chapter_envelope_json(string project_id, string volume_id, string title);
+
     [Throws=WriterError]
     boolean rename_chapter(string project_id, string volume_id, string chapter_id, string new_title);
+
+    string rename_chapter_envelope_json(string project_id, string volume_id, string chapter_id, string new_title);
 
     [Throws=WriterError]
     boolean delete_chapter(string project_id, string volume_id, string chapter_id);
 
     [Throws=WriterError]
     boolean reorder_chapters(string project_id, string volume_id, sequence<string> ordered_chapter_ids);
+
+    string reorder_chapters_envelope_json(string project_id, string volume_id, sequence<string> ordered_chapter_ids);
 
     [Throws=WriterError]
     ChapterContentDto open_chapter(string project_id, string volume_id, string chapter_id);
@@ -941,8 +959,12 @@ interface WriterAppService {
     [Throws=WriterError]
     ChapterSaveReceiptDto clear_chapter_content(string project_id, string volume_id, string chapter_id);
 
+    string clear_chapter_content_envelope_json(string project_id, string volume_id, string chapter_id);
+
     [Throws=WriterError]
     boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);
+
+    string update_chapter_note_envelope_json(string project_id, string volume_id, string chapter_id, string note);
 
     [Throws=WriterError]
     LocalSettingsDto load_local_settings();

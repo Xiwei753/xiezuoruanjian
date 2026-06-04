@@ -25,11 +25,20 @@
 - `get_workspace_diagnostics(path: &Path, has_workspace: bool, tree_count: u64) -> Result<WorkspaceDiagnosticsDto>`：工作区结构、可写性、最近工作区与新建作品可用性诊断由 Core 计算；Linux/QML 只展示 `ResultEnvelope<WorkspaceDiagnosticsDto>`。
 - `list_projects(path: &Path) -> Result<Vec<Project>>`
 - `create_project(path: &Path, title: &str) -> Result<Project>`
+- `rename_project(path: &Path, project_id: &str, new_title: &str) -> Result<bool>`
+- `delete_project(path: &Path, project_id: &str) -> Result<bool>`
+- `reorder_projects(path: &Path, ordered_project_ids: &[String]) -> Result<bool>`
 - `get_project_stats(path: &Path, project_id: &str) -> Result<ProjectStats>`
 - `list_volumes(path: &Path, project_id: &str) -> Result<Vec<Volume>>`
 - `create_volume(path: &Path, project_id: &str, title: &str) -> Result<Volume>`
+- `rename_volume(path: &Path, project_id: &str, volume_id: &str, new_title: &str) -> Result<bool>`
+- `delete_volume(path: &Path, project_id: &str, volume_id: &str) -> Result<bool>`
+- `reorder_volumes(path: &Path, project_id: &str, ordered_volume_ids: &[String]) -> Result<bool>`
 - `list_chapters(path: &Path, project_id: &str, volume_id: &str) -> Result<Vec<Chapter>>`
 - `create_chapter(path: &Path, project_id: &str, volume_id: &str, title: &str) -> Result<Chapter>`
+- `rename_chapter(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str, new_title: &str) -> Result<bool>`
+- `delete_chapter(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<bool>`
+- `reorder_chapters(path: &Path, project_id: &str, volume_id: &str, ordered_chapter_ids: &[String]) -> Result<bool>`
 - `read_chapter(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<ChapterContent>`
 - `open_chapter(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<ChapterOpenResult>`
 - `save_chapter(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str, content: &str) -> Result<()>`
@@ -37,6 +46,7 @@
 - `save_chapter_verified_with_allow_empty_overwrite(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str, content: &str, allow_empty_overwrite: bool) -> Result<ChapterSaveReceipt>`
 - `clear_chapter_content(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<()>`
 - `clear_chapter_content_verified(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str) -> Result<ChapterSaveReceipt>`
+- `update_chapter_note(path: &Path, project_id: &str, volume_id: &str, chapter_id: &str, note: &str) -> Result<bool>`
 - `load_local_settings(path: &Path) -> Result<LocalSettings>`
 - `save_local_settings(path: &Path, settings: &LocalSettings) -> Result<()>`
 - `load_syncable_settings(workspace_path: &Path) -> Result<SyncableSettings>`
@@ -62,6 +72,18 @@
 - `delete_starmap_link(...) -> Result<()>`
 - `find_starmap_references(...) -> Result<Vec<StarMapReference>>`
 
+### ResultEnvelope JSON API
+
+跨端写入、删除、设置保存和同步操作必须使用标准 `ResultEnvelope` JSON 入口。当前稳定 envelope 入口包括：
+
+- Project：`create_project_envelope_json`、`rename_project_envelope_json`、`reorder_projects_envelope_json`、`delete_project_envelope_json`。成功时写入 `ProjectCreated`、`ProjectRenamed`、`ProjectsReordered`、`ProjectDeleted`。
+- Volume：`create_volume_envelope_json`、`rename_volume_envelope_json`、`reorder_volumes_envelope_json`、`delete_volume_envelope_json`。成功时写入 `VolumeCreated`、`VolumeRenamed`、`VolumesReordered`、`VolumeDeleted`。
+- Chapter：`create_chapter_envelope_json`、`rename_chapter_envelope_json`、`reorder_chapters_envelope_json`、`save_chapter_content_envelope_json`、`clear_chapter_content_envelope_json`、`update_chapter_note_envelope_json`、`delete_chapter_envelope_json`。成功时写入 `ChapterCreated`、`ChapterRenamed`、`ChaptersReordered`、`ChapterSaved`、`ChapterCleared`、`ChapterNoteUpdated`、`ChapterDeleted`。
+- Settings：`save_local_settings_envelope_json`、`save_syncable_settings_envelope_json`。成功时写入 `SettingsSaved`。
+- Sync：`save_sync_config_envelope_json`、`save_sync_secrets_envelope_json`、`perform_sync_envelope_json`、`perform_sync_dry_run_envelope_json`、`perform_sync_diagnostics_envelope_json`。成功时写入 `SyncConfigSaved`、`SyncSecretsSaved`、`SyncCompleted` 等同步状态标记；失败时写入稳定同步错误码。
+
+只读列表、打开章节和统计类 API 可继续返回 typed DTO，不要求为了 envelope 而放弃强类型返回。
+
 ### 文件操作
 所有写操作（`save_chapter`、`save_*_settings`）必须使用 core 的原子替换写入路径：写入临时文件、flush、`fsync` 临时文件，然后 `rename` 替换目标文件。该机制避免目标文件半写入；目录项持久化仍受平台和文件系统语义影响，不宣称跨设备断电的绝对耐久性。
 
@@ -70,9 +92,9 @@
 在用不同内容覆盖现有非空章节文本之前，Core 会在 `backups/chapters/` 下写入一个轻量级恢复副本。备份文件名包含 `project_id`、`volume_id`、`chapter_id` 和时间戳。Core 仅保留每个章节最近的备份，以避免无限增长。
 
 ### 错误处理
-Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来处理内部失败模式。跨平台 `api::error::WriterError` 是平台暴露层稳定错误类型，由 `api/error.rs` 集中映射。跨端 Bridge 必须传播稳定错误码和错误语义，不得吞错或只依赖字符串匹配。当前稳定错误码包括 `IO_ERROR`、`JSON_ERROR`、`INVALID_WORKSPACE`、`PROJECT_NOT_FOUND`、`VOLUME_NOT_FOUND`、`CHAPTER_NOT_FOUND`、`EMPTY_OVERWRITE_BLOCKED`、`NOT_IMPLEMENTED`、`REFUSE_DELETE_WORKSPACE_ROOT`、`INVALID_DELETE_TARGET`、`OTHER`。
+Core domain 定义统一 `Error` 枚举（如 `writer_core::error::Error`）来处理内部失败模式。跨平台 `api::error::WriterError` 是平台暴露层稳定错误类型，由 `api/error.rs` 集中映射。跨端 Bridge 必须传播稳定错误码和错误语义，不得吞错或只依赖字符串匹配。当前稳定错误码包括 `IO_ERROR`、`JSON_ERROR`、`INVALID_WORKSPACE`、`PROJECT_NOT_FOUND`、`VOLUME_NOT_FOUND`、`CHAPTER_NOT_FOUND`、`EMPTY_OVERWRITE_BLOCKED`、`NOT_IMPLEMENTED`、`REFUSE_DELETE_WORKSPACE_ROOT`、`INVALID_DELETE_TARGET`、`SYNC_CONFLICT`、`SYNC_FAILED`、`OTHER`。
 
-跨端 JSON 入口必须返回标准 `ResultEnvelope`。JNI fallback 已通过 `ResultEnvelope::from_api_result` 序列化，Android legacy parser 兼容旧字段但优先读取 `errorCode` / `userMessage`。设置保存类 envelope 会把 `SettingsSaved` 写入 `changedEntities`；Android `SettingsBridge` 已改为消费该 Core 标记，不再通过平台端 `SettingsChangeBus.notifyChanged()` 自行发保存事件。
+跨端 JSON 入口必须返回标准 `ResultEnvelope`。JNI fallback 已通过 `ResultEnvelope::from_api_result` 序列化，Android legacy parser 兼容旧字段但优先读取 `errorCode` / `userMessage`。Project / Volume / Chapter 写操作、Settings 保存、Sync 保存与执行类 envelope 都必须写入 `changedEntities`；Android 主写路径已改为消费这些 Core 标记，不再通过平台端临时 bus 或裸字符串自行发业务事件。
 
 Linux 工作区诊断入口已迁移到 `WriterCoreApi::get_workspace_diagnostics_envelope_json`。平台层只传递当前是否已加载工作区和缓存树节点数，不再自行探测 `workspace_manifest.json`、`projects/`、`app-meta/` 或创建 `.writer_write_test` 判断可写性。
 
@@ -94,6 +116,7 @@ Linux 工作区诊断入口已迁移到 `WriterCoreApi::get_workspace_diagnostic
 - GitHub API 写入使用 Contents API 串行执行：更新文件时带当前远端 blob `sha`，删除文件时带当前远端 blob `sha`；遇到 `409` 会重新读取 `sha` 并重试一次。此路径不调用 Git Database API 写提交，也不调用本地 `fetch/reset`。
 - `SyncResultDto` 的 `uploaded_files`、`downloaded_files`、`local_deletes`、`remote_deletes`、`overwritten_files`、`ignored_files` 为 UI 展示的权威计数来源；`error_category` 为同步错误分类的权威来源，客户端仅在该字段为空时退回消息文本分类；`error` 非空时客户端不得显示同步成功，即使状态字符串异常地表示成功。
 - `perform_sync_diagnostics` 在 `github_api` 后端返回 `backend_type = "github_api"`，避免 UI 将 GitHub API 模式误判为传统 Git。
+- 同步写入/执行类平台入口必须使用 `save_sync_config_envelope_json`、`save_sync_secrets_envelope_json`、`perform_sync_envelope_json`、`perform_sync_dry_run_envelope_json`、`perform_sync_diagnostics_envelope_json`。Core envelope 统一映射 `SYNC_CONFLICT`、`SYNC_AUTH_REQUIRED`、`SYNC_NETWORK_ERROR`、`SYNC_REMOTE_ERROR`、`SYNC_CONFIG_ERROR`、`SYNC_NOT_CONFIGURED`、`SYNC_FAILED` 等错误码，平台端不得再靠 raw string 推断冲突或认证失败。
 
 ### Android Bridge 入口
 
