@@ -305,10 +305,22 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
             if file_name == "SmoothCursor.qml" {
                 if !content.contains("fallbackCursorHeight")
                     || !content.contains("targetTextArea.cursorRectangle")
-                    || !content.contains("Math.max(rect.height || 0, fallbackCursorHeight)")
+                    || !content.contains("Math.max(rawHeight, fallbackHeight * 0.85)")
+                    || !content.contains("fallbackHeight * 1.25")
                 {
                     eprintln!(
                         "{}: SmoothCursor missing empty cursorRectangle fallback",
+                        file_name
+                    );
+                    has_errors = true;
+                }
+                if !content.contains("Rectangle {")
+                    || !content.contains("id: cursorRect")
+                    || !content.contains("Item {")
+                    || !content.contains("id: typingLayer")
+                {
+                    eprintln!(
+                        "{}: SmoothCursor must split cursorRect from typingLayer",
                         file_name
                     );
                     has_errors = true;

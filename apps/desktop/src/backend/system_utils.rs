@@ -28,8 +28,9 @@ pub(crate) fn try_kreadconfig(cmd: &str) -> Option<String> {
 }
 
 pub(crate) fn detect_system_theme_from_platform() -> String {
-    // Priority: KDE6 kreadconfig6 > KDE5 kreadconfig5 > GNOME gsettings > GTK_THEME env >
-    //           gsettings gtk-theme > light fallback
+    // Fallback priority: KDE6 kreadconfig6 > KDE5 kreadconfig5 > GNOME gsettings >
+    //                    GTK_THEME env > gsettings gtk-theme > light fallback.
+    // QML SystemPalette is the primary source when themeMode=system.
     if let Some("dark") = try_kreadconfig("kreadconfig6").as_deref() {
         return "dark".to_string();
     }

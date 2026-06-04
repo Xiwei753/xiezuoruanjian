@@ -84,12 +84,26 @@ ApplicationWindow {
 
     property string previousEditorText: ""
 
+    SystemPalette {
+        id: systemPalette
+        colorGroup: SystemPalette.Active
+    }
+
+    function colorLuminance(colorValue) {
+        return 0.2126 * colorValue.r + 0.7152 * colorValue.g + 0.0722 * colorValue.b;
+    }
+
+    function systemPaletteIsDark() {
+        return colorLuminance(systemPalette.window) < colorLuminance(systemPalette.windowText);
+    }
+
     // Design tokens
     DesignTokens {
         id: designTokens
         isDark: {
             if (appState.settings && appState.settings.themeMode === "dark") return true;
             if (appState.settings && appState.settings.themeMode === "light") return false;
+            if (systemPalette.window !== undefined && systemPalette.windowText !== undefined) return window.systemPaletteIsDark();
             return appBackend !== null && appBackend.system_color_scheme !== "light";
         }
         monetColor: settingsBackend !== null ? settingsBackend.setting_monet_color : ""

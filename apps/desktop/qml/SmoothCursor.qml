@@ -40,11 +40,16 @@ Item {
         id: typingParticlesModel
     }
 
+    function clampCursorHeight(rectHeight) {
+        var fallbackHeight = fallbackCursorHeight;
+        var rawHeight = rectHeight || fallbackHeight;
+        return Math.min(Math.max(rawHeight, fallbackHeight * 0.85), fallbackHeight * 1.25);
+    }
+
     function cursorHeight() {
         if (!targetTextArea) return 0;
         var rect = targetTextArea.cursorRectangle;
-        var baseHeight = Math.max(rect.height || 0, fallbackCursorHeight);
-        return Math.min(baseHeight, fallbackCursorHeight * 1.35);
+        return clampCursorHeight(rect.height);
     }
 
     function cursorX() {
@@ -76,8 +81,7 @@ Item {
         try {
             var rect = targetTextArea.positionToRectangle(position);
             var pt = targetTextArea.mapToItem(overlayItem || parent, rect.x || 0, rect.y || 0);
-            var baseHeight = Math.max(rect.height || 0, fallbackCursorHeight);
-            var clampedHeight = Math.min(baseHeight, fallbackCursorHeight * 1.35);
+            var clampedHeight = clampCursorHeight(rect.height);
             return {
                 "x": pt ? pt.x : cursorRect.x,
                 "y": pt ? pt.y : cursorRect.y,
@@ -149,52 +153,57 @@ Item {
         }
     }
 
-    Repeater {
-        model: typingParticlesModel
-        delegate: Text {
-            text: charText
-            color: root.targetTextArea ? root.targetTextArea.color : (root.dt ? root.dt.onSurface : "#000")
-            x: startXPos
-            y: startYPos
-            opacity: 1.0
-            z: 2
-            scale: 1.0
+    Item {
+        id: typingLayer
+        anchors.fill: parent
+        z: 2
 
-            Component.onCompleted: {
-                if (root.targetTextArea) {
-                    font = root.targetTextArea.font;
-                }
-                animGroup.start();
-            }
+        Repeater {
+            model: typingParticlesModel
+            delegate: Text {
+                text: charText
+                color: root.targetTextArea ? root.targetTextArea.color : (root.dt ? root.dt.onSurface : "#000")
+                x: startXPos
+                y: startYPos
+                opacity: 1.0
+                scale: 1.0
 
-            ParallelAnimation {
-                id: animGroup
-                NumberAnimation {
-                    target: parent
-                    property: "opacity"
-                    from: isDeletion ? 1.0 : 0.4
-                    to: 0.0
-                    duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
-                    easing.type: Easing.OutSine
+                Component.onCompleted: {
+                    if (root.targetTextArea) {
+                        font = root.targetTextArea.font;
+                    }
+                    animGroup.start();
                 }
-                NumberAnimation {
-                    target: parent
-                    property: "y"
-                    from: startYPos
-                    to: isDeletion ? startYPos - 10 : startYPos
-                    duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
-                    easing.type: Easing.OutSine
-                }
-                NumberAnimation {
-                    target: parent
-                    property: "scale"
-                    from: 1.0
-                    to: isDeletion ? 1.0 : 1.5
-                    duration: root.typingAnimationDuration * 1.5
-                    easing.type: Easing.OutSine
-                }
-                onFinished: {
-                    // It will be cleaned up by garbageCollector
+
+                ParallelAnimation {
+                    id: animGroup
+                    NumberAnimation {
+                        target: parent
+                        property: "opacity"
+                        from: isDeletion ? 1.0 : 0.4
+                        to: 0.0
+                        duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
+                        easing.type: Easing.OutSine
+                    }
+                    NumberAnimation {
+                        target: parent
+                        property: "y"
+                        from: startYPos
+                        to: isDeletion ? startYPos - 10 : startYPos
+                        duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
+                        easing.type: Easing.OutSine
+                    }
+                    NumberAnimation {
+                        target: parent
+                        property: "scale"
+                        from: 1.0
+                        to: isDeletion ? 1.0 : 1.5
+                        duration: root.typingAnimationDuration * 1.5
+                        easing.type: Easing.OutSine
+                    }
+                    onFinished: {
+                        // It will be cleaned up by garbageCollector
+                    }
                 }
             }
         }
