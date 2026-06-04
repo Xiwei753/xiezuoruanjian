@@ -156,6 +156,15 @@ class WriterEditText @JvmOverloads constructor(
         renderLayer?.onFocusChanged(focused)
     }
 
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        if (!controllersReady) return
+        if (hasWindowFocus && isFocused && renderLayer?.smoothCursorRenderer?.smoothCursorEnabled == true) {
+            renderLayer?.smoothCursorRenderer?.updateCursorTarget(false)
+            renderLayer?.smoothCursorRenderer?.startCursorBlink()
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         if (!controllersReady) {
             super.onDraw(canvas)

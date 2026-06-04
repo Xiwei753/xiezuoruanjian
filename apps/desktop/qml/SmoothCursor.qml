@@ -22,6 +22,7 @@ Rectangle {
     property int cursorAnimationDuration: 80
     property int typingAnimationDuration: 100
     property int lastTextLength: targetTextArea ? targetTextArea.length : 0
+    property string lastTextString: targetTextArea ? targetTextArea.text : ""
     property real fallbackCursorHeight: targetTextArea ? Math.max(targetTextArea.font.pixelSize * 1.2, 18) : 18
 
     width: 2
@@ -39,6 +40,10 @@ Rectangle {
     readonly property real _bottomPaddingCheck: targetTextArea ? targetTextArea.bottomPadding : 0
 
     property bool isTyping: false
+
+    ListModel {
+        id: typingParticlesModel
+    }
 
     function cursorHeight() {
         if (!targetTextArea) return 0;
@@ -87,53 +92,74 @@ Rectangle {
         }
     }
 
-    Rectangle {
-        id: typingPulse
-        x: -4
-        y: -4
-        width: 12
-        height: Math.max(18, root.height + 8)
-        radius: 4
-        color: root.dt ? root.dt.accent : "#7B8CDE"
-        opacity: 0
-        visible: opacity > 0
-        z: -1
-    }
+    Repeater {
+        model: typingParticlesModel
+        delegate: Text {
+            text: charText
+            color: root.targetTextArea ? root.targetTextArea.color : (root.dt ? root.dt.onSurface : "#000")
+            x: startXPos
+            y: startYPos
+            opacity: 1.0
+            z: -1
+            scale: 1.0
 
-    ParallelAnimation {
-        id: typingPulseAnimation
-        NumberAnimation {
-            target: typingPulse
-            property: "opacity"
-            from: 0.4
-            to: 0
-            duration: root.typingAnimationDuration * 1.5
-            easing.type: Easing.OutSine
-        }
-        NumberAnimation {
-            target: typingPulse
-            property: "width"
-            from: 12
-            to: 32
-            duration: root.typingAnimationDuration * 1.5
-            easing.type: Easing.OutSine
-        }
-        NumberAnimation {
-            target: typingPulse
-            property: "x"
-            from: -4
-            to: -14
-            duration: root.typingAnimationDuration * 1.5
-            easing.type: Easing.OutSine
+            Component.onCompleted: {
+                if (root.targetTextArea) {
+                    font = root.targetTextArea.font;
+                }
+                animGroup.start();
+            }
+
+            ParallelAnimation {
+                id: animGroup
+                NumberAnimation {
+                    target: parent
+                    property: "opacity"
+                    from: isDeletion ? 1.0 : 0.4
+                    to: 0.0
+                    duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
+                    easing.type: Easing.OutSine
+                }
+                NumberAnimation {
+                    target: parent
+                    property: "y"
+                    from: startYPos
+                    to: isDeletion ? startYPos - 10 : startYPos
+                    duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
+                    easing.type: Easing.OutSine
+                }
+                NumberAnimation {
+                    target: parent
+                    property: "scale"
+                    from: 1.0
+                    to: isDeletion ? 1.0 : 1.5
+                    duration: root.typingAnimationDuration * 1.5
+                    easing.type: Easing.OutSine
+                }
+                onFinished: {
+                    // It will be cleaned up by garbageCollector
+                }
+            }
         }
     }
 
     Timer {
-        id: typingResetTimer
-        interval: 32
-        repeat: false
+        id: garbageCollector
+        interval: 500
+        repeat: true
+        running: typingParticlesModel.count > 0
         onTriggered: {
-            root.isTyping = false;
+            var now = Date.now();
+            var i = 0;
+            while (i < typingParticlesModel.count) {
+                var item = typingParticlesModel.get(i);
+                var dur = item.isDeletion ? (root.typingAnimationDuration * 2.5 + 100) : (root.typingAnimationDuration * 1.5 + 100);
+                if (now - item.createdAt >= dur) {
+                    typingParticlesModel.remove(i, 1);
+                } else {
+                    i++;
+                }
+            }
         }
     }
 
@@ -141,17 +167,45 @@ Rectangle {
         target: root.targetTextArea
         function onTextChanged() {
             var len = root.targetTextArea ? root.targetTextArea.length : 0;
-            if (root.typingAnimationEnabled && root.targetTextArea && root.targetTextArea.activeFocus && len > root.lastTextLength) {
-                root.isTyping = true;
-                typingResetTimer.restart();
-                
-                typingPulseAnimation.stop();
-                typingPulse.opacity = 0.4;
-                typingPulse.width = 12;
-                typingPulse.x = -4;
-                typingPulseAnimation.start();
+            var newText = root.targetTextArea ? root.targetTextArea.text : "";
+            if (root.typingAnimationEnabled && root.targetTextArea && root.targetTextArea.activeFocus) {
+                var cursorPosition = root.targetTextArea.cursorPosition;
+                if (len > root.lastTextLength) {
+                    // Addition
+                    if (cursorPosition > 0 && cursorPosition <= newText.length) {
+                        var lastChar = newText.charAt(cursorPosition - 1);
+                        if (lastChar !== '\n' && lastChar !== '\r' && lastChar !== ' ') {
+                            typingParticlesModel.append({
+                                charText: lastChar,
+                                startXPos: root.x - root.targetTextArea.font.pixelSize / 2,
+                                startYPos: root.y,
+                                createdAt: Date.now(),
+                                isDeletion: false
+                            });
+                        }
+                    }
+                } else if (len < root.lastTextLength) {
+                    // Deletion
+                    // Attempt to find what was deleted. Usually the character just after the cursor in the old string, or just before
+                    // For simplicity, we just use the cursor position to extract from the old string.
+                    // This works best for single-char backspace.
+                    var diff = root.lastTextLength - len;
+                    if (diff === 1 && cursorPosition >= 0 && cursorPosition < root.lastTextString.length) {
+                        var deletedChar = root.lastTextString.charAt(cursorPosition);
+                        if (deletedChar !== '\n' && deletedChar !== '\r' && deletedChar !== ' ') {
+                            typingParticlesModel.append({
+                                charText: deletedChar,
+                                startXPos: root.x, // Start at cursor
+                                startYPos: root.y,
+                                createdAt: Date.now(),
+                                isDeletion: true
+                            });
+                        }
+                    }
+                }
             }
             root.lastTextLength = len;
+            root.lastTextString = newText;
         }
     }
 

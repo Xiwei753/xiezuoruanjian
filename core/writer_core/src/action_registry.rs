@@ -341,7 +341,7 @@ impl ActionRegistry {
                 "type": "object",
                 "properties": {
                     "enabled": { "type": "boolean" },
-                    "durationMs": { "type": "integer", "minimum": 0, "maximum": 500 }
+                    "durationMs": { "type": "integer", "minimum": 0, "maximum": 1000 }
                 },
                 "required": ["enabled"]
             })),
@@ -378,7 +378,7 @@ impl ActionRegistry {
                 "type": "object",
                 "properties": {
                     "enabled": { "type": "boolean" },
-                    "durationMs": { "type": "integer", "minimum": 0, "maximum": 500 }
+                    "durationMs": { "type": "integer", "minimum": 0, "maximum": 1000 }
                 },
                 "required": ["enabled"]
             })),

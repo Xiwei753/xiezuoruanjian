@@ -152,7 +152,7 @@ Dialog {
                     label: qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
                     from: 0
-                    to: 240
+                    to: 1000
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.saveAndNotify() }
                 }
@@ -171,7 +171,7 @@ Dialog {
                     label: qsTr("平滑光标持续时间")
                     valueText: Math.round(value) + " ms"
                     from: 0
-                    to: 240
+                    to: 1000
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }
                 }
