@@ -135,12 +135,6 @@ Item {
             root.snapNextCursorUpdate();
             updateCursorRect(true);
         }
-
-        function onSelectionChanged() {
-            if (root.targetTextArea && root.targetTextArea.selectedText.length > 0) {
-                root.snapNextCursorUpdate();
-            }
-        }
     }
 
     Rectangle {

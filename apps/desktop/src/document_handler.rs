@@ -134,18 +134,26 @@ impl DocumentHandler {
     }
 
     fn apply_format(&self) {
+        // Re-entrancy guard via C++ static in the cpp block below.
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
         let text_color = self.current_text_color.clone();
 
         cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text_color as "QString"] {
+            // Re-entrancy guard: prevent infinite loop where apply_format
+            // modifies QTextDocument, which triggers contentsChanged,
+            // which triggers textChanged in QML, which calls apply_format again.
+            static bool s_applying = false;
+            if (s_applying) return;
+            s_applying = true;
+
             QObject* obj = doc_variant.value<QObject*>();
-            if (!obj) return;
+            if (!obj) { s_applying = false; return; }
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
-            if (!qquick_doc) return;
+            if (!qquick_doc) { s_applying = false; return; }
             QTextDocument* doc = qquick_doc->textDocument();
-            if (!doc) return;
+            if (!doc) { s_applying = false; return; }
 
             QTextCursor cursor(doc);
             cursor.beginEditBlock();
@@ -157,12 +165,6 @@ impl DocumentHandler {
             cursor.mergeBlockFormat(blockFormat);
 
             QColor color(text_color);
-            qWarning().noquote()
-                << "[SujianThemeDiagnostics] DocumentHandler.apply_format"
-                << "text_color=" << text_color
-                << "valid=" << color.isValid()
-                << "line_spacing=" << line_spacing
-                << "indent=" << indent;
             if (color.isValid()) {
                 QTextCharFormat charFormat;
                 charFormat.setForeground(color);
@@ -170,6 +172,7 @@ impl DocumentHandler {
             }
 
             cursor.endEditBlock();
+            s_applying = false;
         });
     }
 
