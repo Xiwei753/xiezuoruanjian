@@ -6,9 +6,13 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.util.AttributeSet
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.inputmethod.BaseInputConnection
+import android.widget.OverScroller
 import androidx.appcompat.widget.AppCompatEditText
+import kotlin.math.abs
 
 /**
  * WriterEditText — 自定义写作编辑器
@@ -52,6 +56,14 @@ class WriterEditText @JvmOverloads constructor(
     private var isEditorScrolling = false
     private val scrollIdleDelayMs = 140L
     private val scrollIdleRunnable = Runnable { setEditorScrolling(false) }
+    private val flingScroller = OverScroller(context)
+    private val touchConfig = ViewConfiguration.get(context)
+    private val touchSlop = touchConfig.scaledTouchSlop
+    private val minimumFlingVelocity = touchConfig.scaledMinimumFlingVelocity
+    private val maximumFlingVelocity = touchConfig.scaledMaximumFlingVelocity
+    private var velocityTracker: VelocityTracker? = null
+    private var lastTouchY = 0f
+    private var flingDragStarted = false
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
@@ -93,6 +105,38 @@ class WriterEditText @JvmOverloads constructor(
     private fun markEditorScrolling() {
         if (!controllersReady) return
         setEditorScrolling(true)
+    }
+
+    private fun maxEditorScrollY(): Int {
+        val textLayout = layout ?: return 0
+        val viewportHeight = (height - compoundPaddingTop - compoundPaddingBottom).coerceAtLeast(0)
+        return (textLayout.height - viewportHeight).coerceAtLeast(0)
+    }
+
+    private fun recycleVelocityTracker() {
+        velocityTracker?.recycle()
+        velocityTracker = null
+    }
+
+    private fun startEditorFling(velocityY: Float): Boolean {
+        val maxScrollY = maxEditorScrollY()
+        if (maxScrollY <= 0) return false
+        val startY = scrollY.coerceIn(0, maxScrollY)
+        flingScroller.fling(
+            0,
+            startY,
+            0,
+            -velocityY.toInt(),
+            0,
+            0,
+            0,
+            maxScrollY,
+            0,
+            height / 2
+        )
+        markEditorScrolling()
+        postInvalidateOnAnimation()
+        return true
     }
 
     fun runWithoutTextAnimations(block: () -> Unit) {
@@ -149,7 +193,7 @@ class WriterEditText @JvmOverloads constructor(
                 if (before > 1 || count > 1) {
                     needsDelayedIndentFullRebuild = true
                 }
-                typingAnimationController?.onTextChanged(s, start, before, count)
+                typingAnimationController?.onTextChanged(start, count)
             }
 
             override fun afterTextChanged(s: Editable?) {
@@ -206,9 +250,35 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (controllersReady) {
+            velocityTracker?.addMovement(event)
             when (event.actionMasked) {
-                MotionEvent.ACTION_MOVE -> markEditorScrolling()
+                MotionEvent.ACTION_DOWN -> {
+                    flingScroller.forceFinished(true)
+                    recycleVelocityTracker()
+                    velocityTracker = VelocityTracker.obtain().also { it.addMovement(event) }
+                    lastTouchY = event.y
+                    flingDragStarted = false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (abs(event.y - lastTouchY) > touchSlop) {
+                        flingDragStarted = true
+                        markEditorScrolling()
+                    }
+                    lastTouchY = event.y
+                }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (event.actionMasked == MotionEvent.ACTION_UP && flingDragStarted) {
+                        velocityTracker?.let { tracker ->
+                            tracker.addMovement(event)
+                            tracker.computeCurrentVelocity(1000, maximumFlingVelocity.toFloat())
+                            val velocityY = tracker.yVelocity
+                            if (abs(velocityY) >= minimumFlingVelocity) {
+                                startEditorFling(velocityY)
+                            }
+                        }
+                    }
+                    recycleVelocityTracker()
+                    flingDragStarted = false
                     if (isEditorScrolling) {
                         removeCallbacks(scrollIdleRunnable)
                         postDelayed(scrollIdleRunnable, scrollIdleDelayMs)
@@ -219,10 +289,41 @@ class WriterEditText @JvmOverloads constructor(
         return super.onTouchEvent(event)
     }
 
+    override fun onTextContextMenuItem(id: Int): Boolean {
+        return if (id == android.R.id.paste || id == android.R.id.pasteAsPlainText) {
+            var handled = false
+            runWithoutTextAnimations {
+                handled = super.onTextContextMenuItem(id)
+            }
+            handled
+        } else {
+            super.onTextContextMenuItem(id)
+        }
+    }
+
+    override fun computeScroll() {
+        super.computeScroll()
+        if (!controllersReady) return
+        if (!flingScroller.computeScrollOffset()) return
+
+        val maxScrollY = maxEditorScrollY()
+        val nextY = flingScroller.currY.coerceIn(0, maxScrollY)
+        if (nextY != flingScroller.currY) {
+            flingScroller.forceFinished(true)
+        }
+        if (nextY != scrollY) {
+            scrollTo(scrollX, nextY)
+            markEditorScrolling()
+        }
+        postInvalidateOnAnimation()
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         if (!controllersReady) return
         removeCallbacks(scrollIdleRunnable)
+        flingScroller.forceFinished(true)
+        recycleVelocityTracker()
         renderLayer?.onDetachedFromWindow()
         typingAnimationController?.onDetachedFromWindow()
         animationRuntime?.clear()

@@ -284,18 +284,31 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
                     has_errors = true;
                 }
-                if content.contains("SmoothCursor {") || content.contains("id: cursorOverlay") {
-                    eprintln!("{}: Stable editor mode must not instantiate SmoothCursor overlay", file_name);
-                    has_errors = true;
-                }
-                if !content.contains("cursorVisible: activeFocus && enabled") {
-                    eprintln!("{}: Stable editor mode must use the native Qt cursor", file_name);
-                    has_errors = true;
-                }
-                if !content.contains("cursorDelegate: Rectangle")
-                    || !content.contains("color: editorArea.color")
+                if !content.contains("SmoothCursor {")
+                    || !content.contains("overlayItem: paperBg")
+                    || !content.contains("isScrolling: editorScroll.editorIsScrolling")
                 {
-                    eprintln!("{}: Editor cursor delegate must use the same visible color as the TextArea", file_name);
+                    eprintln!("{}: Stable editor mode must use an isolated SmoothCursor overlay", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("cursorDelegate: Item {}") {
+                    eprintln!("{}: Stable editor mode must hide the native Qt cursor behind SmoothCursor", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true")
+                    || !content.contains("typingAnimationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true")
+                    || !content.contains("cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160")
+                    || !content.contains("typingAnimationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 220")
+                {
+                    eprintln!("{}: SmoothCursor settings must be driven by settingsBackend", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("textAnimationsSuppressed: editorController.isLoadingChapter")
+                    || !content.contains("editorController.isApplyingFormat")
+                    || !content.contains("editorController.isApplyingSettings")
+                    || !content.contains("smoothCursorOverlay.suppressNextTextAnimation()")
+                {
+                    eprintln!("{}: SmoothCursor text animation must be suppressed during load/format/settings/paste", file_name);
                     has_errors = true;
                 }
                 if content.contains("#606470") {
@@ -330,18 +343,26 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     );
                     has_errors = true;
                 }
-                if !content.contains("targetTextArea.leftPadding")
-                    || !content.contains("targetTextArea.topPadding")
-                    || !content.contains("targetTextArea.bottomPadding")
-                {
-                    eprintln!(
-                        "{}: SmoothCursor must position against TextArea padding",
-                        file_name
-                    );
-                    has_errors = true;
-                }
                 if !content.contains("targetTextArea.mapToItem(overlayItem || parent") {
                     eprintln!("{}: SmoothCursor must map TextArea cursor coordinates into overlay coordinates", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("textAnimationsSuppressed")
+                    || !content.contains("root.isScrolling || root.textAnimationsSuppressed")
+                    || !content.contains("suppressNextTextAnimation")
+                    || !content.contains("inputMethodComposing")
+                    || !content.contains("addedText.length <= 3")
+                    || !content.contains("deletedText.length <= 3")
+                {
+                    eprintln!("{}: SmoothCursor must suppress cursor birth animations during scroll, composing, and bulk text changes", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("cursorBirthAnimationsModel")
+                    || !content.contains("appendCursorBirthAnimation")
+                    || !content.contains("endXPos")
+                    || !content.contains("endYPos")
+                {
+                    eprintln!("{}: SmoothCursor text animation must use cursor birth animation semantics", file_name);
                     has_errors = true;
                 }
             }

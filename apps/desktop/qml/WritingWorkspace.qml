@@ -647,10 +647,10 @@ Rectangle {
 
                         Component.onCompleted: {
                             if (contentItem && contentItem.maximumFlickVelocity !== undefined) {
-                                contentItem.maximumFlickVelocity = 2200;
+                                contentItem.maximumFlickVelocity = 4200;
                             }
                             if (contentItem && contentItem.flickDeceleration !== undefined) {
-                                contentItem.flickDeceleration = 9000;
+                                contentItem.flickDeceleration = 4500;
                             }
                         }
 
@@ -680,7 +680,7 @@ Rectangle {
                             implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
 
                             cursorVisible: activeFocus && enabled
-                            cursorDelegate: Item {} // 隐藏原生光标，使用 SmoothCursor
+                            cursorDelegate: Item {} // Hide native cursor; SmoothCursor owns the visible cursor.
 
                             text: ""
 
@@ -690,17 +690,25 @@ Rectangle {
                                     (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
                                     editorController.markPotentialExplicitClear();
                                 }
+                                if ((event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) ||
+                                    (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
+                                    smoothCursorOverlay.suppressNextTextAnimation();
+                                }
                             }
                         }
                     }
 
                     SmoothCursor {
+                        id: smoothCursorOverlay
                         targetTextArea: editorArea
                         overlayItem: paperBg
                         dt: root.dt
                         isScrolling: editorScroll.editorIsScrolling
-                        smoothCursorEnabled: true
-                        typingAnimationEnabled: true
+                        textAnimationsSuppressed: editorController.isLoadingChapter || editorController.isApplyingFormat || editorController.isApplyingSettings
+                        smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
+                        typingAnimationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
+                        cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
+                        typingAnimationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 220
                     }
                 }
 

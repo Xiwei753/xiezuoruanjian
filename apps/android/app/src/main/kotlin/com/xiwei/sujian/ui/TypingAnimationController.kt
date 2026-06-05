@@ -52,8 +52,6 @@ class TypingAnimationController(
 
     private var isPasteOrDelete = false
 
-    private val MAX_ANIMATIONS = 24
-
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         typingAnimationEnabled = enabled
         typingAnimationDurationMs = durationMs
@@ -85,14 +83,11 @@ class TypingAnimationController(
             }
         }
 
-        if (count > 0 && after == 0) {
-            isPasteOrDelete = true
-        } else if (after > 100) {
-            isPasteOrDelete = true
-        } else if (count > 0 && !matchesComposing) {
-            isPasteOrDelete = true
-        } else {
-            isPasteOrDelete = false
+        isPasteOrDelete = when {
+            after > 3 -> true
+            count > 3 -> true
+            count > 0 && after > 0 && !matchesComposing -> true
+            else -> false
         }
 
         if ((after > 0 || count > 0) && editText.layout != null) {
@@ -101,13 +96,16 @@ class TypingAnimationController(
             cursorBeforeY = editText.layout.getLineBaseline(line).toFloat()
         }
 
-        if (count > 0 && after == 0 && typingAnimationEnabled && typingAnimationDurationMs > 0 && s != null) {
+        if (count > 0 && count <= 3 && after == 0 && !matchesComposing && typingAnimationEnabled && typingAnimationDurationMs > 0 && s != null) {
             val deletedText = s.subSequence(start, start + count).toString()
+            if (deletedText.contains('\n') || deletedText.contains('\r')) return
             val anim = OverlayAnim(
                 insertedStart = start,
                 insertedText = deletedText,
                 startX = cursorBeforeX,
                 startY = cursorBeforeY,
+                endX = cursorBeforeX,
+                endY = cursorBeforeY,
                 progress = 0f,
                 startTimeNanos = -1L,
                 durationMs = typingAnimationDurationMs,
@@ -122,7 +120,7 @@ class TypingAnimationController(
         }
     }
 
-    fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+    fun onTextChanged(start: Int, count: Int) {
         if (isSuppressAnimations || isScrollAnimationsSuppressed) {
             lastAddedStart = -1
             lastAddedCount = 0
@@ -153,13 +151,17 @@ class TypingAnimationController(
              return
         }
 
-        if (typingAnimationEnabled && lastAddedCount > 0 && lastAddedStart >= 0) {
+        if (typingAnimationEnabled && lastAddedCount in 1..3 && lastAddedStart >= 0) {
             val start = lastAddedStart
-            val animLimit = kotlin.math.min(MAX_ANIMATIONS, lastAddedCount)
-            val end = kotlin.math.min(start + animLimit, editable.length)
+            val end = kotlin.math.min(start + lastAddedCount, editable.length)
 
             if (end > start && typingAnimationDurationMs > 0) {
                 val insertedText = editable.subSequence(start, end).toString()
+                if (insertedText.contains('\n') || insertedText.contains('\r')) {
+                    lastAddedStart = -1
+                    lastAddedCount = 0
+                    return
+                }
 
                 val hiddenSpan = android.text.style.ForegroundColorSpan(android.graphics.Color.TRANSPARENT)
                 editText.isUpdatingSpanWrapper = true

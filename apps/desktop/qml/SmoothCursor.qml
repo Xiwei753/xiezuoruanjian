@@ -13,6 +13,8 @@ Item {
     property bool smoothCursorEnabled: true
     property bool typingAnimationEnabled: true
     property bool isScrolling: false
+    property bool textAnimationsSuppressed: false
+    property bool suppressNextTextChange: false
     property int cursorAnimationDuration: 80
     property int typingAnimationDuration: 100
     property int lastTextLength: targetTextArea ? targetTextArea.length : 0
@@ -26,7 +28,7 @@ Item {
     property bool hasSelection: targetTextArea ? (targetTextArea.selectedText.length > 0) : false
 
     ListModel {
-        id: typingParticlesModel
+        id: cursorBirthAnimationsModel
     }
 
     function clampCursorHeight(rectHeight) {
@@ -88,6 +90,34 @@ Item {
         }
     }
 
+    function textAnimationSuppressed() {
+        return root.isScrolling || root.textAnimationsSuppressed;
+    }
+
+    function suppressNextTextAnimation() {
+        root.suppressNextTextChange = true;
+        if (cursorBirthAnimationsModel.count > 0) cursorBirthAnimationsModel.clear();
+    }
+
+    function clampedBirthPoint(startRect, endRect, isDeletion) {
+        var maxDistance = 12;
+        var sx = startRect.x;
+        var sy = startRect.y;
+        var ex = endRect.x;
+        var ey = endRect.y;
+        var dx = ex - sx;
+        var dy = ey - sy;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > maxDistance) {
+            sx = ex - (dx / dist) * maxDistance;
+            sy = ey - (dy / dist) * maxDistance;
+        } else if (dist < 1) {
+            sx = ex + (isDeletion ? maxDistance : -maxDistance * 0.65);
+            sy = ey;
+        }
+        return { "x": sx, "y": sy };
+    }
+
     function commonPrefixLength(a, b) {
         var limit = Math.min(a.length, b.length);
         var i = 0;
@@ -102,15 +132,17 @@ Item {
         return i;
     }
 
-    function appendTypingParticle(charText, position, isDeletion) {
-        if (root.isScrolling) return;
+    function appendCursorBirthAnimation(charText, startRect, endRect, isDeletion) {
+        if (textAnimationSuppressed()) return;
         if (!charText || charText === "\n" || charText === "\r") return;
-        if (typingParticlesModel.count > 40) typingParticlesModel.remove(0, typingParticlesModel.count - 40);
-        var rect = textPositionRect(position);
-        typingParticlesModel.append({
+        if (cursorBirthAnimationsModel.count > 40) cursorBirthAnimationsModel.remove(0, cursorBirthAnimationsModel.count - 40);
+        var birthPoint = clampedBirthPoint(startRect, endRect, isDeletion);
+        cursorBirthAnimationsModel.append({
             charText: charText,
-            startXPos: rect.x,
-            startYPos: rect.y + rect.height * 0.75,
+            startXPos: birthPoint.x,
+            startYPos: birthPoint.y + startRect.height * 0.75,
+            endXPos: endRect.x,
+            endYPos: endRect.y + endRect.height * 0.75,
             createdAt: Date.now(),
             isDeletion: isDeletion
         });
@@ -134,8 +166,8 @@ Item {
     onIsScrollingChanged: {
         if (isScrolling) {
             scrollDebounceTimer.stop();
-            if (typingParticlesModel.count > 0) {
-                typingParticlesModel.clear();
+            if (cursorBirthAnimationsModel.count > 0) {
+                cursorBirthAnimationsModel.clear();
             }
         } else {
             scrollDebounceTimer.restart();
@@ -148,26 +180,36 @@ Item {
             updateCursorRect();
         }
         function onTextChanged() {
+            var previousCursorRect = { "x": cursorRect.x, "y": cursorRect.y, "height": cursorRect.height };
             var len = root.targetTextArea ? root.targetTextArea.length : 0;
             var newText = root.targetTextArea ? root.targetTextArea.text : "";
             var isComposing = root.targetTextArea && root.targetTextArea.inputMethodComposing;
-            
-            if (root.typingAnimationEnabled && !root.isScrolling && !isComposing && root.targetTextArea && root.targetTextArea.activeFocus) {
+
+            if (root.suppressNextTextChange) {
+                root.suppressNextTextChange = false;
+                root.lastTextLength = len;
+                root.lastTextString = newText;
+                return;
+            }
+
+            if (root.typingAnimationEnabled && !textAnimationSuppressed() && !isComposing && root.targetTextArea && root.targetTextArea.activeFocus) {
                 var prefix = commonPrefixLength(root.lastTextString, newText);
                 var suffix = commonSuffixLength(root.lastTextString, newText, prefix);
                 var addedText = newText.substring(prefix, newText.length - suffix);
                 var deletedText = root.lastTextString.substring(prefix, root.lastTextString.length - suffix);
 
-                // 只对短输入生成粒子，避开大段粘贴、章节加载、一键排版
                 if (addedText.length > 0 && addedText.length <= 3 && deletedText.length === 0) {
                     for (var addIndex = 0; addIndex < addedText.length; addIndex++) {
-                        appendTypingParticle(addedText.charAt(addIndex), prefix + addIndex, false);
+                        appendCursorBirthAnimation(addedText.charAt(addIndex), previousCursorRect, textPositionRect(prefix + addIndex), false);
                     }
                 } else if (deletedText.length > 0 && deletedText.length <= 3 && addedText.length === 0) {
+                    var deleteTargetRect = textPositionRect(Math.min(prefix, newText.length));
                     for (var delIndex = 0; delIndex < deletedText.length; delIndex++) {
-                        appendTypingParticle(deletedText.charAt(delIndex), Math.min(prefix, newText.length), true);
+                        appendCursorBirthAnimation(deletedText.charAt(delIndex), previousCursorRect, deleteTargetRect, true);
                     }
                 }
+            } else if (textAnimationSuppressed() && cursorBirthAnimationsModel.count > 0) {
+                cursorBirthAnimationsModel.clear();
             }
             root.lastTextLength = len;
             root.lastTextString = newText;
@@ -215,14 +257,14 @@ Item {
         z: 2
 
         Repeater {
-            model: typingParticlesModel
+            model: cursorBirthAnimationsModel
             delegate: Text {
                 text: charText
                 color: root.targetTextArea ? root.targetTextArea.color : (root.dt ? root.dt.editorText : "#E2E2E5")
                 x: startXPos
                 y: startYPos
-                opacity: 1.0
-                scale: 1.0
+                opacity: isDeletion ? 1.0 : 0.0
+                scale: isDeletion ? 1.0 : 0.82
 
                 Component.onCompleted: {
                     if (root.targetTextArea) {
@@ -235,26 +277,44 @@ Item {
                     id: animGroup
                     NumberAnimation {
                         target: parent
-                        property: "opacity"
-                        from: isDeletion ? 1.0 : 0.4
-                        to: 0.0
-                        duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
-                        easing.type: Easing.OutSine
+                        property: "x"
+                        from: startXPos
+                        to: endXPos
+                        duration: root.typingAnimationDuration
+                        easing.type: Easing.OutCubic
                     }
                     NumberAnimation {
                         target: parent
                         property: "y"
                         from: startYPos
-                        to: isDeletion ? startYPos - 10 : startYPos
-                        duration: isDeletion ? root.typingAnimationDuration * 2.5 : root.typingAnimationDuration * 1.5
-                        easing.type: Easing.OutSine
+                        to: endYPos
+                        duration: root.typingAnimationDuration
+                        easing.type: Easing.OutCubic
+                    }
+                    SequentialAnimation {
+                        NumberAnimation {
+                            target: parent
+                            property: "opacity"
+                            from: isDeletion ? 1.0 : 0.0
+                            to: isDeletion ? 0.0 : 0.9
+                            duration: isDeletion ? root.typingAnimationDuration : Math.max(40, root.typingAnimationDuration * 0.35)
+                            easing.type: Easing.OutSine
+                        }
+                        NumberAnimation {
+                            target: parent
+                            property: "opacity"
+                            from: isDeletion ? 0.0 : 0.9
+                            to: 0.0
+                            duration: isDeletion ? 1 : Math.max(40, root.typingAnimationDuration * 0.65)
+                            easing.type: Easing.OutSine
+                        }
                     }
                     NumberAnimation {
                         target: parent
                         property: "scale"
-                        from: 1.0
-                        to: isDeletion ? 1.0 : 1.5
-                        duration: root.typingAnimationDuration * 1.5
+                        from: isDeletion ? 1.0 : 0.82
+                        to: isDeletion ? 0.62 : 1.0
+                        duration: root.typingAnimationDuration
                         easing.type: Easing.OutSine
                     }
                 }
@@ -266,15 +326,15 @@ Item {
         id: garbageCollector
         interval: 500
         repeat: true
-        running: typingParticlesModel.count > 0 && !root.isScrolling
+        running: cursorBirthAnimationsModel.count > 0 && !root.isScrolling
         onTriggered: {
             var now = Date.now();
             var i = 0;
-            while (i < typingParticlesModel.count) {
-                var item = typingParticlesModel.get(i);
-                var dur = item.isDeletion ? (root.typingAnimationDuration * 2.5 + 100) : (root.typingAnimationDuration * 1.5 + 100);
+            while (i < cursorBirthAnimationsModel.count) {
+                var item = cursorBirthAnimationsModel.get(i);
+                var dur = root.typingAnimationDuration + 150;
                 if (now - item.createdAt >= dur) {
-                    typingParticlesModel.remove(i, 1);
+                    cursorBirthAnimationsModel.remove(i, 1);
                 } else {
                     i++;
                 }

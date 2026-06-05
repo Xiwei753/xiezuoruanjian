@@ -29,6 +29,8 @@ data class OverlayAnim(
     val insertedText: String,
     val startX: Float,
     val startY: Float,
+    val endX: Float = -1f,
+    val endY: Float = -1f,
     var progress: Float = 0f,
     var startTimeNanos: Long = -1L,
     val durationMs: Long,
@@ -190,26 +192,30 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
             val interpolatedProgress = 1f - (1f - anim.progress) * (1f - anim.progress)
 
             if (anim.isDeletion) {
-                // Determine fixed position based on cursor when deletion happened
-                val destX = anim.startX
-                val destY = anim.startY
+                val destX = if (anim.endX >= 0f) anim.endX else anim.startX
+                val destY = if (anim.endY >= 0f) anim.endY else anim.startY
 
-                val currentY = destY - (40f * interpolatedProgress) // Float upwards
-                paint.alpha = (originalAlpha * (1f - interpolatedProgress)).toInt().coerceIn(0, 255) // Fade out
+                val currentX = anim.startX + (destX - anim.startX) * interpolatedProgress
+                val currentY = anim.startY + (destY - anim.startY) * interpolatedProgress
+                val scale = 1f - 0.38f * interpolatedProgress
+                paint.alpha = (originalAlpha * (1f - interpolatedProgress)).toInt().coerceIn(0, 255)
 
-                var offsetX = destX
+                var offsetX = 0f
                 for (idx in anim.codePoints.indices) {
                     val cp = anim.codePoints[idx]
                     val isNewline = (cp == '\n'.code || cp == '\r'.code)
                     if (isNewline) continue
 
                     val textToDraw = anim.cachedStrings[idx]
+                    canvas.save()
+                    canvas.scale(scale, scale, currentX + padX, currentY + padY)
                     canvas.drawText(
                         textToDraw,
-                        offsetX + padX,
+                        currentX + offsetX + padX,
                         currentY + padY,
                         paint
                     )
+                    canvas.restore()
                     offsetX += paint.measureText(textToDraw)
                     drawnCodepoints++
                 }
@@ -242,7 +248,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
                         val dx = destX - sX
                         val dy = destY - sY
                         val distSq = dx * dx + dy * dy
-                        val maxDist = 80f
+                        val maxDist = 10f
                         if (distSq > maxDist * maxDist) {
                             val dist = sqrt(distSq.toDouble()).toFloat()
                             sX = destX - (dx / dist) * maxDist
