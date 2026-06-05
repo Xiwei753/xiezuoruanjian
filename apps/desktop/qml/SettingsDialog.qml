@@ -140,7 +140,7 @@ Dialog {
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("打字动画")
-                    description: qsTr("输入时显示动态效果")
+                    description: qsTr("使用 hidden-range/reveal，避免重影")
                     clickable: true
                     onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
                     ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }

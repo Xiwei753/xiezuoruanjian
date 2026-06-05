@@ -633,14 +633,7 @@ Rectangle {
                     
                     ScrollView {
                         id: editorScroll
-                        readonly property bool editorIsScrolling: wheelKineticTimer.running || ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
-                        property real wheelVelocityY: 0
-                        property real wheelLastTickMs: 0
-                        readonly property real wheelAngleLinesPerStep: 3.0
-                        readonly property real wheelVelocityGain: 42.0
-                        readonly property real wheelDecayPerSecond: 0.045
-                        readonly property real wheelMaxVelocityY: Math.max(availableHeight * 7.0, 2400)
-                        readonly property real wheelStopVelocityY: Math.max(editorArea.font.pixelSize * 0.35, 6)
+                        readonly property bool editorIsScrolling: editorWheelScroller.active || ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
                         anchors.fill: paperBg
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
@@ -653,109 +646,6 @@ Rectangle {
                             anchors.top: editorScroll.top
                             anchors.bottom: editorScroll.bottom
                             anchors.right: editorScroll.right
-                        }
-
-                        Component.onCompleted: {
-                            if (contentItem && contentItem.maximumFlickVelocity !== undefined) {
-                                contentItem.maximumFlickVelocity = 4200;
-                            }
-                            if (contentItem && contentItem.flickDeceleration !== undefined) {
-                                contentItem.flickDeceleration = 4500;
-                            }
-                        }
-
-                        function maxContentY() {
-                            if (!contentItem) return 0;
-                            return Math.max(0, contentItem.contentHeight - contentItem.height);
-                        }
-
-                        function clampContentY(value) {
-                            return Math.max(0, Math.min(maxContentY(), value));
-                        }
-
-                        function wheelLineHeight() {
-                            var rectHeight = editorArea.cursorRectangle ? editorArea.cursorRectangle.height : 0;
-                            return Math.max(rectHeight || 0, editorArea.font.pixelSize * 1.35, 18);
-                        }
-
-                        function wheelDeltaPixels(event) {
-                            var pixelY = event.pixelDelta ? event.pixelDelta.y : 0;
-                            if (Math.abs(pixelY) > 0) return -pixelY;
-                            var angleY = event.angleDelta ? event.angleDelta.y : 0;
-                            if (Math.abs(angleY) > 0) return -(angleY / 120.0) * wheelLineHeight() * wheelAngleLinesPerStep;
-                            return 0;
-                        }
-
-                        function applyWheelImpulse(deltaY) {
-                            if (!contentItem || deltaY === 0 || maxContentY() <= 0) return false;
-                            var currentY = contentItem.contentY;
-                            if ((currentY <= 0 && deltaY < 0) || (currentY >= maxContentY() && deltaY > 0)) {
-                                wheelVelocityY = 0;
-                                wheelKineticTimer.stop();
-                                return false;
-                            }
-
-                            if (wheelVelocityY * deltaY < 0) {
-                                wheelVelocityY = 0;
-                            }
-
-                            wheelVelocityY = Math.max(-wheelMaxVelocityY, Math.min(wheelMaxVelocityY, wheelVelocityY + deltaY * wheelVelocityGain));
-                            wheelLastTickMs = Date.now();
-                            if (!wheelKineticTimer.running) {
-                                wheelKineticTimer.start();
-                            }
-                            return true;
-                        }
-
-                        Timer {
-                            id: wheelKineticTimer
-                            interval: 16
-                            repeat: true
-                            onTriggered: {
-                                if (!editorScroll.contentItem) {
-                                    editorScroll.wheelVelocityY = 0;
-                                    wheelKineticTimer.stop();
-                                    return;
-                                }
-
-                                var now = Date.now();
-                                var dtSeconds = Math.max(0.001, Math.min((now - editorScroll.wheelLastTickMs) / 1000.0, 0.05));
-                                editorScroll.wheelLastTickMs = now;
-
-                                var oldY = editorScroll.contentItem.contentY;
-                                var newY = editorScroll.clampContentY(oldY + editorScroll.wheelVelocityY * dtSeconds);
-                                editorScroll.contentItem.contentY = newY;
-
-                                if (newY === oldY || newY <= 0 || newY >= editorScroll.maxContentY()) {
-                                    editorScroll.wheelVelocityY = 0;
-                                    wheelKineticTimer.stop();
-                                    return;
-                                }
-
-                                editorScroll.wheelVelocityY *= Math.pow(editorScroll.wheelDecayPerSecond, dtSeconds);
-                                if (Math.abs(editorScroll.wheelVelocityY) < editorScroll.wheelStopVelocityY) {
-                                    editorScroll.wheelVelocityY = 0;
-                                    wheelKineticTimer.stop();
-                                }
-                            }
-                        }
-
-                        WheelHandler {
-                            id: editorWheelHandler
-                            target: null
-                            orientation: Qt.Vertical
-                            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                            onWheel: function(event) {
-                                var deltaY = editorScroll.wheelDeltaPixels(event);
-                                if (deltaY === 0) {
-                                    event.accepted = false;
-                                    return;
-                                }
-                                event.accepted = editorScroll.applyWheelImpulse(deltaY);
-                                if (event.accepted) {
-                                    smoothCursorOverlay.snapNextCursorUpdate();
-                                }
-                            }
                         }
 
                         TextArea {
@@ -797,7 +687,7 @@ Rectangle {
                                 }
                                 if ((event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) ||
                                     (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
-                                    smoothCursorOverlay.suppressNextTextAnimation();
+                                    smoothCursorOverlay.snapNextCursorUpdate();
                                 }
                             }
 
@@ -811,17 +701,34 @@ Rectangle {
                         }
                     }
 
+                    EditorWheelScroller {
+                        id: editorWheelScroller
+                        anchors.fill: editorScroll
+                        scrollView: editorScroll
+                        textArea: editorArea
+                        onScrollActivity: smoothCursorOverlay.snapNextCursorUpdate()
+                    }
+
+                    EditorTypingAnimator {
+                        id: editorTypingAnimator
+                        anchors.fill: paperBg
+                        targetTextArea: editorArea
+                        documentHandler: editorController.docHandler
+                        overlayItem: paperBg
+                        dt: root.dt
+                        animationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
+                        animationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 160
+                        suppressed: editorController.isLoadingChapter || editorController.isApplyingFormat || editorController.isApplyingSettings
+                    }
+
                     SmoothCursor {
                         id: smoothCursorOverlay
                         targetTextArea: editorArea
                         overlayItem: paperBg
                         dt: root.dt
                         isScrolling: editorScroll.editorIsScrolling
-                        textAnimationsSuppressed: editorController.isLoadingChapter || editorController.isApplyingFormat || editorController.isApplyingSettings
                         smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                        typingAnimationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
                         cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
-                        typingAnimationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 220
                     }
                 }
 

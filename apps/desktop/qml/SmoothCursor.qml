@@ -15,12 +15,6 @@ Item {
     property int cursorAnimationDuration: 80
     property real fallbackCursorHeight: targetTextArea ? Math.max(targetTextArea.font.pixelSize * 1.2, 18) : 18
 
-    // Kept for settings compatibility. Linux TextArea has no safe hidden-range path,
-    // so ghost text animation is intentionally disabled to avoid duplicate glyphs.
-    property bool typingAnimationEnabled: false
-    property bool textAnimationsSuppressed: false
-    property int typingAnimationDuration: 100
-
     property bool hasSelection: targetTextArea ? (targetTextArea.selectedText.length > 0) : false
     property bool snapNextUpdate: true
     property real smoothUntilMs: 0
@@ -73,10 +67,6 @@ Item {
     function snapNextCursorUpdate() {
         root.snapNextUpdate = true;
         root.smoothUntilMs = 0;
-    }
-
-    function suppressNextTextAnimation() {
-        snapNextCursorUpdate();
     }
 
     function updateCursorRect(forceSnap) {

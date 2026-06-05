@@ -284,21 +284,30 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
                     has_errors = true;
                 }
-                if !content.contains("WheelHandler {")
-                    || !content.contains("pixelDelta")
-                    || !content.contains("angleDelta")
-                    || !content.contains("wheelVelocityY")
-                    || !content.contains("wheelVelocityGain")
-                    || !content.contains("wheelDecayPerSecond")
-                    || !content.contains("wheelKineticTimer")
-                    || !content.contains("applyWheelImpulse")
-                    || !content.contains("Math.pow(editorScroll.wheelDecayPerSecond, dtSeconds)")
+                if !content.contains("EditorWheelScroller {")
+                    || !content.contains("id: editorWheelScroller")
+                    || !content.contains("isScrolling: editorScroll.editorIsScrolling")
+                    || !content.contains("editorWheelScroller.active")
                 {
-                    eprintln!("{}: Editor wheel scrolling must use velocity-integrated kinetic scrolling", file_name);
+                    eprintln!("{}: Stable editor mode must delegate wheel physics to EditorWheelScroller", file_name);
                     has_errors = true;
                 }
-                if content.contains("id: smoothWheelAnim") {
-                    eprintln!("{}: Editor wheel scrolling must not fall back to fixed-duration contentY tweening", file_name);
+                if content.contains("id: smoothWheelAnim")
+                    || content.contains("wheelVelocityGain")
+                    || content.contains("wheelDecayPerSecond")
+                    || content.contains("maximumFlickVelocity")
+                    || content.contains("flickDeceleration")
+                {
+                    eprintln!("{}: WritingWorkspace must not own editor wheel physics or hard flick tuning", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("EditorTypingAnimator {")
+                    || !content.contains("documentHandler: editorController.docHandler")
+                    || !content.contains("animationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true")
+                    || !content.contains("animationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 160")
+                    || !content.contains("suppressed: editorController.isLoadingChapter")
+                {
+                    eprintln!("{}: Stable editor mode must delegate typing animation to EditorTypingAnimator", file_name);
                     has_errors = true;
                 }
                 if !content.contains("SmoothCursor {")
@@ -313,19 +322,19 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     has_errors = true;
                 }
                 if !content.contains("smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true")
-                    || !content.contains("typingAnimationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true")
                     || !content.contains("cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160")
-                    || !content.contains("typingAnimationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 220")
                 {
                     eprintln!("{}: SmoothCursor settings must be driven by settingsBackend", file_name);
                     has_errors = true;
                 }
-                if !content.contains("textAnimationsSuppressed: editorController.isLoadingChapter")
-                    || !content.contains("editorController.isApplyingFormat")
-                    || !content.contains("editorController.isApplyingSettings")
-                    || !content.contains("smoothCursorOverlay.suppressNextTextAnimation()")
+                if content.contains("typingAnimationEnabled:")
+                    || content.contains("typingAnimationDuration:")
+                    || content.contains("textAnimationsSuppressed:")
+                    || content.contains("suppressNextTextAnimation")
+                    || content.contains("id: typingLayer")
+                    || content.contains("cursorBirthAnimationsModel")
                 {
-                    eprintln!("{}: SmoothCursor text animation must be suppressed during load/format/settings/paste", file_name);
+                    eprintln!("{}: Linux typing animation must not be wired into SmoothCursor", file_name);
                     has_errors = true;
                 }
                 if content.contains("#606470") {
@@ -371,8 +380,35 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || content.contains("cursorBirthAnimationsModel")
                     || content.contains("appendCursorBirthAnimation")
                     || content.contains("inputMethodComposing")
+                    || content.contains("typingAnimationEnabled")
+                    || content.contains("typingAnimationDuration")
+                    || content.contains("textAnimationsSuppressed")
+                    || content.contains("suppressNextTextAnimation")
                 {
                     eprintln!("{}: SmoothCursor must not own Linux ghost text animation overlay", file_name);
+                    has_errors = true;
+                }
+            }
+
+            if file_name == "EditorWheelScroller.qml" {
+                if !content.contains("WheelHandler {")
+                    || !content.contains("pixelDelta")
+                    || !content.contains("angleDelta")
+                    || !content.contains("wheelVelocityY")
+                    || !content.contains("velocityGain")
+                    || !content.contains("decayPerSecond")
+                    || !content.contains("wheelKineticTimer")
+                    || !content.contains("applyWheelImpulse")
+                    || !content.contains("Math.pow(root.decayPerSecond, dtSeconds)")
+                {
+                    eprintln!("{}: Editor wheel scrolling must use velocity-integrated kinetic scrolling", file_name);
+                    has_errors = true;
+                }
+                if content.contains("id: smoothWheelAnim")
+                    || content.contains("maximumFlickVelocity")
+                    || content.contains("flickDeceleration")
+                {
+                    eprintln!("{}: Editor wheel scrolling must not fall back to fixed-duration tweening or Flickable hard tuning", file_name);
                     has_errors = true;
                 }
             }
@@ -396,6 +432,28 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
                 if !content.contains("textPrimary") || !content.contains("textSecondary") {
                     eprintln!("{}: Missing explicit DesignTokens text colors", file_name);
+                    has_errors = true;
+                }
+            }
+
+            if file_name == "EditorTypingAnimator.qml" {
+                if !content.contains("ListModel { id: typingAnimations }")
+                    || !content.contains("positionToRectangle")
+                    || !content.contains("hide_text_range")
+                    || !content.contains("show_text_range")
+                    || !content.contains("clear_hidden_text_ranges")
+                    || !content.contains("commonPrefixLength")
+                    || !content.contains("commonSuffixLength")
+                    || !content.contains("NumberAnimation on progress")
+                {
+                    eprintln!("{}: Typing animation must use hidden-range reveal instead of ghost text overlay", file_name);
+                    has_errors = true;
+                }
+                if content.contains("targetTextArea.text =")
+                    || content.contains("textFormat: TextEdit.RichText")
+                    || content.contains("cursorBirthAnimationsModel")
+                {
+                    eprintln!("{}: Typing animation must not mutate editor text or restore old ghost implementation", file_name);
                     has_errors = true;
                 }
             }
