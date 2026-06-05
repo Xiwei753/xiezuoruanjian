@@ -99,23 +99,52 @@ Item {
         if (cursorBirthAnimationsModel.count > 0) cursorBirthAnimationsModel.clear();
     }
 
-    function clampedBirthPoint(startRect, endRect, isDeletion) {
-        var maxDistance = 12;
-        var sx = startRect.x;
-        var sy = startRect.y;
-        var ex = endRect.x;
-        var ey = endRect.y;
-        var dx = ex - sx;
-        var dy = ey - sy;
-        var dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > maxDistance) {
-            sx = ex - (dx / dist) * maxDistance;
-            sy = ey - (dy / dist) * maxDistance;
-        } else if (dist < 1) {
-            sx = ex + (isDeletion ? maxDistance : -maxDistance * 0.65);
-            sy = ey;
+    function calculateAnimationPoints(startRect, endRect, isDeletion) {
+        var maxDistance = 24;
+        var sx, sy, ex, ey;
+
+        if (!isDeletion) {
+            sx = startRect.x;
+            sy = startRect.y;
+            ex = endRect.x;
+            ey = endRect.y;
+
+            var dx = ex - sx;
+            var dy = ey - sy;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > maxDistance) {
+                sx = ex - (dx / dist) * maxDistance;
+                sy = ey - (dy / dist) * maxDistance;
+            } else if (dist < 1) {
+                sx = ex + 4;
+                sy = ey;
+            }
+        } else {
+            sx = endRect.x;
+            sy = endRect.y;
+            ex = startRect.x;
+            ey = startRect.y;
+
+            var dx = ex - sx;
+            var dy = ey - sy;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist > maxDistance) {
+                ex = sx + (dx / dist) * maxDistance;
+                ey = sy + (dy / dist) * maxDistance;
+            } else if (dist < 1) {
+                ex = sx + 8;
+                ey = sy;
+            }
         }
-        return { "x": sx, "y": sy };
+
+        return {
+            "startX": sx,
+            "startY": sy + startRect.height * 0.75,
+            "endX": ex,
+            "endY": ey + endRect.height * 0.75
+        };
     }
 
     function commonPrefixLength(a, b) {
@@ -136,13 +165,13 @@ Item {
         if (textAnimationSuppressed()) return;
         if (!charText || charText === "\n" || charText === "\r") return;
         if (cursorBirthAnimationsModel.count > 40) cursorBirthAnimationsModel.remove(0, cursorBirthAnimationsModel.count - 40);
-        var birthPoint = clampedBirthPoint(startRect, endRect, isDeletion);
+        var points = calculateAnimationPoints(startRect, endRect, isDeletion);
         cursorBirthAnimationsModel.append({
             charText: charText,
-            startXPos: birthPoint.x,
-            startYPos: birthPoint.y + startRect.height * 0.75,
-            endXPos: endRect.x,
-            endYPos: endRect.y + endRect.height * 0.75,
+            startXPos: points.startX,
+            startYPos: points.startY,
+            endXPos: points.endX,
+            endYPos: points.endY,
             createdAt: Date.now(),
             isDeletion: isDeletion
         });
