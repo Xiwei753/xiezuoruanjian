@@ -239,6 +239,11 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         // 快速连续点击时：新 target 从当前 cursor 位置接管；startTimeNanos 重置；不堆积多个 cursor anim。
         invalidateCursorRectAt(currentCursorX, currentCursorTop, currentCursorBottom)
 
+        if (Math.abs(newTargetTop - currentCursorTop) > 5f) {
+            currentCursorTop = newTargetTop
+            currentCursorBottom = newTargetBottom
+        }
+
         startX = currentCursorX
         startY_top = currentCursorTop
         startY_bottom = currentCursorBottom
