@@ -49,6 +49,7 @@
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
+use std::cell::Cell;
 
 cpp! {{
     #include <QtCore/QVariant>
@@ -58,9 +59,20 @@ cpp! {{
     #include <QtGui/QTextBlockFormat>
     #include <QtGui/QTextCharFormat>
     #include <QtGui/QColor>
+    #include <QtCore/QSignalBlocker>
     #include <QtCore/QDebug>
     #include <algorithm>
 }}
+
+struct VisualFormatMutationScope<'a> {
+    handler: &'a DocumentHandler,
+}
+
+impl Drop for VisualFormatMutationScope<'_> {
+    fn drop(&mut self) {
+        self.handler.end_visual_format_mutation();
+    }
+}
 
 #[allow(dead_code)]
 #[derive(QObject, Default)]
@@ -71,11 +83,13 @@ pub struct DocumentHandler {
     line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY line_spacing_changed),
     text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY text_indent_changed),
     text_color: qt_property!(QString; READ text_color WRITE set_text_color NOTIFY text_color_changed),
+    visual_format_mutating: qt_property!(bool; READ visual_format_mutating NOTIFY visual_format_mutating_changed),
 
     document_changed: qt_signal!(),
     line_spacing_changed: qt_signal!(),
     text_indent_changed: qt_signal!(),
     text_color_changed: qt_signal!(),
+    visual_format_mutating_changed: qt_signal!(),
 
     apply_format: qt_method!(fn(&self)),
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -88,9 +102,26 @@ pub struct DocumentHandler {
     current_line_spacing: f32,
     current_text_indent: f32,
     current_text_color: QString,
+    visual_format_mutating_state: Cell<bool>,
 }
 
 impl DocumentHandler {
+    fn begin_visual_format_mutation(&self) -> Option<VisualFormatMutationScope<'_>> {
+        if self.visual_format_mutating_state.get() {
+            return None;
+        }
+        self.visual_format_mutating_state.set(true);
+        self.visual_format_mutating_changed();
+        Some(VisualFormatMutationScope { handler: self })
+    }
+
+    fn end_visual_format_mutation(&self) {
+        if !self.visual_format_mutating_state.replace(false) {
+            return;
+        }
+        self.visual_format_mutating_changed();
+    }
+
     fn document(&self) -> QVariant {
         self.current_doc.clone()
     }
@@ -125,6 +156,11 @@ impl DocumentHandler {
     fn text_color(&self) -> QString {
         self.current_text_color.clone()
     }
+
+    fn visual_format_mutating(&self) -> bool {
+        self.visual_format_mutating_state.get()
+    }
+
     fn set_text_color(&mut self, val: QString) {
         if self.current_text_color.to_string() != val.to_string() {
             self.current_text_color = val;
@@ -134,26 +170,24 @@ impl DocumentHandler {
     }
 
     fn apply_format(&self) {
-        // Re-entrancy guard via C++ static in the cpp block below.
         let doc_variant = self.current_doc.clone();
         let line_spacing = self.current_line_spacing;
         let indent = self.current_text_indent;
         let text_color = self.current_text_color.clone();
+        let Some(_visual_mutation) = self.begin_visual_format_mutation() else {
+            return;
+        };
 
         cpp!(unsafe [doc_variant as "QVariant", line_spacing as "float", indent as "float", text_color as "QString"] {
-            // Re-entrancy guard: prevent infinite loop where apply_format
-            // modifies QTextDocument, which triggers contentsChanged,
-            // which triggers textChanged in QML, which calls apply_format again.
-            static bool s_applying = false;
-            if (s_applying) return;
-            s_applying = true;
-
             QObject* obj = doc_variant.value<QObject*>();
-            if (!obj) { s_applying = false; return; }
+            if (!obj) return;
             QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
-            if (!qquick_doc) { s_applying = false; return; }
+            if (!qquick_doc) return;
             QTextDocument* doc = qquick_doc->textDocument();
-            if (!doc) { s_applying = false; return; }
+            if (!doc) return;
+
+            QSignalBlocker doc_signal_blocker(doc);
+            QSignalBlocker quick_doc_signal_blocker(qquick_doc);
 
             QTextCursor cursor(doc);
             cursor.beginEditBlock();
@@ -172,7 +206,6 @@ impl DocumentHandler {
             }
 
             cursor.endEditBlock();
-            s_applying = false;
         });
     }
 
@@ -192,6 +225,9 @@ impl DocumentHandler {
 
     fn hide_text_range(&self, start: i32, length: i32) {
         let doc_variant = self.current_doc.clone();
+        let Some(_visual_mutation) = self.begin_visual_format_mutation() else {
+            return;
+        };
 
         cpp!(unsafe [doc_variant as "QVariant", start as "int", length as "int"] {
             QObject* obj = doc_variant.value<QObject*>();
@@ -200,6 +236,9 @@ impl DocumentHandler {
             if (!qquick_doc) return;
             QTextDocument* doc = qquick_doc->textDocument();
             if (!doc || length <= 0) return;
+
+            QSignalBlocker doc_signal_blocker(doc);
+            QSignalBlocker quick_doc_signal_blocker(qquick_doc);
 
             const int doc_len = std::max(0, doc->characterCount() - 1);
             const int safe_start = std::max(0, std::min(start, doc_len));
@@ -219,6 +258,9 @@ impl DocumentHandler {
     fn show_text_range(&self, start: i32, length: i32) {
         let doc_variant = self.current_doc.clone();
         let text_color = self.current_text_color.clone();
+        let Some(_visual_mutation) = self.begin_visual_format_mutation() else {
+            return;
+        };
 
         cpp!(unsafe [doc_variant as "QVariant", start as "int", length as "int", text_color as "QString"] {
             QObject* obj = doc_variant.value<QObject*>();
@@ -227,6 +269,9 @@ impl DocumentHandler {
             if (!qquick_doc) return;
             QTextDocument* doc = qquick_doc->textDocument();
             if (!doc || length <= 0) return;
+
+            QSignalBlocker doc_signal_blocker(doc);
+            QSignalBlocker quick_doc_signal_blocker(qquick_doc);
 
             const int doc_len = std::max(0, doc->characterCount() - 1);
             const int safe_start = std::max(0, std::min(start, doc_len));

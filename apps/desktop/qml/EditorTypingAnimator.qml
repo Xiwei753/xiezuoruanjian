@@ -87,7 +87,7 @@ Item {
         };
     }
 
-    function appendAnimation(kind, startIndex, text) {
+    function appendAnimation(kind, startIndex, text, visualWidth) {
         var rect = rectForPosition(startIndex);
         var id = nextAnimationId++;
         typingAnimations.append({
@@ -98,19 +98,24 @@ Item {
             "text": text,
             "x": rect.x,
             "y": rect.y,
-            "height": rect.height
+            "height": rect.height,
+            "visualWidth": visualWidth || 0
         });
     }
 
     function animateInsert(startIndex, text) {
+        var startRect = rectForPosition(startIndex);
+        var endRect = rectForPosition(startIndex + text.length);
+        var sameLine = Math.abs((endRect.y || 0) - (startRect.y || 0)) < 2;
+        var visualWidth = sameLine ? Math.max(1, (endRect.x || 0) - (startRect.x || 0)) : 0;
         if (documentHandler && documentHandler.hide_text_range) {
             documentHandler.hide_text_range(startIndex, text.length);
         }
-        appendAnimation("insert", startIndex, text);
+        appendAnimation("insert", startIndex, text, visualWidth);
     }
 
     function animateDelete(startIndex, text) {
-        appendAnimation("delete", startIndex, text);
+        appendAnimation("delete", startIndex, text, 0);
     }
 
     function finishAnimation(animationId) {
@@ -176,22 +181,43 @@ Item {
         delegate: Item {
             id: animationItem
             property real progress: model.kind === "insert" ? 0 : 1
-            property real fullWidth: Math.max(1, animatedText.implicitWidth)
+            property real textWidth: Math.max(1, animatedText.implicitWidth)
+            property real fullWidth: Math.max(1, model.visualWidth > 0 ? model.visualWidth : textWidth)
 
             x: model.kind === "delete" ? model.x + fullWidth * (1 - progress) : model.x
             y: model.y
-            width: Math.max(1, fullWidth * progress)
+            width: model.kind === "delete" ? Math.max(1, fullWidth * progress) : fullWidth
             height: model.height
-            clip: true
+            clip: model.kind === "delete"
             opacity: model.kind === "delete" ? progress : 1
 
-            Text {
-                id: animatedText
-                text: model.text
-                color: root.dt ? root.dt.editorText : "#E2E2E5"
-                font.pixelSize: root.targetTextArea ? root.targetTextArea.font.pixelSize : 16
-                font.family: root.targetTextArea ? root.targetTextArea.font.family : "serif"
-                y: Math.max(0, (animationItem.height - implicitHeight) / 2)
+            Rectangle {
+                visible: model.kind === "insert"
+                x: 0
+                y: 0
+                width: animationItem.fullWidth
+                height: animationItem.height
+                color: root.dt ? root.dt.editorBackground : "#191C21"
+                z: 0
+            }
+
+            Item {
+                id: revealClip
+                x: 0
+                y: 0
+                width: Math.max(1, animationItem.fullWidth * animationItem.progress)
+                height: animationItem.height
+                clip: true
+                z: 1
+
+                Text {
+                    id: animatedText
+                    text: model.text
+                    color: root.dt ? root.dt.editorText : "#E2E2E5"
+                    font.pixelSize: root.targetTextArea ? root.targetTextArea.font.pixelSize : 16
+                    font.family: root.targetTextArea ? root.targetTextArea.font.family : "serif"
+                    y: Math.max(0, (animationItem.height - implicitHeight) / 2)
+                }
             }
 
             NumberAnimation on progress {

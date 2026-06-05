@@ -723,6 +723,7 @@ Rectangle {
 
                     SmoothCursor {
                         id: smoothCursorOverlay
+                        anchors.fill: paperBg
                         targetTextArea: editorArea
                         overlayItem: paperBg
                         dt: root.dt

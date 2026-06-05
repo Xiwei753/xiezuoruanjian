@@ -228,7 +228,7 @@ QtObject {
     }
 
     function saveGuardActive() {
-        return isLoadingChapter || isApplyingFormat || isApplyingSettings;
+        return isLoadingChapter || isApplyingFormat || isApplyingSettings || (docHandler && docHandler.visual_format_mutating);
     }
 
     function hasRecentExplicitClearCandidate() {
