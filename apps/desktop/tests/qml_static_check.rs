@@ -332,37 +332,30 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     );
                     has_errors = true;
                 }
-                if !content.contains("Rectangle {")
-                    || !content.contains("id: cursorRect")
-                    || !content.contains("Item {")
-                    || !content.contains("id: typingLayer")
-                {
-                    eprintln!(
-                        "{}: SmoothCursor must split cursorRect from typingLayer",
-                        file_name
-                    );
+                if !content.contains("Rectangle {") || !content.contains("id: cursorRect") {
+                    eprintln!("{}: SmoothCursor must draw the custom cursorRect", file_name);
                     has_errors = true;
                 }
                 if !content.contains("targetTextArea.mapToItem(overlayItem || parent") {
                     eprintln!("{}: SmoothCursor must map TextArea cursor coordinates into overlay coordinates", file_name);
                     has_errors = true;
                 }
-                if !content.contains("textAnimationsSuppressed")
-                    || !content.contains("root.isScrolling || root.textAnimationsSuppressed")
-                    || !content.contains("suppressNextTextAnimation")
-                    || !content.contains("inputMethodComposing")
-                    || !content.contains("addedText.length <= 3")
-                    || !content.contains("deletedText.length <= 3")
+                if !content.contains("snapNextCursorUpdate")
+                    || !content.contains("allowSmoothCursorMotion")
+                    || !content.contains("snapNextUpdate")
+                    || !content.contains("smoothUntilMs")
+                    || !content.contains("xBehaviorEnabled = false")
+                    || !content.contains("yBehaviorEnabled = false")
                 {
-                    eprintln!("{}: SmoothCursor must suppress cursor birth animations during scroll, composing, and bulk text changes", file_name);
+                    eprintln!("{}: SmoothCursor must distinguish snap updates from keyboard-driven smooth motion", file_name);
                     has_errors = true;
                 }
-                if !content.contains("cursorBirthAnimationsModel")
-                    || !content.contains("appendCursorBirthAnimation")
-                    || !content.contains("endXPos")
-                    || !content.contains("endYPos")
+                if content.contains("id: typingLayer")
+                    || content.contains("cursorBirthAnimationsModel")
+                    || content.contains("appendCursorBirthAnimation")
+                    || content.contains("inputMethodComposing")
                 {
-                    eprintln!("{}: SmoothCursor text animation must use cursor birth animation semantics", file_name);
+                    eprintln!("{}: SmoothCursor must not own Linux ghost text animation overlay", file_name);
                     has_errors = true;
                 }
             }

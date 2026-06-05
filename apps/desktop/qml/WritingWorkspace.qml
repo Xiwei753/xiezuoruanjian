@@ -135,6 +135,7 @@ Rectangle {
             return;
         }
 
+        smoothCursorOverlay.snapNextCursorUpdate();
         // loadChapterContentWithIds returns null on failure, result object on success.
         // State is only updated after content is successfully loaded.
         var result = editorController.loadChapterContentWithIds(pId, vId, cId);
@@ -144,11 +145,13 @@ Rectangle {
             editorController.volumeId = d.volumeId || vId;
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
+            smoothCursorOverlay.snapNextCursorUpdate();
         }
     }
 
     function reloadActiveChapter() {
         if (editorController.projectId && editorController.volumeId && editorController.chapterId) {
+            smoothCursorOverlay.snapNextCursorUpdate();
             editorController.loadChapterContentWithIds(
                 editorController.projectId,
                 editorController.volumeId,
@@ -631,6 +634,8 @@ Rectangle {
                     ScrollView {
                         id: editorScroll
                         readonly property bool editorIsScrolling: ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
+                        property real smoothWheelTargetY: 0
+                        readonly property real wheelStepPx: Math.max(editorArea.font.pixelSize * 3.0, dt ? dt.sp48 : 48)
                         anchors.fill: paperBg
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
@@ -651,6 +656,58 @@ Rectangle {
                             }
                             if (contentItem && contentItem.flickDeceleration !== undefined) {
                                 contentItem.flickDeceleration = 4500;
+                            }
+                        }
+
+                        function maxContentY() {
+                            if (!contentItem) return 0;
+                            return Math.max(0, contentItem.contentHeight - contentItem.height);
+                        }
+
+                        function clampContentY(value) {
+                            return Math.max(0, Math.min(maxContentY(), value));
+                        }
+
+                        function wheelDeltaPixels(event) {
+                            var pixelY = event.pixelDelta ? event.pixelDelta.y : 0;
+                            if (Math.abs(pixelY) > 0) return -pixelY;
+                            var angleY = event.angleDelta ? event.angleDelta.y : 0;
+                            if (Math.abs(angleY) > 0) return -(angleY / 120.0) * wheelStepPx;
+                            return 0;
+                        }
+
+                        function scrollByWheelDelta(deltaY) {
+                            if (!contentItem || deltaY === 0) return;
+                            var baseY = smoothWheelAnim.running ? smoothWheelTargetY : contentItem.contentY;
+                            smoothWheelTargetY = clampContentY(baseY + deltaY);
+                            smoothWheelAnim.stop();
+                            smoothWheelAnim.from = contentItem.contentY;
+                            smoothWheelAnim.to = smoothWheelTargetY;
+                            smoothWheelAnim.start();
+                        }
+
+                        NumberAnimation {
+                            id: smoothWheelAnim
+                            target: editorScroll.contentItem
+                            property: "contentY"
+                            duration: 135
+                            easing.type: Easing.OutCubic
+                        }
+
+                        WheelHandler {
+                            id: editorWheelHandler
+                            target: null
+                            orientation: Qt.Vertical
+                            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                            onWheel: function(event) {
+                                var deltaY = editorScroll.wheelDeltaPixels(event);
+                                if (deltaY === 0) {
+                                    event.accepted = false;
+                                    return;
+                                }
+                                editorScroll.scrollByWheelDelta(deltaY);
+                                smoothCursorOverlay.snapNextCursorUpdate();
+                                event.accepted = true;
                             }
                         }
 
@@ -685,6 +742,7 @@ Rectangle {
                             text: ""
 
                             Keys.onPressed: function(event) {
+                                smoothCursorOverlay.allowSmoothCursorMotion();
                                 if (event.key === Qt.Key_Backspace ||
                                     event.key === Qt.Key_Delete ||
                                     (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
@@ -693,6 +751,14 @@ Rectangle {
                                 if ((event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) ||
                                     (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
                                     smoothCursorOverlay.suppressNextTextAnimation();
+                                }
+                            }
+
+                            TapHandler {
+                                acceptedButtons: Qt.LeftButton
+                                gesturePolicy: TapHandler.WithinBounds
+                                onPressedChanged: {
+                                    if (pressed) smoothCursorOverlay.snapNextCursorUpdate();
                                 }
                             }
                         }
