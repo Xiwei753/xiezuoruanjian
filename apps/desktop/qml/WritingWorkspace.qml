@@ -633,9 +633,14 @@ Rectangle {
                     
                     ScrollView {
                         id: editorScroll
-                        readonly property bool editorIsScrolling: ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
-                        property real smoothWheelTargetY: 0
-                        readonly property real wheelStepPx: Math.max(editorArea.font.pixelSize * 3.0, dt ? dt.sp48 : 48)
+                        readonly property bool editorIsScrolling: wheelKineticTimer.running || ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
+                        property real wheelVelocityY: 0
+                        property real wheelLastTickMs: 0
+                        readonly property real wheelAngleLinesPerStep: 3.0
+                        readonly property real wheelVelocityGain: 42.0
+                        readonly property real wheelDecayPerSecond: 0.045
+                        readonly property real wheelMaxVelocityY: Math.max(availableHeight * 7.0, 2400)
+                        readonly property real wheelStopVelocityY: Math.max(editorArea.font.pixelSize * 0.35, 6)
                         anchors.fill: paperBg
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
@@ -668,30 +673,71 @@ Rectangle {
                             return Math.max(0, Math.min(maxContentY(), value));
                         }
 
+                        function wheelLineHeight() {
+                            var rectHeight = editorArea.cursorRectangle ? editorArea.cursorRectangle.height : 0;
+                            return Math.max(rectHeight || 0, editorArea.font.pixelSize * 1.35, 18);
+                        }
+
                         function wheelDeltaPixels(event) {
                             var pixelY = event.pixelDelta ? event.pixelDelta.y : 0;
                             if (Math.abs(pixelY) > 0) return -pixelY;
                             var angleY = event.angleDelta ? event.angleDelta.y : 0;
-                            if (Math.abs(angleY) > 0) return -(angleY / 120.0) * wheelStepPx;
+                            if (Math.abs(angleY) > 0) return -(angleY / 120.0) * wheelLineHeight() * wheelAngleLinesPerStep;
                             return 0;
                         }
 
-                        function scrollByWheelDelta(deltaY) {
-                            if (!contentItem || deltaY === 0) return;
-                            var baseY = smoothWheelAnim.running ? smoothWheelTargetY : contentItem.contentY;
-                            smoothWheelTargetY = clampContentY(baseY + deltaY);
-                            smoothWheelAnim.stop();
-                            smoothWheelAnim.from = contentItem.contentY;
-                            smoothWheelAnim.to = smoothWheelTargetY;
-                            smoothWheelAnim.start();
+                        function applyWheelImpulse(deltaY) {
+                            if (!contentItem || deltaY === 0 || maxContentY() <= 0) return false;
+                            var currentY = contentItem.contentY;
+                            if ((currentY <= 0 && deltaY < 0) || (currentY >= maxContentY() && deltaY > 0)) {
+                                wheelVelocityY = 0;
+                                wheelKineticTimer.stop();
+                                return false;
+                            }
+
+                            if (wheelVelocityY * deltaY < 0) {
+                                wheelVelocityY = 0;
+                            }
+
+                            wheelVelocityY = Math.max(-wheelMaxVelocityY, Math.min(wheelMaxVelocityY, wheelVelocityY + deltaY * wheelVelocityGain));
+                            wheelLastTickMs = Date.now();
+                            if (!wheelKineticTimer.running) {
+                                wheelKineticTimer.start();
+                            }
+                            return true;
                         }
 
-                        NumberAnimation {
-                            id: smoothWheelAnim
-                            target: editorScroll.contentItem
-                            property: "contentY"
-                            duration: 135
-                            easing.type: Easing.OutCubic
+                        Timer {
+                            id: wheelKineticTimer
+                            interval: 16
+                            repeat: true
+                            onTriggered: {
+                                if (!editorScroll.contentItem) {
+                                    editorScroll.wheelVelocityY = 0;
+                                    wheelKineticTimer.stop();
+                                    return;
+                                }
+
+                                var now = Date.now();
+                                var dtSeconds = Math.max(0.001, Math.min((now - editorScroll.wheelLastTickMs) / 1000.0, 0.05));
+                                editorScroll.wheelLastTickMs = now;
+
+                                var oldY = editorScroll.contentItem.contentY;
+                                var newY = editorScroll.clampContentY(oldY + editorScroll.wheelVelocityY * dtSeconds);
+                                editorScroll.contentItem.contentY = newY;
+
+                                if (newY === oldY || newY <= 0 || newY >= editorScroll.maxContentY()) {
+                                    editorScroll.wheelVelocityY = 0;
+                                    wheelKineticTimer.stop();
+                                    return;
+                                }
+
+                                editorScroll.wheelVelocityY *= Math.pow(editorScroll.wheelDecayPerSecond, dtSeconds);
+                                if (Math.abs(editorScroll.wheelVelocityY) < editorScroll.wheelStopVelocityY) {
+                                    editorScroll.wheelVelocityY = 0;
+                                    wheelKineticTimer.stop();
+                                }
+                            }
                         }
 
                         WheelHandler {
@@ -705,9 +751,10 @@ Rectangle {
                                     event.accepted = false;
                                     return;
                                 }
-                                editorScroll.scrollByWheelDelta(deltaY);
-                                smoothCursorOverlay.snapNextCursorUpdate();
-                                event.accepted = true;
+                                event.accepted = editorScroll.applyWheelImpulse(deltaY);
+                                if (event.accepted) {
+                                    smoothCursorOverlay.snapNextCursorUpdate();
+                                }
                             }
                         }
 

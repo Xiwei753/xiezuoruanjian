@@ -284,6 +284,23 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
                     has_errors = true;
                 }
+                if !content.contains("WheelHandler {")
+                    || !content.contains("pixelDelta")
+                    || !content.contains("angleDelta")
+                    || !content.contains("wheelVelocityY")
+                    || !content.contains("wheelVelocityGain")
+                    || !content.contains("wheelDecayPerSecond")
+                    || !content.contains("wheelKineticTimer")
+                    || !content.contains("applyWheelImpulse")
+                    || !content.contains("Math.pow(editorScroll.wheelDecayPerSecond, dtSeconds)")
+                {
+                    eprintln!("{}: Editor wheel scrolling must use velocity-integrated kinetic scrolling", file_name);
+                    has_errors = true;
+                }
+                if content.contains("id: smoothWheelAnim") {
+                    eprintln!("{}: Editor wheel scrolling must not fall back to fixed-duration contentY tweening", file_name);
+                    has_errors = true;
+                }
                 if !content.contains("SmoothCursor {")
                     || !content.contains("overlayItem: paperBg")
                     || !content.contains("isScrolling: editorScroll.editorIsScrolling")
