@@ -69,9 +69,26 @@ Item {
 
     function updateCursorRect() {
         if (!targetTextArea || isScrolling || scrollDebounceTimer.running) return;
-        cursorRect.x = root.cursorX();
-        cursorRect.y = root.cursorY();
-        cursorRect.height = root.cursorHeight();
+        var newX = root.cursorX();
+        var newY = root.cursorY();
+        var newHeight = root.cursorHeight();
+
+        if (Math.abs(newY - cursorRect.y) > 2) {
+            cursorRect.yBehaviorEnabled = false;
+            cursorRect.y = newY;
+            Qt.callLater(function() {
+                cursorRect.yBehaviorEnabled = true;
+            });
+        } else {
+            cursorRect.y = newY;
+        }
+
+        cursorRect.x = newX;
+        cursorRect.height = newHeight;
+
+        if (typeof blinkAnim !== "undefined") {
+            blinkAnim.restart();
+        }
     }
 
     function textPositionRect(position) {
@@ -272,6 +289,7 @@ Item {
         }
 
         SequentialAnimation on opacity {
+            id: blinkAnim
             loops: Animation.Infinite
             running: cursorRect.visible
             NumberAnimation { from: 1.0; to: 0.2; duration: 600; easing.type: Easing.InOutQuad }

@@ -142,7 +142,7 @@
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
         android:src="@drawable/ic_add"
-        app:layout_anchor="@id/toolbar"
+        app:layout_anchor="@id/mainContainer"
         app:layout_anchorGravity="bottom|end" />
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -151,8 +151,8 @@
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
         android:src="@drawable/ic_add"
-        app:layout_anchor="@id/bottomNav"
-        app:layout_anchorGravity="top|end"
+        app:layout_anchor="@id/mainContainer"
+        app:layout_anchorGravity="bottom|end"
         android:visibility="gone" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
