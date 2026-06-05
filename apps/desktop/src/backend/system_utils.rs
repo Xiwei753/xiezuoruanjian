@@ -44,6 +44,8 @@ fn parse_portal_color_scheme(value: &str) -> Option<&'static str> {
         Some("dark")
     } else if lower.contains("uint32 2") || lower.contains("<2>") || lower.trim() == "2" {
         Some("light")
+    } else if lower.contains("uint32 0") || lower.contains("<0>") || lower.trim() == "0" {
+        Some("light")
     } else {
         None
     }
@@ -133,7 +135,7 @@ fn detect_gsettings_color_scheme() -> Option<String> {
     .to_lowercase();
     if value.contains("prefer-dark") || value.contains("dark") {
         Some("dark".to_string())
-    } else if value.contains("prefer-light") || value.contains("light") {
+    } else if value.contains("prefer-light") || value.contains("light") || value.contains("default") {
         Some("light".to_string())
     } else {
         None
@@ -251,7 +253,8 @@ mod tests {
     fn parses_portal_color_scheme() {
         assert_eq!(parse_portal_color_scheme("(<uint32 1>,)"), Some("dark"));
         assert_eq!(parse_portal_color_scheme("(<uint32 2>,)"), Some("light"));
-        assert_eq!(parse_portal_color_scheme("(<uint32 0>,)"), None);
+        assert_eq!(parse_portal_color_scheme("(<uint32 0>,)"), Some("light"));
+        assert_eq!(parse_portal_color_scheme("(<uint32 99>,)"), None);
     }
 
     #[test]
