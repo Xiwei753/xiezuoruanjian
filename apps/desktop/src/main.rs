@@ -78,6 +78,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/WritingTreeController.qml" as "WritingTreeController.qml",
     "qml/EditorController.qml" as "EditorController.qml",
     "qml/SmoothCursor.qml" as "SmoothCursor.qml",
+    "qml/EditorWheelScroller.qml" as "EditorWheelScroller.qml",
+    "qml/EditorTypingAnimator.qml" as "EditorTypingAnimator.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",

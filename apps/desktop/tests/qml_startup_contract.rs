@@ -144,6 +144,19 @@ fn main_qml_has_backend_runtime_startup_diagnostics() {
 }
 
 #[test]
+fn embedded_qrc_includes_editor_qml_components() {
+    let main_rs = fs::read_to_string("src/main.rs").expect("read src/main.rs");
+
+    for component in ["EditorWheelScroller.qml", "EditorTypingAnimator.qml"] {
+        let entry = format!("\"qml/{component}\" as \"{component}\"");
+        assert!(
+            main_rs.contains(&entry),
+            "embedded qrc must include {component} so AppImage can load qrc:/main.qml"
+        );
+    }
+}
+
+#[test]
 fn workspace_backend_exposes_has_workspace_bool_property() {
     let workspace_backend =
         fs::read_to_string("src/backend/workspace_backend.rs").expect("read workspace backend");
