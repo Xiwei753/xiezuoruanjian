@@ -303,11 +303,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
                 if !content.contains("EditorTypingAnimator {")
                     || !content.contains("documentHandler: editorController.docHandler")
-                    || !content.contains("animationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true")
-                    || !content.contains("animationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 160")
-                    || !content.contains("suppressed: editorController.isLoadingChapter")
+                    || !content.contains("animationEnabled: false")
+                    || !content.contains("Do not mutate")
                 {
-                    eprintln!("{}: Stable editor mode must delegate typing animation to EditorTypingAnimator", file_name);
+                    eprintln!("{}: Linux typing animation must stay disabled until SujianEditorItem consumes Core transactions", file_name);
                     has_errors = true;
                 }
                 if !content.contains("SmoothCursor {")
@@ -437,23 +436,23 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
             }
 
             if file_name == "EditorTypingAnimator.qml" {
-                if !content.contains("ListModel { id: typingAnimations }")
-                    || !content.contains("positionToRectangle")
-                    || !content.contains("hide_text_range")
-                    || !content.contains("show_text_range")
-                    || !content.contains("clear_hidden_text_ranges")
-                    || !content.contains("commonPrefixLength")
-                    || !content.contains("commonSuffixLength")
-                    || !content.contains("NumberAnimation on progress")
+                if !content.contains("visible: false")
+                    || !content.contains("function clearHiddenRanges()")
+                    || !content.contains("function resetTextSnapshot()")
+                    || !content.contains("SujianEditorItem")
                 {
-                    eprintln!("{}: Typing animation must use hidden-range reveal instead of ghost text overlay", file_name);
+                    eprintln!("{}: Typing animator must be an inert compatibility component until self-rendered editor lands", file_name);
                     has_errors = true;
                 }
                 if content.contains("targetTextArea.text =")
                     || content.contains("textFormat: TextEdit.RichText")
                     || content.contains("cursorBirthAnimationsModel")
+                    || content.contains("hide_text_range")
+                    || content.contains("show_text_range")
+                    || content.contains("clear_hidden_text_ranges")
+                    || content.contains("NumberAnimation on progress")
                 {
-                    eprintln!("{}: Typing animation must not mutate editor text or restore old ghost implementation", file_name);
+                    eprintln!("{}: Typing animation must not mutate QTextDocument formats or restore old overlay implementation", file_name);
                     has_errors = true;
                 }
             }

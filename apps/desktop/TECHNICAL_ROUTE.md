@@ -22,6 +22,8 @@
 - 不手搓整套深色主题。
 - 不用硬编码颜色覆盖所有控件。
 - 不在 QML 里写业务状态机。
+- 写作编辑器最终路线是 `SujianEditorItem` 自绘，平台只负责输入适配、`QTextLayout` 布局、绘制、滚动和命中测试。
+- 在 `SujianEditorItem` 落地前，Linux 文字吐字动画关闭；不得恢复通过 `QTextDocument` 字符格式隐藏真实文字的方案。
 
 ## Linux 禁止事项
 - 不随意切 Qt5 / Qt6 / GTK / Flutter / Electron / WebView。
@@ -30,6 +32,7 @@
 - 不在 QML 里拼业务树、猜路径、猜 ID。
 - 不在 QML 里吞 backend/core 错误。
 - 不用临时本地文件绕过 Core。
+- 不在 QML `TextArea` 上继续堆文字动画 diff、overlay 和 hidden-range 补丁。
 
 ## Linux 状态路线
 - backend 维护 AppState / WorkspaceTreeState / SyncState。

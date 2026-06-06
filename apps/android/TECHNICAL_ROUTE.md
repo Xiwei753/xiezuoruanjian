@@ -50,6 +50,13 @@
 - 拖动、缩放、fling 使用 postInvalidateOnAnimation。
 - 页面不可见时停止无意义刷新。
 
+## Android 编辑器路线
+- 当前 `WriterEditText` + overlay 只能作为过渡形态。
+- 最终路线是 `SujianEditorView : View` 自绘正文、选区、光标和动画。
+- 输入法通过 `onCreateInputConnection()` 和自定义 `InputConnection` 接入。
+- Kotlin 层不得自行猜跨平台文本 diff；插入、删除、粘贴、撤销、重做和 IME composition 后续必须映射为 Core `EditorTransaction`。
+- Renderer 只消费 Core transaction / animation event 和平台文字布局结果。
+
 ## Android 路线变更规则
 - 若要引入 Compose，必须先改本文档，说明为什么整个 Android UI 需要迁移。
 - 若要引入 OpenGL ES，必须保持现有 MindMapSnapshot / Renderer 抽象，不推翻 Core 和 Model。

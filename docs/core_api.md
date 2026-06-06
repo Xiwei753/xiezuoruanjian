@@ -18,6 +18,20 @@
 - `core/writer_core/src/api/envelope.rs`：跨平台标准 `ResultEnvelope<T>`，统一序列化 `success`、`data`、`errorCode`、`userMessage`、`rawError`、`warnings`、`changedPaths`、`changedEntities`。平台端只能根据 `success` / `errorCode` / `userMessage` 分支，不能解析 `rawError` 猜错误。
 - `core/writer_core/src/api/service.rs`：`WriterCoreApi` 持有 workspace path，统一封装 `facade::WriterCore` 调用，返回 API DTO / `WriterError`，不依赖 Android、Linux、QML 或 UniFFI。
 
+## Editor Core
+
+`core/writer_core/src/editor` 是平台无关的编辑器语义层。当前已提供：
+
+- `EditorCursor { index }`：UTF-8 byte offset 光标位置，会夹到字符边界。
+- `EditorSelection { anchor, head }`：选区锚点与活动端。
+- `EditorChange::Insert { index, text }` / `EditorChange::Delete { index, text }`：正文变更。
+- `EditorTransaction { old_text, new_text, changes, old_selection, new_selection, cause, should_animate }`：统一编辑事务。
+- `EditorAnimationEvent { id, kind, range_start, range_len, text, old_cursor, new_cursor, duration_ms }`：平台 renderer 可消费的动画事件描述。
+- `EditorEngine::create_transaction(...)`：从旧文本、新文本、选区和原因生成事务。
+- `EditorEngine::animation_events(...)`：从事务生成插入、删除和光标动画事件。
+
+该层不绘制、不处理输入法、不依赖 Qt/Android；Desktop 和 Android 后续必须消费该语义，不能各自猜 diff。
+
 `writer_core` 当前稳定能力包括：
 
 - `create_workspace(path: &Path) -> Result<()>`

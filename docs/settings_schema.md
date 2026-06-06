@@ -11,6 +11,10 @@
 - `editorLineSpacingMultiplier`（浮点数）
 - `autoSaveEnabled`（布尔值）
 - `autoSaveDelayMs`（整数）
+- `editorTypingAnimationEnabled`（布尔值，本地编辑器文字动画开关；Linux 当前强制停用，等待自绘编辑器）
+- `editorSmoothCursorEnabled`（布尔值）
+- `editorTypingAnimationDurationMs`（整数，毫秒）
+- `editorSmoothCursorDurationMs`（整数，毫秒）
 - `windowWidth`、`windowHeight`（浮点数）
 
 ### `settings.sync.json`

@@ -21,6 +21,7 @@
 - 同步白名单。
 - 删除安全。
 - 导图业务图和布局快照。
+- 编辑器平台无关事务、选区、变更和动画事件语义。
 - 错误语义。
 - 序列化兼容。
 - 跨平台稳定 API DTO、错误映射和服务入口。
@@ -32,6 +33,13 @@
 - 不允许 Android/Linux 私自写 workspace 关键业务文件。
 - 不把平台 UI 状态写入 Core 业务数据。
 - 不把业务能力直接堆进 UniFFI adapter。
+- 不包含平台绘制、输入法、窗口、动画曲线执行或 Qt/Android 特定代码。
+
+## Editor Core 路线
+- `src/editor` 是编辑器平台无关语义层。
+- `EditorTransaction` 统一描述旧文本、新文本、变更列表、选区变化和原因。
+- `EditorAnimationEvent` 只描述 renderer 可以播放的插入、删除、光标事件，不执行绘制。
+- Platform renderer 可以使用 Qt `QTextLayout`、Android `Canvas` / text layout 等本地能力，但不得在平台端自行定义分叉的业务 diff 语义。
 
 ## Mind Map Core 路线
 - **分层边界**：必须严格区分 Graph（业务真相）、Layout（纯位置信息）和 Snapshot（发给平台的只读渲染视图）。

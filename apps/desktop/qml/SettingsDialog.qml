@@ -42,7 +42,7 @@ Dialog {
         if (!backendRef) return
         updatingValues = true
         autoSave.checked = backendRef.setting_auto_save_enabled
-        typingAnim.checked = backendRef.setting_typing_animation_enabled
+        typingAnim.checked = false
         smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
         aiSwitch.checked = backendRef.ai_enabled
         autoSaveDelay.value = backendRef.setting_auto_save_delay_ms / 1000.0
@@ -139,11 +139,10 @@ Dialog {
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
-                    title: qsTr("打字动画")
-                    description: qsTr("使用 hidden-range/reveal，避免重影")
-                    clickable: true
-                    onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
-                    ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }
+                    title: qsTr("打字动画（重构中）")
+                    description: qsTr("旧 TextArea hidden-range 动画已停用，等待 SujianEditorItem")
+                    clickable: false
+                    ModernSwitch { id: typingAnim; dt: root.dt; enabled: false }
                 }
                 AppSlider {
                     id: typingAnimDuration

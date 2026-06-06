@@ -8,7 +8,7 @@
 //
 // 干什么的：
 // - 接管 QML TextArea 关联的 QTextDocument 实例。
-// - 负责纯文本的视觉排版调整，例如行高比例、段首首行缩进、主题正文前景色和临时隐藏范围。
+// - 负责纯文本的视觉排版调整，例如行高比例、段首首行缩进和主题正文前景色。
 // - 实现纯文本的安全提取（doc->toPlainText()），杜绝 HTML 字符串或富文本内容物理污染磁盘正文。
 // - 提供在切换章节时一键清空撤销栈（clearUndoRedoStacks()）的底层实现。
 //
@@ -29,7 +29,7 @@
 //!
 //! ## 职责边界
 //!
-//! - **做**：应用行距、首行缩进、主题正文前景色、临时隐藏输入范围、获取纯文本、清空撤销栈
+//! - **做**：应用行距、首行缩进、主题正文前景色、获取纯文本、清空撤销栈
 //! - **不做**：正文内容管理（由 WriterCore 负责）
 //! - **不做**：业务逻辑（只做视觉排版）
 //!
@@ -43,7 +43,6 @@
 //!
 //! - `apply_format()`：将行距、首行缩进和主题正文前景色应用到 QTextDocument
 //! - `get_plain_text()`：获取纯文本（替换 `\u2029` 为 `\n`）
-//! - `hide_text_range()` / `show_text_range()`：临时隐藏/恢复字符显示，不改变纯文本内容
 //! - `clear_undo_stack()`：清空撤销栈（章节切换时调用）
 
 use cpp::cpp;
@@ -93,9 +92,6 @@ pub struct DocumentHandler {
 
     apply_format: qt_method!(fn(&self)),
     get_plain_text: qt_method!(fn(&self) -> QString),
-    hide_text_range: qt_method!(fn(&self, start: i32, length: i32)),
-    show_text_range: qt_method!(fn(&self, start: i32, length: i32)),
-    clear_hidden_text_ranges: qt_method!(fn(&self)),
     clear_undo_stack: qt_method!(fn(&self)),
 
     current_doc: QVariant,
@@ -221,78 +217,6 @@ impl DocumentHandler {
             if (!doc) return QString();
             return doc->toPlainText();
         })
-    }
-
-    fn hide_text_range(&self, start: i32, length: i32) {
-        let doc_variant = self.current_doc.clone();
-        let Some(_visual_mutation) = self.begin_visual_format_mutation() else {
-            return;
-        };
-
-        cpp!(unsafe [doc_variant as "QVariant", start as "int", length as "int"] {
-            QObject* obj = doc_variant.value<QObject*>();
-            if (!obj) return;
-            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
-            if (!qquick_doc) return;
-            QTextDocument* doc = qquick_doc->textDocument();
-            if (!doc || length <= 0) return;
-
-            QSignalBlocker doc_signal_blocker(doc);
-            QSignalBlocker quick_doc_signal_blocker(qquick_doc);
-
-            const int doc_len = std::max(0, doc->characterCount() - 1);
-            const int safe_start = std::max(0, std::min(start, doc_len));
-            const int safe_end = std::max(safe_start, std::min(start + length, doc_len));
-            if (safe_end <= safe_start) return;
-
-            QTextCharFormat hidden_format;
-            hidden_format.setForeground(QColor(0, 0, 0, 0));
-
-            QTextCursor cursor(doc);
-            cursor.setPosition(safe_start);
-            cursor.setPosition(safe_end, QTextCursor::KeepAnchor);
-            cursor.mergeCharFormat(hidden_format);
-        });
-    }
-
-    fn show_text_range(&self, start: i32, length: i32) {
-        let doc_variant = self.current_doc.clone();
-        let text_color = self.current_text_color.clone();
-        let Some(_visual_mutation) = self.begin_visual_format_mutation() else {
-            return;
-        };
-
-        cpp!(unsafe [doc_variant as "QVariant", start as "int", length as "int", text_color as "QString"] {
-            QObject* obj = doc_variant.value<QObject*>();
-            if (!obj) return;
-            QQuickTextDocument* qquick_doc = qobject_cast<QQuickTextDocument*>(obj);
-            if (!qquick_doc) return;
-            QTextDocument* doc = qquick_doc->textDocument();
-            if (!doc || length <= 0) return;
-
-            QSignalBlocker doc_signal_blocker(doc);
-            QSignalBlocker quick_doc_signal_blocker(qquick_doc);
-
-            const int doc_len = std::max(0, doc->characterCount() - 1);
-            const int safe_start = std::max(0, std::min(start, doc_len));
-            const int safe_end = std::max(safe_start, std::min(start + length, doc_len));
-            if (safe_end <= safe_start) return;
-
-            QColor color(text_color);
-            if (!color.isValid()) return;
-
-            QTextCharFormat visible_format;
-            visible_format.setForeground(color);
-
-            QTextCursor cursor(doc);
-            cursor.setPosition(safe_start);
-            cursor.setPosition(safe_end, QTextCursor::KeepAnchor);
-            cursor.mergeCharFormat(visible_format);
-        });
-    }
-
-    fn clear_hidden_text_ranges(&self) {
-        self.apply_format();
     }
 
     fn clear_undo_stack(&self) {

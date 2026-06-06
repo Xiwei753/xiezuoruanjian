@@ -32,6 +32,14 @@
 - 不在 UI 层吞错误。
 - 不用过程文档替代架构文档。
 
+## 编辑器底层路线
+- 最新路线见 [自绘编辑器与统一事件层路线](editor_engine_route.md)。
+- 停止围绕 QML `TextArea` / Android `EditText` 继续堆文字动画补丁。
+- Core `editor` 模块统一产出 `EditorTransaction`、`EditorAnimationEvent` 等平台无关语义。
+- Desktop 最终使用 `SujianEditorItem` 自绘正文、选区、光标和动画，底层优先 `QTextLayout`。
+- Android 最终使用 `SujianEditorView : View` 自绘，并通过 `InputConnection` 接输入法。
+- 在新自绘编辑器落地前，Linux typing animation 必须关闭，不得恢复 hidden-range/reveal 或 QTextDocument 字符格式隐藏方案。
+
 ## Android 导图技术路线
 - 导图不是普通页面，而是大画布图形系统。**导图最终是与正文并列的创作知识图谱，不仅限于章节树结构。**
 - 章节结构图只是导图在未自定义时的**一种自动生成视图**。

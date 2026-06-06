@@ -92,7 +92,7 @@ fn default_auto_indent_width() -> f32 {
     2.0
 }
 fn default_editor_typing_animation_enabled() -> bool {
-    true
+    false
 }
 fn default_editor_smooth_cursor_enabled() -> bool {
     true

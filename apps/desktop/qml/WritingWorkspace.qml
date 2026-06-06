@@ -716,7 +716,10 @@ Rectangle {
                         documentHandler: editorController.docHandler
                         overlayItem: paperBg
                         dt: root.dt
-                        animationEnabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
+                        // Disabled until the editor is backed by Core transactions
+                        // and a self-rendered SujianEditorItem. Do not mutate
+                        // QTextDocument char formats for typing effects.
+                        animationEnabled: false
                         animationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 160
                         suppressed: editorController.isLoadingChapter || editorController.isApplyingFormat || editorController.isApplyingSettings
                     }
