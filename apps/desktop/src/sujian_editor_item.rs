@@ -5,6 +5,7 @@
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QQuickPaintedItem, QRectF, QString};
+use std::cell::Cell;
 use std::time::Instant;
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause};
 
@@ -14,15 +15,6 @@ cpp! {{
     #include <QtGui/QPainter>
     #include <QtGui/QClipboard>
     #include <QGuiApplication>
-
-    static void setup_painter_font(QPainter *painter, float font_size, const QString &font_family) {
-        QFont f = painter->font();
-        f.setPixelSize(static_cast<int>(font_size));
-        if (!font_family.isEmpty()) {
-            f.setFamilies(QStringList{font_family});
-        }
-        painter->setFont(f);
-    }
 }}
 
 const KEY_BACKSPACE: i32 = 0x0100_0003;
@@ -267,10 +259,12 @@ pub struct SujianEditorItem {
     insert_preedit: qt_method!(fn(&mut self, text: QString)),
     commit_preedit: qt_method!(fn(&mut self, text: QString)),
     cancel_preedit: qt_method!(fn(&mut self)),
+    flush_content_height: qt_method!(fn(&mut self)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
     current_content_height: f32,
+    content_height_dirty: Cell<bool>,
     current_editor_enabled: bool,
     current_font_pixel_size: f32,
     current_font_family: QString,
@@ -346,9 +340,11 @@ impl Default for SujianEditorItem {
             insert_preedit: Default::default(),
             commit_preedit: Default::default(),
             cancel_preedit: Default::default(),
+            flush_content_height: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
+            content_height_dirty: Cell::new(false),
             current_editor_enabled: true,
             current_font_pixel_size: 16.0,
             current_font_family: "serif".into(),
@@ -579,18 +575,25 @@ impl SujianEditorItem {
     }
 
     fn visual_changed(&mut self) {
-        self.recalculate_content_height();
+        self.recalculate_content_height_quiet();
         self.visual_settings_changed();
         self.request_repaint();
     }
 
     fn emit_content_changed(&mut self) {
-        self.recalculate_content_height();
+        self.recalculate_content_height_quiet();
         self.plain_text_changed();
         self.text_changed();
         self.cursor_position_changed();
         self.selection_changed();
         self.request_repaint();
+    }
+
+    fn flush_content_height(&mut self) {
+        if self.content_height_dirty.get() {
+            self.content_height_dirty.set(false);
+            self.content_height_changed();
+        }
     }
 
     fn clear_undo_stack(&mut self) {
@@ -900,16 +903,28 @@ impl SujianEditorItem {
     }
 
     fn recalculate_content_height(&mut self) {
+        let next = self.compute_content_height();
+        if (self.current_content_height - next).abs() > 0.5 {
+            self.current_content_height = next;
+            self.content_height_changed();
+        }
+    }
+
+    fn recalculate_content_height_quiet(&mut self) {
+        let next = self.compute_content_height();
+        if (self.current_content_height - next).abs() > 0.5 {
+            self.current_content_height = next;
+            self.content_height_dirty.set(true);
+        }
+    }
+
+    fn compute_content_height(&self) -> f32 {
         let lines = self.layout_lines(self.bounding_width());
         let height = lines
             .last()
             .map(|line| line.y + line.height + self.current_padding as f64)
             .unwrap_or((self.current_font_pixel_size * self.current_line_spacing + self.current_padding * 2.0) as f64);
-        let next = height.max(1.0) as f32;
-        if (self.current_content_height - next).abs() > 0.5 {
-            self.current_content_height = next;
-            self.content_height_changed();
-        }
+        height.max(1.0) as f32
     }
 
     fn layout_lines(&self, width: f64) -> Vec<VisualLine> {
@@ -977,7 +992,7 @@ impl SujianEditorItem {
 
 impl QQuickItem for SujianEditorItem {
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        self.recalculate_content_height();
+        self.recalculate_content_height_quiet();
         self.request_repaint();
     }
 
@@ -995,7 +1010,7 @@ impl QQuickItem for SujianEditorItem {
 
 impl QQuickPaintedItem for SujianEditorItem {
     fn paint(&mut self, painter: &mut QPainter) {
-        self.recalculate_content_height();
+        self.recalculate_content_height_quiet();
         let width = self.bounding_width();
         let item = self as &dyn QQuickItem;
         let height = item.bounding_rect().height.max(self.current_content_height as f64);
@@ -1008,10 +1023,11 @@ impl QQuickPaintedItem for SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
         let fs = font_size as f32;
-        let ff = font_family.clone();
-        let painter_ptr = painter as *mut QPainter;
-        cpp!(unsafe [painter_ptr as "QPainter*", fs as "float", ff as "QString"] {
-            setup_painter_font(painter_ptr, fs, ff);
+        let ff: QString = font_family.clone().into();
+        cpp!(unsafe [painter as "QPainter*", fs as "float", ff as "QString"] {
+            QFont f(ff);
+            f.setPixelSize(static_cast<int>(fs));
+            painter->setFont(f);
         });
 
         let lines = self.layout_lines(width);

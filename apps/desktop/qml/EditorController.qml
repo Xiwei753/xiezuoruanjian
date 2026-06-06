@@ -160,6 +160,7 @@ QtObject {
         target: (controller.useSelfRenderedEditor && targetEditorItem) ? targetEditorItem : null
         function onText_changed() {
             controller.handlePlainTextChanged("sujian_editor_text_changed");
+            Qt.callLater(targetEditorItem.flush_content_height);
         }
     }
 
