@@ -5,7 +5,8 @@
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QQuickPaintedItem, QRectF, QString};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::time::Instant;
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause};
 
@@ -53,6 +54,19 @@ struct VisualLine {
     y: f64,
     width: f64,
     height: f64,
+}
+
+struct LayoutCache {
+    text_ptr: usize,
+    text_len: usize,
+    width: f64,
+    font_size: f32,
+    font_family: String,
+    line_spacing: f32,
+    text_indent: f32,
+    padding: f32,
+    lines: Vec<VisualLine>,
+    content_height: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -230,6 +244,7 @@ pub struct SujianEditorItem {
     typing_animation_enabled: qt_property!(bool; READ typing_animation_enabled WRITE set_typing_animation_enabled NOTIFY visual_settings_changed),
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
+    scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
 
     plain_text_changed: qt_signal!(),
     text_changed: qt_signal!(),
@@ -278,6 +293,7 @@ pub struct SujianEditorItem {
     current_smooth_cursor_enabled: bool,
     current_cursor_animation_duration_ms: u32,
     current_typing_animation_enabled: bool,
+    current_scroll_y: f32,
     last_summary: QString,
     last_event_count: u32,
     target_cursor_x: f64,
@@ -288,6 +304,7 @@ pub struct SujianEditorItem {
     cursor_animating: bool,
     preedit_text: String,
     preedit_cursor: usize,
+    layout_cache: Option<LayoutCache>,
 }
 
 impl Default for SujianEditorItem {
@@ -313,6 +330,7 @@ impl Default for SujianEditorItem {
             typing_animation_enabled: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
+            scroll_y: Default::default(),
             plain_text_changed: Default::default(),
             text_changed: Default::default(),
             content_height_changed: Default::default(),
@@ -358,6 +376,7 @@ impl Default for SujianEditorItem {
             current_smooth_cursor_enabled: true,
             current_cursor_animation_duration_ms: 160,
             current_typing_animation_enabled: false,
+            current_scroll_y: 0.0,
             last_summary: "".into(),
             last_event_count: 0,
             target_cursor_x: 0.0,
@@ -368,6 +387,7 @@ impl Default for SujianEditorItem {
             cursor_animating: false,
             preedit_text: String::new(),
             preedit_cursor: 0,
+            layout_cache: None,
         }
     }
 }
@@ -566,6 +586,18 @@ impl SujianEditorItem {
         self.visual_settings_changed();
     }
 
+    fn scroll_y(&self) -> f32 {
+        self.current_scroll_y
+    }
+
+    fn set_scroll_y(&mut self, value: f32) {
+        if (self.current_scroll_y - value).abs() < 0.5 {
+            return;
+        }
+        self.current_scroll_y = value;
+        self.request_repaint();
+    }
+
     fn last_transaction_summary(&self) -> QString {
         self.last_summary.clone()
     }
@@ -575,12 +607,14 @@ impl SujianEditorItem {
     }
 
     fn visual_changed(&mut self) {
+        self.invalidate_layout_cache();
         self.recalculate_content_height_quiet();
         self.visual_settings_changed();
         self.request_repaint();
     }
 
     fn emit_content_changed(&mut self) {
+        self.invalidate_layout_cache();
         self.recalculate_content_height_quiet();
         self.plain_text_changed();
         self.text_changed();
@@ -836,7 +870,8 @@ impl SujianEditorItem {
     }
 
     fn move_cursor_vertical(&mut self, down: bool, extend: bool) {
-        let lines = self.layout_lines(self.bounding_width());
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
         let Some((line_idx, x)) = self.cursor_line_and_x(&lines) else {
             return;
         };
@@ -856,7 +891,8 @@ impl SujianEditorItem {
     }
 
     fn move_to_line_edge(&mut self, end: bool, extend: bool) {
-        let lines = self.layout_lines(self.bounding_width());
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
         let Some((line_idx, _)) = self.cursor_line_and_x(&lines) else {
             return;
         };
@@ -902,14 +938,6 @@ impl SujianEditorItem {
         }
     }
 
-    fn recalculate_content_height(&mut self) {
-        let next = self.compute_content_height();
-        if (self.current_content_height - next).abs() > 0.5 {
-            self.current_content_height = next;
-            self.content_height_changed();
-        }
-    }
-
     fn recalculate_content_height_quiet(&mut self) {
         let next = self.compute_content_height();
         if (self.current_content_height - next).abs() > 0.5 {
@@ -918,29 +946,80 @@ impl SujianEditorItem {
         }
     }
 
-    fn compute_content_height(&self) -> f32 {
-        let lines = self.layout_lines(self.bounding_width());
+    fn compute_content_height(&mut self) -> f32 {
+        let width = self.bounding_width();
+        let padding = self.current_padding;
+        let font_size = self.current_font_pixel_size;
+        let line_spacing = self.current_line_spacing;
+        let lines = self.ensure_layout_cached(width);
         let height = lines
             .last()
-            .map(|line| line.y + line.height + self.current_padding as f64)
-            .unwrap_or((self.current_font_pixel_size * self.current_line_spacing + self.current_padding * 2.0) as f64);
+            .map(|line| line.y + line.height + padding as f64)
+            .unwrap_or((font_size * line_spacing + padding * 2.0) as f64);
         height.max(1.0) as f32
     }
 
-    fn layout_lines(&self, width: f64) -> Vec<VisualLine> {
-        layout_lines(
-            &self.buffer.text,
-            width,
-            self.current_font_pixel_size as f64,
-            self.current_line_spacing as f64,
-            self.current_padding as f64,
-            self.current_text_indent as f64,
-            &self.current_font_family.to_string(),
-        )
+    fn invalidate_layout_cache(&mut self) {
+        self.layout_cache = None;
+        clear_text_width_cache();
     }
 
-    fn hit_test(&self, x: f64, y: f64) -> usize {
-        let lines = self.layout_lines(self.bounding_width());
+    fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
+        let text_ptr = self.buffer.text.as_ptr() as usize;
+        let text_len = self.buffer.text.len();
+        let font_size = self.current_font_pixel_size;
+        let font_family = self.current_font_family.to_string();
+        let line_spacing = self.current_line_spacing;
+        let text_indent = self.current_text_indent;
+        let padding = self.current_padding;
+
+        let needs_refresh = match &self.layout_cache {
+            Some(c) => c.text_ptr != text_ptr
+                || c.text_len != text_len
+                || (c.width - width).abs() > 0.1
+                || (c.font_size - font_size).abs() > 0.1
+                || c.font_family != font_family
+                || (c.line_spacing - line_spacing).abs() > 0.01
+                || (c.text_indent - text_indent).abs() > 0.1
+                || (c.padding - padding).abs() > 0.1,
+            None => true,
+        };
+
+        if needs_refresh {
+            let lines = layout_lines(
+                &self.buffer.text,
+                width,
+                font_size as f64,
+                line_spacing as f64,
+                padding as f64,
+                text_indent as f64,
+                &font_family,
+            );
+            let content_height = lines
+                .last()
+                .map(|l| (l.y + l.height + padding as f64) as f32)
+                .unwrap_or((font_size * line_spacing + padding * 2.0) as f32)
+                .max(1.0);
+            self.layout_cache = Some(LayoutCache {
+                text_ptr,
+                text_len,
+                width,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                lines,
+                content_height,
+            });
+        }
+
+        &self.layout_cache.as_ref().unwrap().lines
+    }
+
+    fn hit_test(&mut self, x: f64, y: f64) -> usize {
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
         if lines.is_empty() {
             return 0;
         }
@@ -1010,13 +1089,19 @@ impl QQuickItem for SujianEditorItem {
 
 impl QQuickPaintedItem for SujianEditorItem {
     fn paint(&mut self, painter: &mut QPainter) {
-        self.recalculate_content_height_quiet();
         let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
+        let content_h = self.layout_cache.as_ref().map(|c| c.content_height).unwrap_or(self.current_content_height);
+        if (self.current_content_height - content_h).abs() > 0.5 {
+            self.current_content_height = content_h;
+            self.content_height_dirty.set(true);
+        }
+
         let item = self as &dyn QQuickItem;
-        let height = item.bounding_rect().height.max(self.current_content_height as f64);
+        let viewport_height = item.bounding_rect().height.max(content_h as f64);
         painter.set_render_hint(QPainterRenderHint::TextAntialiasing, true);
         painter.fill_rect(
-            QRectF { x: 0.0, y: 0.0, width, height },
+            QRectF { x: 0.0, y: 0.0, width, height: viewport_height },
             QBrush::from_color(QColor::from_rgba(0, 0, 0, 0)),
         );
 
@@ -1030,9 +1115,12 @@ impl QQuickPaintedItem for SujianEditorItem {
             painter->setFont(f);
         });
 
-        let lines = self.layout_lines(width);
+        let scroll_y = self.current_scroll_y as f64;
+        let vis_start = lines.partition_point(|l| l.y + l.height < scroll_y);
+        let vis_end = lines.len().min(lines.partition_point(|l| l.y < scroll_y + viewport_height) + 1);
+
         let selection = self.buffer.selection_range();
-        for line in &lines {
+        for line in &lines[vis_start..vis_end] {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
                 let sel_end = selection.1.min(line.end);
@@ -1062,7 +1150,7 @@ impl QQuickPaintedItem for SujianEditorItem {
 
         if !self.preedit_text.is_empty() {
             let pc = self.buffer.cursor;
-            for line in &lines {
+            for line in &lines[vis_start..vis_end] {
                 if pc >= line.start && pc <= line.end {
                     let prefix = &self.buffer.text[line.start..pc];
                     let x = line.x + measure_text_width(prefix, font_size, &font_family);
@@ -1139,19 +1227,34 @@ fn normalize_plain_text(text: &str) -> String {
     text.replace('\u{2029}', "\n").replace("\r\n", "\n").replace('\r', "\n")
 }
 
+thread_local! {
+    static TEXT_WIDTH_CACHE: RefCell<HashMap<(String, u32, String), f64>> = RefCell::new(HashMap::new());
+}
+
+fn clear_text_width_cache() {
+    TEXT_WIDTH_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
 fn measure_text_width(text: &str, font_size: f64, font_family: &str) -> f64 {
     if text.is_empty() {
         return 0.0;
     }
+    let fs_key = (font_size * 100.0).round() as u32;
+    let key = (text.to_string(), fs_key, font_family.to_string());
+    if let Some(cached) = TEXT_WIDTH_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return cached;
+    }
     let qtext: QString = text.to_string().into();
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
-    cpp!(unsafe [qtext as "QString", fs as "float", ff as "QString"] -> f64 as "double" {
+    let result = cpp!(unsafe [qtext as "QString", fs as "float", ff as "QString"] -> f64 as "double" {
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
         QFontMetricsF fm(font);
         return fm.horizontalAdvance(qtext);
-    })
+    });
+    TEXT_WIDTH_CACHE.with(|c| c.borrow_mut().insert(key, result));
+    result
 }
 
 fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, padding: f64, indent: f64, font_family: &str) -> Vec<VisualLine> {

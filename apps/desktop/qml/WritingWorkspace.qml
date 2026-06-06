@@ -30,7 +30,7 @@ Rectangle {
     property int drawerTab: 0
     property bool aiCapable: false
     property bool aiEnabled: false
-    property bool useSujianEditorItem: true
+    property bool useSujianEditorItem: false
 
     // Project-level ID — set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
@@ -718,6 +718,7 @@ Rectangle {
                                 smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
                                 cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
                                 typing_animation_enabled: false
+                                scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                             }
 
                             MouseArea {

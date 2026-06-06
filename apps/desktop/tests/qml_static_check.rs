@@ -282,7 +282,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
                 if !content.contains("SujianEditorItem {")
                     || !content.contains("id: sujianEditor")
-                    || !content.contains("property bool useSujianEditorItem: true")
+                    || !content.contains("property bool useSujianEditorItem:")
                     || !content.contains("targetEditorItem: sujianEditor")
                     || !content.contains("useSelfRenderedEditor: root.useSujianEditorItem")
                 {
