@@ -2017,4 +2017,361 @@ mod tests {
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();
     }
+
+    #[test]
+    fn test_is_document_content_path() {
+        use crate::sync_service::lww::is_document_content_path;
+        assert!(is_document_content_path(
+            "projects/p1/volumes/v1/chapters/c1/chapter.md"
+        ));
+        assert!(is_document_content_path(
+            "projects/abc/volumes/001/chapters/xyz/chapter.md"
+        ));
+        assert!(!is_document_content_path(
+            "projects/p1/project.json"
+        ));
+        assert!(!is_document_content_path(
+            "projects/p1/volumes/v1/chapters/c1/chapter.meta.json"
+        ));
+        assert!(!is_document_content_path(
+            "app-meta/settings/settings.sync.json"
+        ));
+        assert!(!is_document_content_path(
+            "projects/p1/volumes/v1/volume.json"
+        ));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_lww_document_conflict_no_overwrite() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version of chapter";
+        let local_content = "local modified version of chapter";
+        let remote_content = "remote modified version of chapter";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
+        let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(chapter_rel.to_string(), remote_content.to_string());
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_hash.clone(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        assert_eq!(res.status, SyncStatus::PartialConflict);
+        assert!(!res.conflicts.is_empty());
+        assert_eq!(res.conflicts[0].local_path, chapter_rel);
+        assert_eq!(res.conflicts[0].base_hash, base_hash);
+        assert!(!res
+            .overwritten_files
+            .contains(&chapter_rel.to_string()));
+        assert!(!res
+            .downloaded_files
+            .contains(&chapter_rel.to_string()));
+        assert!(!res
+            .uploaded_files
+            .contains(&chapter_rel.to_string()));
+
+        let local_after = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(local_after, local_content);
+
+        let conflict_files: Vec<String> = std::fs::read_dir(chapter_abs.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("remote-conflict"))
+            .collect();
+        assert!(
+            !conflict_files.is_empty(),
+            "Expected remote-conflict file to be created"
+        );
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_lww_document_only_local_changed_allows_upload() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version";
+        let local_content = "local modified version";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash);
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(chapter_rel.to_string(), base_content.to_string());
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: format!("{:x}", md5::compute(base_content.as_bytes())),
+                updated_at_ms: 1000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        assert_eq!(res.status, SyncStatus::LatestWinsApplied);
+        assert!(res
+            .uploaded_files
+            .contains(&chapter_rel.to_string()));
+        assert!(res.conflicts.is_empty());
+        assert!(res.overwritten_files.is_empty());
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_lww_document_only_remote_changed_downloads() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version";
+        let remote_content = "remote modified version";
+
+        std::fs::write(&chapter_abs, base_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash);
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(chapter_rel.to_string(), remote_content.to_string());
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_hash,
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        assert_eq!(res.status, SyncStatus::LatestWinsApplied);
+        assert!(res
+            .downloaded_files
+            .contains(&chapter_rel.to_string()));
+        assert!(res.conflicts.is_empty());
+        assert!(res.overwritten_files.is_empty());
+
+        let content_after = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(content_after, remote_content);
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_lww_document_remote_delete_local_modified_is_conflict() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version";
+        let local_content = "local modified version";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: String::new(),
+                updated_at_ms: 3000,
+                deleted_at_ms: Some(3000),
+                device_id: "device_remote".to_string(),
+                op: "delete".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), std::collections::HashMap::new());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            proxy_enabled: false,
+            proxy_type: "none".to_string(),
+            proxy_host: String::new(),
+            proxy_port: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        assert_eq!(res.status, SyncStatus::PartialConflict);
+        assert!(!res.conflicts.is_empty());
+
+        let local_after = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(local_after, local_content);
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
 }

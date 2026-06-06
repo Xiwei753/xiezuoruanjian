@@ -95,6 +95,7 @@ pub enum SyncStatus {
     Success,
     ConfiguredUntested,
     Conflict,
+    PartialConflict,
     RecoverableError(String),
     FatalError(String),
     DirtyRepoBlocked,

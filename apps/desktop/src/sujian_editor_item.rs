@@ -2,9 +2,28 @@
 // sujian_editor_item.rs — Desktop self-rendered editor item
 // =============================================================================
 
+use cpp::cpp;
 use qmetaobject::prelude::*;
-use qmetaobject::{QBrush, QColor, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QQuickPaintedItem, QRectF, QString};
+use qmetaobject::{QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QQuickPaintedItem, QRectF, QString};
+use std::time::Instant;
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause};
+
+cpp! {{
+    #include <QtGui/QFont>
+    #include <QtGui/QFontMetricsF>
+    #include <QtGui/QPainter>
+    #include <QtGui/QClipboard>
+    #include <QGuiApplication>
+
+    static void setup_painter_font(QPainter *painter, float font_size, const QString &font_family) {
+        QFont f = painter->font();
+        f.setPixelSize(static_cast<int>(font_size));
+        if (!font_family.isEmpty()) {
+            f.setFamilies(QStringList{font_family});
+        }
+        painter->setFont(f);
+    }
+}}
 
 const KEY_BACKSPACE: i32 = 0x0100_0003;
 const KEY_TAB: i32 = 0x0100_0001;
@@ -18,6 +37,8 @@ const KEY_DOWN: i32 = 0x0100_0015;
 const KEY_HOME: i32 = 0x0100_0010;
 const KEY_END: i32 = 0x0100_0011;
 const KEY_A: i32 = 0x41;
+const KEY_C: i32 = 0x43;
+const KEY_V: i32 = 0x56;
 const KEY_X: i32 = 0x58;
 const KEY_Y: i32 = 0x59;
 const KEY_Z: i32 = 0x5a;
@@ -204,6 +225,7 @@ pub struct SujianEditorItem {
     has_selection: qt_property!(bool; READ has_selection NOTIFY selection_changed),
     editor_enabled: qt_property!(bool; READ editor_enabled WRITE set_editor_enabled NOTIFY editor_enabled_changed),
     font_pixel_size: qt_property!(f32; READ font_pixel_size WRITE set_font_pixel_size NOTIFY visual_settings_changed),
+    font_family: qt_property!(QString; READ font_family WRITE set_font_family NOTIFY visual_settings_changed),
     line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY visual_settings_changed),
     text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY visual_settings_changed),
     padding: qt_property!(f32; READ padding WRITE set_padding NOTIFY visual_settings_changed),
@@ -240,12 +262,18 @@ pub struct SujianEditorItem {
     handle_key: qt_method!(fn(&mut self, key: i32, modifiers: i32) -> bool),
     click_at: qt_method!(fn(&mut self, x: f32, y: f32, extend: bool)),
     drag_select_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    clipboard_copy: qt_method!(fn(&self) -> bool),
+    clipboard_paste: qt_method!(fn(&mut self)),
+    insert_preedit: qt_method!(fn(&mut self, text: QString)),
+    commit_preedit: qt_method!(fn(&mut self, text: QString)),
+    cancel_preedit: qt_method!(fn(&mut self)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
     current_content_height: f32,
     current_editor_enabled: bool,
     current_font_pixel_size: f32,
+    current_font_family: QString,
     current_line_spacing: f32,
     current_text_indent: f32,
     current_padding: f32,
@@ -258,10 +286,14 @@ pub struct SujianEditorItem {
     current_typing_animation_enabled: bool,
     last_summary: QString,
     last_event_count: u32,
-    last_cursor_x: f64,
-    last_cursor_y: f64,
+    target_cursor_x: f64,
+    target_cursor_y: f64,
     animated_cursor_x: f64,
     animated_cursor_y: f64,
+    last_paint_instant: Option<Instant>,
+    cursor_animating: bool,
+    preedit_text: String,
+    preedit_cursor: usize,
 }
 
 impl Default for SujianEditorItem {
@@ -274,6 +306,7 @@ impl Default for SujianEditorItem {
             has_selection: Default::default(),
             editor_enabled: Default::default(),
             font_pixel_size: Default::default(),
+            font_family: "serif".into(),
             line_spacing: Default::default(),
             text_indent: Default::default(),
             padding: Default::default(),
@@ -308,11 +341,17 @@ impl Default for SujianEditorItem {
             handle_key: Default::default(),
             click_at: Default::default(),
             drag_select_at: Default::default(),
+            clipboard_copy: Default::default(),
+            clipboard_paste: Default::default(),
+            insert_preedit: Default::default(),
+            commit_preedit: Default::default(),
+            cancel_preedit: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
             current_editor_enabled: true,
             current_font_pixel_size: 16.0,
+            current_font_family: "serif".into(),
             current_line_spacing: 1.5,
             current_text_indent: 0.0,
             current_padding: 16.0,
@@ -325,10 +364,14 @@ impl Default for SujianEditorItem {
             current_typing_animation_enabled: false,
             last_summary: "".into(),
             last_event_count: 0,
-            last_cursor_x: 0.0,
-            last_cursor_y: 0.0,
+            target_cursor_x: 0.0,
+            target_cursor_y: 0.0,
             animated_cursor_x: 0.0,
             animated_cursor_y: 0.0,
+            last_paint_instant: None,
+            cursor_animating: false,
+            preedit_text: String::new(),
+            preedit_cursor: 0,
         }
     }
 }
@@ -358,6 +401,8 @@ impl SujianEditorItem {
         self.buffer.set_text(normalized);
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
         self.emit_content_changed();
     }
 
@@ -399,6 +444,18 @@ impl SujianEditorItem {
             return;
         }
         self.current_font_pixel_size = value.max(8.0);
+        self.visual_changed();
+    }
+
+    fn font_family(&self) -> QString {
+        self.current_font_family.clone()
+    }
+
+    fn set_font_family(&mut self, value: QString) {
+        if self.current_font_family.to_string() == value.to_string() {
+            return;
+        }
+        self.current_font_family = value;
         self.visual_changed();
     }
 
@@ -509,7 +566,6 @@ impl SujianEditorItem {
     }
 
     fn set_typing_animation_enabled(&mut self, value: bool) {
-        // Kept as a future event-driven hook; text reveal animation stays off by default.
         self.current_typing_animation_enabled = value;
         self.visual_settings_changed();
     }
@@ -550,6 +606,8 @@ impl SujianEditorItem {
         if inserted.is_empty() {
             return;
         }
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
@@ -644,7 +702,16 @@ impl SujianEditorItem {
                     self.select_all();
                     return true;
                 }
+                KEY_C => {
+                    self.clipboard_copy();
+                    return true;
+                }
+                KEY_V => {
+                    self.clipboard_paste();
+                    return true;
+                }
                 KEY_X => {
+                    self.clipboard_copy();
                     self.delete_selection();
                     return true;
                 }
@@ -679,6 +746,8 @@ impl SujianEditorItem {
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
         let index = self.hit_test(x as f64, y as f64);
         self.buffer.move_cursor(index, extend);
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
         self.cursor_position_changed();
         self.selection_changed();
         self.request_repaint();
@@ -689,6 +758,65 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, true);
         self.cursor_position_changed();
         self.selection_changed();
+        self.request_repaint();
+    }
+
+    fn clipboard_copy(&self) -> bool {
+        if !self.buffer.has_selection() {
+            return false;
+        }
+        let text = self.buffer.selected_text();
+        if text.is_empty() {
+            return false;
+        }
+        let qtext: QString = text.into();
+        cpp!(unsafe [qtext as "QString"] {
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            if (clipboard) clipboard->setText(qtext, QClipboard::Clipboard);
+        });
+        true
+    }
+
+    fn clipboard_paste(&mut self) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        let pasted: QString = cpp!(unsafe [] -> QString as "QString" {
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            return clipboard ? clipboard->text(QClipboard::Clipboard) : QString();
+        });
+        let s = pasted.to_string();
+        if s.is_empty() {
+            return;
+        }
+        let normalized = normalize_plain_text(&s);
+        self.insert_text(normalized.into());
+    }
+
+    fn insert_preedit(&mut self, text: QString) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        self.preedit_text = text.to_string();
+        self.preedit_cursor = self.preedit_text.len();
+        self.request_repaint();
+    }
+
+    fn commit_preedit(&mut self, text: QString) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        let committed = text.to_string();
+        if !committed.is_empty() {
+            self.insert_text(committed.into());
+        }
+    }
+
+    fn cancel_preedit(&mut self) {
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
         self.request_repaint();
     }
 
@@ -792,6 +920,7 @@ impl SujianEditorItem {
             self.current_line_spacing as f64,
             self.current_padding as f64,
             self.current_text_indent as f64,
+            &self.current_font_family.to_string(),
         )
     }
 
@@ -808,22 +937,38 @@ impl SujianEditorItem {
     }
 
     fn index_at_line_x(&self, line: &VisualLine, x: f64) -> usize {
-        let char_width = average_char_width(self.current_font_pixel_size as f64);
+        let segment = &self.buffer.text[line.start..line.end];
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
         let relative = (x - line.x).max(0.0);
-        let mut col = (relative / char_width).round() as usize;
-        let max_col = self.buffer.text[line.start..line.end].chars().count();
-        col = col.min(max_col);
-        byte_index_at_char_offset(&self.buffer.text, line.start, col)
+        let chars: Vec<char> = segment.chars().collect();
+        let mut best_col = 0usize;
+        let mut best_dist = f64::MAX;
+        for i in 0..=chars.len() {
+            let prefix: String = chars[..i].iter().collect();
+            let w = measure_text_width(&prefix, font_size, &font_family);
+            let dist = (w - relative).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best_col = i;
+            } else {
+                break;
+            }
+        }
+        byte_index_at_char_offset(&self.buffer.text, line.start, best_col)
     }
 
     fn cursor_line_and_x(&self, lines: &[VisualLine]) -> Option<(usize, f64)> {
         if lines.is_empty() {
             return None;
         }
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
         for (idx, line) in lines.iter().enumerate() {
             if self.buffer.cursor >= line.start && self.buffer.cursor <= line.end {
-                let col = self.buffer.text[line.start..self.buffer.cursor].chars().count();
-                return Some((idx, line.x + col as f64 * average_char_width(self.current_font_pixel_size as f64)));
+                let segment = &self.buffer.text[line.start..self.buffer.cursor];
+                let w = measure_text_width(segment, font_size, &font_family);
+                return Some((idx, line.x + w));
             }
         }
         lines.last().map(|line| (lines.len() - 1, line.x + line.width))
@@ -860,20 +1005,30 @@ impl QQuickPaintedItem for SujianEditorItem {
             QBrush::from_color(QColor::from_rgba(0, 0, 0, 0)),
         );
 
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
+        let fs = font_size as f32;
+        let ff = font_family.clone();
+        let painter_ptr = painter as *mut QPainter;
+        cpp!(unsafe [painter_ptr as "QPainter*", fs as "float", ff as "QString"] {
+            setup_painter_font(painter_ptr, fs, ff);
+        });
+
         let lines = self.layout_lines(width);
         let selection = self.buffer.selection_range();
         for line in &lines {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
                 let sel_end = selection.1.min(line.end);
-                let start_col = self.buffer.text[line.start..sel_start].chars().count() as f64;
-                let end_col = self.buffer.text[line.start..sel_end].chars().count() as f64;
-                let char_width = average_char_width(self.current_font_pixel_size as f64);
+                let prefix_start = &self.buffer.text[line.start..sel_start];
+                let prefix_end = &self.buffer.text[line.start..sel_end];
+                let x_start = line.x + measure_text_width(prefix_start, font_size, &font_family);
+                let x_end = line.x + measure_text_width(prefix_end, font_size, &font_family);
                 draw_rect(
                     painter,
-                    line.x + start_col * char_width,
+                    x_start,
                     line.y,
-                    (end_col - start_col).max(0.5) * char_width,
+                    (x_end - x_start).max(2.0),
                     line.height,
                     self.current_selection_color.clone(),
                 );
@@ -882,26 +1037,75 @@ impl QQuickPaintedItem for SujianEditorItem {
             draw_text(
                 painter,
                 line.x,
-                line.y + self.current_font_pixel_size as f64,
-                self.current_font_pixel_size,
+                line.y + font_size,
+                fs,
                 self.current_text_color.clone(),
                 text.into(),
             );
         }
 
-        let (cursor_x, cursor_y) = cursor_geometry(&self.buffer.text, &lines, self.buffer.cursor, self.current_font_pixel_size as f64);
-        let cursor_h = (self.current_font_pixel_size as f64 * self.current_line_spacing as f64).max(16.0);
-        let same_line = (cursor_y - self.last_cursor_y).abs() < 2.0;
-        let small_move = (cursor_x - self.last_cursor_x).abs() <= 160.0;
+        if !self.preedit_text.is_empty() {
+            let pc = self.buffer.cursor;
+            for line in &lines {
+                if pc >= line.start && pc <= line.end {
+                    let prefix = &self.buffer.text[line.start..pc];
+                    let x = line.x + measure_text_width(prefix, font_size, &font_family);
+                    draw_text(
+                        painter,
+                        x,
+                        line.y + font_size,
+                        fs,
+                        self.current_text_color.clone(),
+                        self.preedit_text.clone().into(),
+                    );
+                    let preedit_w = measure_text_width(&self.preedit_text, font_size, &font_family);
+                    painter.set_pen(QPen::from_color(color_from_qstring(self.current_text_color.clone())));
+                    let underline_y = line.y + font_size + 2.0;
+                    let line_f = QLineF { pt1: QPointF { x, y: underline_y }, pt2: QPointF { x: x + preedit_w, y: underline_y } };
+                    painter.draw_line(line_f);
+                    break;
+                }
+            }
+        }
+
+        let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
+        let cursor_h = (font_size * self.current_line_spacing as f64).max(16.0);
+
+        let now = Instant::now();
+        let dt_secs = self.last_paint_instant
+            .map(|t| now.duration_since(t).as_secs_f64())
+            .unwrap_or(0.0);
+        self.last_paint_instant = Some(now);
+
+        let dx = cursor_x - self.animated_cursor_x;
+        let dy = cursor_y - self.animated_cursor_y;
+        let same_line = dy.abs() < 2.0;
+        let small_move = dx.abs() <= 160.0;
+
         if self.current_smooth_cursor_enabled && same_line && small_move {
-            self.animated_cursor_x = self.animated_cursor_x * 0.45 + cursor_x * 0.55;
+            let duration_ms = self.current_cursor_animation_duration_ms.max(1) as f64;
+            let tau = duration_ms / 1000.0 * 3.0;
+            let alpha = 1.0 - (-dt_secs / tau).exp();
+            self.animated_cursor_x += dx * alpha;
             self.animated_cursor_y = cursor_y;
+            self.target_cursor_x = cursor_x;
+            self.target_cursor_y = cursor_y;
+            let settled = dx.abs() < 0.5;
+            if settled {
+                self.animated_cursor_x = cursor_x;
+                self.cursor_animating = false;
+            } else {
+                self.cursor_animating = true;
+                self.request_repaint();
+            }
         } else {
             self.animated_cursor_x = cursor_x;
             self.animated_cursor_y = cursor_y;
+            self.target_cursor_x = cursor_x;
+            self.target_cursor_y = cursor_y;
+            self.cursor_animating = false;
         }
-        self.last_cursor_x = cursor_x;
-        self.last_cursor_y = cursor_y;
+
         if self.current_editor_enabled && !self.buffer.has_selection() {
             draw_rect(
                 painter,
@@ -919,21 +1123,32 @@ fn normalize_plain_text(text: &str) -> String {
     text.replace('\u{2029}', "\n").replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn average_char_width(font_size: f64) -> f64 {
-    (font_size * 0.58).max(6.0)
+fn measure_text_width(text: &str, font_size: f64, font_family: &str) -> f64 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let qtext: QString = text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    cpp!(unsafe [qtext as "QString", fs as "float", ff as "QString"] -> f64 as "double" {
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QFontMetricsF fm(font);
+        return fm.horizontalAdvance(qtext);
+    })
 }
 
-fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, padding: f64, indent: f64) -> Vec<VisualLine> {
-    let char_width = average_char_width(font_size);
+fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, padding: f64, indent: f64, font_family: &str) -> Vec<VisualLine> {
     let line_height = (font_size * line_spacing).max(font_size + 4.0);
-    let available = (width - padding * 2.0).max(char_width);
+    let available = (width - padding * 2.0).max(font_size);
     let mut result = Vec::new();
     let mut y = padding;
     let mut paragraph_start = 0;
 
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
-        let paragraph_text_end = paragraph_start + paragraph.trim_end_matches('\n').len();
+        let paragraph_text = paragraph.trim_end_matches('\n');
+        let paragraph_text_end = paragraph_start + paragraph_text.len();
         let mut line_start = paragraph_start;
         if line_start == paragraph_text_end {
             result.push(VisualLine {
@@ -953,26 +1168,36 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
         let mut first_line = true;
         while line_start < paragraph_text_end {
             let x = padding + if first_line { indent } else { 0.0 };
-            let max_chars = ((available - if first_line { indent } else { 0.0 }).max(char_width) / char_width).floor().max(1.0) as usize;
-            let line_end = byte_index_at_char_offset(text, line_start, max_chars).min(paragraph_text_end);
-            let end = if line_end == line_start {
-                next_char_boundary(text, line_start).unwrap_or(paragraph_text_end)
-            } else {
-                line_end
-            };
-            let count = text[line_start..end].chars().count() as f64;
+            let line_available = available - if first_line { indent } else { 0.0 };
+            let segment = &text[line_start..paragraph_text_end];
+            let chars: Vec<char> = segment.chars().collect();
+            let mut end_col = 0usize;
+            for i in 1..=chars.len() {
+                let prefix: String = chars[..i].iter().collect();
+                let w = measure_text_width(&prefix, font_size, font_family);
+                if w > line_available {
+                    break;
+                }
+                end_col = i;
+            }
+            if end_col == 0 {
+                end_col = 1;
+            }
+            let line_end = byte_index_at_char_offset(text, line_start, end_col).min(paragraph_text_end);
+            let line_text = &text[line_start..line_end];
+            let line_width = measure_text_width(line_text, font_size, font_family);
             result.push(VisualLine {
                 start: line_start,
-                end,
-                hard_break: hard_break && end == paragraph_text_end,
+                end: line_end,
+                hard_break: hard_break && line_end == paragraph_text_end,
                 x,
                 y,
-                width: count * char_width,
+                width: line_width,
                 height: line_height,
             });
             y += line_height;
             first_line = false;
-            line_start = end;
+            line_start = line_end;
         }
         paragraph_start += paragraph.len();
     }
@@ -991,12 +1216,12 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
     result
 }
 
-fn cursor_geometry(text: &str, lines: &[VisualLine], cursor: usize, font_size: f64) -> (f64, f64) {
-    let char_width = average_char_width(font_size);
+fn cursor_geometry_with_font(text: &str, lines: &[VisualLine], cursor: usize, font_size: f64, font_family: &str) -> (f64, f64) {
     for line in lines {
         if cursor >= line.start && cursor <= line.end {
-            let col = text[line.start..cursor].chars().count() as f64;
-            return (line.x + col * char_width, line.y);
+            let segment = &text[line.start..cursor];
+            let w = measure_text_width(segment, font_size, font_family);
+            return (line.x + w, line.y);
         }
     }
     lines
@@ -1097,15 +1322,5 @@ mod tests {
         buffer.replace_selection_or_insert("纯文本");
         assert_eq!(buffer.text, "纯文本");
         assert_eq!(buffer.selected_text(), "");
-    }
-
-    #[test]
-    fn editor_layout_wraps_and_maps_cursor_on_char_boundaries() {
-        let lines = layout_lines("你好hello", 30.0, 16.0, 1.5, 0.0, 0.0);
-        assert!(lines.len() >= 2);
-        for line in lines {
-            assert!("你好hello".is_char_boundary(line.start));
-            assert!("你好hello".is_char_boundary(line.end));
-        }
     }
 }

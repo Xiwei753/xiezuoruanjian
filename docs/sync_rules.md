@@ -11,3 +11,53 @@
 ## 同步规则
 - 数据同步遵循工作区中定义的严格白名单/黑名单配置。
 - `app-meta/settings/settings.local.json` 和 `app-meta/sync/sync_secrets.local.json` 被列入黑名单，仅保留在本地。
+
+## 正文文件冲突保护
+
+### 保护范围
+
+以下文件路径被视为"正文内容"，享受三路合并保护，绝不静默覆盖：
+
+- `projects/*/volumes/*/chapters/*/chapter.md`（章节正文）
+
+判断函数：`lww::is_document_content_path(path)`
+
+### 三路合并策略
+
+对正文文件，使用 `base_hash / local_hash / remote_hash` 三路比较：
+
+| base_hash | local_hash | remote_hash | 结果 |
+|-----------|-----------|-------------|------|
+| == local | == local | == local | 无变更 |
+| == local | == local | != base | 仅远端改了，下载 |
+| == local | != base | == local | 仅本地改了，上传 |
+| != local | != base | != base | **双端都改了，冲突** |
+
+其中 `base_hash` 来自 `state.known_files`（上次成功同步后记录的 hash）。
+
+### 冲突处理
+
+当检测到双端修改冲突时：
+
+1. **不覆盖本地文件**：本地原文件保持不动
+2. **生成远端冲突副本**：`chapter.remote-conflict-YYYYMMDD-HHMMSS.md`
+3. **记录冲突信息**：写入 `app-meta/sync/conflicts.json`
+4. **返回 `PartialConflict` 状态**：表示部分同步成功，但有正文冲突需手动处理
+
+### 非正文文件
+
+配置文件、元数据文件（`project.json`、`settings.sync.json`、`volume.json` 等）继续使用 LWW（Last Writer Wins）策略，按时间戳比较。
+
+### 冲突状态
+
+| 状态 | 含义 |
+|------|------|
+| `Conflict` | Git 合并冲突（设置文件等） |
+| `PartialConflict` | 正文文件双端修改冲突，部分同步完成 |
+| `LatestWinsApplied` | LWW 策略已应用 |
+| `NoChanges` | 无变更 |
+
+### 删除保护
+
+- 本地修改 + 远端删除 = 冲突，不自动删除本地
+- 本地删除 + 远端修改 = 冲突，不自动删除本地

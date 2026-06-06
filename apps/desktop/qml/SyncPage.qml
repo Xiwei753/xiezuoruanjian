@@ -59,12 +59,17 @@ Item {
         var s = root.currentSyncStatus
         if (s === "success") return "success"
         if (s === "syncing") return "warning"
+        if (s === "partial_conflict") return "warning"
         if (root.isFailureStatus(s)) return "error"
         return "info"
     }
 
     function isFailureStatus(s) {
-        return s === "error" || s === "conflict" || s === "recoverable_error" || s === "fatal_error" || s === "auth_failed" || s === "network_failed"
+        return s === "error" || s === "conflict" || s === "partial_conflict" || s === "recoverable_error" || s === "fatal_error" || s === "auth_failed" || s === "network_failed"
+    }
+
+    function isConflictStatus(s) {
+        return s === "conflict" || s === "partial_conflict"
     }
 
     function statusText() {
@@ -72,6 +77,7 @@ Item {
         if (s === "success") return qsTr("已同步")
         if (s === "syncing") return qsTr("同步中")
         if (s === "conflict") return qsTr("存在冲突")
+        if (s === "partial_conflict") return qsTr("部分同步，存在正文冲突")
         if (root.isFailureStatus(s)) return qsTr("同步失败")
         if (root.backendRef && root.backendRef.sync_enabled) return qsTr("已配置")
         return qsTr("未配置")
@@ -250,7 +256,7 @@ Item {
                 text: qsTr("复制冲突信息")
                 theme: root.theme
                 variant: "danger"
-                visible: root.backendRef && root.currentSyncStatus === "conflict"
+                visible: root.backendRef && root.isConflictStatus(root.currentSyncStatus)
                 onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncResultArea.text)
             }
         }

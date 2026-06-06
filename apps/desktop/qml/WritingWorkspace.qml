@@ -130,16 +130,8 @@ Rectangle {
     }
 
     function copySelfRenderedSelection() {
-        if (!sujianEditor || !imeBridge || !sujianEditor.has_selection) return false;
-        var selected = sujianEditor.selected_text ? sujianEditor.selected_text() : "";
-        if (!selected || selected.length === 0) return false;
-        imeBridge.suppressCommit = true;
-        imeBridge.text = selected;
-        imeBridge.selectAll();
-        imeBridge.copy();
-        imeBridge.text = "";
-        imeBridge.suppressCommit = false;
-        return true;
+        if (!sujianEditor) return false;
+        return sujianEditor.clipboard_copy();
     }
 
     function handleSelfRenderedKey(event) {
@@ -153,12 +145,12 @@ Rectangle {
             return;
         }
         if (ctrl && event.key === Qt.Key_V) {
-            imeBridge.paste();
+            sujianEditor.clipboard_paste();
             event.accepted = true;
             return;
         }
         if (ctrl && event.key === Qt.Key_X) {
-            if (copySelfRenderedSelection()) {
+            if (sujianEditor.clipboard_copy()) {
                 editorController.markPotentialExplicitClear();
                 sujianEditor.delete_selection();
                 event.accepted = true;
@@ -715,6 +707,7 @@ Rectangle {
                                 visible: root.useSujianEditorItem
                                 editor_enabled: editorController.chapterId !== ""
                                 font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
+                                font_family: "serif"
                                 line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
                                 text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
                                 padding: dt ? dt.sp16 : 16

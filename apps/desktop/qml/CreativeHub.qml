@@ -138,7 +138,7 @@ Rectangle {
                                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
                                     if (s === "success") return dt ? dt.success : "#5CB880";
                                     if (s === "syncing") return dt ? dt.warning : "#E0A840";
-                                    if (s === "error" || s === "conflict") return dt ? dt.error : "#E06060";
+                                    if (s === "error" || s === "conflict" || s === "partial_conflict") return dt ? dt.error : "#E06060";
                                     return dt ? dt.textMuted : "#606470";
                                 }
                                 Layout.alignment: Qt.AlignVCenter
@@ -151,6 +151,7 @@ Rectangle {
                                     if (s === "syncing") return qsTr("同步中");
                                     if (s === "error") return qsTr("同步失败");
                                     if (s === "conflict") return qsTr("冲突");
+                                    if (s === "partial_conflict") return qsTr("正文冲突");
                                     return qsTr("已配置");
                                 }
                                 color: dt ? dt.onSurfaceVariant : "#8C9198"

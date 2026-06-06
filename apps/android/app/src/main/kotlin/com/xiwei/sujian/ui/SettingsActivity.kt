@@ -573,7 +573,7 @@ class SettingsActivity : AppCompatActivity() {
                 when (result) {
                     is BridgeResult.Success -> {
                         val syncResult = result.data
-                        if (syncResult.status == com.xiwei.sujian.model.SyncStatus.Conflict) {
+                        if (syncResult.status == com.xiwei.sujian.model.SyncStatus.Conflict || syncResult.status == com.xiwei.sujian.model.SyncStatus.PartialConflict) {
                                 val summary = syncResult.conflictSummary
                                 val settingConflicts = syncResult.settingsConflicts
                                 val msgBuilder = StringBuilder()

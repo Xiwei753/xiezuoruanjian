@@ -4,8 +4,8 @@ use crate::sync_service::github_api_client::{
 use crate::sync_service::github_backend::GitHubApiBackend;
 use crate::sync_service::scanner::scan_workspace_for_sync;
 use crate::sync_service::types::{
-    FirstSyncMode, ManifestFileRecord, SyncConfig, SyncKind, SyncManifest, SyncResult, SyncSecrets,
-    SyncState, SyncStatus,
+    FirstSyncMode, ManifestFileRecord, SyncConfig, SyncConflict, SyncKind, SyncManifest,
+    SyncResult, SyncSecrets, SyncState, SyncStatus,
 };
 use crate::sync_service::SyncService;
 use std::path::Path;
@@ -18,6 +18,40 @@ fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     } else {
         record.updated_at_ms
     }
+}
+
+pub(crate) fn is_document_content_path(path: &str) -> bool {
+    if path.contains("/chapters/") && path.ends_with("/chapter.md") {
+        return true;
+    }
+    false
+}
+
+fn three_way_resolve(
+    base_hash: &str,
+    local_hash: &str,
+    remote_hash: &str,
+) -> ThreeWayResult {
+    if local_hash == remote_hash {
+        return ThreeWayResult::NoConflict;
+    }
+    if local_hash == base_hash && remote_hash != base_hash {
+        return ThreeWayResult::RemoteChanged;
+    }
+    if local_hash != base_hash && remote_hash == base_hash {
+        return ThreeWayResult::LocalChanged;
+    }
+    if local_hash != base_hash && remote_hash != base_hash {
+        return ThreeWayResult::BothChanged;
+    }
+    ThreeWayResult::NoConflict
+}
+
+enum ThreeWayResult {
+    NoConflict,
+    LocalChanged,
+    RemoteChanged,
+    BothChanged,
 }
 
 pub(crate) fn perform_lww_sync(
@@ -300,6 +334,7 @@ fn execute_lww_sync_attempt(
     let mut local_deletes_count = Vec::new();
     let mut remote_deletes_count = Vec::new();
     let mut overwritten_files = Vec::new();
+    let mut doc_conflicts: Vec<SyncConflict> = Vec::new();
 
     let all_paths: std::collections::HashSet<String> = local_records
         .keys()
@@ -328,59 +363,160 @@ fn execute_lww_sync_attempt(
                 }
             }
             (Some(local_rec), Some(remote_rec)) => {
-                let local_time = lww_record_time(local_rec);
-                let remote_time = lww_record_time(remote_rec);
-                let mut remote_wins = false;
-                if remote_time > local_time {
-                    remote_wins = true;
-                } else if remote_time == local_time {
-                    if remote_rec.content_hash == local_rec.content_hash
-                        && remote_rec.op == local_rec.op
-                    {
-                        merged_manifest_files.insert(path.clone(), local_rec.clone());
-                        result.ignored_files.push(path);
-                        continue;
-                    }
-                    remote_wins = remote_rec.device_id > local_rec.device_id;
-                    eprintln!(
-                        "[sync] lww_tie_breaker path={} winner={} local_device={} remote_device={}",
-                        path,
-                        if remote_wins { "remote" } else { "local" },
-                        local_rec.device_id,
-                        remote_rec.device_id
-                    );
-                }
+                if is_document_content_path(&path) {
+                    let base_hash = state.known_files.get(&path).map(|s| s.as_str()).unwrap_or("");
+                    let local_hash = &local_rec.content_hash;
+                    let remote_hash = &remote_rec.content_hash;
 
-                if remote_wins {
-                    merged_manifest_files.insert(path.clone(), remote_rec.clone());
-                    if remote_rec.op == "upsert" {
-                        if local_rec.op == "delete"
-                            || local_rec.content_hash != remote_rec.content_hash
-                        {
-                            overwritten_files.push(path.clone());
-                            to_download.push(path);
+                    match three_way_resolve(base_hash, local_hash, remote_hash) {
+                        ThreeWayResult::NoConflict => {
+                            merged_manifest_files.insert(path.clone(), local_rec.clone());
+                            result.ignored_files.push(path);
                         }
-                    } else if remote_rec.op == "delete" {
-                        if local_rec.op == "upsert" {
-                            overwritten_files.push(path.clone());
-                        }
-                        to_delete_local.push(path.clone());
-                        remote_deletes_count.push(path);
-                    }
-                } else {
-                    merged_manifest_files.insert(path.clone(), local_rec.clone());
-                    if local_rec.op == "upsert" {
-                        if remote_rec.op == "delete"
-                            || remote_rec.content_hash != local_rec.content_hash
-                        {
-                            overwritten_files.push(path.clone());
+                        ThreeWayResult::LocalChanged => {
+                            merged_manifest_files.insert(path.clone(), local_rec.clone());
                             to_upload.push(path);
                         }
-                    } else if local_rec.op == "delete" {
-                        if remote_rec.op == "upsert" {
-                            overwritten_files.push(path.clone());
+                        ThreeWayResult::RemoteChanged => {
+                            merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                            if remote_rec.op == "upsert" {
+                                to_download.push(path);
+                            } else if remote_rec.op == "delete" {
+                                to_delete_local.push(path.clone());
+                                remote_deletes_count.push(path);
+                            }
                         }
-                        local_deletes_count.push(path);
+                        ThreeWayResult::BothChanged => {
+                            eprintln!(
+                                "[sync] document_conflict path={} local_hash={} remote_hash={} base_hash={}",
+                                path, local_hash, remote_hash, base_hash
+                            );
+
+                            let conflict = if remote_rec.op == "upsert" {
+                                if let Some((remote_content, _)) = github_get_content(
+                                    client,
+                                    api_base,
+                                    token,
+                                    &config.branch,
+                                    &path,
+                                )? {
+                                    let full_path = workspace_path.join(&path);
+                                    let filename = full_path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .to_string();
+                                    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                                    let conflict_filename =
+                                        format!("{}.remote-conflict-{}", filename, timestamp);
+                                    let conflict_path = full_path
+                                        .parent()
+                                        .unwrap_or(&full_path)
+                                        .join(&conflict_filename);
+                                    if let Some(parent) = conflict_path.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                    std::fs::write(&conflict_path, &remote_content).map_err(
+                                        |e| {
+                                            crate::Error::Other(format!(
+                                                "local_io_error: write conflict copy {}: {}",
+                                                path, e
+                                            ))
+                                        },
+                                    )?;
+
+                                    Some(SyncConflict {
+                                        local_path: path.clone(),
+                                        remote_path: path.clone(),
+                                        local_hash: local_hash.clone(),
+                                        remote_hash: remote_hash.clone(),
+                                        base_hash: base_hash.to_string(),
+                                        created_at: chrono::Utc::now().timestamp(),
+                                        description: format!(
+                                            "正文文件双端修改冲突。本地修改和远端修改均保留。远端副本: {}",
+                                            conflict_filename
+                                        ),
+                                    })
+                                } else {
+                                    None
+                                }
+                            } else if remote_rec.op == "delete" {
+                                Some(SyncConflict {
+                                    local_path: path.clone(),
+                                    remote_path: path.clone(),
+                                    local_hash: local_hash.clone(),
+                                    remote_hash: remote_hash.clone(),
+                                    base_hash: base_hash.to_string(),
+                                    created_at: chrono::Utc::now().timestamp(),
+                                    description: "正文文件冲突：本地已修改，远端已删除。保留本地文件。"
+                                        .to_string(),
+                                })
+                            } else {
+                                None
+                            };
+
+                            if let Some(conflict) = conflict {
+                                doc_conflicts.push(conflict);
+                            }
+
+                            merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        }
+                    }
+                } else {
+                    let local_time = lww_record_time(local_rec);
+                    let remote_time = lww_record_time(remote_rec);
+                    let mut remote_wins = false;
+                    if remote_time > local_time {
+                        remote_wins = true;
+                    } else if remote_time == local_time {
+                        if remote_rec.content_hash == local_rec.content_hash
+                            && remote_rec.op == local_rec.op
+                        {
+                            merged_manifest_files.insert(path.clone(), local_rec.clone());
+                            result.ignored_files.push(path);
+                            continue;
+                        }
+                        remote_wins = remote_rec.device_id > local_rec.device_id;
+                        eprintln!(
+                            "[sync] lww_tie_breaker path={} winner={} local_device={} remote_device={}",
+                            path,
+                            if remote_wins { "remote" } else { "local" },
+                            local_rec.device_id,
+                            remote_rec.device_id
+                        );
+                    }
+
+                    if remote_wins {
+                        merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                        if remote_rec.op == "upsert" {
+                            if local_rec.op == "delete"
+                                || local_rec.content_hash != remote_rec.content_hash
+                            {
+                                overwritten_files.push(path.clone());
+                                to_download.push(path);
+                            }
+                        } else if remote_rec.op == "delete" {
+                            if local_rec.op == "upsert" {
+                                overwritten_files.push(path.clone());
+                            }
+                            to_delete_local.push(path.clone());
+                            remote_deletes_count.push(path);
+                        }
+                    } else {
+                        merged_manifest_files.insert(path.clone(), local_rec.clone());
+                        if local_rec.op == "upsert" {
+                            if remote_rec.op == "delete"
+                                || remote_rec.content_hash != local_rec.content_hash
+                            {
+                                overwritten_files.push(path.clone());
+                                to_upload.push(path);
+                            }
+                        } else if local_rec.op == "delete" {
+                            if remote_rec.op == "upsert" {
+                                overwritten_files.push(path.clone());
+                            }
+                            local_deletes_count.push(path);
+                        }
                     }
                 }
             }
@@ -489,6 +625,10 @@ fn execute_lww_sync_attempt(
         remote_tree_files.get(SYNC_MANIFEST_PATH).cloned(),
     )?;
 
+    for conflict in &doc_conflicts {
+        let _ = SyncService::record_sync_conflict(workspace_path, conflict.clone(), None);
+    }
+
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
     state.last_synced_commit = None;
     state.last_error = None;
@@ -524,15 +664,41 @@ fn execute_lww_sync_attempt(
 
     crate::sync_service::SyncService::save_sync_state(workspace_path, state)?;
 
+    let has_doc_conflicts = !doc_conflicts.is_empty();
     let has_changes = !to_upload.is_empty()
         || !to_download.is_empty()
         || !local_deletes_count.is_empty()
         || !remote_deletes_count.is_empty();
-    result.status = if has_changes {
-        SyncStatus::LatestWinsApplied
+
+    if has_doc_conflicts {
+        result.status = SyncStatus::PartialConflict;
+        result.conflicts = doc_conflicts;
+        result.user_message = Some(format!(
+            "同步完成，但 {} 个正文文件存在双端修改冲突，已保留本地和远端两个版本，请手动处理。上传: {}, 下载: {} (网络模式: {})。",
+            result.conflicts.len(),
+            to_upload.len(),
+            to_download.len(),
+            mode
+        ));
+    } else if has_changes {
+        result.status = SyncStatus::LatestWinsApplied;
+        result.user_message = Some(format!(
+            "双向同步完成。上传: {}, 下载: {}, 本地删除: {}, 远端删除: {}, 覆盖: {} (网络模式: {})。",
+            to_upload.len(),
+            to_download.len(),
+            local_deletes_count.len(),
+            remote_deletes_count.len(),
+            overwritten_files.len(),
+            mode
+        ));
     } else {
-        SyncStatus::NoChanges
-    };
+        result.status = SyncStatus::NoChanges;
+        result.user_message = Some(format!(
+            "同步完成，无变更 (网络模式: {})。",
+            mode
+        ));
+    }
+
     result.uploaded_files = to_upload;
     result.downloaded_files = to_download;
     result.local_deletes = local_deletes_count;
@@ -540,16 +706,6 @@ fn execute_lww_sync_attempt(
     result.overwritten_files = overwritten_files;
     result.commit_hash = None;
     result.first_sync_mode = FirstSyncMode::AlreadyGitRepo;
-
-    result.user_message = Some(format!(
-        "双向同步完成。上传: {}, 下载: {}, 本地删除: {}, 远端删除: {}, 覆盖: {} (网络模式: {})。",
-        result.uploaded_files.len(),
-        result.downloaded_files.len(),
-        result.local_deletes.len(),
-        result.remote_deletes.len(),
-        result.overwritten_files.len(),
-        mode
-    ));
 
     eprintln!("[sync] github_api step=同步完成");
     Ok(result.clone())

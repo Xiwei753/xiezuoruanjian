@@ -593,6 +593,7 @@ fn sync_status_to_wire(status: &crate::sync_service::SyncStatus) -> String {
         crate::sync_service::SyncStatus::Success => "success",
         crate::sync_service::SyncStatus::ConfiguredUntested => "configured_untested",
         crate::sync_service::SyncStatus::Conflict => "conflict",
+        crate::sync_service::SyncStatus::PartialConflict => "partial_conflict",
         crate::sync_service::SyncStatus::RecoverableError(_) => "recoverable_error",
         crate::sync_service::SyncStatus::FatalError(_) => "fatal_error",
         crate::sync_service::SyncStatus::DirtyRepoBlocked => "dirty_repo_blocked",

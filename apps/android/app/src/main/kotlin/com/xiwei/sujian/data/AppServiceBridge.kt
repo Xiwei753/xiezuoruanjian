@@ -600,6 +600,7 @@ private fun String?.toSyncStatus(): SyncStatus = when (this) {
     "success" -> SyncStatus.Success
     "configured_untested" -> SyncStatus.ConfiguredUntested
     "conflict" -> SyncStatus.Conflict
+    "partial_conflict" -> SyncStatus.PartialConflict
     "recoverable_error" -> SyncStatus.RecoverableError
     "fatal_error" -> SyncStatus.FatalError
     "dirty_repo_blocked" -> SyncStatus.DirtyRepoBlocked
