@@ -1,26 +1,24 @@
 package com.xiwei.sujian.ui
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ValueAnimator
 import android.text.Editable
 import android.view.inputmethod.BaseInputConnection
 
 /**
  * TypingAnimationController — 打字动画控制器
  *
- * 监听 EditText 的文本变化，触发动画效果并管理动画生命周期。
+ * 监听 EditText 的文本变化，并为后续 Core 事件驱动动画保留入口。
  *
  * ## 架构定位
- * - WriterEditText → TypingAnimationController → TypingOverlayRenderer
+ * - WriterEditText → TypingAnimationController → AndroidEditorAnimationEvent 占位
  *
  * ## 职责边界
- * - **做**：文本变化监听、动画触发、动画参数管理
- * - **不做**：动画渲染（由 TypingOverlayRenderer 负责）
+ * - **做**：文本变化监听、动画参数管理、记录轻量事件占位
+ * - **不做**：动画渲染或正文 span 可见性修改
+ * - **禁止**：向正文 Editable 注入透明 ForegroundColorSpan 隐藏文字
  *
  * ## 使用场景
- * - 用户输入字符时触发动画
- * - 粘贴/删除时抑制动画
+ * - 用户输入/删除字符时记录后续自绘 renderer 可消费的事件占位
+ * - 粘贴/大段替换时不记录逐字动画
  */
 class TypingAnimationController(
     private val editText: WriterEditText,
@@ -51,10 +49,16 @@ class TypingAnimationController(
     private var cursorBeforeY = -1f
 
     private var isPasteOrDelete = false
+    var lastEditorAnimationEvent: AndroidEditorAnimationEvent? = null
+        private set
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
-        typingAnimationEnabled = enabled
+        // Android remains on WriterEditText during fast iteration, but the old
+        // transparent-span reveal path is disabled. Future SujianEditorView
+        // should consume writer_core EditorAnimationEvent instead.
+        typingAnimationEnabled = false
         typingAnimationDurationMs = durationMs
+        if (enabled) renderLayer.clear()
     }
 
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
@@ -96,23 +100,15 @@ class TypingAnimationController(
             cursorBeforeY = editText.layout.getLineBaseline(line).toFloat()
         }
 
-        if (count > 0 && count <= 3 && after == 0 && !matchesComposing && typingAnimationEnabled && typingAnimationDurationMs > 0 && s != null) {
+        if (count > 0 && count <= 3 && after == 0 && !matchesComposing && typingAnimationDurationMs > 0 && s != null) {
             val deletedText = s.subSequence(start, start + count).toString()
             if (deletedText.contains('\n') || deletedText.contains('\r')) return
-            val anim = OverlayAnim(
-                insertedStart = start,
-                insertedText = deletedText,
-                startX = cursorBeforeX,
-                startY = cursorBeforeY,
-                endX = cursorBeforeX,
-                endY = cursorBeforeY,
-                progress = 0f,
-                startTimeNanos = -1L,
-                durationMs = typingAnimationDurationMs,
-                hiddenSpan = null,
-                isDeletion = true
+            lastEditorAnimationEvent = AndroidEditorAnimationEvent(
+                kind = "delete",
+                start = start,
+                text = deletedText,
+                durationMs = typingAnimationDurationMs
             )
-            renderLayer.addTypingAnim(anim)
         }
 
         if (DEBUG_ANIM) {
@@ -151,7 +147,7 @@ class TypingAnimationController(
              return
         }
 
-        if (typingAnimationEnabled && lastAddedCount in 1..3 && lastAddedStart >= 0) {
+        if (lastAddedCount in 1..3 && lastAddedStart >= 0) {
             val start = lastAddedStart
             val end = kotlin.math.min(start + lastAddedCount, editable.length)
 
@@ -163,26 +159,15 @@ class TypingAnimationController(
                     return
                 }
 
-                val hiddenSpan = android.text.style.ForegroundColorSpan(android.graphics.Color.TRANSPARENT)
-                editText.isUpdatingSpanWrapper = true
-                editable.setSpan(hiddenSpan, start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                editText.isUpdatingSpanWrapper = false
-
-                val anim = OverlayAnim(
-                    insertedStart = start,
-                    insertedText = insertedText,
-                    startX = cursorBeforeX,
-                    startY = cursorBeforeY,
-                    progress = 0f,
-                    startTimeNanos = -1L,
-                    durationMs = typingAnimationDurationMs,
-                    hiddenSpan = hiddenSpan
+                lastEditorAnimationEvent = AndroidEditorAnimationEvent(
+                    kind = "insert",
+                    start = start,
+                    text = insertedText,
+                    durationMs = typingAnimationDurationMs
                 )
 
-                renderLayer.addTypingAnim(anim)
-
                 if (DEBUG_ANIM) {
-                    android.util.Log.d(TAG, "afterTextChanged - created anim: insertedStart=${anim.insertedStart}, length=${insertedText.length}")
+                    android.util.Log.d(TAG, "afterTextChanged - recorded event: start=$start, length=${insertedText.length}")
                 }
             }
             lastAddedStart = -1
@@ -194,3 +179,10 @@ class TypingAnimationController(
         renderLayer.clear()
     }
 }
+
+data class AndroidEditorAnimationEvent(
+    val kind: String,
+    val start: Int,
+    val text: String,
+    val durationMs: Long
+)

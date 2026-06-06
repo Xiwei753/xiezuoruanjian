@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui
 
 import android.content.Context
+import android.text.style.ForegroundColorSpan
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import com.xiwei.sujian.model.LocalSettings
@@ -26,7 +27,7 @@ class EditorSettingsTest {
     @Test
     fun testLocalSettingsDefaultValues() {
         val settings = LocalSettings()
-        assertTrue(settings.editorTypingAnimationEnabled)
+        assertFalse(settings.editorTypingAnimationEnabled)
         assertEquals(100, settings.editorTypingAnimationDurationMs)
         assertTrue(settings.editorSmoothCursorEnabled)
         assertEquals(80, settings.editorSmoothCursorDurationMs)
@@ -56,6 +57,22 @@ class EditorSettingsTest {
         // Disable typing animation setting
         editText.setTypingAnimationEnabled(false, 0L)
         assertEquals(0L, editText.typingAnimationDurationMs())
+    }
+
+    @Test
+    fun testTypingAnimationDoesNotInjectTransparentForegroundSpans() {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val editText = WriterEditText(context)
+
+        editText.setTypingAnimationEnabled(true, 150L)
+        editText.setText("你")
+
+        val spans = editText.text?.getSpans(0, editText.text?.length ?: 0, ForegroundColorSpan::class.java)
+            ?: emptyArray()
+        assertTrue(
+            "Android WriterEditText must not hide real body text with transparent spans",
+            spans.none { it.foregroundColor == android.graphics.Color.TRANSPARENT }
+        )
     }
 
     @Test

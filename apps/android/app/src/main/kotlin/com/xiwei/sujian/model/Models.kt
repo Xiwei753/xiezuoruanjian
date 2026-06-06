@@ -36,7 +36,7 @@ data class LocalSettings(
     val autoIndentWidth: Float = 2.0f,
     val windowWidth: Double = 800.0,
     val windowHeight: Double = 600.0,
-    val editorTypingAnimationEnabled: Boolean = true,
+    val editorTypingAnimationEnabled: Boolean = false,
     val editorSmoothCursorEnabled: Boolean = true,
     val editorTypingAnimationDurationMs: Int = 100,
     val editorSmoothCursorDurationMs: Int = 80,

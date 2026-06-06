@@ -9,6 +9,7 @@ Item {
 
     property var scrollView: null
     property var textArea: null
+    property var editorItem: null
 
     // Tuned in one place so WritingWorkspace stays a layout container.
     property real angleLinesPerStep: 3.0
@@ -23,12 +24,12 @@ Item {
 
     signal scrollActivity()
 
-    enabled: scrollView && textArea && textArea.enabled
+    enabled: scrollView && ((textArea && textArea.enabled) || (editorItem && editorItem.editor_enabled))
 
     property real wheelVelocityY: 0
     property real wheelLastTickMs: 0
     readonly property real wheelMaxVelocityY: Math.max(viewportHeight() * maxVelocityViewportMultiplier, minMaxVelocity)
-    readonly property real wheelStopVelocityY: Math.max((textArea ? textArea.font.pixelSize : 16) * stopVelocityFontMultiplier, minStopVelocity)
+    readonly property real wheelStopVelocityY: Math.max(wheelFontPixelSize() * stopVelocityFontMultiplier, minStopVelocity)
 
     function viewportHeight() {
         return scrollView ? scrollView.availableHeight : 0;
@@ -49,9 +50,16 @@ Item {
     }
 
     function wheelLineHeight() {
+        if (editorItem) return Math.max(editorItem.font_pixel_size * 1.35, 18);
         if (!textArea) return 18;
         var rectHeight = textArea.cursorRectangle ? textArea.cursorRectangle.height : 0;
         return Math.max(rectHeight || 0, textArea.font.pixelSize * 1.35, 18);
+    }
+
+    function wheelFontPixelSize() {
+        if (editorItem) return editorItem.font_pixel_size || 16;
+        if (textArea) return textArea.font.pixelSize || 16;
+        return 16;
     }
 
     function wheelDeltaPixels(event) {

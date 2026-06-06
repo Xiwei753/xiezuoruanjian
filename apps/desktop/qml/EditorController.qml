@@ -28,7 +28,9 @@ QtObject {
     signal emptySaveBlocked(string message)
 
     // Target UI bindings
+    property var targetEditorItem: null
     property var targetTextArea: null
+    property bool useSelfRenderedEditor: false
     property var backendRef: null
     property var dt: null
 
@@ -86,6 +88,7 @@ QtObject {
 
     function colorToHex(colorValue, fallback) {
         if (colorValue === undefined || colorValue === null) return fallback;
+        if (typeof colorValue === "string") return colorValue;
         var r = Math.round(Math.max(0, Math.min(1, colorValue.r)) * 255);
         var g = Math.round(Math.max(0, Math.min(1, colorValue.g)) * 255);
         var b = Math.round(Math.max(0, Math.min(1, colorValue.b)) * 255);
@@ -121,7 +124,7 @@ QtObject {
 
     property DocumentHandler docHandler: DocumentHandler {
         id: docHandler
-        document: targetTextArea ? targetTextArea.textDocument : null
+        document: (!useSelfRenderedEditor && targetTextArea) ? targetTextArea.textDocument : null
         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
         text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
         text_color: dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "#E2E2E5"
@@ -140,27 +143,16 @@ QtObject {
 
     // Connections to TextArea signals
     property var textConnections: Connections {
-        target: targetTextArea
+        target: (!controller.useSelfRenderedEditor && targetTextArea) ? targetTextArea : null
         function onTextChanged() {
-            if (controller.saveGuardActive()) return;
+            controller.handlePlainTextChanged("text_changed");
+        }
+    }
 
-            var read = controller.readEditorPlainText();
-            if (read.suspiciousEmpty) {
-                controller.blockUnsafeEmptySave("text_changed", read);
-                return;
-            }
-
-            var plainText = read.text;
-            if (plainText.length > 0) {
-                controller.explicitEmptySavePending = false;
-            }
-            controller.reportStatsIfChanged(plainText);
-            if (controller.chapterId && controller.backendRef) {
-                controller.backendRef.calculate_word_count(plainText);
-                if (settingsBackend && settingsBackend.setting_auto_save_enabled) {
-                    controller.autoSaveTimer.restart();
-                }
-            }
+    property var editorItemConnections: Connections {
+        target: (controller.useSelfRenderedEditor && targetEditorItem) ? targetEditorItem : null
+        function onText_changed() {
+            controller.handlePlainTextChanged("sujian_editor_text_changed");
         }
     }
 
@@ -195,7 +187,38 @@ QtObject {
         return normalizePlainText(text);
     }
 
+    function readEditorItemPlainText() {
+        if (!targetEditorItem) return "";
+        try {
+            if (targetEditorItem.get_plain_text) {
+                return normalizePlainText(targetEditorItem.get_plain_text());
+            }
+            if (targetEditorItem.plain_text !== undefined) {
+                return normalizePlainText(targetEditorItem.plain_text);
+            }
+        } catch (e) {
+            logWriterWarning("editor_item_get_plain_text_failed", "error=" + e);
+        }
+        return "";
+    }
+
     function readEditorPlainText() {
+        if (useSelfRenderedEditor && targetEditorItem) {
+            var editorItemText = readEditorItemPlainText();
+            var hadKnownEditorItemContent = previousEditorText.length > 0 || lastSavedEditorText.length > 0;
+            if (editorItemText.length === 0 && hadKnownEditorItemContent && hasRecentExplicitClearCandidate()) {
+                explicitEmptySavePending = true;
+            }
+            return {
+                "text": editorItemText,
+                "docLength": -1,
+                "textAreaLength": -1,
+                "editorItemLength": editorItemText.length,
+                "usedFallback": false,
+                "suspiciousEmpty": editorItemText.length === 0 && hadKnownEditorItemContent && !explicitEmptySavePending
+            };
+        }
+
         var docText = "";
         try {
             docText = normalizePlainText(docHandler.get_plain_text());
@@ -222,21 +245,34 @@ QtObject {
             "text": text,
             "docLength": docText.length,
             "textAreaLength": textAreaText.length,
+            "editorItemLength": -1,
             "usedFallback": usedFallback,
             "suspiciousEmpty": suspiciousEmpty
         };
     }
 
     function saveGuardActive() {
-        return isLoadingChapter || isApplyingFormat || isApplyingSettings || (docHandler && docHandler.visual_format_mutating);
+        return isLoadingChapter || isApplyingFormat || isApplyingSettings || (!useSelfRenderedEditor && docHandler && docHandler.visual_format_mutating);
     }
 
     function hasRecentExplicitClearCandidate() {
+        if (useSelfRenderedEditor && targetEditorItem) {
+            return readEditorItemPlainText().length === 0 && (Date.now() - lastPotentialExplicitClearAtMs) < 2000;
+        }
         if (!targetTextArea || !targetTextArea.activeFocus || (targetTextArea.length || 0) !== 0) return false;
         return (Date.now() - lastPotentialExplicitClearAtMs) < 2000;
     }
 
     function markPotentialExplicitClear() {
+        if (useSelfRenderedEditor && targetEditorItem) {
+            if (saveGuardActive()) return;
+            var editorTextLen = readEditorItemPlainText().length;
+            var hasSelection = targetEditorItem.has_selection === true;
+            if (editorTextLen <= 1 || hasSelection) {
+                lastPotentialExplicitClearAtMs = Date.now();
+            }
+            return;
+        }
         if (!targetTextArea || !targetTextArea.activeFocus || saveGuardActive()) return;
         var currentLen = targetTextArea.length || 0;
         var selectedLen = targetTextArea.selectedText ? targetTextArea.selectedText.length : 0;
@@ -258,7 +294,8 @@ QtObject {
                 + ", previousLen=" + previousEditorText.length
                 + ", lastSavedLen=" + lastSavedEditorText.length
                 + ", docLen=" + (read ? read.docLength : -1)
-                + ", textAreaLen=" + (read ? read.textAreaLength : -1);
+                + ", textAreaLen=" + (read ? read.textAreaLength : -1)
+                + ", editorItemLen=" + (read ? read.editorItemLength : -1);
         logWriterWarning("empty_save_blocked", details);
         if (backendRef) {
             backendRef.save_status = qsTr("已阻止空内容保存");
@@ -266,6 +303,28 @@ QtObject {
         autoSaveTimer.stop();
         pendingAutoSaveAfterGuard = false;
         return false;
+    }
+
+    function handlePlainTextChanged(reason) {
+        if (controller.saveGuardActive()) return;
+
+        var read = controller.readEditorPlainText();
+        if (read.suspiciousEmpty) {
+            controller.blockUnsafeEmptySave(reason, read);
+            return;
+        }
+
+        var plainText = read.text;
+        if (plainText.length > 0) {
+            controller.explicitEmptySavePending = false;
+        }
+        controller.reportStatsIfChanged(plainText);
+        if (controller.chapterId && controller.backendRef) {
+            controller.backendRef.calculate_word_count(plainText);
+            if (settingsBackend && settingsBackend.setting_auto_save_enabled) {
+                controller.autoSaveTimer.restart();
+            }
+        }
     }
 
     // Unified save entry — always writes normalized plain text via backend.
@@ -306,7 +365,9 @@ QtObject {
     // Load chapter: content comes from Rust core as plain text.
     // Returns the full result object so caller can update state.
     function loadChapterContentWithIds(pId, vId, cId) {
-        if (!cId || !pId || !vId || !backendRef || !targetTextArea) return null;
+        if (!cId || !pId || !vId || !backendRef) return null;
+        if (useSelfRenderedEditor && !targetEditorItem) return null;
+        if (!useSelfRenderedEditor && !targetTextArea) return null;
         if (isLoadingChapter) return null;
 
         isLoadingChapter = true;
@@ -321,12 +382,17 @@ QtObject {
 
         var content = normalizePlainText(result.data ? result.data.content || "" : "");
 
-        // TextArea/Core own plain-text content; DocumentHandler owns display format.
-        targetTextArea.textFormat = TextEdit.PlainText;
-        targetTextArea.text = content;
-        logRenderColorProbe("open_chapter_before_apply_format");
-        docHandler.apply_format();
-        docHandler.clear_undo_stack();
+        if (useSelfRenderedEditor && targetEditorItem) {
+            targetEditorItem.set_plain_text(content);
+            targetEditorItem.clear_undo_stack();
+        } else {
+            // TextArea fallback owns plain text; DocumentHandler owns display format only.
+            targetTextArea.textFormat = TextEdit.PlainText;
+            targetTextArea.text = content;
+            logRenderColorProbe("open_chapter_before_apply_format");
+            docHandler.apply_format();
+            docHandler.clear_undo_stack();
+        }
 
         previousEditorText = content;
         lastSavedEditorText = content;
@@ -354,7 +420,7 @@ QtObject {
             pendingAutoSaveAfterGuard = true;
             autoSaveTimer.stop();
         }
-        if (docHandler) {
+        if (!useSelfRenderedEditor && docHandler) {
             logRenderColorProbe("apply_settings_before_apply_format");
             docHandler.apply_format();
         }
@@ -362,7 +428,8 @@ QtObject {
     }
 
     function formatText() {
-        if (!targetTextArea) return;
+        if (useSelfRenderedEditor && !targetEditorItem) return;
+        if (!useSelfRenderedEditor && !targetTextArea) return;
         var read = readEditorPlainText();
         if (read.suspiciousEmpty) {
             blockUnsafeEmptySave("format_text_read", read);
@@ -388,13 +455,18 @@ QtObject {
 
         isApplyingFormat = true;
         autoSaveTimer.stop();
-        var cursor = targetTextArea.cursorPosition;
         try {
-            targetTextArea.textFormat = TextEdit.PlainText;
-            targetTextArea.text = plain;
-            logRenderColorProbe("format_text_before_apply_format");
-            docHandler.apply_format();
-            targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
+            if (useSelfRenderedEditor && targetEditorItem) {
+                targetEditorItem.set_plain_text(plain);
+                targetEditorItem.clear_undo_stack();
+            } else {
+                var cursor = targetTextArea.cursorPosition;
+                targetTextArea.textFormat = TextEdit.PlainText;
+                targetTextArea.text = plain;
+                logRenderColorProbe("format_text_before_apply_format");
+                docHandler.apply_format();
+                targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
+            }
         } finally {
             isApplyingFormat = false;
         }

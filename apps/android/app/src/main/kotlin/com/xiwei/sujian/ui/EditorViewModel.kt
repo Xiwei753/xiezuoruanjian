@@ -58,7 +58,7 @@ data class EditorSettingsState(
     val lineSpacingMultiplier: Float = 1.5f,
     val autoIndentEnabled: Boolean = true,
     val autoIndentWidth: Float = 2.0f,
-    val typingAnimationEnabled: Boolean = true,
+    val typingAnimationEnabled: Boolean = false,
     val typingAnimationDurationMs: Long = 100L,
     val smoothCursorEnabled: Boolean = true,
     val smoothCursorDurationMs: Long = 80L,

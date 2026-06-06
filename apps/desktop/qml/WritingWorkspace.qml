@@ -16,6 +16,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Sujian 1.0
 
 Rectangle {
     id: root
@@ -29,6 +30,7 @@ Rectangle {
     property int drawerTab: 0
     property bool aiCapable: false
     property bool aiEnabled: false
+    property bool useSujianEditorItem: true
 
     // Project-level ID — set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
@@ -64,7 +66,9 @@ Rectangle {
 
     EditorController {
         id: editorController
+        targetEditorItem: sujianEditor
         targetTextArea: editorArea
+        useSelfRenderedEditor: root.useSujianEditorItem
         backendRef: root.backendRef
         dt: root.dt
         onEmptySaveBlocked: function(msg) {
@@ -122,6 +126,55 @@ Rectangle {
                 root.backendRef.selected_chapter_id,
                 ""
             );
+        }
+    }
+
+    function copySelfRenderedSelection() {
+        if (!sujianEditor || !imeBridge || !sujianEditor.has_selection) return false;
+        var selected = sujianEditor.selected_text ? sujianEditor.selected_text() : "";
+        if (!selected || selected.length === 0) return false;
+        imeBridge.suppressCommit = true;
+        imeBridge.text = selected;
+        imeBridge.selectAll();
+        imeBridge.copy();
+        imeBridge.text = "";
+        imeBridge.suppressCommit = false;
+        return true;
+    }
+
+    function handleSelfRenderedKey(event) {
+        if (!root.useSujianEditorItem || !sujianEditor) return;
+
+        var ctrl = (event.modifiers & Qt.ControlModifier) !== 0;
+        var alt = (event.modifiers & Qt.AltModifier) !== 0;
+        var meta = (event.modifiers & Qt.MetaModifier) !== 0;
+        if (ctrl && event.key === Qt.Key_C) {
+            event.accepted = copySelfRenderedSelection();
+            return;
+        }
+        if (ctrl && event.key === Qt.Key_V) {
+            imeBridge.paste();
+            event.accepted = true;
+            return;
+        }
+        if (ctrl && event.key === Qt.Key_X) {
+            if (copySelfRenderedSelection()) {
+                editorController.markPotentialExplicitClear();
+                sujianEditor.delete_selection();
+                event.accepted = true;
+            }
+            return;
+        }
+        if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete) {
+            editorController.markPotentialExplicitClear();
+        }
+        if (sujianEditor.handle_key && sujianEditor.handle_key(event.key, event.modifiers)) {
+            event.accepted = true;
+            return;
+        }
+        if (!ctrl && !alt && !meta && event.text && event.text.length > 0) {
+            sujianEditor.insert_text(event.text);
+            event.accepted = true;
         }
     }
 
@@ -638,7 +691,7 @@ Rectangle {
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
                         contentWidth: availableWidth
-                        contentHeight: Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight, availableHeight)
+                        contentHeight: Math.max(editorCanvas.height, availableHeight)
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                         ScrollBar.vertical: ScrollBar {
                             policy: ScrollBar.AsNeeded
@@ -648,55 +701,124 @@ Rectangle {
                             anchors.right: editorScroll.right
                         }
 
-                        TextArea {
-                            id: editorArea
-                            property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
+                        Item {
+                            id: editorCanvas
+                            readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + (dt ? dt.sp16 : 16) * 2, editorScroll.availableHeight)
                             width: editorScroll.availableWidth
-                            height: Math.max(implicitHeight, emptyContentMinimumHeight)
-                            color: dt ? dt.editorText : "#E2E2E5"
-                            selectedTextColor: dt ? dt.selectedText : "#CCE5FF"
-                            selectionColor: dt ? dt.primary : "#006497"
-                            font.pixelSize: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
-                            font.family: "serif"
-                            textFormat: TextEdit.PlainText
-                            wrapMode: TextArea.Wrap
-                            verticalAlignment: TextInput.AlignTop
-                            background: Rectangle { color: "transparent" }
-                            enabled: editorController.chapterId !== ""
-                            focus: true
-                            activeFocusOnTab: true
-                            selectByMouse: true
-                            persistentSelection: true
-                            leftPadding: dt ? dt.sp16 : 16
-                            rightPadding: dt ? dt.sp16 : 16
-                            topPadding: dt ? dt.sp16 : 16
-                            bottomPadding: dt ? dt.sp16 : 16
-                            implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
+                            height: root.useSujianEditorItem
+                                    ? Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
+                                    : Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight)
 
-                            cursorVisible: activeFocus && enabled
-                            cursorDelegate: Item {} // Hide native cursor; SmoothCursor owns the visible cursor.
-
-                            text: ""
-
-                            Keys.onPressed: function(event) {
-                                if (event.key === Qt.Key_Backspace ||
-                                    event.key === Qt.Key_Delete ||
-                                    (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
-                                    editorController.markPotentialExplicitClear();
-                                }
-                                if ((event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) ||
-                                    (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
-                                    smoothCursorOverlay.snapNextCursorUpdate();
-                                }
+                            SujianEditorItem {
+                                id: sujianEditor
+                                anchors.fill: parent
+                                visible: root.useSujianEditorItem
+                                editor_enabled: editorController.chapterId !== ""
+                                font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
+                                line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
+                                text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
+                                padding: dt ? dt.sp16 : 16
+                                text_color: editorController.colorToHex(dt ? dt.editorText : "#E2E2E5", "#E2E2E5")
+                                selection_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
+                                selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
+                                cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
+                                smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
+                                cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
+                                typing_animation_enabled: false
                             }
 
-                            TapHandler {
+                            MouseArea {
+                                anchors.fill: parent
+                                visible: root.useSujianEditorItem
+                                enabled: root.useSujianEditorItem && sujianEditor.editor_enabled
                                 acceptedButtons: Qt.LeftButton
-                                gesturePolicy: TapHandler.WithinBounds
-                                onPressedChanged: {
-                                    if (pressed) smoothCursorOverlay.snapNextCursorUpdate();
+                                hoverEnabled: true
+                                onPressed: function(mouse) {
+                                    sujianEditor.click_at(mouse.x, mouse.y, (mouse.modifiers & Qt.ShiftModifier) !== 0);
+                                    imeBridge.forceActiveFocus();
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (pressed) sujianEditor.drag_select_at(mouse.x, mouse.y);
                                 }
                             }
+
+                            TextArea {
+                                id: editorArea
+                                property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
+                                width: editorScroll.availableWidth
+                                height: Math.max(implicitHeight, emptyContentMinimumHeight)
+                                visible: !root.useSujianEditorItem
+                                color: dt ? dt.editorText : "#E2E2E5"
+                                selectedTextColor: dt ? dt.selectedText : "#CCE5FF"
+                                selectionColor: dt ? dt.primary : "#006497"
+                                font.pixelSize: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
+                                font.family: "serif"
+                                textFormat: TextEdit.PlainText
+                                wrapMode: TextArea.Wrap
+                                verticalAlignment: TextInput.AlignTop
+                                background: Rectangle { color: "transparent" }
+                                enabled: !root.useSujianEditorItem && editorController.chapterId !== ""
+                                focus: !root.useSujianEditorItem
+                                activeFocusOnTab: true
+                                selectByMouse: true
+                                persistentSelection: true
+                                leftPadding: dt ? dt.sp16 : 16
+                                rightPadding: dt ? dt.sp16 : 16
+                                topPadding: dt ? dt.sp16 : 16
+                                bottomPadding: dt ? dt.sp16 : 16
+                                implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
+
+                                cursorVisible: activeFocus && enabled
+                                cursorDelegate: Item {} // Hide native cursor; SmoothCursor owns the visible cursor in fallback mode.
+
+                                text: ""
+
+                                Keys.onPressed: function(event) {
+                                    if (event.key === Qt.Key_Backspace ||
+                                        event.key === Qt.Key_Delete ||
+                                        (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
+                                        editorController.markPotentialExplicitClear();
+                                    }
+                                    if ((event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) ||
+                                        (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
+                                        smoothCursorOverlay.snapNextCursorUpdate();
+                                    }
+                                }
+
+                                TapHandler {
+                                    acceptedButtons: Qt.LeftButton
+                                    gesturePolicy: TapHandler.WithinBounds
+                                    onPressedChanged: {
+                                        if (pressed) smoothCursorOverlay.snapNextCursorUpdate();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    TextInput {
+                        id: imeBridge
+                        property bool suppressCommit: false
+                        width: 1
+                        height: 1
+                        x: -1000
+                        y: -1000
+                        opacity: 0
+                        visible: root.useSujianEditorItem
+                        focus: root.useSujianEditorItem
+                        enabled: root.useSujianEditorItem && sujianEditor.editor_enabled
+                        inputMethodHints: Qt.ImhNoPredictiveText
+                        selectByMouse: false
+                        onTextChanged: {
+                            if (suppressCommit || !root.useSujianEditorItem || !sujianEditor || text.length === 0) return;
+                            var committed = text;
+                            suppressCommit = true;
+                            text = "";
+                            suppressCommit = false;
+                            sujianEditor.insert_text(committed);
+                        }
+                        Keys.onPressed: function(event) {
+                            root.handleSelfRenderedKey(event);
                         }
                     }
 
@@ -704,14 +826,15 @@ Rectangle {
                         id: editorWheelScroller
                         anchors.fill: editorScroll
                         scrollView: editorScroll
-                        textArea: editorArea
+                        textArea: root.useSujianEditorItem ? null : editorArea
+                        editorItem: root.useSujianEditorItem ? sujianEditor : null
                         onScrollActivity: smoothCursorOverlay.snapNextCursorUpdate()
                     }
 
                     EditorTypingAnimator {
                         id: editorTypingAnimator
                         anchors.fill: paperBg
-                        targetTextArea: editorArea
+                        targetTextArea: root.useSujianEditorItem ? null : editorArea
                         documentHandler: editorController.docHandler
                         overlayItem: paperBg
                         dt: root.dt
@@ -726,7 +849,8 @@ Rectangle {
                     SmoothCursor {
                         id: smoothCursorOverlay
                         anchors.fill: paperBg
-                        targetTextArea: editorArea
+                        visible: !root.useSujianEditorItem
+                        targetTextArea: root.useSujianEditorItem ? null : editorArea
                         overlayItem: paperBg
                         dt: root.dt
                         isScrolling: editorScroll.editorIsScrolling

@@ -52,6 +52,8 @@
 
 ## Android 编辑器路线
 - 当前 `WriterEditText` + overlay 只能作为过渡形态。
+- 当前过渡形态不得再通过透明 `ForegroundColorSpan` 或 hidden span 隐藏真实正文文字来做吐字动画。
+- `TypingAnimationController` 只允许记录轻量动画事件占位；不得修改正文 `Editable` 的可见性或内容格式。
 - 最终路线是 `SujianEditorView : View` 自绘正文、选区、光标和动画。
 - 输入法通过 `onCreateInputConnection()` 和自定义 `InputConnection` 接入。
 - Kotlin 层不得自行猜跨平台文本 diff；插入、删除、粘贴、撤销、重做和 IME composition 后续必须映射为 Core `EditorTransaction`。

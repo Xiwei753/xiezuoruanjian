@@ -34,6 +34,7 @@ use std::sync::{Mutex, OnceLock};
 mod backend;
 mod document_handler;
 mod starmap_bridge;
+mod sujian_editor_item;
 mod sync_bridge;
 mod writing_bridge;
 
@@ -266,6 +267,12 @@ fn main() {
         1,
         0,
         CStr::from_bytes_with_nul(b"DocumentHandler\0").unwrap(),
+    );
+    qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
+        CStr::from_bytes_with_nul(b"Sujian\0").unwrap(),
+        1,
+        0,
+        CStr::from_bytes_with_nul(b"SujianEditorItem\0").unwrap(),
     );
 
     let qml_path = "qrc:/main.qml";

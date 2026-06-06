@@ -32,6 +32,8 @@
 - 内部维护文本、选区、光标、滚动、布局缓存和动画列表。
 - 使用 `QTextLayout` 负责 Unicode 文本布局、换行、光标位置和绘制辅助。
 - QML `WritingWorkspace` 最终只放 `SujianEditorItem`，不再把 `TextArea` 作为主显示层。
+- 当前 Desktop 已以 `SujianEditorItem` 作为默认主编辑器，旧 `TextArea` 仅保留隐藏应急 fallback。
+- 由于 Rust `qmetaobject` 当前不直接暴露 IME virtual event，Desktop 首版用隐藏平台输入桥只转发提交后的纯文本和按键命令；正文状态、保存和事务仍归 `SujianEditorItem`。
 
 ### 第四阶段：Android SujianEditorView
 
@@ -39,12 +41,17 @@
 - `onDraw(Canvas)` 画正文、选区、光标和动画。
 - `onCreateInputConnection()` 返回自定义输入连接，处理 `commitText`、`setComposingText`、`deleteSurroundingText`、`setSelection`。
 - Android 渲染层只消费 Core transaction 和平台 text layout 结果。
+- 当前 Android 仍保留 `WriterEditText` 过渡形态，但透明 `ForegroundColorSpan` 隐藏正文的吐字动画路径已停用。
+- `TypingAnimationController` 只记录轻量 `AndroidEditorAnimationEvent` 占位，等待 `SujianEditorView` 接入 Core `EditorAnimationEvent`。
 
 ## 当前代码落点
 
 - `core/writer_core/src/editor/transaction.rs`：统一编辑事务和动画事件骨架。
+- `apps/desktop/src/sujian_editor_item.rs`：Desktop 自绘编辑器主路径，内部维护纯文本、光标、选区、撤销重做和 Core transaction。
+- `apps/desktop/qml/WritingWorkspace.qml`：默认挂载 `SujianEditorItem`，保留隐藏 `TextArea` fallback 和平台 IME 输入桥。
 - `apps/desktop/qml/EditorTypingAnimator.qml`：保留为兼容占位，当前 inert，不再监听文本变化或修改文档格式。
 - `apps/desktop/src/document_handler.rs`：只做视觉排版、纯文本读取和撤销栈清理，不再提供隐藏字符 range API。
+- `apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/TypingAnimationController.kt`：Android 过渡期只记录动画事件占位，不再向正文 `Editable` 注入透明 span。
 
 ## 红线
 
@@ -53,3 +60,4 @@
 - 不允许通过修改正文内容实现首行缩进、动画或富文本排版。
 - 不允许保存 HTML。
 - 不允许为了动画污染撤销栈、输入法 composition 或正文格式。
+- 不允许 Android 恢复 `ForegroundColorSpan(Color.TRANSPARENT)` 隐藏真实正文文字。

@@ -280,14 +280,41 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     );
                     has_errors = true;
                 }
-                if !content.contains("contentHeight: Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight, availableHeight)") {
-                    eprintln!("{}: ScrollView missing editor contentHeight guard", file_name);
+                if !content.contains("SujianEditorItem {")
+                    || !content.contains("id: sujianEditor")
+                    || !content.contains("property bool useSujianEditorItem: true")
+                    || !content.contains("targetEditorItem: sujianEditor")
+                    || !content.contains("useSelfRenderedEditor: root.useSujianEditorItem")
+                {
+                    eprintln!("{}: WritingWorkspace must mount SujianEditorItem as the default Linux editor", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("TextInput {")
+                    || !content.contains("id: imeBridge")
+                    || !content.contains("sujianEditor.insert_text(committed)")
+                    || !content.contains("root.handleSelfRenderedKey(event)")
+                {
+                    eprintln!("{}: SujianEditorItem must use a hidden platform input bridge for IME commit forwarding", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("visible: !root.useSujianEditorItem")
+                    || !content.contains("enabled: !root.useSujianEditorItem && editorController.chapterId !== \"\"")
+                    || !content.contains("textFormat: TextEdit.PlainText")
+                {
+                    eprintln!("{}: Old TextArea must remain as a plain-text emergency fallback", file_name);
+                    has_errors = true;
+                }
+                if !content.contains("contentHeight: Math.max(editorCanvas.height, availableHeight)")
+                    || !content.contains("Math.max(sujianEditor.content_height, emptyContentMinimumHeight)")
+                {
+                    eprintln!("{}: ScrollView missing SujianEditorItem contentHeight guard", file_name);
                     has_errors = true;
                 }
                 if !content.contains("EditorWheelScroller {")
                     || !content.contains("id: editorWheelScroller")
                     || !content.contains("isScrolling: editorScroll.editorIsScrolling")
                     || !content.contains("editorWheelScroller.active")
+                    || !content.contains("editorItem: root.useSujianEditorItem ? sujianEditor : null")
                 {
                     eprintln!("{}: Stable editor mode must delegate wheel physics to EditorWheelScroller", file_name);
                     has_errors = true;
@@ -313,7 +340,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("overlayItem: paperBg")
                     || !content.contains("isScrolling: editorScroll.editorIsScrolling")
                 {
-                    eprintln!("{}: Stable editor mode must use an isolated SmoothCursor overlay", file_name);
+                    eprintln!("{}: TextArea fallback must keep the isolated SmoothCursor overlay", file_name);
                     has_errors = true;
                 }
                 if !content.contains("cursorDelegate: Item {}") {
@@ -479,18 +506,39 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 fn test_editor_render_format_is_unified() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let document_handler = fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
+    let main_rs = fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
+    let sujian_editor_item = fs::read_to_string(manifest_dir.join("src/sujian_editor_item.rs")).unwrap();
     let editor_controller = fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
     let writing_workspace = fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
     let design_tokens = fs::read_to_string(manifest_dir.join("qml/DesignTokens.qml")).unwrap();
+
+    assert!(
+        main_rs.contains("mod sujian_editor_item;")
+            && main_rs.contains("SujianEditorItem"),
+        "Desktop startup must register the Rust self-rendered SujianEditorItem QML type"
+    );
+
+    assert!(
+        sujian_editor_item.contains("trait QQuickPaintedItem")
+            && sujian_editor_item.contains("fn paint(&mut self, painter: &mut QPainter)")
+            && sujian_editor_item.contains("EditorEngine")
+            && sujian_editor_item.contains("EditorTransactionCause")
+            && sujian_editor_item.contains("insert_text")
+            && sujian_editor_item.contains("handle_key"),
+        "SujianEditorItem must be a Rust self-rendered editor that consumes Core editor transactions"
+    );
 
     for token in [
         ["set", "PlainText"].concat(),
         ["set", "_plain", "_text"].concat(),
         ["apply", "_current", "_text", "_color"].concat(),
+        ["hide", "_text", "_range"].concat(),
+        ["show", "_text", "_range"].concat(),
+        ["clear", "_hidden", "_text", "_ranges"].concat(),
     ] {
         assert!(
             !document_handler.contains(&token),
-            "DocumentHandler must not own content loading or per-cursor text color refresh: {token}"
+            "DocumentHandler must not own content loading, hidden ranges, or per-cursor text color refresh: {token}"
         );
     }
 
@@ -515,11 +563,19 @@ fn test_editor_render_format_is_unified() {
     }
 
     assert!(
+        editor_controller.contains("targetEditorItem")
+            && editor_controller.contains("useSelfRenderedEditor")
+            && editor_controller.contains("readEditorItemPlainText")
+            && editor_controller.contains("targetEditorItem.set_plain_text(content)")
+            && editor_controller.contains("targetEditorItem.set_plain_text(plain)"),
+        "EditorController must prefer SujianEditorItem for load/format/save plain text"
+    );
+    assert!(
         editor_controller.contains("text_color: dt ? controller.colorToHex(dt.editorText, \"#E2E2E5\") : \"#E2E2E5\"")
             && editor_controller.contains("theme_color_probe")
             && editor_controller.contains("colorToHex(editorText)=")
             && editor_controller.contains("docHandler.text_color="),
-        "EditorController must bind the semantic editor foreground into DocumentHandler and log the QML color chain"
+        "EditorController must keep semantic fallback foreground formatting and log the QML color chain"
     );
 
     assert!(
@@ -529,8 +585,11 @@ fn test_editor_render_format_is_unified() {
         "DesignTokens.editorText must remain the semantic editor foreground token"
     );
     assert!(
-        writing_workspace.contains("color: dt ? dt.editorText : \"#E2E2E5\""),
-        "WritingWorkspace TextArea must read editor text color from DesignTokens"
+        writing_workspace.contains("SujianEditorItem {")
+            && writing_workspace.contains("text_color: editorController.colorToHex")
+            && writing_workspace.contains("TextInput {")
+            && writing_workspace.contains("visible: !root.useSujianEditorItem"),
+        "WritingWorkspace must make SujianEditorItem the main editor while keeping TextArea fallback"
     );
     assert!(
         writing_workspace.contains("textFormat: TextEdit.PlainText"),
@@ -540,6 +599,6 @@ fn test_editor_render_format_is_unified() {
         editor_controller.contains("targetTextArea.text = content")
             && editor_controller.contains("targetTextArea.text = plain")
             && editor_controller.contains("docHandler.apply_format()"),
-        "EditorController must load and format text through TextArea.text, then apply block formatting"
+        "EditorController must keep TextArea fallback load/format path without making it the default"
     );
 }
