@@ -13,11 +13,11 @@ Item {
     property bool smoothCursorEnabled: true
     property bool isScrolling: false
     property int cursorAnimationDuration: 80
+    property real maxSmoothCursorDistance: 160
     property real fallbackCursorHeight: targetTextArea ? Math.max(targetTextArea.font.pixelSize * 1.2, 18) : 18
 
     property bool hasSelection: targetTextArea ? (targetTextArea.selectedText.length > 0) : false
     property bool snapNextUpdate: true
-    property real smoothUntilMs: 0
 
     anchors.fill: parent
     visible: targetTextArea && targetTextArea.enabled
@@ -59,24 +59,29 @@ Item {
         }
     }
 
-    function allowSmoothCursorMotion() {
-        root.smoothUntilMs = Date.now() + Math.max(120, root.cursorAnimationDuration + 80);
-        root.snapNextUpdate = false;
-    }
-
     function snapNextCursorUpdate() {
         root.snapNextUpdate = true;
-        root.smoothUntilMs = 0;
+    }
+
+    function shouldAnimateCursorMove(newX, newY) {
+        if (!root.smoothCursorEnabled || root.snapNextUpdate || root.isScrolling || scrollDebounceTimer.running || root.hasSelection) {
+            return false;
+        }
+        if (Math.abs(newY - cursorRect.y) > 2) {
+            return false;
+        }
+        if (Math.abs(newX - cursorRect.x) > root.maxSmoothCursorDistance) {
+            return false;
+        }
+        return true;
     }
 
     function updateCursorRect(forceSnap) {
-        if (!targetTextArea || isScrolling || scrollDebounceTimer.running) return;
+        if (!targetTextArea) return;
         var newX = root.cursorX();
         var newY = root.cursorY();
         var newHeight = root.cursorHeight();
-        var lineChanged = Math.abs(newY - cursorRect.y) > 2;
-        var maySmooth = root.smoothCursorEnabled && Date.now() <= root.smoothUntilMs;
-        var shouldSnap = forceSnap || root.snapNextUpdate || !maySmooth || lineChanged;
+        var shouldSnap = forceSnap || !root.shouldAnimateCursorMove(newX, newY);
 
         if (shouldSnap) {
             cursorRect.xBehaviorEnabled = false;

@@ -679,7 +679,6 @@ Rectangle {
                             text: ""
 
                             Keys.onPressed: function(event) {
-                                smoothCursorOverlay.allowSmoothCursorMotion();
                                 if (event.key === Qt.Key_Backspace ||
                                     event.key === Qt.Key_Delete ||
                                     (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {

@@ -330,10 +330,11 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || content.contains("typingAnimationDuration:")
                     || content.contains("textAnimationsSuppressed:")
                     || content.contains("suppressNextTextAnimation")
+                    || content.contains("allowSmoothCursorMotion()")
                     || content.contains("id: typingLayer")
                     || content.contains("cursorBirthAnimationsModel")
                 {
-                    eprintln!("{}: Linux typing animation must not be wired into SmoothCursor", file_name);
+                    eprintln!("{}: Linux typing animation and cursor smoothing must not depend on keypress hooks", file_name);
                     has_errors = true;
                 }
                 if content.contains("#606470") {
@@ -366,13 +367,22 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     has_errors = true;
                 }
                 if !content.contains("snapNextCursorUpdate")
-                    || !content.contains("allowSmoothCursorMotion")
+                    || !content.contains("shouldAnimateCursorMove")
+                    || !content.contains("maxSmoothCursorDistance")
                     || !content.contains("snapNextUpdate")
-                    || !content.contains("smoothUntilMs")
+                    || !content.contains("Math.abs(newY - cursorRect.y) > 2")
+                    || !content.contains("Math.abs(newX - cursorRect.x) > root.maxSmoothCursorDistance")
                     || !content.contains("xBehaviorEnabled = false")
                     || !content.contains("yBehaviorEnabled = false")
                 {
-                    eprintln!("{}: SmoothCursor must distinguish snap updates from keyboard-driven smooth motion", file_name);
+                    eprintln!("{}: SmoothCursor must decide snap vs smooth from cursor geometry", file_name);
+                    has_errors = true;
+                }
+                if content.contains("smoothUntilMs")
+                    || content.contains("Date.now()")
+                    || content.contains("allowSmoothCursorMotion")
+                {
+                    eprintln!("{}: SmoothCursor must not depend on keypress time windows", file_name);
                     has_errors = true;
                 }
                 if content.contains("id: typingLayer")
