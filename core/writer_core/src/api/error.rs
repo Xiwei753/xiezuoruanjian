@@ -96,6 +96,35 @@ impl From<crate::error::Error> for WriterError {
             Error::NotImplemented => WriterError::NotImplemented,
             Error::RefuseToDeleteWorkspaceRoot => WriterError::RefuseToDeleteWorkspaceRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),
+            Error::SyncAuthFailed { reason } => WriterError::SyncFailed(reason),
+            Error::SyncNetworkUnavailable { reason } => WriterError::SyncFailed(reason),
+            Error::SyncRateLimited { retry_after_secs } => {
+                WriterError::SyncFailed(format!("rate_limited: retry_after={}", retry_after_secs))
+            }
+            Error::SyncDocumentConflict {
+                path,
+                local_hash,
+                remote_hash,
+            } => WriterError::SyncConflict(format!(
+                "path={} local={} remote={}",
+                path, local_hash, remote_hash
+            )),
+            Error::SyncIncompleteTransaction {
+                transaction_id,
+                missing_files,
+            } => WriterError::Other(format!(
+                "incomplete_transaction: tx_id={} missing={}",
+                transaction_id,
+                missing_files.join(",")
+            )),
+            Error::DiskFull { path, required_bytes } => WriterError::Io(format!(
+                "disk_full: path={} required={}",
+                path, required_bytes
+            )),
+            Error::StorageTransactionIncomplete { transaction_id } => WriterError::Other(format!(
+                "storage_transaction_incomplete: tx_id={}",
+                transaction_id
+            )),
             Error::Other(s) => WriterError::Other(s),
         }
     }

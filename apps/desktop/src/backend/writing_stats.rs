@@ -43,7 +43,9 @@ impl AppBackend {
             ) {
                 self.debug_error("stats", "report_writing_event_failed", &e.to_string());
             }
-            self.flush_writing_stats();
+            // NOTE: flush_writing_stats removed from per-keystroke path.
+            // Stats are flushed on chapter save (saveCurrentChapter) and on app exit.
+            // Per-keystroke disk I/O was the single biggest FFI performance bottleneck.
         }
     }
 
@@ -85,7 +87,8 @@ impl AppBackend {
                     &e.to_string(),
                 );
             }
-            self.flush_writing_stats();
+            // NOTE: flush_writing_stats removed from per-keystroke path.
+            // Stats are flushed on chapter save and on app exit.
         }
     }
 

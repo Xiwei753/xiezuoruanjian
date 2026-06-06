@@ -31,6 +31,23 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// 动态动作提供者 trait
+///
+/// 实现此 trait 可向 ActionRegistry 注册自定义动作。
+/// 未来可用于插件系统、WASM 扩展等场景。
+pub trait ActionProvider: Send + Sync {
+    /// 提供者名称（用于调试和日志）
+    fn name(&self) -> &str;
+
+    /// 返回此提供者注册的动作描述列表
+    fn list_actions(&self) -> Vec<ActionDescriptor>;
+
+    /// 执行此提供者注册的动作
+    ///
+    /// 如果 action_id 不属于此提供者，应返回 `Ok(None)` 交由下一个提供者处理。
+    fn execute(&self, action_id: &str, args_json: &str, context: &str) -> Option<ActionResult>;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ActionKind {
@@ -76,6 +93,7 @@ pub struct ActionResult {
 
 pub struct ActionRegistry {
     actions: Vec<ActionDescriptor>,
+    providers: Vec<Box<dyn ActionProvider>>,
 }
 
 impl Default for ActionRegistry {
@@ -88,9 +106,16 @@ impl ActionRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             actions: Vec::new(),
+            providers: Vec::new(),
         };
         registry.register_v1_actions();
         registry
+    }
+
+    /// 注册动态动作提供者
+    pub fn register_provider(&mut self, provider: Box<dyn ActionProvider>) {
+        self.actions.extend(provider.list_actions());
+        self.providers.push(provider);
     }
 
     fn register_v1_actions(&mut self) {
@@ -395,6 +420,28 @@ impl ActionRegistry {
     pub fn get_action(&self, action_id: &str) -> Option<ActionDescriptor> {
         self.actions.iter().find(|a| a.id == action_id).cloned()
     }
+
+    /// 尝试通过已注册的动态提供者执行动作
+    ///
+    /// 如果没有提供者能处理此 action_id，返回 None。
+    pub fn try_execute_via_providers(
+        &self,
+        action_id: &str,
+        args_json: &str,
+        context: &str,
+    ) -> Option<ActionResult> {
+        for provider in &self.providers {
+            if let Some(result) = provider.execute(action_id, args_json, context) {
+                return Some(result);
+            }
+        }
+        None
+    }
+
+    /// 已注册的动态提供者名称列表（调试用）
+    pub fn provider_names(&self) -> Vec<&str> {
+        self.providers.iter().map(|p| p.name()).collect()
+    }
 }
 
 #[cfg(test)]
@@ -554,4 +601,60 @@ fn test_execute_invalid_json() {
         .unwrap();
     assert!(!result.success);
     assert_eq!(result.message.unwrap(), "invalid args json");
+}
+
+#[test]
+fn test_action_provider_registration() {
+    use super::*;
+
+    struct MockProvider;
+    impl ActionProvider for MockProvider {
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn list_actions(&self) -> Vec<ActionDescriptor> {
+            vec![ActionDescriptor {
+                id: "mock.test.action".to_string(),
+                title: "Test Action".to_string(),
+                description: "A test action".to_string(),
+                category: "test".to_string(),
+                kind: ActionKind::Query,
+                risk_level: ActionRiskLevel::SafeRead,
+                confirm_required: false,
+                undoable: false,
+                platforms: vec!["linux".to_string()],
+                input_schema: None,
+                ui_schema: None,
+            }]
+        }
+        fn execute(&self, action_id: &str, _args: &str, _ctx: &str) -> Option<ActionResult> {
+            if action_id == "mock.test.action" {
+                Some(ActionResult {
+                    success: true,
+                    message: Some("mock executed".to_string()),
+                    data: None,
+                    proposed_ui: None,
+                    requires_confirmation: None,
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    let mut registry = ActionRegistry::new();
+    let base_count = registry.list_registered_actions().len();
+
+    registry.register_provider(Box::new(MockProvider));
+    let actions = registry.list_registered_actions();
+    assert_eq!(actions.len(), base_count + 1);
+    assert!(actions.iter().any(|a| a.id == "mock.test.action"));
+    assert_eq!(registry.provider_names(), vec!["mock"]);
+
+    let result = registry.try_execute_via_providers("mock.test.action", "", "");
+    assert!(result.is_some());
+    assert!(result.unwrap().success);
+
+    let none_result = registry.try_execute_via_providers("unknown.action", "", "");
+    assert!(none_result.is_none());
 }

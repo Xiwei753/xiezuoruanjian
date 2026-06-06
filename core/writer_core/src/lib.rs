@@ -52,6 +52,7 @@ pub mod backup;
 pub mod chapter;
 pub mod editor;
 pub mod error;
+pub mod history;
 pub mod index;
 pub mod mind_map;
 pub mod project;

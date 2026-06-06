@@ -130,6 +130,20 @@ QtObject {
         text_color: dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "#E2E2E5"
     }
 
+    // Stats + word count debounce timer — batches per-keystroke FFI calls.
+    // process_writing_event_from_text does text diff + stats recording (expensive),
+    // calculate_word_count scans full text. Both are imperceptible at 300ms延迟.
+    property var statsTimer: Timer {
+        interval: 300
+        repeat: false
+        onTriggered: {
+            if (!controller.chapterId || !controller.backendRef) return;
+            var plainText = controller.getEditorPlainText();
+            controller.reportStatsIfChanged(plainText);
+            controller.backendRef.calculate_word_count(plainText);
+        }
+    }
+
     // NOTE: sync is NOT triggered by save. Auto-sync runs on workspace open
     // and foreground return only (see main.qml workspaceOpenAutoSyncTimer,
     // foregroundAutoSyncTimer). This is intentional: save ≠ sync.
@@ -311,9 +325,9 @@ QtObject {
         if (plainText.length > 0) {
             controller.explicitEmptySavePending = false;
         }
-        controller.reportStatsIfChanged(plainText);
+        // Debounce stats + word count — batch into 300ms timer instead of per-keystroke FFI
+        controller.statsTimer.restart();
         if (controller.chapterId && controller.backendRef) {
-            controller.backendRef.calculate_word_count(plainText);
             if (settingsBackend && settingsBackend.setting_auto_save_enabled) {
                 controller.autoSaveTimer.restart();
             }

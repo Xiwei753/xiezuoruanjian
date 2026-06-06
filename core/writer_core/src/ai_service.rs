@@ -247,3 +247,208 @@ impl Default for AiService {
         Self::new()
     }
 }
+
+/// 流式输出缓冲区配置
+#[derive(Debug, Clone)]
+pub struct StreamFlushConfig {
+    /// 缓冲区字符数阈值，达到后触发 flush
+    pub char_threshold: usize,
+    /// 遇到换行符时是否立即 flush
+    pub flush_on_newline: bool,
+    /// 句尾标点触发 flush（。！？；）
+    pub flush_on_sentence_end: bool,
+}
+
+impl Default for StreamFlushConfig {
+    fn default() -> Self {
+        Self {
+            char_threshold: 64,
+            flush_on_newline: true,
+            flush_on_sentence_end: true,
+        }
+    }
+}
+
+/// 流式输出批量 flush 缓冲区
+///
+/// 用于 AI 流式 token 输出场景：token 逐个到达，缓冲区积累到阈值后
+/// 一次性 flush 到编辑器，避免逐字渲染造成性能问题。
+///
+/// ## 使用方式
+///
+/// ```rust
+/// use writer_core::ai_service::{StreamFlusher, StreamFlushConfig};
+///
+/// let mut flusher = StreamFlusher::new(StreamFlushConfig::default());
+/// flusher.push("你");
+/// flusher.push("好");
+/// flusher.push("，");
+/// flusher.push("世界");
+/// flusher.push("。\n");
+/// // flush_on_sentence_end + flush_on_newline 触发
+/// let batch = flusher.flush();
+/// assert_eq!(batch, "你好，世界。\n");
+/// ```
+pub struct StreamFlusher {
+    buffer: String,
+    config: StreamFlushConfig,
+    total_pushed: usize,
+    total_flushed: usize,
+}
+
+impl StreamFlusher {
+    pub fn new(config: StreamFlushConfig) -> Self {
+        Self {
+            buffer: String::new(),
+            config,
+            total_pushed: 0,
+            total_flushed: 0,
+        }
+    }
+
+    /// 推入一个 token 片段
+    pub fn push(&mut self, token: &str) {
+        self.buffer.push_str(token);
+        self.total_pushed += token.len();
+    }
+
+    /// 检查是否应该 flush
+    pub fn should_flush(&self) -> bool {
+        if self.buffer.len() >= self.config.char_threshold {
+            return true;
+        }
+        if self.config.flush_on_newline && self.buffer.contains('\n') {
+            return true;
+        }
+        if self.config.flush_on_sentence_end {
+            for ch in self.buffer.chars().rev() {
+                if matches!(ch, '。' | '！' | '？' | '；' | '.' | '!' | '?' | ';') {
+                    return true;
+                }
+                if !ch.is_whitespace() {
+                    break;
+                }
+            }
+        }
+        false
+    }
+
+    /// 取出缓冲区内容并清空
+    pub fn flush(&mut self) -> String {
+        let content = std::mem::take(&mut self.buffer);
+        self.total_flushed += content.len();
+        content
+    }
+
+    /// 取出缓冲区内容（如果有），否则返回空字符串
+    pub fn flush_if_ready(&mut self) -> Option<String> {
+        if self.should_flush() {
+            Some(self.flush())
+        } else {
+            None
+        }
+    }
+
+    /// 强制 flush 所有剩余内容（流结束时调用）
+    pub fn flush_remaining(&mut self) -> Option<String> {
+        if self.buffer.is_empty() {
+            None
+        } else {
+            Some(self.flush())
+        }
+    }
+
+    /// 当前缓冲区大小
+    pub fn buffered_len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// 当前缓冲区内容（只读）
+    pub fn buffered(&self) -> &str {
+        &self.buffer
+    }
+
+    /// 统计：已推入总字节数
+    pub fn total_pushed(&self) -> usize {
+        self.total_pushed
+    }
+
+    /// 统计：已 flush 总字节数
+    pub fn total_flushed(&self) -> usize {
+        self.total_flushed
+    }
+
+    /// 清空缓冲区（不返回内容）
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stream_flusher_basic() {
+        let mut flusher = StreamFlusher::new(StreamFlushConfig::default());
+        flusher.push("hello");
+        assert!(!flusher.should_flush());
+        assert_eq!(flusher.flush(), "hello");
+    }
+
+    #[test]
+    fn test_stream_flusher_char_threshold() {
+        let config = StreamFlushConfig {
+            char_threshold: 5,
+            flush_on_newline: false,
+            flush_on_sentence_end: false,
+        };
+        let mut flusher = StreamFlusher::new(config);
+        flusher.push("abc");
+        assert!(!flusher.should_flush());
+        flusher.push("de");
+        assert!(flusher.should_flush());
+        assert_eq!(flusher.flush(), "abcde");
+    }
+
+    #[test]
+    fn test_stream_flusher_newline() {
+        let mut flusher = StreamFlusher::new(StreamFlushConfig::default());
+        flusher.push("hello\nworld");
+        assert!(flusher.should_flush());
+        let content = flusher.flush();
+        assert_eq!(content, "hello\nworld");
+    }
+
+    #[test]
+    fn test_stream_flusher_sentence_end() {
+        let mut flusher = StreamFlusher::new(StreamFlushConfig::default());
+        flusher.push("这是");
+        assert!(!flusher.should_flush());
+        flusher.push("一句话。");
+        assert!(flusher.should_flush());
+    }
+
+    #[test]
+    fn test_stream_flusher_flush_remaining() {
+        let mut flusher = StreamFlusher::new(StreamFlushConfig::default());
+        assert!(flusher.flush_remaining().is_none());
+        flusher.push("remaining");
+        assert_eq!(flusher.flush_remaining().unwrap(), "remaining");
+        assert!(flusher.flush_remaining().is_none());
+    }
+
+    #[test]
+    fn test_stream_flusher_flush_if_ready() {
+        let config = StreamFlushConfig {
+            char_threshold: 10,
+            flush_on_newline: false,
+            flush_on_sentence_end: false,
+        };
+        let mut flusher = StreamFlusher::new(config);
+        flusher.push("short");
+        assert!(flusher.flush_if_ready().is_none());
+        flusher.push(" and longer");
+        assert!(flusher.flush_if_ready().is_some());
+    }
+}

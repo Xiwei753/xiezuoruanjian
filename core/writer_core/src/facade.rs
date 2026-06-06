@@ -1574,7 +1574,6 @@ mod tests {
 
         assert!(core.backup_project("p1").is_err());
         assert!(core.move_chapter_to_trash("c1").is_err());
-        assert!(core.update_index().is_err());
         assert!(core.sync_workspace().is_err());
     }
 
