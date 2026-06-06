@@ -20,11 +20,71 @@ fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     }
 }
 
-pub(crate) fn is_document_content_path(path: &str) -> bool {
-    if path.contains("/chapters/") && path.ends_with("/chapter.md") {
-        return true;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentClass {
+    /// User-authored text: chapter.md, note.md, outline.md, scene.md, etc.
+    /// Three-way merge on sync; never silently overwritten by LWW.
+    UserTextDocument,
+    /// Project/volume/chapter metadata JSON. LWW or semantic merge.
+    Metadata,
+    /// Local-only data (backups, app-meta internals). Never synced.
+    LocalOnly,
+    /// Generated or cache data. LWW is acceptable.
+    GeneratedCache,
+}
+
+/// Classify a workspace-relative path into a content category.
+///
+/// Uses suffix-based rules so it works for any project/volume/chapter ID.
+pub(crate) fn classify_content_path(path: &str) -> ContentClass {
+    // Local-only directories
+    if path.starts_with("backups/") || path.starts_with("app-meta/") {
+        return ContentClass::LocalOnly;
     }
-    false
+
+    // User text documents: any .md file under /chapters/, plus
+    // note.md, outline.md, scene.md, character_notes.md, timeline_notes.md
+    // anywhere in the workspace
+    if path.ends_with(".md") {
+        if path.contains("/chapters/") {
+            return ContentClass::UserTextDocument;
+        }
+        let filename = path.rsplit('/').next().unwrap_or(path);
+        if matches!(
+            filename,
+            "note.md"
+                | "outline.md"
+                | "scene.md"
+                | "character_notes.md"
+                | "timeline_notes.md"
+                | "draft.md"
+        ) {
+            return ContentClass::UserTextDocument;
+        }
+        return ContentClass::GeneratedCache;
+    }
+
+    // Metadata JSON files
+    if path.ends_with(".json") {
+        let filename = path.rsplit('/').next().unwrap_or(path);
+        if matches!(
+            filename,
+            "project.json"
+                | "volume.json"
+                | "chapter.meta.json"
+                | "settings.sync.json"
+                | "starmap.json"
+                | "writing_stats.json"
+        ) {
+            return ContentClass::Metadata;
+        }
+    }
+
+    ContentClass::GeneratedCache
+}
+
+pub(crate) fn is_document_content_path(path: &str) -> bool {
+    classify_content_path(path) == ContentClass::UserTextDocument
 }
 
 fn three_way_resolve(
@@ -94,6 +154,24 @@ pub(crate) fn perform_lww_sync(
     if state.device_id.is_empty() {
         state.device_id = uuid::Uuid::new_v4().to_string();
         crate::sync_service::SyncService::save_sync_state(workspace_path, &state)?;
+    }
+
+    // P1-4: Core-level debounce. Even if clients call sync too often,
+    // the core enforces a minimum interval to prevent network I/O flood.
+    // This is a safety net; clients should also debounce.
+    let min_interval = config.sync_interval_seconds.max(60) as i64;
+    if let Some(last_sync) = state.last_sync_time {
+        let now = chrono::Utc::now().timestamp();
+        let elapsed = now - last_sync;
+        if elapsed >= 0 && elapsed < min_interval {
+            eprintln!(
+                "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
+                elapsed, min_interval
+            );
+            result.status = SyncStatus::Success;
+            result.user_message = Some("同步间隔过短，跳过本次同步。".to_string());
+            return Ok(result);
+        }
     }
 
     let api_base = GitHubApiBackend::api_base_url(&config.remote_url);
@@ -458,8 +536,15 @@ fn execute_lww_sync_attempt(
                             if let Some(conflict) = conflict {
                                 doc_conflicts.push(conflict);
                             }
-
-                            merged_manifest_files.insert(path.clone(), local_rec.clone());
+                            // P1-2: Keep remote_rec in manifest, NOT local_rec.
+                            // The remote manifest record must stay pointing to the
+                            // actual remote content hash. Inserting local_rec would
+                            // make the remote manifest claim the file has local_hash
+                            // while GitHub still has remote_hash — a manifest/content
+                            // desync. On next sync, BothChanged is re-detected
+                            // (local_hash != remote_hash still holds) and the conflict
+                            // persists until the user manually resolves it.
+                            merged_manifest_files.insert(path.clone(), remote_rec.clone());
                         }
                     }
                 } else {
@@ -656,6 +741,13 @@ fn execute_lww_sync_attempt(
             });
             state.known_files_updated_at.insert(entry.relative_path, t);
         }
+    }
+
+    // P1-2: For conflicted document files, store remote_hash in known_files
+    // so that next sync's three-way comparison sees base=remote, local=local,
+    // remote=remote → BothChanged again (conflict persists).
+    for conflict in &doc_conflicts {
+        state.known_files.insert(conflict.remote_path.clone(), conflict.remote_hash.clone());
     }
 
     state

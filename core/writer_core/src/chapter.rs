@@ -322,8 +322,22 @@ fn save_chapter_verified_with_options(
 
     let updated_meta_str = serde_json::to_string_pretty(&meta)?;
 
-    crate::storage::atomic_write_string(&md_path, content)?;
-    crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+    // Transactional write: all files staged first, then atomic rename
+    let mut tx = crate::storage::transaction::SaveTransaction::new(workspace_path);
+
+    let md_relative = md_path
+        .strip_prefix(workspace_path)
+        .unwrap_or(&md_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let meta_relative = meta_path
+        .strip_prefix(workspace_path)
+        .unwrap_or(&meta_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    tx.add_file(&md_relative, content)?;
+    tx.add_file(&meta_relative, &updated_meta_str)?;
 
     let volume_meta_path = workspace_path
         .join("projects")
@@ -335,8 +349,40 @@ fn save_chapter_verified_with_options(
         .join("projects")
         .join(project_id)
         .join("project.json");
-    let _ = touch_json_updated_at(&volume_meta_path);
-    let _ = touch_json_updated_at(&project_meta_path);
+
+    if volume_meta_path.exists() {
+        if let Ok(vol_raw) = fs::read_to_string(&volume_meta_path) {
+            if let Ok(mut vol_val) = serde_json::from_str::<serde_json::Value>(&vol_raw) {
+                if let Some(obj) = vol_val.as_object_mut() {
+                    obj.insert("updated_at".to_string(), serde_json::Value::String(Utc::now().to_rfc3339()));
+                    let vol_relative = volume_meta_path
+                        .strip_prefix(workspace_path)
+                        .unwrap_or(&volume_meta_path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let _ = tx.add_file(&vol_relative, &serde_json::to_string_pretty(&vol_val)?);
+                }
+            }
+        }
+    }
+
+    if project_meta_path.exists() {
+        if let Ok(proj_raw) = fs::read_to_string(&project_meta_path) {
+            if let Ok(mut proj_val) = serde_json::from_str::<serde_json::Value>(&proj_raw) {
+                if let Some(obj) = proj_val.as_object_mut() {
+                    obj.insert("updated_at".to_string(), serde_json::Value::String(Utc::now().to_rfc3339()));
+                    let proj_relative = project_meta_path
+                        .strip_prefix(workspace_path)
+                        .unwrap_or(&project_meta_path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let _ = tx.add_file(&proj_relative, &serde_json::to_string_pretty(&proj_val)?);
+                }
+            }
+        }
+    }
+
+    tx.commit()?;
 
     let read_back = fs::read_to_string(&md_path)?;
     let read_back_hash = format!("{:x}", md5::compute(read_back.as_bytes()));

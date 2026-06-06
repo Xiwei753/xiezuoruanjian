@@ -130,16 +130,9 @@ QtObject {
         text_color: dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "#E2E2E5"
     }
 
-    // Autosync timer
-    property var autoSyncTimer: Timer {
-        interval: 20000
-        repeat: false
-        onTriggered: {
-            if (!backendRef || !backendRef.has_workspace) return;
-            if (!backendRef.sync_auto_sync || !backendRef.sync_enabled) return;
-            backendRef.request_auto_sync("auto_sync_after_save");
-        }
-    }
+    // NOTE: sync is NOT triggered by save. Auto-sync runs on workspace open
+    // and foreground return only (see main.qml workspaceOpenAutoSyncTimer,
+    // foregroundAutoSyncTimer). This is intentional: save ≠ sync.
 
     // Connections to TextArea signals
     property var textConnections: Connections {

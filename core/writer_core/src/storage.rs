@@ -8,6 +8,8 @@
 //! 这样可避免写入过程中断导致目标文件半写入。不同文件系统和挂载参数下，
 //! 目录项持久化仍取决于平台语义，本模块不宣称跨设备断电的绝对耐久性。
 
+pub mod transaction;
+
 use crate::error::Result;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
