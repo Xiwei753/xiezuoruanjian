@@ -1,0 +1,23 @@
+--- apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt
++++ apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core/writer_core.kt
+@@ -32,6 +32,7 @@
+ import java.util.concurrent.atomic.AtomicLong
+ import java.util.concurrent.ConcurrentHashMap
+ import java.util.concurrent.atomic.AtomicBoolean
++import android.util.Log
+
+ private interface rustBuffer {
+     class ByValue: Structure(), Structure.ByValue {
+@@ -2340,11 +2341,12 @@
+     override fun destroy() {
+         // Only allow a single call to this method.
+-        // TODO: maybe we should log a warning if called more than once?
+         if (this.wasDestroyed.compareAndSet(false, true)) {
+             // This decrement always matches the initial count of 1 given at creation time.
+             if (this.callCounter.decrementAndGet() == 0L) {
+                 cleanable.clean()
+             }
++        } else {
++            Log.w("SujianError", "destroy() called more than once")
+         }
+     }
