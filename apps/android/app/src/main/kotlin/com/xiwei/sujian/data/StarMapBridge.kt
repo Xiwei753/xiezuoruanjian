@@ -3,6 +3,7 @@ package com.xiwei.sujian.data
 import com.google.gson.Gson
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapEdgeKind
+import com.xiwei.sujian.model.StarMapEdgeRenderData
 import com.xiwei.sujian.model.StarMapGraphData
 import com.xiwei.sujian.model.StarMapGraphEdge
 import com.xiwei.sujian.model.StarMapGraphNode
@@ -14,6 +15,7 @@ import com.xiwei.sujian.model.StarMapNodeKind
 import uniffi.writer_core.StarMapDisplayPolicyDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgeKindDto
+import uniffi.writer_core.StarMapEdgeRenderDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
 import uniffi.writer_core.StarMapGraphDto
@@ -34,6 +36,7 @@ import uniffi.writer_core.StarMapSourceKindDto
 private val starMapPayloadGson = Gson()
 
 private data class StarMapRawCache(
+    val graph: StarMapGraphDto? = null,
     val nodes: MutableMap<String, StarMapNodeDto> = mutableMapOf(),
     val edges: MutableMap<String, StarMapEdgeDto> = mutableMapOf(),
     val layoutNodes: MutableMap<String, StarMapLayoutNodeDto> = mutableMapOf()
@@ -108,6 +111,31 @@ class StarMapBridge(private val appService: AppServiceBridge) {
         }
     }
 
+    fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
+        val cache = when (val cacheResult = getRawCache(data.graph.starmapId)) {
+            is BridgeResult.Success -> cacheResult.data
+            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
+            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
+        }
+        val graph = cache.graph ?: return BridgeResult.Error(
+            ResultEnvelope.error("STAR_MAP_CACHE_MISSING", "Raw starmap graph is not available")
+        )
+        return when (val result = appService.computeStarMapEdgeRenders(graph, data.layout.toDto(cache))) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data.map { it.toModel() })
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun hitTestStarmapNode(data: StarMapData, x: Float, y: Float): BridgeResult<String?> {
+        val cache = when (val cacheResult = getRawCache(data.graph.starmapId)) {
+            is BridgeResult.Success -> cacheResult.data
+            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
+            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
+        }
+        return appService.hitTestStarMapNode(data.layout.toDto(cache), x, y)
+    }
+
     fun addStarmapEmbed(starmapId: String, embed: StarMapEmbedDto): BridgeResult<StarMapEmbedDto> {
         return when (val result = appService.addStarmapEmbed(starmapId, embed)) {
             is BridgeResult.Success -> BridgeResult.Success(result.data)
@@ -163,6 +191,11 @@ class StarMapBridge(private val appService: AppServiceBridge) {
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
     }
+
+    private fun getRawCache(starmapId: String): BridgeResult<StarMapRawCache> {
+        rawCacheByStarmapId[starmapId]?.let { return BridgeResult.Success(it) }
+        return refreshRawCache(starmapId)
+    }
 }
 
 private fun StarMapMetaDto.toModel(): StarMapMeta = StarMapMeta(
@@ -182,6 +215,7 @@ private fun StarMapMetaDto.toModel(): StarMapMeta = StarMapMeta(
 )
 
 private fun StarMapGraphDto.toRawCache(): StarMapRawCache = StarMapRawCache(
+    graph = this,
     nodes = nodes.associateByTo(mutableMapOf()) { it.id },
     edges = edges.associateByTo(mutableMapOf()) { it.id }
 )
@@ -318,6 +352,29 @@ private fun StarMapLayoutNodeData.toDto(base: StarMapLayoutNodeDto?): StarMapLay
     depth = depth,
     focusWeight = focusWeight,
     orbitGroup = orbitGroup
+)
+
+private fun StarMapEdgeRenderDto.toModel(): StarMapEdgeRenderData = StarMapEdgeRenderData(
+    edgeId = edgeId,
+    fromCx = fromCx,
+    fromCy = fromCy,
+    toCx = toCx,
+    toCy = toCy,
+    startX = startX,
+    startY = startY,
+    endX = endX,
+    endY = endY,
+    offsetX = offsetX,
+    offsetY = offsetY,
+    arrowTipX = arrowTipX,
+    arrowTipY = arrowTipY,
+    arrowLeftX = arrowLeftX,
+    arrowLeftY = arrowLeftY,
+    arrowRightX = arrowRightX,
+    arrowRightY = arrowRightY,
+    labelX = labelX,
+    labelY = labelY,
+    hasBidirectional = hasBidirectional
 )
 
 private fun StarMapNodeKindDto.toModel(): StarMapNodeKind = when (this) {

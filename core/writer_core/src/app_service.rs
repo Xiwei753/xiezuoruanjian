@@ -574,6 +574,23 @@ impl WriterAppService {
         self.api.save_starmap_layout(&starmap_id, &layout)
     }
 
+    pub fn compute_starmap_edge_renders(
+        &self,
+        graph: crate::api::types::StarMapGraphDto,
+        layout: crate::api::types::StarMapLayoutDto,
+    ) -> Result<Vec<crate::api::types::StarMapEdgeRenderDto>, WriterError> {
+        self.api.compute_starmap_edge_renders(graph, layout)
+    }
+
+    pub fn hit_test_starmap_node(
+        &self,
+        layout: crate::api::types::StarMapLayoutDto,
+        x: f32,
+        y: f32,
+    ) -> Result<Option<String>, WriterError> {
+        self.api.hit_test_starmap_node(layout, x, y)
+    }
+
     pub fn add_starmap_embed(
         &self,
         starmap_id: String,

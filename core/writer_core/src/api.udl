@@ -685,6 +685,29 @@ dictionary StarMapLayoutNodeDto {
     string? orbit_group;
 };
 
+dictionary StarMapEdgeRenderDto {
+    string edge_id;
+    float from_cx;
+    float from_cy;
+    float to_cx;
+    float to_cy;
+    float start_x;
+    float start_y;
+    float end_x;
+    float end_y;
+    float offset_x;
+    float offset_y;
+    float arrow_tip_x;
+    float arrow_tip_y;
+    float arrow_left_x;
+    float arrow_left_y;
+    float arrow_right_x;
+    float arrow_right_y;
+    float label_x;
+    float label_y;
+    boolean has_bidirectional;
+};
+
 dictionary StarMapReferenceDto {
     string host_starmap_id;
     string host_title;
@@ -1072,6 +1095,12 @@ interface WriterAppService {
 
     [Throws=WriterError]
     boolean save_starmap_layout(string starmap_id, StarMapLayoutDto layout);
+
+    [Throws=WriterError]
+    sequence<StarMapEdgeRenderDto> compute_starmap_edge_renders(StarMapGraphDto graph, StarMapLayoutDto layout);
+
+    [Throws=WriterError]
+    string? hit_test_starmap_node(StarMapLayoutDto layout, float x, float y);
 
     [Throws=WriterError]
     StarMapEmbedDto add_starmap_embed(string starmap_id, StarMapEmbedDto embed);

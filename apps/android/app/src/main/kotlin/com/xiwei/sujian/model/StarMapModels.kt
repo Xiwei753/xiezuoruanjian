@@ -178,6 +178,29 @@ data class StarMapLayoutData(
     val nodes: List<StarMapLayoutNodeData>
 )
 
+data class StarMapEdgeRenderData(
+    val edgeId: String,
+    val fromCx: Float,
+    val fromCy: Float,
+    val toCx: Float,
+    val toCy: Float,
+    val startX: Float,
+    val startY: Float,
+    val endX: Float,
+    val endY: Float,
+    val offsetX: Float,
+    val offsetY: Float,
+    val arrowTipX: Float,
+    val arrowTipY: Float,
+    val arrowLeftX: Float,
+    val arrowLeftY: Float,
+    val arrowRightX: Float,
+    val arrowRightY: Float,
+    val labelX: Float,
+    val labelY: Float,
+    val hasBidirectional: Boolean
+)
+
 data class StarMapNodePatch(
     val title: String? = null,
     val kind: StarMapNodeKind? = null,
@@ -193,5 +216,6 @@ data class StarMapEdgePatch(
 
 data class StarMapData(
     val graph: StarMapGraphData,
-    val layout: StarMapLayoutData
+    val layout: StarMapLayoutData,
+    val edgeRenders: List<StarMapEdgeRenderData> = emptyList()
 )

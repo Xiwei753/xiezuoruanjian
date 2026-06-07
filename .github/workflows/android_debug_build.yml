@@ -47,9 +47,13 @@ jobs:
       - name: Security audit Rust dependencies
         run: cargo install cargo-audit --locked && cargo audit
 
-      - name: Test Android unit tests
+      - name: Test Android no-ai Debug unit tests
         working-directory: apps/android
-        run: ./gradlew testNoAiReleaseUnitTest --tests com.xiwei.sujian.model.SyncConfigNormalizeTest
+        run: ./gradlew testNoAiDebugUnitTest
+
+      - name: Compile Android no-ai Debug Kotlin
+        working-directory: apps/android
+        run: ./gradlew :app:compileNoAiDebugKotlin
 
       - name: Decode Android Keystore
         env:
@@ -120,9 +124,13 @@ jobs:
       - name: Test Rust core
         run: cargo test -p writer_core --features ai
 
-      - name: Test Android unit tests
+      - name: Test Android ai Debug unit tests
         working-directory: apps/android
-        run: ./gradlew testAiReleaseUnitTest --tests com.xiwei.sujian.model.SyncConfigNormalizeTest
+        run: ./gradlew testAiDebugUnitTest
+
+      - name: Compile Android ai Debug Kotlin
+        working-directory: apps/android
+        run: ./gradlew :app:compileAiDebugKotlin
 
       - name: Decode Android Keystore
         env:

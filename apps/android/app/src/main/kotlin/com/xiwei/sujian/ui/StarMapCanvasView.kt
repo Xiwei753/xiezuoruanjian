@@ -5,12 +5,13 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapNodeKind
-import android.graphics.Typeface
 
 /**
  * StarMapCanvasView — 星图画布自定义 View
@@ -65,11 +66,31 @@ class StarMapCanvasView @JvmOverloads constructor(
 
     var panX = 0f
     var panY = 0f
+    var zoom = 1f
     var lastTouchX = 0f
     var lastTouchY = 0f
     var draggingNodeId: String? = null
     var onNodeDragListener: ((String, Float, Float) -> Unit)? = null
+    var onNodeHitTestListener: ((Float, Float) -> String?)? = null
     var onLayoutSavedListener: (() -> Unit)? = null
+
+    private val scaleGestureDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            val oldZoom = zoom
+            val newZoom = (zoom * detector.scaleFactor).coerceIn(0.35f, 3.0f)
+            if (newZoom == oldZoom) return false
+
+            val focusX = detector.focusX
+            val focusY = detector.focusY
+            val graphFocusX = (focusX - panX) / oldZoom
+            val graphFocusY = (focusY - panY) / oldZoom
+            zoom = newZoom
+            panX = focusX - graphFocusX * zoom
+            panY = focusY - graphFocusY * zoom
+            invalidate()
+            return true
+        }
+    })
 
     fun getData(): StarMapData? = data
 
@@ -115,20 +136,12 @@ class StarMapCanvasView @JvmOverloads constructor(
 
         canvas.save()
         canvas.translate(panX, panY)
+        canvas.scale(zoom, zoom)
 
-        for (edge in currentData.graph.edges) {
-            val fromLayout = currentData.layout.nodes.find { it.nodeId == edge.from }
-            val toLayout = currentData.layout.nodes.find { it.nodeId == edge.to }
-
-            if (fromLayout != null && toLayout != null) {
-                canvas.drawLine(
-                    fromLayout.x + fromLayout.width / 2,
-                    fromLayout.y + fromLayout.height / 2,
-                    toLayout.x + toLayout.width / 2,
-                    toLayout.y + toLayout.height / 2,
-                    paintEdge
-                )
-            }
+        for (edge in currentData.edgeRenders) {
+            canvas.drawLine(edge.startX, edge.startY, edge.endX, edge.endY, paintEdge)
+            canvas.drawLine(edge.arrowTipX, edge.arrowTipY, edge.arrowLeftX, edge.arrowLeftY, paintEdge)
+            canvas.drawLine(edge.arrowTipX, edge.arrowTipY, edge.arrowRightX, edge.arrowRightY, paintEdge)
         }
 
         for (node in currentData.graph.nodes) {
@@ -171,30 +184,31 @@ class StarMapCanvasView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val x = event.x
         val y = event.y
+        scaleGestureDetector.onTouchEvent(event)
 
-        when (event.action) {
+        if (event.pointerCount > 1 || scaleGestureDetector.isInProgress) {
+            draggingNodeId = null
+            lastTouchX = x
+            lastTouchY = y
+            return true
+        }
+
+        when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastTouchX = x
                 lastTouchY = y
 
-                val graphX = x - panX
-                val graphY = y - panY
+                val graphX = (x - panX) / zoom
+                val graphY = (y - panY) / zoom
 
-                // TODO: 替换为 Core 的 hit_test_nodes（需 UniFFI 暴露）
-                draggingNodeId = null
-                data?.layout?.nodes?.forEach { layout ->
-                    if (graphX >= layout.x && graphX <= layout.x + layout.width &&
-                        graphY >= layout.y && graphY <= layout.y + layout.height) {
-                        draggingNodeId = layout.nodeId
-                    }
-                }
+                draggingNodeId = onNodeHitTestListener?.invoke(graphX, graphY)
             }
             MotionEvent.ACTION_MOVE -> {
                 val dx = x - lastTouchX
                 val dy = y - lastTouchY
 
                 if (draggingNodeId != null) {
-                    onNodeDragListener?.invoke(draggingNodeId!!, dx, dy)
+                    onNodeDragListener?.invoke(draggingNodeId!!, dx / zoom, dy / zoom)
                 } else {
                     panX += dx
                     panY += dy

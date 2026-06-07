@@ -1,6 +1,6 @@
-# Linux 应用
+# Desktop 应用
 
-本目录包含 Linux 原生客户端，使用 Rust 和 Qt/QML 构建，提供桌面端写作体验。
+本目录包含 desktop 原生客户端，使用 Rust 和 Qt/QML 构建，提供桌面端写作体验。
 
 ## 主要文件
 
@@ -56,7 +56,13 @@ QT_PLUGIN_PATH=/usr/lib64/qt6/plugins
 不要把 `/usr/lib64/qt5/qml` 或 `/usr/lib64/qt5/plugins` 混入启动路径，否则 Qt5 程序和 Qt6 QML 模块会互相污染。构建完成后可用以下命令确认链接结果：
 
 ```bash
-ldd target/debug/linux | grep -Ei 'Qt5|Qt6|qml|quick'
+ldd target/debug/sujian-desktop | grep -Ei 'Qt5|Qt6|qml|quick'
 ```
 
 结果应出现 `libQt6Core`、`libQt6Qml`、`libQt6Quick`，不应出现 `libQt5Core`、`libQt5Qml`、`libQt5Quick`。
+
+自研写作区默认关闭。需要测试 `SujianEditorItem` 时，用环境变量显式打开：
+
+```bash
+SUJIAN_DESKTOP_USE_SUJIAN_EDITOR=1 cargo run -p sujian-desktop
+```

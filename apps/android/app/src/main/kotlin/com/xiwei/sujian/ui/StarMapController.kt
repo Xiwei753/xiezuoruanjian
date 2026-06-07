@@ -46,9 +46,18 @@ class StarMapController(
                 if (idx != -1) {
                     val layout = mutableNodes[idx]
                     mutableNodes[idx] = layout.copy(x = layout.x + dx, y = layout.y + dy)
-                    val newData = data.copy(layout = data.layout.copy(nodes = mutableNodes))
+                    val newData = data.copy(layout = data.layout.copy(nodes = mutableNodes)).withCoreEdgeRenders()
                     currentData = newData
                     canvasView.setData(newData)
+                }
+            }
+        }
+
+        canvasView.onNodeHitTestListener = { graphX, graphY ->
+            currentData?.let { data ->
+                when (val result = bridge.hitTestStarmapNode(data, graphX, graphY)) {
+                    is BridgeResult.Success -> result.data
+                    else -> null
                 }
             }
         }
@@ -82,8 +91,9 @@ class StarMapController(
             withContext(Dispatchers.Main) {
                 when (result) {
                     is BridgeResult.Success -> {
-                        currentData = result.data
-                        canvasView.setData(result.data)
+                        val data = result.data.withCoreEdgeRenders()
+                        currentData = data
+                        canvasView.setData(data)
                     }
                     is BridgeResult.Error -> {
                         Toast.makeText(activity, "Failed to load: ${result.message}", Toast.LENGTH_LONG).show()
@@ -98,6 +108,13 @@ class StarMapController(
         val data = canvasView.getData() ?: return
         CoroutineScope(Dispatchers.IO).launch {
             bridge.saveStarmapLayout(starmapId, data.layout)
+        }
+    }
+
+    private fun StarMapData.withCoreEdgeRenders(): StarMapData {
+        return when (val result = bridge.computeEdgeRenders(this)) {
+            is BridgeResult.Success -> copy(edgeRenders = result.data)
+            else -> this
         }
     }
 

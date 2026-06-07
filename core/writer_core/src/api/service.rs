@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -796,6 +797,55 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn compute_starmap_edge_renders(
+        &self,
+        graph: crate::api::types::StarMapGraphDto,
+        layout: crate::api::types::StarMapLayoutDto,
+    ) -> ApiResult<Vec<crate::api::types::StarMapEdgeRenderDto>> {
+        let node_centers: HashMap<String, (f32, f32)> = layout
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.node_id.clone(),
+                    (node.x + node.width / 2.0, node.y + node.height / 2.0),
+                )
+            })
+            .collect();
+        let edges: Vec<crate::starmap::render::EdgeInput> = graph
+            .edges
+            .into_iter()
+            .filter_map(|edge| {
+                let from = edge.from.filter(|id| !id.is_empty())?;
+                let to = edge.to.filter(|id| !id.is_empty())?;
+                Some(crate::starmap::render::EdgeInput {
+                    id: edge.id,
+                    from,
+                    to,
+                })
+            })
+            .collect();
+
+        Ok(crate::starmap::render::compute_edge_renders(
+            &edges,
+            &node_centers,
+            &crate::starmap::render::EdgeRenderParams::default(),
+        )
+        .into_iter()
+        .map(Into::into)
+        .collect())
+    }
+
+    pub fn hit_test_starmap_node(
+        &self,
+        layout: crate::api::types::StarMapLayoutDto,
+        x: f32,
+        y: f32,
+    ) -> ApiResult<Option<String>> {
+        let layout: crate::starmap::types::StarMapLayout = layout.into();
+        Ok(crate::starmap::hittest::hit_test_nodes(x, y, &layout.nodes).map(|hit| hit.id))
+    }
+
     pub fn rename_starmap(
         &self,
         starmap_id: &str,
@@ -1303,6 +1353,118 @@ mod tests {
             err,
             WriterError::Io(message) if message.contains("UnsupportedSchemaVersion")
         ));
+    }
+
+    #[test]
+    fn compute_starmap_edge_renders_uses_core_geometry() {
+        let api = WriterCoreApi::new("");
+        let graph = StarMapGraphDto {
+            schema_version: 1,
+            id: "graph".to_string(),
+            starmap_id: "map".to_string(),
+            title: "Map".to_string(),
+            nodes: vec![],
+            edges: vec![StarMapEdgeDto {
+                id: "edge-1".to_string(),
+                from: Some("a".to_string()),
+                to: Some("b".to_string()),
+                kind: StarMapEdgeKindDto::RelatedTo,
+                label: None,
+                payload: None,
+                from_target: None,
+                to_target: None,
+                from_endpoint: None,
+                to_endpoint: None,
+                created_at: 0,
+                updated_at: 0,
+            }],
+            embeds: vec![],
+            links: vec![],
+            created_at: 0,
+            updated_at: 0,
+        };
+        let layout = StarMapLayoutDto {
+            kind: StarMapLayoutKindDto::Freeform,
+            nodes: vec![
+                StarMapLayoutNodeDto {
+                    node_id: "a".to_string(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    radius: 16.0,
+                    collapsed: false,
+                    z_index: 0,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 1.0,
+                    orbit_group: None,
+                },
+                StarMapLayoutNodeDto {
+                    node_id: "b".to_string(),
+                    x: 200.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    radius: 16.0,
+                    collapsed: false,
+                    z_index: 0,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 1.0,
+                    orbit_group: None,
+                },
+            ],
+        };
+
+        let renders = api.compute_starmap_edge_renders(graph, layout).unwrap();
+
+        assert_eq!(renders.len(), 1);
+        assert_eq!(renders[0].edge_id, "edge-1");
+        assert!((renders[0].start_x - 92.0).abs() < 0.1);
+        assert!((renders[0].end_x - 208.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn hit_test_starmap_node_returns_top_z_node() {
+        let api = WriterCoreApi::new("");
+        let layout = StarMapLayoutDto {
+            kind: StarMapLayoutKindDto::Freeform,
+            nodes: vec![
+                StarMapLayoutNodeDto {
+                    node_id: "lower".to_string(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    radius: 16.0,
+                    collapsed: false,
+                    z_index: 1,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 1.0,
+                    orbit_group: None,
+                },
+                StarMapLayoutNodeDto {
+                    node_id: "upper".to_string(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0,
+                    radius: 16.0,
+                    collapsed: false,
+                    z_index: 2,
+                    scale: 1.0,
+                    depth: 0.0,
+                    focus_weight: 1.0,
+                    orbit_group: None,
+                },
+            ],
+        };
+
+        let hit = api.hit_test_starmap_node(layout, 50.0, 50.0).unwrap();
+
+        assert_eq!(hit.as_deref(), Some("upper"));
     }
 
     #[test]

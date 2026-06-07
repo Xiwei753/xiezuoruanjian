@@ -144,13 +144,7 @@ jobs:
           Categories=Office;TextEditor;
           Terminal=false
           EOF
-          cat > AppDir/usr/share/icons/hicolor/scalable/apps/sujian-desktop.svg <<'EOF'
-          <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-            <rect width="128" height="128" rx="28" fill="#2f5d50"/>
-            <path d="M34 34h60v60H34z" fill="#f5efe0"/>
-            <path d="M48 50h32M48 64h32M48 78h22" stroke="#2f5d50" stroke-width="7" stroke-linecap="round"/>
-          </svg>
-          EOF
+          cp apps/desktop/resources/icons/sujian.svg AppDir/usr/share/icons/hicolor/scalable/apps/sujian-desktop.svg
           if [ ! -f "$FCITX_QT_PLUGIN" ]; then
             echo "::error title=fcitx5 Qt6 input context missing::Expected built plugin at $FCITX_QT_PLUGIN"
             exit 1

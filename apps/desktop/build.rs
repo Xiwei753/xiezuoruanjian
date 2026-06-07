@@ -286,6 +286,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");
     println!("cargo:rerun-if-changed=qml/SmoothCursor.qml");
+    println!("cargo:rerun-if-changed=qml/EditorWheelScroller.qml");
+    println!("cargo:rerun-if-changed=qml/EditorTypingAnimator.qml");
     println!("cargo:rerun-if-changed=qml/TopWritingToolbar.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
     println!("cargo:rerun-if-changed=qml/HubPageFrame.qml");
@@ -313,6 +315,16 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/SidebarItem.qml");
     println!("cargo:rerun-if-changed=qml/StatusPill.qml");
     println!("cargo:rerun-if-changed=qml/ToolbarButton.qml");
+    println!("cargo:rerun-if-changed=qml");
+    if let Ok(entries) = fs::read_dir("qml") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "qml") {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    println!("cargo:rerun-if-changed=resources/icons/sujian.svg");
 
     let mut config = cpp_build::Config::new();
     configure_cpp_standard(&mut config);

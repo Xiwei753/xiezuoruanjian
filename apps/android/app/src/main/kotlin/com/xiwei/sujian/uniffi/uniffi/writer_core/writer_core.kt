@@ -886,6 +886,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -924,6 +928,8 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_fn_method_writerappservice_clear_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_clear_chapter_content_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_compute_starmap_edge_renders(`ptr`: Pointer,`graph`: RustBuffer.ByValue,`layout`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -980,6 +986,8 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_by_project(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_hit_test_starmap_node(`ptr`: Pointer,`layout`: RustBuffer.ByValue,`x`: Float,`y`: Float,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_list_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -1209,6 +1217,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content_envelope_json(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_compute_starmap_edge_renders(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_chapter(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_chapter_envelope_json(
@@ -1264,6 +1274,8 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_project(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_hit_test_starmap_node(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_list_chapters(
     ): Short
@@ -1406,6 +1418,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content_envelope_json() != 42343.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_compute_starmap_edge_renders() != 63065.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_chapter() != 27761.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1488,6 +1503,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_summary() != 65245.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_hit_test_starmap_node() != 8068.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_list_chapters() != 34372.toShort()) {
@@ -2106,6 +2124,8 @@ public interface WriterAppServiceInterface {
 
     fun `clearChapterContentEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.String
 
+    fun `computeStarmapEdgeRenders`(`graph`: StarMapGraphDto, `layout`: StarMapLayoutDto): List<StarMapEdgeRenderDto>
+
     fun `createChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): ChapterMetaDto
 
     fun `createChapterEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): kotlin.String
@@ -2161,6 +2181,8 @@ public interface WriterAppServiceInterface {
     fun `getWritingStatsByProject`(`startDate`: kotlin.String, `endDate`: kotlin.String): ProjectStatsSummaryDto
 
     fun `getWritingStatsSummary`(`startDate`: kotlin.String, `endDate`: kotlin.String): WritingStatsSummaryDto
+
+    fun `hitTestStarmapNode`(`layout`: StarMapLayoutDto, `x`: kotlin.Float, `y`: kotlin.Float): kotlin.String?
 
     fun `listChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String): List<ChapterMetaDto>
 
@@ -2433,6 +2455,19 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_clear_chapter_content_envelope_json(
         it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `computeStarmapEdgeRenders`(`graph`: StarMapGraphDto, `layout`: StarMapLayoutDto): List<StarMapEdgeRenderDto> {
+            return FfiConverterSequenceTypeStarMapEdgeRenderDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_compute_starmap_edge_renders(
+        it, FfiConverterTypeStarMapGraphDto.lower(`graph`),FfiConverterTypeStarMapLayoutDto.lower(`layout`),_status)
 }
     }
     )
@@ -2791,6 +2826,19 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_writing_stats_summary(
         it, FfiConverterString.lower(`startDate`),FfiConverterString.lower(`endDate`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `hitTestStarmapNode`(`layout`: StarMapLayoutDto, `x`: kotlin.Float, `y`: kotlin.Float): kotlin.String? {
+            return FfiConverterOptionalString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_hit_test_starmap_node(
+        it, FfiConverterTypeStarMapLayoutDto.lower(`layout`),FfiConverterFloat.lower(`x`),FfiConverterFloat.lower(`y`),_status)
 }
     }
     )
@@ -5352,6 +5400,110 @@ public object FfiConverterTypeStarMapEdgeEndpointDto: FfiConverterRustBuffer<Sta
             FfiConverterOptionalString.write(value.`nodeId`, buf)
             FfiConverterOptionalString.write(value.`anchorId`, buf)
             FfiConverterOptionalTypeStarMapDeepTargetDto.write(value.`target`, buf)
+    }
+}
+
+
+
+data class StarMapEdgeRenderDto (
+    var `edgeId`: kotlin.String,
+    var `fromCx`: kotlin.Float,
+    var `fromCy`: kotlin.Float,
+    var `toCx`: kotlin.Float,
+    var `toCy`: kotlin.Float,
+    var `startX`: kotlin.Float,
+    var `startY`: kotlin.Float,
+    var `endX`: kotlin.Float,
+    var `endY`: kotlin.Float,
+    var `offsetX`: kotlin.Float,
+    var `offsetY`: kotlin.Float,
+    var `arrowTipX`: kotlin.Float,
+    var `arrowTipY`: kotlin.Float,
+    var `arrowLeftX`: kotlin.Float,
+    var `arrowLeftY`: kotlin.Float,
+    var `arrowRightX`: kotlin.Float,
+    var `arrowRightY`: kotlin.Float,
+    var `labelX`: kotlin.Float,
+    var `labelY`: kotlin.Float,
+    var `hasBidirectional`: kotlin.Boolean
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEdgeRenderDto: FfiConverterRustBuffer<StarMapEdgeRenderDto> {
+    override fun read(buf: ByteBuffer): StarMapEdgeRenderDto {
+        return StarMapEdgeRenderDto(
+            FfiConverterString.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEdgeRenderDto) = (
+            FfiConverterString.allocationSize(value.`edgeId`) +
+            FfiConverterFloat.allocationSize(value.`fromCx`) +
+            FfiConverterFloat.allocationSize(value.`fromCy`) +
+            FfiConverterFloat.allocationSize(value.`toCx`) +
+            FfiConverterFloat.allocationSize(value.`toCy`) +
+            FfiConverterFloat.allocationSize(value.`startX`) +
+            FfiConverterFloat.allocationSize(value.`startY`) +
+            FfiConverterFloat.allocationSize(value.`endX`) +
+            FfiConverterFloat.allocationSize(value.`endY`) +
+            FfiConverterFloat.allocationSize(value.`offsetX`) +
+            FfiConverterFloat.allocationSize(value.`offsetY`) +
+            FfiConverterFloat.allocationSize(value.`arrowTipX`) +
+            FfiConverterFloat.allocationSize(value.`arrowTipY`) +
+            FfiConverterFloat.allocationSize(value.`arrowLeftX`) +
+            FfiConverterFloat.allocationSize(value.`arrowLeftY`) +
+            FfiConverterFloat.allocationSize(value.`arrowRightX`) +
+            FfiConverterFloat.allocationSize(value.`arrowRightY`) +
+            FfiConverterFloat.allocationSize(value.`labelX`) +
+            FfiConverterFloat.allocationSize(value.`labelY`) +
+            FfiConverterBoolean.allocationSize(value.`hasBidirectional`)
+    )
+
+    override fun write(value: StarMapEdgeRenderDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`edgeId`, buf)
+            FfiConverterFloat.write(value.`fromCx`, buf)
+            FfiConverterFloat.write(value.`fromCy`, buf)
+            FfiConverterFloat.write(value.`toCx`, buf)
+            FfiConverterFloat.write(value.`toCy`, buf)
+            FfiConverterFloat.write(value.`startX`, buf)
+            FfiConverterFloat.write(value.`startY`, buf)
+            FfiConverterFloat.write(value.`endX`, buf)
+            FfiConverterFloat.write(value.`endY`, buf)
+            FfiConverterFloat.write(value.`offsetX`, buf)
+            FfiConverterFloat.write(value.`offsetY`, buf)
+            FfiConverterFloat.write(value.`arrowTipX`, buf)
+            FfiConverterFloat.write(value.`arrowTipY`, buf)
+            FfiConverterFloat.write(value.`arrowLeftX`, buf)
+            FfiConverterFloat.write(value.`arrowLeftY`, buf)
+            FfiConverterFloat.write(value.`arrowRightX`, buf)
+            FfiConverterFloat.write(value.`arrowRightY`, buf)
+            FfiConverterFloat.write(value.`labelX`, buf)
+            FfiConverterFloat.write(value.`labelY`, buf)
+            FfiConverterBoolean.write(value.`hasBidirectional`, buf)
     }
 }
 
@@ -8763,6 +8915,34 @@ public object FfiConverterSequenceTypeStarMapEdgeDto: FfiConverterRustBuffer<Lis
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeStarMapEdgeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapEdgeRenderDto: FfiConverterRustBuffer<List<StarMapEdgeRenderDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapEdgeRenderDto> {
+        val len = buf.getInt()
+        return List<StarMapEdgeRenderDto>(len) {
+            FfiConverterTypeStarMapEdgeRenderDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapEdgeRenderDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapEdgeRenderDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapEdgeRenderDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapEdgeRenderDto.write(it, buf)
         }
     }
 }

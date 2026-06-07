@@ -2006,6 +2006,58 @@ impl From<StarMapLayoutNodeDto> for crate::starmap::types::StarMapLayoutNode {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct StarMapEdgeRenderDto {
+    pub edge_id: String,
+    pub from_cx: f32,
+    pub from_cy: f32,
+    pub to_cx: f32,
+    pub to_cy: f32,
+    pub start_x: f32,
+    pub start_y: f32,
+    pub end_x: f32,
+    pub end_y: f32,
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub arrow_tip_x: f32,
+    pub arrow_tip_y: f32,
+    pub arrow_left_x: f32,
+    pub arrow_left_y: f32,
+    pub arrow_right_x: f32,
+    pub arrow_right_y: f32,
+    pub label_x: f32,
+    pub label_y: f32,
+    pub has_bidirectional: bool,
+}
+
+impl From<crate::starmap::render::EdgeRender> for StarMapEdgeRenderDto {
+    fn from(r: crate::starmap::render::EdgeRender) -> Self {
+        Self {
+            edge_id: r.edge_id,
+            from_cx: r.from_cx,
+            from_cy: r.from_cy,
+            to_cx: r.to_cx,
+            to_cy: r.to_cy,
+            start_x: r.start_x,
+            start_y: r.start_y,
+            end_x: r.end_x,
+            end_y: r.end_y,
+            offset_x: r.offset_x,
+            offset_y: r.offset_y,
+            arrow_tip_x: r.arrow_tip_x,
+            arrow_tip_y: r.arrow_tip_y,
+            arrow_left_x: r.arrow_left_x,
+            arrow_left_y: r.arrow_left_y,
+            arrow_right_x: r.arrow_right_x,
+            arrow_right_y: r.arrow_right_y,
+            label_x: r.label_x,
+            label_y: r.label_y,
+            has_bidirectional: r.has_bidirectional,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct StarMapReferenceDto {
     pub host_starmap_id: String,
     pub host_title: String,
