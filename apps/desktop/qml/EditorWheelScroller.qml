@@ -12,11 +12,12 @@ Item {
     property var editorItem: null
 
     // Tuned in one place so WritingWorkspace stays a layout container.
-    property real angleLinesPerStep: 3.0
-    property real velocityGain: 42.0
-    property real decayPerSecond: 0.045
-    property real maxVelocityViewportMultiplier: 7.0
-    property real minMaxVelocity: 2400
+    property real angleLinesPerStep: 2.2
+    property real velocityGain: 14.0
+    property real pixelVelocityGain: 7.0
+    property real decayPerSecond: 0.006
+    property real maxVelocityViewportMultiplier: 2.4
+    property real minMaxVelocity: 900
     property real stopVelocityFontMultiplier: 0.35
     property real minStopVelocity: 6
 
@@ -64,13 +65,13 @@ Item {
 
     function wheelDeltaPixels(event) {
         var pixelY = event.pixelDelta ? event.pixelDelta.y : 0;
-        if (Math.abs(pixelY) > 0) return -pixelY;
+        if (Math.abs(pixelY) > 0) return { deltaY: -pixelY, gain: pixelVelocityGain };
         var angleY = event.angleDelta ? event.angleDelta.y : 0;
-        if (Math.abs(angleY) > 0) return -(angleY / 120.0) * wheelLineHeight() * angleLinesPerStep;
-        return 0;
+        if (Math.abs(angleY) > 0) return { deltaY: -(angleY / 120.0) * wheelLineHeight() * angleLinesPerStep, gain: velocityGain };
+        return { deltaY: 0, gain: velocityGain };
     }
 
-    function applyWheelImpulse(deltaY) {
+    function applyWheelImpulse(deltaY, gain) {
         var item = contentItem();
         var maxY = maxContentY();
         if (!item || deltaY === 0 || maxY <= 0) return false;
@@ -86,7 +87,7 @@ Item {
             wheelVelocityY = 0;
         }
 
-        wheelVelocityY = Math.max(-wheelMaxVelocityY, Math.min(wheelMaxVelocityY, wheelVelocityY + deltaY * velocityGain));
+        wheelVelocityY = Math.max(-wheelMaxVelocityY, Math.min(wheelMaxVelocityY, wheelVelocityY + deltaY * gain));
         wheelLastTickMs = Date.now();
         if (!wheelKineticTimer.running) {
             wheelKineticTimer.start();
@@ -134,13 +135,13 @@ Item {
         orientation: Qt.Vertical
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         onWheel: function(event) {
-            var deltaY = root.wheelDeltaPixels(event);
-            if (deltaY === 0) {
+            var wheelDelta = root.wheelDeltaPixels(event);
+            if (wheelDelta.deltaY === 0) {
                 event.accepted = false;
                 return;
             }
 
-            event.accepted = root.applyWheelImpulse(deltaY);
+            event.accepted = root.applyWheelImpulse(wheelDelta.deltaY, wheelDelta.gain);
             if (event.accepted) {
                 root.scrollActivity();
             }

@@ -679,6 +679,7 @@ Rectangle {
                     ScrollView {
                         id: editorScroll
                         readonly property bool editorIsScrolling: editorWheelScroller.active || ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
+                        property bool editorAnimationSuppressed: false
                         anchors.fill: paperBg
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
@@ -695,6 +696,21 @@ Rectangle {
                         }
                         onContentHeightChanged: clampScroll()
                         onHeightChanged: clampScroll()
+                        onEditorIsScrollingChanged: {
+                            if (editorIsScrolling) {
+                                scrollAnimationReleaseTimer.stop();
+                                editorAnimationSuppressed = true;
+                            } else {
+                                scrollAnimationReleaseTimer.restart();
+                            }
+                        }
+
+                        Timer {
+                            id: scrollAnimationReleaseTimer
+                            interval: 80
+                            repeat: false
+                            onTriggered: editorScroll.editorAnimationSuppressed = false
+                        }
                         
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                         ScrollBar.vertical: ScrollBar {
@@ -740,7 +756,7 @@ Rectangle {
                                 // 吐字/吞字动画：从设置读取
                                 typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : false
                                 scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
-                                is_scrolling: editorScroll.editorIsScrolling
+                                is_scrolling: editorScroll.editorAnimationSuppressed
                                 
                             }
 

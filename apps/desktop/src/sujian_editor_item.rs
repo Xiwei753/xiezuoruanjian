@@ -7,7 +7,7 @@ use qmetaobject::prelude::*;
 use qmetaobject::{QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QQuickPaintedItem, QRectF, QString};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause};
 
 cpp! {{
@@ -436,6 +436,7 @@ pub struct SujianEditorItem {
     preedit_text: String,
     preedit_cursor: usize,
     layout_cache: Option<LayoutCache>,
+    last_slow_paint_log: Option<Instant>,
 }
 
 impl Default for SujianEditorItem {
@@ -526,6 +527,7 @@ impl Default for SujianEditorItem {
             preedit_text: String::new(),
             preedit_cursor: 0,
             layout_cache: None,
+            last_slow_paint_log: None,
         }
     }
 }
@@ -744,6 +746,9 @@ impl SujianEditorItem {
 
     fn set_typing_animation_enabled(&mut self, value: bool) {
         self.current_typing_animation_enabled = value;
+        if editor_animation_debug_enabled() {
+            eprintln!("typing_animation_enabled_changed: enabled={}", value);
+        }
         self.visual_settings_changed();
     }
 
@@ -768,6 +773,13 @@ impl SujianEditorItem {
             return;
         }
         self.current_is_scrolling = value;
+        if value {
+            self.cursor_animation = None;
+            self.insert_animation = None;
+            self.delete_animation = None;
+            self.request_repaint();
+            return;
+        }
         if !value {
             // 滚动结束时，从当前动画位置继续，避免光标跳动
             let now = Instant::now();
@@ -880,6 +892,12 @@ impl SujianEditorItem {
             let width = self.bounding_width();
             let _ = self.ensure_layout_cached(width);
             let glyphs = self.glyph_rects_for_range(insert_byte_start, insert_byte_end);
+            self.log_animation_created(
+                "insert_animation_created",
+                insert_byte_start,
+                glyphs.len(),
+                self.animation_visible_hit(&glyphs),
+            );
 
             if !glyphs.is_empty() {
                 let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
@@ -890,6 +908,14 @@ impl SujianEditorItem {
                     duration_ms: duration,
                 });
             }
+        } else if editor_animation_debug_enabled() {
+            eprintln!(
+                "insert_animation_skipped: offset={}, len={}, enabled={}, scrolling={}",
+                insert_byte_start,
+                inserted.len(),
+                self.current_typing_animation_enabled,
+                self.current_is_scrolling,
+            );
         }
 
         self.emit_content_changed();
@@ -912,29 +938,33 @@ impl SujianEditorItem {
             None
         };
 
+        let anim_glyphs = if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            self.insert_animation = None;
+            if let Some((del_start, del_end)) = del_range {
+                let width = self.bounding_width();
+                let _ = self.ensure_layout_cached(width);
+                let glyphs = self.glyph_rects_for_range(del_start, del_end);
+                self.log_animation_created(
+                    "delete_animation_created",
+                    del_start,
+                    glyphs.len(),
+                    self.animation_visible_hit(&glyphs),
+                );
+                glyphs
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         if !self.buffer.delete_backward() {
             return;
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
 
-        // 在删除前取被删字形的原始位置（从旧 layout）
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            self.insert_animation = None;  // 清除可能存在的吐字动画
-            if let Some((del_start, del_end)) = del_range {
-                let glyphs = self.glyph_rects_for_range(del_start, del_end);
-                if !glyphs.is_empty() {
-                    let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
-                    let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-                    self.delete_animation = Some(DeleteAnimation {
-                        glyphs,
-                        target_cursor_rect: (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_h),
-                        start_time: Instant::now(),
-                        duration_ms: duration,
-                    });
-                }
-            }
-        }
+        self.start_delete_animation(anim_glyphs);
 
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
@@ -957,28 +987,33 @@ impl SujianEditorItem {
             None
         };
 
+        let anim_glyphs = if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            self.insert_animation = None;
+            if let Some((del_start, del_end)) = del_range {
+                let width = self.bounding_width();
+                let _ = self.ensure_layout_cached(width);
+                let glyphs = self.glyph_rects_for_range(del_start, del_end);
+                self.log_animation_created(
+                    "delete_animation_created",
+                    del_start,
+                    glyphs.len(),
+                    self.animation_visible_hit(&glyphs),
+                );
+                glyphs
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         if !self.buffer.delete_forward() {
             return;
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
 
-        // 在删除前取被删字形的原始位置
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            if let Some((del_start, del_end)) = del_range {
-                let glyphs = self.glyph_rects_for_range(del_start, del_end);
-                if !glyphs.is_empty() {
-                    let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
-                    let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-                    self.delete_animation = Some(DeleteAnimation {
-                        glyphs,
-                        target_cursor_rect: (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_h),
-                        start_time: Instant::now(),
-                        duration_ms: duration,
-                    });
-                }
-            }
-        }
+        self.start_delete_animation(anim_glyphs);
 
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
@@ -993,7 +1028,17 @@ impl SujianEditorItem {
 
         // 在删除前取选区字形的原始位置
         let anim_glyphs = if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            self.glyph_rects_for_range(sel_start, sel_end)
+            self.insert_animation = None;
+            let width = self.bounding_width();
+            let _ = self.ensure_layout_cached(width);
+            let glyphs = self.glyph_rects_for_range(sel_start, sel_end);
+            self.log_animation_created(
+                "delete_animation_created",
+                sel_start,
+                glyphs.len(),
+                self.animation_visible_hit(&glyphs),
+            );
+            glyphs
         } else {
             Vec::new()
         };
@@ -1004,16 +1049,7 @@ impl SujianEditorItem {
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
 
-        if !anim_glyphs.is_empty() {
-            let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
-            let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-            self.delete_animation = Some(DeleteAnimation {
-                glyphs: anim_glyphs,
-                target_cursor_rect: (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_h),
-                start_time: Instant::now(),
-                duration_ms: duration,
-            });
-        }
+        self.start_delete_animation(anim_glyphs);
 
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
@@ -1428,10 +1464,10 @@ impl SujianEditorItem {
 
             let segment = &text[seg_start..seg_end];
             let mut cursor_x = line.x + prefix_w;
-            for ch in segment.chars() {
+            for (rel_byte_start, ch) in segment.char_indices() {
                 let ch_str = ch.to_string();
                 let ch_w = measure_text_width(&ch_str, font_size, &font_family);
-                let ch_byte_start = seg_start + text[seg_start..seg_end].find(&ch_str).unwrap_or(0);
+                let ch_byte_start = seg_start + rel_byte_start;
                 result.push(AnimatedGlyph {
                     byte_start: ch_byte_start,
                     byte_end: ch_byte_start + ch_str.len(),
@@ -1444,6 +1480,54 @@ impl SujianEditorItem {
             }
         }
         result
+    }
+
+    fn start_delete_animation(&mut self, glyphs: Vec<AnimatedGlyph>) {
+        if glyphs.is_empty() || self.current_is_scrolling {
+            return;
+        }
+        self.invalidate_layout_cache();
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
+        let (target_x, target_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
+        let cursor_h = cursor_height_for_line(font_size, &font_family);
+        let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+        self.delete_animation = Some(DeleteAnimation {
+            glyphs,
+            target_cursor_rect: (target_x, target_y, 2.0, cursor_h),
+            start_time: Instant::now(),
+            duration_ms: duration,
+        });
+    }
+
+    fn animation_visible_hit(&self, glyphs: &[AnimatedGlyph]) -> bool {
+        if glyphs.is_empty() {
+            return false;
+        }
+        let item = self as &dyn QQuickItem;
+        let top = self.current_scroll_y as f64;
+        let bottom = top + item.bounding_rect().height.max(1.0);
+        glyphs.iter().any(|g| {
+            let glyph_top = g.rect.1;
+            let glyph_bottom = g.rect.1 + g.rect.3;
+            glyph_bottom >= top && glyph_top <= bottom
+        })
+    }
+
+    fn log_animation_created(&self, label: &str, offset: usize, glyph_count: usize, visible_line_hit: bool) {
+        if editor_animation_debug_enabled() {
+            eprintln!(
+                "{}: offset={}, glyph_count={}, visible_line_hit={}, scrolling={}, enabled={}",
+                label,
+                offset,
+                glyph_count,
+                visible_line_hit,
+                self.current_is_scrolling,
+                self.current_typing_animation_enabled,
+            );
+        }
     }
 
     /// 给定字节范围，返回 (min_x, min_y, max_x, max_y) 包围盒
@@ -1486,6 +1570,7 @@ impl QQuickItem for SujianEditorItem {
 
 impl QQuickPaintedItem for SujianEditorItem {
     fn paint(&mut self, painter: &mut QPainter) {
+        let paint_start = Instant::now();
         let width = self.bounding_width();
         // 先确保布局缓存有效，然后借用而非 clone
         {
@@ -1523,6 +1608,7 @@ impl QQuickPaintedItem for SujianEditorItem {
 
         let selection = self.buffer.selection_range();
         let now_anim = Instant::now();
+        let mut needs_animation_repaint = false;
 
         // ── Layer 1: Selection background ──
         for line in &lines[vis_start..vis_end] {
@@ -1545,8 +1631,10 @@ impl QQuickPaintedItem for SujianEditorItem {
         }
 
         // ── Layer 2: Base text ──
-        let active_insert = self.insert_animation.as_ref().filter(|a| !a.is_finished(now_anim));
-        let active_delete = self.delete_animation.as_ref().filter(|a| !a.is_finished(now_anim));
+        let active_insert = self.insert_animation.as_ref().filter(|a| !self.current_is_scrolling && !a.is_finished(now_anim));
+        let active_delete = self.delete_animation.as_ref().filter(|a| !self.current_is_scrolling && !a.is_finished(now_anim));
+        let had_insert_animation = active_insert.is_some();
+        let had_delete_animation = active_delete.is_some();
 
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
@@ -1557,6 +1645,13 @@ impl QQuickPaintedItem for SujianEditorItem {
                 let insert_in_line = insert_anim.glyphs.iter().any(|g| g.line_index == line_idx);
                 if insert_in_line {
                     let eased = 1.0 - (1.0 - insert_anim.progress(now_anim)).powi(3);
+                    if editor_animation_debug_enabled() {
+                        eprintln!(
+                            "insert_animation_paint: progress={:.3}, glyph_count={}, visible_line_hit=true",
+                            insert_anim.progress(now_anim),
+                            insert_anim.glyphs.len(),
+                        );
+                    }
                     let first_glyph = insert_anim.glyphs.first().unwrap();
                     let last_glyph = insert_anim.glyphs.last().unwrap();
                     let insert_start_byte = first_glyph.byte_start;
@@ -1584,8 +1679,13 @@ impl QQuickPaintedItem for SujianEditorItem {
                             // 简化方案：用 alpha 模拟部分可见
                             let visible_frac = ((clip_right - gx) / glyph.rect.2).clamp(0.0, 1.0);
                             let alpha = (visible_frac * 255.0).round() as i32;
-                            let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
-                            draw_text(painter, gx, glyph.baseline_y, fs, fade_qstr.into(), glyph.text.clone().into());
+                            draw_text_color(
+                                painter,
+                                gx,
+                                glyph.baseline_y,
+                                QColor::from_rgba(base_color.red(), base_color.green(), base_color.blue(), alpha),
+                                glyph.text.clone().into(),
+                            );
                         }
                         // 完全在 clip 区域外，不绘制
                     }
@@ -1598,56 +1698,45 @@ impl QQuickPaintedItem for SujianEditorItem {
                         draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after.to_string().into());
                     }
 
-                    self.request_repaint();
-                    continue;
-                }
-            }
-
-            if let Some(ref delete_anim) = active_delete {
-                let delete_in_line = delete_anim.glyphs.iter().any(|g| g.line_index == line_idx);
-                if delete_in_line {
-                    let eased = 1.0 - (1.0 - delete_anim.progress(now_anim)).powi(3);
-                    let target_x = delete_anim.target_cursor_rect.0;
-                    let target_y_top = delete_anim.target_cursor_rect.1;
-
-                    // 删除点之前的文字：正常绘制
-                    let first_glyph = delete_anim.glyphs.first().unwrap();
-                    let del_start_byte = first_glyph.byte_start;
-                    if del_start_byte > line.start && del_start_byte <= line.end {
-                        let before = &self.buffer.text[line.start..del_start_byte];
-                        draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before.to_string().into());
-                    }
-
-                    // Ghost 文字：每个字形向光标收缩 + alpha 渐出
-                    let base_color = color_from_qstring(self.current_text_color.clone());
-                    for glyph in &delete_anim.glyphs {
-                        let (gx, gy, _gw, _gh) = glyph.rect;
-                        let offset_x = (target_x - gx) * eased;
-                        let offset_y = (target_y_top - gy) * eased;
-                        let draw_x = gx + offset_x;
-                        // alpha 从 1.0 渐出到 0.0
-                        let alpha = ((1.0 - eased) * 255.0).round() as i32;
-                        let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
-                        let ghost_baseline = glyph.baseline_y + offset_y;
-                        draw_text(painter, draw_x, ghost_baseline, fs, fade_qstr.into(), glyph.text.clone().into());
-                    }
-
-                    // 删除点之后的文字：正常绘制
-                    let last_glyph = delete_anim.glyphs.last().unwrap();
-                    let del_end_byte = last_glyph.byte_end;
-                    if del_end_byte >= line.start && del_end_byte < line.end {
-                        let after_x = line.x + measure_text_width(&self.buffer.text[line.start..del_end_byte], font_size, &font_family);
-                        let after = &self.buffer.text[del_end_byte..line.end];
-                        draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after.to_string().into());
-                    }
-
-                    self.request_repaint();
+                    needs_animation_repaint = true;
                     continue;
                 }
             }
 
             // 普通文字绘制
             draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), text.into());
+        }
+
+        // 删除动画不能用旧字节范围切新正文：先画新正文，再把旧 glyph 作为 ghost 叠上去。
+        if let Some(ref delete_anim) = active_delete {
+            let eased = 1.0 - (1.0 - delete_anim.progress(now_anim)).powi(3);
+            let target_x = delete_anim.target_cursor_rect.0;
+            let target_y_top = delete_anim.target_cursor_rect.1;
+            let base_color = color_from_qstring(self.current_text_color.clone());
+            if editor_animation_debug_enabled() {
+                eprintln!(
+                    "delete_animation_paint: progress={:.3}, glyph_count={}",
+                    delete_anim.progress(now_anim),
+                    delete_anim.glyphs.len(),
+                );
+            }
+            for glyph in &delete_anim.glyphs {
+                let (gx, gy, _gw, gh) = glyph.rect;
+                if gy + gh < scroll_y || gy > scroll_y + viewport_height {
+                    continue;
+                }
+                let offset_x = (target_x - gx) * eased;
+                let offset_y = (target_y_top - gy) * eased;
+                let alpha = ((1.0 - eased) * 255.0).round() as i32;
+                draw_text_color(
+                    painter,
+                    gx + offset_x,
+                    glyph.baseline_y + offset_y,
+                    QColor::from_rgba(base_color.red(), base_color.green(), base_color.blue(), alpha),
+                    glyph.text.clone().into(),
+                );
+            }
+            needs_animation_repaint = true;
         }
 
         // ── Layer 3: Preedit ──
@@ -1799,6 +1888,22 @@ impl QQuickPaintedItem for SujianEditorItem {
             if anim.is_finished(now_cleanup) {
                 self.delete_animation = None;
             }
+        }
+        if needs_animation_repaint && !self.current_is_scrolling {
+            self.request_repaint();
+        }
+
+        let elapsed = paint_start.elapsed();
+        if elapsed.as_millis() > 8 && should_log_slow_paint(self.last_slow_paint_log, now_cleanup) {
+            self.last_slow_paint_log = Some(now_cleanup);
+            eprintln!(
+                "sujian_editor_paint_slow: elapsed_ms={}, visible_lines={}, insert_active={}, delete_active={}, scrolling={}",
+                elapsed.as_millis(),
+                vis_end.saturating_sub(vis_start),
+                had_insert_animation,
+                had_delete_animation,
+                self.current_is_scrolling,
+            );
         }
     }
 }
@@ -2014,6 +2119,11 @@ fn draw_text(painter: &mut QPainter, x: f64, baseline_y: f64, font_size: f32, co
     painter.draw_text(QPointF { x, y: baseline_y }, text);
 }
 
+fn draw_text_color(painter: &mut QPainter, x: f64, baseline_y: f64, color: QColor, text: QString) {
+    painter.set_pen(QPen::from_color(color));
+    painter.draw_text(QPointF { x, y: baseline_y }, text);
+}
+
 fn draw_rect(painter: &mut QPainter, x: f64, y: f64, width: f64, height: f64, color: QString) {
     painter.fill_rect(
         QRectF { x, y, width, height },
@@ -2023,6 +2133,14 @@ fn draw_rect(painter: &mut QPainter, x: f64, y: f64, width: f64, height: f64, co
 
 fn color_from_qstring(color: QString) -> QColor {
     QColor::from_name(&color.to_string())
+}
+
+fn editor_animation_debug_enabled() -> bool {
+    cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_ANIMATION_DEBUG").is_some()
+}
+
+fn should_log_slow_paint(last_log: Option<Instant>, now: Instant) -> bool {
+    last_log.is_none_or(|last| now.duration_since(last) >= Duration::from_millis(500))
 }
 
 fn prev_char_boundary(text: &str, index: usize) -> Option<usize> {
