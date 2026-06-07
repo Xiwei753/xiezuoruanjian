@@ -1964,7 +1964,11 @@ impl QQuickItem for SujianEditorItem {
 
         let frame_start = Instant::now();
 
-        if !self.render_dirty && !self.cursor_dirty {
+        // 光标动画进行中也算"需要更新"，否则 render_dirty 路径清完 cursor_dirty 后动画会被掐断
+        let cursor_anim_active = self.cursor_animation.as_ref()
+            .is_some_and(|a| !a.is_finished(Instant::now()));
+
+        if !self.render_dirty && !self.cursor_dirty && !cursor_anim_active {
             return node;
         }
 
@@ -1988,13 +1992,21 @@ impl QQuickItem for SujianEditorItem {
                     let new_raw = sujian_update_texture_node(
                         old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, dpr,
                     );
-                    // 更新光标节点
                     sujian_update_cursor_rect(
                         new_raw, item_ptr,
                         self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
                         self.cursor_visible, cursor_rgba,
                     );
-                    self.cursor_dirty = false;
+                    // 光标动画仍 active 时保持 cursor_dirty，让下一帧进 cursor-only 路径推进动画
+                    let still_animating = self.cursor_animation.as_ref()
+                        .is_some_and(|a| !a.is_finished(Instant::now()));
+                    if still_animating {
+                        self.cursor_dirty = true;
+                        let item = self as &dyn QQuickItem;
+                        item.update();
+                    } else {
+                        self.cursor_dirty = false;
+                    }
                     let total_elapsed = frame_start.elapsed();
                     if total_elapsed.as_millis() > 4 {
                         eprintln!(
@@ -2018,27 +2030,31 @@ impl QQuickItem for SujianEditorItem {
                             self.cursor_visible, cursor_rgba,
                         );
                     }
-                    self.cursor_dirty = false;
+                    let still_animating = self.cursor_animation.as_ref()
+                        .is_some_and(|a| !a.is_finished(Instant::now()));
+                    if still_animating {
+                        self.cursor_dirty = true;
+                        let item = self as &dyn QQuickItem;
+                        item.update();
+                    } else {
+                        self.cursor_dirty = false;
+                    }
                     unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
                 }
             }
         } else if self.cursor_dirty && !old_raw.is_null() {
             // 路径 2: 只有光标变了（动画/滚动），不需要重绘文字
-            // ── 在这里推进光标动画，不依赖 paint_onto ──
             let now = Instant::now();
             if let Some(ref anim) = self.cursor_animation {
                 if anim.is_finished(now) {
-                    // 动画结束，snap 到目标
                     self.cursor_visual_x = anim.target_x;
                     self.cursor_visual_y = anim.target_y;
                     self.cursor_animation = None;
                     self.cursor_dirty = false;
                 } else {
-                    // 动画进行中，推进位置
                     let (cx, cy) = anim.current_position(now);
                     self.cursor_visual_x = cx;
                     self.cursor_visual_y = cy;
-                    // 请求下一帧
                     let item = self as &dyn QQuickItem;
                     item.update();
                 }
@@ -2046,10 +2062,8 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_dirty = false;
             }
 
-            // 重新计算屏幕坐标（可能因动画推进而变）
             let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
 
-            // 滚动时也要更新 source rect
             if let Some(ref buf) = self.scroll_buffer {
                 let src_y = scroll_y - buf.buffer_scroll_y;
                 let logical_img_w = buf.image.size().width as f64 / dpr;
@@ -2062,7 +2076,30 @@ impl QQuickItem for SujianEditorItem {
             );
             unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
         } else {
-            // 路径 3: 无变化
+            // 路径 3: 无变化（或只有 anim_active 但 cursor_dirty 已被清，补一次推进）
+            if cursor_anim_active && !old_raw.is_null() {
+                let now = Instant::now();
+                if let Some(ref anim) = self.cursor_animation {
+                    if anim.is_finished(now) {
+                        self.cursor_visual_x = anim.target_x;
+                        self.cursor_visual_y = anim.target_y;
+                        self.cursor_animation = None;
+                        self.cursor_dirty = false;
+                    } else {
+                        let (cx, cy) = anim.current_position(now);
+                        self.cursor_visual_x = cx;
+                        self.cursor_visual_y = cy;
+                        let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
+                        sujian_update_cursor_rect(
+                            old_raw, item_ptr,
+                            self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                            self.cursor_visible, cursor_rgba,
+                        );
+                        let item = self as &dyn QQuickItem;
+                        item.update();
+                    }
+                }
+            }
             unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
         }
     }
