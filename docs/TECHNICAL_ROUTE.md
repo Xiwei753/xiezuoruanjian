@@ -38,7 +38,7 @@
 - Core `editor` 模块统一产出 `EditorTransaction`、`EditorAnimationEvent` 等平台无关语义。
 - Desktop 最终使用 `SujianEditorItem` 自绘正文、选区、光标和动画，底层优先 `QTextLayout`。
 - Android 最终使用 `SujianEditorView : View` 自绘，并通过 `InputConnection` 接输入法。
-- 在新自绘编辑器落地前，Linux typing animation 必须关闭，不得恢复 hidden-range/reveal 或 QTextDocument 字符格式隐藏方案。
+- 在新自绘编辑器落地前，Desktop typing animation 必须关闭，不得恢复 hidden-range/reveal 或 QTextDocument 字符格式隐藏方案。
 
 ## Android 导图技术路线
 - 导图不是普通页面，而是大画布图形系统。**导图最终是与正文并列的创作知识图谱，不仅限于章节树结构。**

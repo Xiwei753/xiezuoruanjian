@@ -21,6 +21,7 @@ cpp! {{
 const KEY_BACKSPACE: i32 = 0x0100_0003;
 const KEY_TAB: i32 = 0x0100_0001;
 const KEY_ENTER: i32 = 0x0100_0005;
+const KEY_INSERT: i32 = 0x0100_0006;
 const KEY_RETURN: i32 = 0x0100_0004;
 const KEY_DELETE: i32 = 0x0100_0007;
 const KEY_LEFT: i32 = 0x0100_0012;
@@ -37,6 +38,26 @@ const KEY_Y: i32 = 0x59;
 const KEY_Z: i32 = 0x5a;
 const CTRL_MODIFIER: i32 = 0x0400_0000;
 const SHIFT_MODIFIER: i32 = 0x0200_0000;
+
+fn has_ctrl(modifiers: i32) -> bool {
+    modifiers & CTRL_MODIFIER != 0
+}
+
+fn has_shift(modifiers: i32) -> bool {
+    modifiers & SHIFT_MODIFIER != 0
+}
+
+fn is_copy_shortcut(key: i32, modifiers: i32) -> bool {
+    has_ctrl(modifiers) && (key == KEY_C || key == KEY_INSERT)
+}
+
+fn is_paste_shortcut(key: i32, modifiers: i32) -> bool {
+    (has_ctrl(modifiers) && key == KEY_V) || (has_shift(modifiers) && key == KEY_INSERT)
+}
+
+fn is_redo_shortcut(key: i32, modifiers: i32) -> bool {
+    has_ctrl(modifiers) && (key == KEY_Y || (has_shift(modifiers) && key == KEY_Z))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EditorSnapshot {
@@ -731,20 +752,24 @@ impl SujianEditorItem {
         if !self.current_editor_enabled {
             return false;
         }
-        let ctrl = modifiers & CTRL_MODIFIER != 0;
-        let shift = modifiers & SHIFT_MODIFIER != 0;
+        let ctrl = has_ctrl(modifiers);
+        let shift = has_shift(modifiers);
+        if is_copy_shortcut(key, modifiers) {
+            self.clipboard_copy();
+            return true;
+        }
+        if is_paste_shortcut(key, modifiers) {
+            self.clipboard_paste();
+            return true;
+        }
+        if is_redo_shortcut(key, modifiers) {
+            self.redo();
+            return true;
+        }
         if ctrl {
             match key {
                 KEY_A => {
                     self.select_all();
-                    return true;
-                }
-                KEY_C => {
-                    self.clipboard_copy();
-                    return true;
-                }
-                KEY_V => {
-                    self.clipboard_paste();
                     return true;
                 }
                 KEY_X => {
@@ -754,10 +779,6 @@ impl SujianEditorItem {
                 }
                 KEY_Z => {
                     self.undo();
-                    return true;
-                }
-                KEY_Y => {
-                    self.redo();
                     return true;
                 }
                 _ => return false,
@@ -1441,5 +1462,38 @@ mod tests {
         buffer.replace_selection_or_insert("纯文本");
         assert_eq!(buffer.text, "纯文本");
         assert_eq!(buffer.selected_text(), "");
+    }
+
+    #[test]
+    fn editor_buffer_undo_redo_keeps_plain_text_and_cursor() {
+        let mut buffer = EditorBuffer::default();
+        let before = buffer.snapshot();
+        buffer.push_undo(before);
+        buffer.replace_selection_or_insert("第一行\n第二行");
+
+        let Some((_old, restored)) = buffer.undo() else {
+            panic!("undo should restore the empty snapshot");
+        };
+        assert_eq!(restored.text, "");
+        assert_eq!(buffer.text, "");
+        assert_eq!(buffer.cursor, 0);
+
+        let Some((_old, redone)) = buffer.redo() else {
+            panic!("redo should restore inserted plain text");
+        };
+        assert_eq!(redone.text, "第一行\n第二行");
+        assert_eq!(buffer.text, "第一行\n第二行");
+        assert_eq!(buffer.cursor, buffer.text.len());
+    }
+
+    #[test]
+    fn self_editor_shortcuts_cover_desktop_clipboard_and_redo_keys() {
+        assert!(is_copy_shortcut(KEY_C, CTRL_MODIFIER));
+        assert!(is_copy_shortcut(KEY_INSERT, CTRL_MODIFIER));
+        assert!(is_paste_shortcut(KEY_V, CTRL_MODIFIER));
+        assert!(is_paste_shortcut(KEY_INSERT, SHIFT_MODIFIER));
+        assert!(is_redo_shortcut(KEY_Y, CTRL_MODIFIER));
+        assert!(is_redo_shortcut(KEY_Z, CTRL_MODIFIER | SHIFT_MODIFIER));
+        assert!(!is_redo_shortcut(KEY_Z, CTRL_MODIFIER));
     }
 }

@@ -213,7 +213,9 @@ QtObject {
     function readEditorPlainText() {
         if (useSelfRenderedEditor && targetEditorItem) {
             var editorItemText = readEditorItemPlainText();
-            var hadKnownEditorItemContent = previousEditorText.length > 0 || lastSavedEditorText.length > 0;
+            // The guard protects persisted content. Transient text that was never
+            // saved must not make undo-back-to-empty look like a destructive save.
+            var hadKnownEditorItemContent = lastSavedEditorText.length > 0;
             if (editorItemText.length === 0 && hadKnownEditorItemContent && hasRecentExplicitClearCandidate()) {
                 explicitEmptySavePending = true;
             }
@@ -243,7 +245,9 @@ QtObject {
             logWriterWarning("doc_empty_textarea_fallback", "textAreaLen=" + textAreaText.length);
         }
 
-        var hadKnownContent = previousEditorText.length > 0 || lastSavedEditorText.length > 0;
+        // Only persisted non-empty content is dangerous to overwrite with an
+        // unexpected empty read. Unsaved transient text can legitimately undo to empty.
+        var hadKnownContent = lastSavedEditorText.length > 0;
         if (text.length === 0 && hadKnownContent && hasRecentExplicitClearCandidate()) {
             explicitEmptySavePending = true;
         }

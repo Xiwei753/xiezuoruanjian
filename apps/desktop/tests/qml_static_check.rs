@@ -286,7 +286,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("targetEditorItem: sujianEditor")
                     || !content.contains("useSelfRenderedEditor: root.useSujianEditorItem")
                 {
-                    eprintln!("{}: WritingWorkspace must mount SujianEditorItem as the default Linux editor", file_name);
+                    eprintln!("{}: WritingWorkspace must mount the experimental SujianEditorItem behind an explicit Desktop test switch", file_name);
                     has_errors = true;
                 }
                 if !content.contains("TextInput {")
@@ -333,7 +333,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("animationEnabled: false")
                     || !content.contains("Do not mutate")
                 {
-                    eprintln!("{}: Linux typing animation must stay disabled until SujianEditorItem consumes Core transactions", file_name);
+                    eprintln!("{}: Desktop typing animation must stay disabled until SujianEditorItem consumes stable Core transactions", file_name);
                     has_errors = true;
                 }
                 if !content.contains("SmoothCursor {")
@@ -361,7 +361,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || content.contains("id: typingLayer")
                     || content.contains("cursorBirthAnimationsModel")
                 {
-                    eprintln!("{}: Linux typing animation and cursor smoothing must not depend on keypress hooks", file_name);
+                    eprintln!("{}: Desktop typing animation and cursor smoothing must not depend on keypress hooks", file_name);
                     has_errors = true;
                 }
                 if content.contains("#606470") {
@@ -599,6 +599,6 @@ fn test_editor_render_format_is_unified() {
         editor_controller.contains("targetTextArea.text = content")
             && editor_controller.contains("targetTextArea.text = plain")
             && editor_controller.contains("docHandler.apply_format()"),
-        "EditorController must keep TextArea fallback load/format path without making it the default"
+        "EditorController must keep TextArea fallback load/format path while SujianEditorItem remains explicitly gated"
     );
 }

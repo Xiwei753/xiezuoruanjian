@@ -12,12 +12,12 @@
 
 ## 分阶段计划
 
-### 第一阶段：停掉 Linux 高危链
+### 第一阶段：停掉 Desktop 高危链
 
 - 停用 `TextArea` 文字吐字动画。
 - 禁止通过 `DocumentHandler` 修改 `QTextDocument` 字符格式来隐藏/恢复文字。
 - 保留稳定编辑、保存、滚轮和光标显示。
-- 设置项可继续存在，但 Linux typing animation 在新 renderer 落地前不生效。
+- 设置项可继续存在，但 Desktop typing animation 在新 renderer 落地前不生效。
 
 ### 第二阶段：统一编辑事件层
 
@@ -32,7 +32,8 @@
 - 内部维护文本、选区、光标、滚动、布局缓存和动画列表。
 - 使用 `QTextLayout` 负责 Unicode 文本布局、换行、光标位置和绘制辅助。
 - QML `WritingWorkspace` 最终只放 `SujianEditorItem`，不再把 `TextArea` 作为主显示层。
-- 当前 Desktop 已以 `SujianEditorItem` 作为默认主编辑器，旧 `TextArea` 仅保留隐藏应急 fallback。
+- 当前 Desktop 仍默认使用 `TextArea` 稳定路径；`SujianEditorItem` 只能通过 `SUJIAN_DESKTOP_USE_SUJIAN_EDITOR=1` 显式打开验证，不能视为已默认接管正文。
+- 默认启用前必须完成中文输入、删除、换行、复制粘贴、全选、撤销重做、滚动裁剪和保存保护测试。
 - 由于 Rust `qmetaobject` 当前不直接暴露 IME virtual event，Desktop 首版用隐藏平台输入桥只转发提交后的纯文本和按键命令；正文状态、保存和事务仍归 `SujianEditorItem`。
 
 ### 第四阶段：Android SujianEditorView
@@ -48,7 +49,7 @@
 
 - `core/writer_core/src/editor/transaction.rs`：统一编辑事务和动画事件骨架。
 - `apps/desktop/src/sujian_editor_item.rs`：Desktop 自绘编辑器主路径，内部维护纯文本、光标、选区、撤销重做和 Core transaction。
-- `apps/desktop/qml/WritingWorkspace.qml`：默认挂载 `SujianEditorItem`，保留隐藏 `TextArea` fallback 和平台 IME 输入桥。
+- `apps/desktop/qml/WritingWorkspace.qml`：默认挂载稳定 `TextArea`，通过显式测试开关启用 `SujianEditorItem` 和平台 IME 输入桥。
 - `apps/desktop/qml/EditorTypingAnimator.qml`：保留为兼容占位，当前 inert，不再监听文本变化或修改文档格式。
 - `apps/desktop/src/document_handler.rs`：只做视觉排版、纯文本读取和撤销栈清理，不再提供隐藏字符 range API。
 - `apps/android/app/src/main/kotlin/com/xiwei/sujian/ui/TypingAnimationController.kt`：Android 过渡期只记录动画事件占位，不再向正文 `Editable` 注入透明 span。
