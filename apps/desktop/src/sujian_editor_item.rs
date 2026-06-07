@@ -119,57 +119,75 @@ impl CursorAnimationState {
     }
 }
 
-/// 文字吐字动画 — 插入文字时，新字从光标处展开
+/// 单个字形的矩形信息
+#[derive(Clone, Debug)]
+struct AnimatedGlyph {
+    byte_start: usize,
+    byte_end: usize,
+    text: String,
+    /// 字形包围盒 (x, y, width, height) — x 是行内左偏移，y 是行顶
+    rect: (f64, f64, f64, f64),
+    baseline_y: f64,
+    line_index: usize,
+}
+
+/// 吐字动画 — 插入文字从光标 clip 展开
 #[derive(Clone, Debug)]
 struct InsertAnimation {
-    /// 插入位置的字节偏移
-    offset: usize,
-    /// 插入的文字
-    inserted_text: String,
-    /// 插入后的光标矩形 (x, y, width, height)
-    cursor_rect: (f64, f64, f64, f64),
-    /// 动画开始时间
+    /// 每个插入字形的最终位置
+    glyphs: Vec<AnimatedGlyph>,
+    /// 插入点的光标矩形（动画起点）
+    origin_cursor_rect: (f64, f64, f64, f64),
     start_time: Instant,
-    /// 动画时长（毫秒）
     duration_ms: u64,
 }
 
 impl InsertAnimation {
-    /// 计算当前动画进度（0.0 ~ 1.0）
     fn progress(&self, now: Instant) -> f64 {
         let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
         (elapsed_ms / self.duration_ms as f64).min(1.0)
     }
 
-    /// 动画是否已完成
     fn is_finished(&self, now: Instant) -> bool {
         now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
     }
+
+    /// 插入内容的总包围盒
+    fn bounding_rect(&self) -> (f64, f64, f64, f64) {
+        if self.glyphs.is_empty() {
+            return self.origin_cursor_rect;
+        }
+        let mut min_x = f64::MAX;
+        let mut min_y = f64::MAX;
+        let mut max_x = f64::MIN;
+        let mut max_y = f64::MIN;
+        for g in &self.glyphs {
+            min_x = min_x.min(g.rect.0);
+            min_y = min_y.min(g.rect.1);
+            max_x = max_x.max(g.rect.0 + g.rect.2);
+            max_y = max_y.max(g.rect.1 + g.rect.3);
+        }
+        (min_x, min_y, max_x - min_x, max_y - min_y)
+    }
 }
 
-/// 文字吞字动画 — 删除文字时，旧字向光标收缩并消失
+/// 吞字动画 — 旧字向光标收缩消失
 #[derive(Clone, Debug)]
 struct DeleteAnimation {
-    /// 删除位置的字节偏移
-    offset: usize,
-    /// 删除的文字
-    deleted_text: String,
-    /// 删除前的光标矩形 (x, y, width, height)
-    cursor_rect: (f64, f64, f64, f64),
-    /// 动画开始时间
+    /// 被删字形的原始位置
+    glyphs: Vec<AnimatedGlyph>,
+    /// 删除后光标位置（动画终点）
+    target_cursor_rect: (f64, f64, f64, f64),
     start_time: Instant,
-    /// 动画时长（毫秒）
     duration_ms: u64,
 }
 
 impl DeleteAnimation {
-    /// 计算当前动画进度（0.0 ~ 1.0）
     fn progress(&self, now: Instant) -> f64 {
         let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
         (elapsed_ms / self.duration_ms as f64).min(1.0)
     }
 
-    /// 动画是否已完成
     fn is_finished(&self, now: Instant) -> bool {
         now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
     }
@@ -830,13 +848,19 @@ impl SujianEditorItem {
         }
         self.preedit_text.clear();
         self.preedit_cursor = 0;
-        
-        // 记录插入前的光标位置（用于动画）
-        let cursor_x = self.target_cursor_x;
-        let cursor_y = self.target_cursor_y;
+
+        // 记录插入前的光标位置（动画起点）
+        let origin_cx = self.target_cursor_x;
+        let origin_cy = self.target_cursor_y;
         let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
-        
+
         let old = self.buffer.snapshot();
+        let insert_byte_start = if self.buffer.has_selection() {
+            let (s, _) = self.buffer.selection_range();
+            s
+        } else {
+            self.buffer.cursor
+        };
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
         let cause = if inserted.chars().count() == 1 {
@@ -846,19 +870,27 @@ impl SujianEditorItem {
         };
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, cause, true);
-        
-        // 触发吐字动画
-        if self.current_typing_animation_enabled {
-            let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-            self.insert_animation = Some(InsertAnimation {
-                offset: self.buffer.cursor.saturating_sub(inserted.len()),
-                inserted_text: inserted.clone(),
-                cursor_rect: (cursor_x, cursor_y, 2.0, cursor_h),
-                start_time: Instant::now(),
-                duration_ms: duration,
-            });
+
+        // 触发吐字动画：先 invalidate 再 re-layout，然后取新字形位置
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            let insert_byte_end = insert_byte_start + inserted.len();
+            // 强制重新布局以获取插入后的字形位置
+            self.invalidate_layout_cache();
+            let width = self.bounding_width();
+            let _ = self.ensure_layout_cached(width);
+            let glyphs = self.glyph_rects_for_range(insert_byte_start, insert_byte_end);
+
+            if !glyphs.is_empty() {
+                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+                self.insert_animation = Some(InsertAnimation {
+                    glyphs,
+                    origin_cursor_rect: (origin_cx, origin_cy, 2.0, cursor_h),
+                    start_time: Instant::now(),
+                    duration_ms: duration,
+                });
+            }
         }
-        
+
         self.emit_content_changed();
     }
 
@@ -867,39 +899,42 @@ impl SujianEditorItem {
             return;
         }
         let old = self.buffer.snapshot();
+
+        // 确定要删除的字节范围
+        let del_range: Option<(usize, usize)> = if self.buffer.has_selection() {
+            let (s, e) = self.buffer.selection_range();
+            Some((s, e))
+        } else if self.buffer.cursor > 0 {
+            let prev = prev_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(0);
+            Some((prev, self.buffer.cursor))
+        } else {
+            None
+        };
+
         if !self.buffer.delete_backward() {
             return;
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
-        
-        // 记录删除前的光标位置和被删除的文字（用于动画）
-        let cursor_x = self.target_cursor_x;
-        let cursor_y = self.target_cursor_y;
-        let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
-        
-        // 获取被删除的文字（从旧快照中）
-        let deleted_char = if old.cursor > 0 {
-            let char_start = old.text[..old.cursor].char_indices().next_back().map(|(i, _)| i).unwrap_or(0);
-            old.text[char_start..old.cursor].to_string()
-        } else {
-            String::new()
-        };
-        
-        self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-        
-        // 触发吞字动画
-        if self.current_typing_animation_enabled && !deleted_char.is_empty() {
-            let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-            self.delete_animation = Some(DeleteAnimation {
-                offset: self.buffer.cursor,
-                deleted_text: deleted_char,
-                cursor_rect: (cursor_x, cursor_y, 2.0, cursor_h),
-                start_time: Instant::now(),
-                duration_ms: duration,
-            });
+
+        // 在删除前取被删字形的原始位置（从旧 layout）
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            if let Some((del_start, del_end)) = del_range {
+                let glyphs = self.glyph_rects_for_range(del_start, del_end);
+                if !glyphs.is_empty() {
+                    let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
+                    let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+                    self.delete_animation = Some(DeleteAnimation {
+                        glyphs,
+                        target_cursor_rect: (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_h),
+                        start_time: Instant::now(),
+                        duration_ms: duration,
+                    });
+                }
+            }
         }
-        
+
+        self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
     }
 
@@ -908,11 +943,41 @@ impl SujianEditorItem {
             return;
         }
         let old = self.buffer.snapshot();
+
+        // 确定要删除的字节范围
+        let del_range: Option<(usize, usize)> = if self.buffer.has_selection() {
+            let (s, e) = self.buffer.selection_range();
+            Some((s, e))
+        } else if self.buffer.cursor < self.buffer.text.len() {
+            let next = next_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.text.len());
+            Some((self.buffer.cursor, next))
+        } else {
+            None
+        };
+
         if !self.buffer.delete_forward() {
             return;
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
+
+        // 在删除前取被删字形的原始位置
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            if let Some((del_start, del_end)) = del_range {
+                let glyphs = self.glyph_rects_for_range(del_start, del_end);
+                if !glyphs.is_empty() {
+                    let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
+                    let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+                    self.delete_animation = Some(DeleteAnimation {
+                        glyphs,
+                        target_cursor_rect: (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_h),
+                        start_time: Instant::now(),
+                        duration_ms: duration,
+                    });
+                }
+            }
+        }
+
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
     }
@@ -922,11 +987,32 @@ impl SujianEditorItem {
             return;
         }
         let old = self.buffer.snapshot();
+        let (sel_start, sel_end) = self.buffer.selection_range();
+
+        // 在删除前取选区字形的原始位置
+        let anim_glyphs = if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            self.glyph_rects_for_range(sel_start, sel_end)
+        } else {
+            Vec::new()
+        };
+
         if !self.buffer.delete_selection() {
             return;
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
+
+        if !anim_glyphs.is_empty() {
+            let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
+            let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+            self.delete_animation = Some(DeleteAnimation {
+                glyphs: anim_glyphs,
+                target_cursor_rect: (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_h),
+                start_time: Instant::now(),
+                duration_ms: duration,
+            });
+        }
+
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
     }
@@ -1298,6 +1384,76 @@ impl SujianEditorItem {
         }
         lines.last().map(|line| (lines.len() - 1, line.x + line.width))
     }
+
+    /// 给定字节范围 [byte_start, byte_end)，返回每个字形的矩形信息。
+    /// 使用当前 layout_cache 中的行布局。
+    fn glyph_rects_for_range(&self, byte_start: usize, byte_end: usize) -> Vec<AnimatedGlyph> {
+        let Some(ref cache) = self.layout_cache else {
+            return Vec::new();
+        };
+        let lines = &cache.lines;
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
+        let text = &self.buffer.text;
+        let mut result = Vec::new();
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            // 行与 [byte_start, byte_end) 无交集
+            if line.end <= byte_start || line.start >= byte_end {
+                continue;
+            }
+            let seg_start = byte_start.max(line.start);
+            let seg_end = byte_end.min(line.end);
+            if seg_start >= seg_end {
+                continue;
+            }
+
+            // 行内前缀宽度 → 起始 x
+            let prefix = &text[line.start..seg_start];
+            let prefix_w = measure_text_width(prefix, font_size, &font_family);
+            let baseline_y = text_baseline_y(line, font_size, &font_family);
+            let top_y = cursor_top_y(line, font_size, &font_family);
+            let h = cursor_height_for_line(font_size, &font_family);
+
+            // 逐字符拆字形
+            let segment = &text[seg_start..seg_end];
+            let mut cursor_x = line.x + prefix_w;
+            for ch in segment.chars() {
+                let ch_str = ch.to_string();
+                let ch_w = measure_text_width(&ch_str, font_size, &font_family);
+                let ch_byte_start = seg_start + text[seg_start..seg_end].find(&ch_str).unwrap_or(0);
+                result.push(AnimatedGlyph {
+                    byte_start: ch_byte_start,
+                    byte_end: ch_byte_start + ch_str.len(),
+                    text: ch_str,
+                    rect: (cursor_x, top_y, ch_w, h),
+                    baseline_y,
+                    line_index: line_idx,
+                });
+                cursor_x += ch_w;
+            }
+        }
+        result
+    }
+
+    /// 给定字节范围，返回 (min_x, min_y, max_x, max_y) 包围盒
+    fn bounding_rect_for_range(&self, byte_start: usize, byte_end: usize) -> (f64, f64, f64, f64) {
+        let glyphs = self.glyph_rects_for_range(byte_start, byte_end);
+        if glyphs.is_empty() {
+            return (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string()));
+        }
+        let mut min_x = f64::MAX;
+        let mut min_y = f64::MAX;
+        let mut max_x = f64::MIN;
+        let mut max_y = f64::MIN;
+        for g in &glyphs {
+            min_x = min_x.min(g.rect.0);
+            min_y = min_y.min(g.rect.1);
+            max_x = max_x.max(g.rect.0 + g.rect.2);
+            max_y = max_y.max(g.rect.1 + g.rect.3);
+        }
+        (min_x, min_y, max_x - min_x, max_y - min_y)
+    }
 }
 
 impl QQuickItem for SujianEditorItem {
@@ -1357,10 +1513,8 @@ impl QQuickPaintedItem for SujianEditorItem {
 
         let selection = self.buffer.selection_range();
         let now_anim = Instant::now();
-        
-        // 吐字/吞字动画颜色（透明度渐变）
-        let anim_color = color_from_qstring(self.current_text_color.clone());
-        
+
+        // ── Layer 1: Selection background ──
         for line in &lines[vis_start..vis_end] {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
@@ -1378,89 +1532,115 @@ impl QQuickPaintedItem for SujianEditorItem {
                     self.current_selection_color.clone(),
                 );
             }
-            
-            // 绘制文字，带吐字/吞字动画
-            let text = self.buffer.text[line.start..line.end].to_string();
-            let text_y = text_baseline_y(line, font_size, &font_family);
-            
-            // 检查是否有进行中的吐字动画且命中当前行
-            let has_insert_anim = self.insert_animation.as_ref().map_or(false, |a| {
-                !a.is_finished(now_anim) && a.offset >= line.start && a.offset <= line.end
-            });
-            let has_delete_anim = self.delete_animation.as_ref().map_or(false, |a| {
-                !a.is_finished(now_anim) && a.offset >= line.start && a.offset <= line.end
-            });
-            
-            if has_insert_anim {
-                let insert_anim = self.insert_animation.as_ref().unwrap();
-                let progress = insert_anim.progress(now_anim);
-                let eased = 1.0 - (1.0 - progress).powi(3);
-                
-                // 正常绘制插入点之前的文字
-                if insert_anim.offset > line.start {
-                    let before_text = &self.buffer.text[line.start..insert_anim.offset];
-                    draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before_text.to_string().into());
-                }
-                
-                // 绘制插入的文字（透明度渐入：用颜色 alpha 模拟）
-                let prefix = &self.buffer.text[line.start..insert_anim.offset];
-                let insert_x = line.x + measure_text_width(prefix, font_size, &font_family);
-                let alpha = (eased * 255.0).round() as i32;
-                let base_color = color_from_qstring(self.current_text_color.clone());
-                let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
-                draw_text(painter, insert_x, text_y, fs, fade_qstr.into(), insert_anim.inserted_text.clone().into());
-                
-                // 绘制插入点之后的文字
-                let after_start = insert_anim.offset + insert_anim.inserted_text.len();
-                if after_start < line.end {
-                    let insert_w = measure_text_width(&insert_anim.inserted_text, font_size, &font_family);
-                    let after_x = insert_x + insert_w;
-                    let after_text = &self.buffer.text[after_start..line.end];
-                    draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after_text.to_string().into());
-                }
-                
-                self.request_repaint();
-            } else if has_delete_anim {
-                let delete_anim = self.delete_animation.as_ref().unwrap();
-                let progress = delete_anim.progress(now_anim);
-                let eased = 1.0 - (1.0 - progress).powi(3);
-                
-                // 正常绘制删除点之前的文字
-                if delete_anim.offset > line.start {
-                    let before_text = &self.buffer.text[line.start..delete_anim.offset];
-                    draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before_text.to_string().into());
-                }
-                
-                // 绘制删除的文字（透明度渐出：用颜色 alpha 模拟）
-                let delete_x = line.x + measure_text_width(&self.buffer.text[line.start..delete_anim.offset], font_size, &font_family);
-                let delete_w = measure_text_width(&delete_anim.deleted_text, font_size, &font_family);
-                let offset_x = delete_w * eased; // 向右收缩
-                let alpha = ((1.0 - eased) * 255.0).round() as i32;
-                let base_color = color_from_qstring(self.current_text_color.clone());
-                let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
-                draw_text(painter, delete_x + offset_x, text_y, fs, fade_qstr.into(), delete_anim.deleted_text.clone().into());
-                
-                // 绘制删除点之后的文字
-                let after_x = delete_x + delete_w * (1.0 - eased);
-                if delete_anim.offset < line.end {
-                    let after_text = &self.buffer.text[delete_anim.offset..line.end];
-                    draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after_text.to_string().into());
-                }
-                
-                self.request_repaint();
-            } else {
-                // 普通文字绘制
-                draw_text(
-                    painter,
-                    line.x,
-                    text_y,
-                    fs,
-                    self.current_text_color.clone(),
-                    text.into(),
-                );
-            }
         }
 
+        // ── Layer 2: Base text ──
+        let active_insert = self.insert_animation.as_ref().filter(|a| !a.is_finished(now_anim));
+        let active_delete = self.delete_animation.as_ref().filter(|a| !a.is_finished(now_anim));
+
+        for line_idx in vis_start..vis_end {
+            let line = &lines[line_idx];
+            let text = self.buffer.text[line.start..line.end].to_string();
+            let text_y = text_baseline_y(line, font_size, &font_family);
+
+            if let Some(ref insert_anim) = active_insert {
+                let insert_in_line = insert_anim.glyphs.iter().any(|g| g.line_index == line_idx);
+                if insert_in_line {
+                    let eased = 1.0 - (1.0 - insert_anim.progress(now_anim)).powi(3);
+                    let first_glyph = insert_anim.glyphs.first().unwrap();
+                    let last_glyph = insert_anim.glyphs.last().unwrap();
+                    let insert_start_byte = first_glyph.byte_start;
+                    let insert_end_byte = last_glyph.byte_end;
+
+                    // 插入点之前的文字：正常绘制
+                    if insert_start_byte > line.start && insert_start_byte <= line.end {
+                        let before = &self.buffer.text[line.start..insert_start_byte];
+                        draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before.to_string().into());
+                    }
+
+                    // 插入的文字：逐字绘制，只画 clip 宽度内的字
+                    let clip_origin_x = insert_anim.origin_cursor_rect.0;
+                    let final_insert_w: f64 = insert_anim.glyphs.iter().map(|g| g.rect.2).sum();
+                    let clip_right = clip_origin_x + final_insert_w * eased;
+                    let base_color = color_from_qstring(self.current_text_color.clone());
+
+                    for glyph in &insert_anim.glyphs {
+                        let gx = glyph.rect.0;
+                        if gx + glyph.rect.2 <= clip_right + 0.5 {
+                            // 完全在 clip 区域内，正常绘制
+                            draw_text(painter, gx, glyph.baseline_y, fs, self.current_text_color.clone(), glyph.text.clone().into());
+                        } else if gx < clip_right + 0.5 {
+                            // 部分可见：用背景色擦除被裁切的部分，然后画可见部分
+                            // 简化方案：用 alpha 模拟部分可见
+                            let visible_frac = ((clip_right - gx) / glyph.rect.2).clamp(0.0, 1.0);
+                            let alpha = (visible_frac * 255.0).round() as i32;
+                            let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
+                            draw_text(painter, gx, glyph.baseline_y, fs, fade_qstr.into(), glyph.text.clone().into());
+                        }
+                        // 完全在 clip 区域外，不绘制
+                    }
+
+                    // 插入点之后的文字：正常绘制
+                    if insert_end_byte < line.end {
+                        let insert_w = final_insert_w;
+                        let after_x = first_glyph.rect.0 + insert_w;
+                        let after = &self.buffer.text[insert_end_byte..line.end];
+                        draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after.to_string().into());
+                    }
+
+                    self.request_repaint();
+                    continue;
+                }
+            }
+
+            if let Some(ref delete_anim) = active_delete {
+                let delete_in_line = delete_anim.glyphs.iter().any(|g| g.line_index == line_idx);
+                if delete_in_line {
+                    let eased = 1.0 - (1.0 - delete_anim.progress(now_anim)).powi(3);
+                    let target_x = delete_anim.target_cursor_rect.0;
+                    let target_y_top = delete_anim.target_cursor_rect.1;
+
+                    // 删除点之前的文字：正常绘制
+                    let first_glyph = delete_anim.glyphs.first().unwrap();
+                    let del_start_byte = first_glyph.byte_start;
+                    if del_start_byte > line.start && del_start_byte <= line.end {
+                        let before = &self.buffer.text[line.start..del_start_byte];
+                        draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before.to_string().into());
+                    }
+
+                    // Ghost 文字：每个字形向光标收缩 + alpha 渐出
+                    let base_color = color_from_qstring(self.current_text_color.clone());
+                    for glyph in &delete_anim.glyphs {
+                        let (gx, gy, _gw, _gh) = glyph.rect;
+                        let offset_x = (target_x - gx) * eased;
+                        let offset_y = (target_y_top - gy) * eased;
+                        let draw_x = gx + offset_x;
+                        // alpha 从 1.0 渐出到 0.0
+                        let alpha = ((1.0 - eased) * 255.0).round() as i32;
+                        let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
+                        let ghost_baseline = glyph.baseline_y + offset_y;
+                        draw_text(painter, draw_x, ghost_baseline, fs, fade_qstr.into(), glyph.text.clone().into());
+                    }
+
+                    // 删除点之后的文字：正常绘制
+                    let last_glyph = delete_anim.glyphs.last().unwrap();
+                    let del_end_byte = last_glyph.byte_end;
+                    if del_end_byte >= line.start && del_end_byte < line.end {
+                        let after_x = line.x + measure_text_width(&self.buffer.text[line.start..del_end_byte], font_size, &font_family);
+                        let after = &self.buffer.text[del_end_byte..line.end];
+                        draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after.to_string().into());
+                    }
+
+                    self.request_repaint();
+                    continue;
+                }
+            }
+
+            // 普通文字绘制
+            draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), text.into());
+        }
+
+        // ── Layer 3: Preedit ──
         if !self.preedit_text.is_empty() {
             let pc = self.buffer.cursor;
             for line in &lines[vis_start..vis_end] {
@@ -1484,6 +1664,8 @@ impl QQuickPaintedItem for SujianEditorItem {
                 }
             }
         }
+
+        // ── Layer 4: Cursor ──
 
         let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
         let cursor_h = cursor_height_for_line(font_size, &font_family);
