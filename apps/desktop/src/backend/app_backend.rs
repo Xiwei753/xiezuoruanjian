@@ -294,9 +294,10 @@ impl AppBackend {
     }
 
     fn sujian_editor_item_enabled(&self) -> bool {
-        std::env::var("SUJIAN_DESKTOP_USE_SUJIAN_EDITOR")
-            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false)
+        match std::env::var("SUJIAN_DESKTOP_USE_SUJIAN_EDITOR") {
+            Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+            Err(_) => true,
+        }
     }
 
     fn debug_module_enabled_qml(&self, module: QString) -> bool {
