@@ -451,6 +451,8 @@ impl SujianEditorItem {
         }
         let old = self.buffer.snapshot();
         self.buffer.set_text(normalized);
+        self.buffer.cursor = 0;
+        self.buffer.selection_anchor = 0;
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
@@ -1251,6 +1253,13 @@ impl QQuickPaintedItem for SujianEditorItem {
             self.target_cursor_x = cursor_x;
             self.target_cursor_y = cursor_y;
             self.cursor_rect_changed();
+            
+            let obj_ptr = self.get_cpp_object();
+            cpp!(unsafe [obj_ptr as "QQuickItem*"] {
+                if (obj_ptr) {
+                    QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+                }
+            });
         }
 
         let now = Instant::now();
@@ -1481,15 +1490,12 @@ fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
 fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
     let ascent = get_font_ascent(font_family, font_size as f32);
     let descent = get_font_descent(font_family, font_size as f32);
-    let visible_ascent = (font_size * 0.85).min(ascent as f64);
-    let visible_descent = (font_size * 0.2).min(descent as f64);
-    visible_ascent + visible_descent
+    (ascent + descent) as f64
 }
 
 fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
     let ascent = get_font_ascent(font_family, font_size as f32);
-    let visible_ascent = (font_size * 0.85).min(ascent as f64);
-    text_baseline_y(line, font_size, font_family) - visible_ascent
+    text_baseline_y(line, font_size, font_family) - (ascent as f64)
 }
 
 fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {

@@ -703,7 +703,8 @@ Rectangle {
 
                             SujianEditorItem {
                                 id: sujianEditor
-                                anchors.fill: parent
+                                width: parent.width
+                                height: root.useSujianEditorItem ? Math.max(content_height, parent.emptyContentMinimumHeight) : parent.emptyContentMinimumHeight
                                 visible: root.useSujianEditorItem
                                 editor_enabled: editorController.chapterId !== ""
                                 font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
@@ -715,12 +716,47 @@ Rectangle {
                                 selection_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
                                 selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
                                 cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
-                                // The self-rendered editor is still in validation mode; keep cursor exact
-                                // until input, undo and scroll paths are stable enough for animation.
-                                smooth_cursor_enabled: false
-                                cursor_animation_duration_ms: 0
+                                smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
+                                cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 100
                                 typing_animation_enabled: false
                                 scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
+                                
+                            }
+
+                            TextInput {
+                                id: imeBridge
+                                property bool suppressCommit: false
+                                width: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_width) : 1
+                                height: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_height) : 1
+                                x: root.useSujianEditorItem && sujianEditor ? sujianEditor.cursor_rect_x : parent.width / 2
+                                y: root.useSujianEditorItem && sujianEditor && editorScroll.contentItem ? sujianEditor.cursor_rect_y - editorScroll.contentItem.contentY : parent.height / 2
+                                
+                                color: "transparent"
+                                selectionColor: "transparent"
+                                selectedTextColor: "transparent"
+                                font.family: sujianEditor ? sujianEditor.font_family : "serif"
+                                font.pixelSize: sujianEditor ? sujianEditor.font_pixel_size : 16
+                                
+                                opacity: 0
+                                visible: root.useSujianEditorItem
+                                focus: root.useSujianEditorItem
+                                enabled: root.useSujianEditorItem && sujianEditor.editor_enabled
+                                inputMethodHints: Qt.ImhNoPredictiveText
+                                selectByMouse: false
+                                Keys.priority: Keys.BeforeItem
+                                
+                                onTextChanged: {
+                                    if (suppressCommit || !root.useSujianEditorItem || !sujianEditor || text.length === 0) return;
+                                    var committed = text;
+                                    suppressCommit = true;
+                                    text = "";
+                                    suppressCommit = false;
+                                    sujianEditor.insert_text(committed);
+                                }
+                                
+                                Keys.onPressed: function(event) {
+                                    root.handleSelfRenderedKey(event);
+                                }
                             }
 
                             MouseArea {
@@ -789,33 +825,6 @@ Rectangle {
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    TextInput {
-                        id: imeBridge
-                        property bool suppressCommit: false
-                        width: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_width) : 1
-                        height: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_height) : 1
-                        x: root.useSujianEditorItem && sujianEditor ? sujianEditor.cursor_rect_x : parent.width / 2
-                        y: root.useSujianEditorItem && sujianEditor && editorScroll.contentItem ? sujianEditor.cursor_rect_y - editorScroll.contentItem.contentY : parent.height / 2
-                        opacity: 0
-                        visible: root.useSujianEditorItem
-                        focus: root.useSujianEditorItem
-                        enabled: root.useSujianEditorItem && sujianEditor.editor_enabled
-                        inputMethodHints: Qt.ImhNoPredictiveText
-                        selectByMouse: false
-                        Keys.priority: Keys.BeforeItem
-                        onTextChanged: {
-                            if (suppressCommit || !root.useSujianEditorItem || !sujianEditor || text.length === 0) return;
-                            var committed = text;
-                            suppressCommit = true;
-                            text = "";
-                            suppressCommit = false;
-                            sujianEditor.insert_text(committed);
-                        }
-                        Keys.onPressed: function(event) {
-                            root.handleSelfRenderedKey(event);
                         }
                     }
 
