@@ -134,6 +134,7 @@ cpp! {{
         if (!item) return;
         auto* filter = new SujianEventFilter(item, rust_item);
         item->installEventFilter(filter);
+        item->setFlag(QQuickItem::ItemHasContents, true);
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
         item->setFlag(QQuickItem::ItemIsFocusScope, true);
         item->setAcceptedMouseButtons(Qt::AllButtons);
@@ -425,6 +426,7 @@ struct ScrollBuffer {
     image: qmetaobject::QImage,
     buffer_scroll_y: f64,
     buffer_content_h: f64,
+    buffer_logical_h: f64,
 }
 
 /// 光标动画状态 — 固定时长 tween，不再用指数追赶
@@ -1967,6 +1969,7 @@ impl QQuickItem for SujianEditorItem {
         }
 
         let item_ptr = self.get_cpp_object();
+        let dpr = if !item_ptr.is_null() { sujian_item_dpr(item_ptr) } else { 1.0 };
         let old_raw = node.into_raw();
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let scroll_y = self.current_scroll_y as f64;
@@ -1981,8 +1984,9 @@ impl QQuickItem for SujianEditorItem {
             match self.render_to_image() {
                 Some((image, buf_scroll_y, _buf_h)) => {
                     let src_y = scroll_y - buf_scroll_y;
+                    let logical_img_w = image.size().width as f64 / dpr;
                     let new_raw = sujian_update_texture_node(
-                        old_raw, item_ptr, &image, 0.0, src_y, image.size().width as f64, vp_h,
+                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, dpr,
                     );
                     // 更新光标节点
                     sujian_update_cursor_rect(
@@ -2005,7 +2009,8 @@ impl QQuickItem for SujianEditorItem {
                     if !old_raw.is_null() {
                         if let Some(ref buf) = self.scroll_buffer {
                             let src_y = scroll_y - buf.buffer_scroll_y;
-                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, buf.image.size().width as f64, vp_h);
+                            let logical_img_w = buf.image.size().width as f64 / dpr;
+                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, dpr);
                         }
                         sujian_update_cursor_rect(
                             old_raw, item_ptr,
@@ -2019,24 +2024,42 @@ impl QQuickItem for SujianEditorItem {
             }
         } else if self.cursor_dirty && !old_raw.is_null() {
             // 路径 2: 只有光标变了（动画/滚动），不需要重绘文字
-            if !self.cursor_animation.is_some() {
+            // ── 在这里推进光标动画，不依赖 paint_onto ──
+            let now = Instant::now();
+            if let Some(ref anim) = self.cursor_animation {
+                if anim.is_finished(now) {
+                    // 动画结束，snap 到目标
+                    self.cursor_visual_x = anim.target_x;
+                    self.cursor_visual_y = anim.target_y;
+                    self.cursor_animation = None;
+                    self.cursor_dirty = false;
+                } else {
+                    // 动画进行中，推进位置
+                    let (cx, cy) = anim.current_position(now);
+                    self.cursor_visual_x = cx;
+                    self.cursor_visual_y = cy;
+                    // 请求下一帧
+                    let item = self as &dyn QQuickItem;
+                    item.update();
+                }
+            } else {
                 self.cursor_dirty = false;
             }
+
+            // 重新计算屏幕坐标（可能因动画推进而变）
+            let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
+
             // 滚动时也要更新 source rect
             if let Some(ref buf) = self.scroll_buffer {
                 let src_y = scroll_y - buf.buffer_scroll_y;
-                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, buf.image.size().width as f64, vp_h);
+                let logical_img_w = buf.image.size().width as f64 / dpr;
+                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, dpr);
             }
             sujian_update_cursor_rect(
                 old_raw, item_ptr,
                 self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
                 self.cursor_visible, cursor_rgba,
             );
-            // 光标动画继续请求下一帧
-            if self.cursor_animation.is_some() {
-                let item = self as &dyn QQuickItem;
-                item.update();
-            }
             unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
         } else {
             // 路径 3: 无变化
@@ -2402,6 +2425,8 @@ impl SujianEditorItem {
     /// 返回 (QImage, buffer_scroll_y, buffer_h) 用于设置纹理节点的 source rect。
     fn render_to_image(&mut self) -> Option<(qmetaobject::QImage, f64, f64)> {
         let render_start = Instant::now();
+        let item_ptr = self.get_cpp_object();
+        let dpr = if !item_ptr.is_null() { sujian_item_dpr(item_ptr) } else { 1.0 };
         let width = self.bounding_width();
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let img_w = (width as i32).max(1);
@@ -2423,10 +2448,10 @@ impl SujianEditorItem {
                 self.render_dirty = false;
                 return None;
             }
-            // 检查滚动是否在当前缓冲区范围内
+            // 检查滚动是否在当前缓冲区范围内（用逻辑高度比较）
             if !content_changed
                 && scroll_y >= buf.buffer_scroll_y - 1.0
-                && scroll_y + vp_h <= buf.buffer_scroll_y + buf.image.size().height as f64 + 1.0
+                && scroll_y + vp_h <= buf.buffer_scroll_y + buf.buffer_logical_h + 1.0
             {
                 // 滚动在缓冲区范围内，不需要重绘，只需更新 source rect
                 self.render_dirty = false;
@@ -2434,15 +2459,17 @@ impl SujianEditorItem {
             }
         }
 
-        // 需要重新渲染
-        let img_h = (buffer_h as i32).max(1);
+        // 需要重新渲染 — 按 DPR 创建物理像素尺寸的 QImage
+        let phys_w = ((img_w as f64 * dpr) as i32).max(1);
+        let phys_h = ((buffer_h * dpr) as i32).max(1);
         let mut image = qmetaobject::QImage::new(
-            qmetaobject::QSize { width: img_w as u32, height: img_h as u32 },
+            qmetaobject::QSize { width: phys_w as u32, height: phys_h as u32 },
             qmetaobject::ImageFormat::ARGB32_Premultiplied,
         );
         image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
 
-        let painter_ptr = sujian_create_painter(&mut image);
+        // 创建 painter 并缩放，使所有绘制操作使用逻辑坐标
+        let painter_ptr = sujian_create_painter_scaled(&mut image, dpr);
         if painter_ptr.is_null() {
             return Some((image, min_y, buffer_h));
         }
@@ -2458,6 +2485,7 @@ impl SujianEditorItem {
             image: image.clone(),
             buffer_scroll_y: min_y,
             buffer_content_h: content_h,
+            buffer_logical_h: buffer_h,
         });
 
         let render_elapsed = render_start.elapsed();
@@ -2469,9 +2497,9 @@ impl SujianEditorItem {
                 end.saturating_sub(start)
             }).unwrap_or(0);
             eprintln!(
-                "sujian_render_to_image: elapsed_ms={}, img={}x{}, vis_lines={}, scroll_y={:.1}, buf_scroll={:.1}, buf_h={:.1}",
+                "sujian_render_to_image: elapsed_ms={}, img={}x{}(phys {}x{}, dpr={}), vis_lines={}, scroll_y={:.1}, buf_scroll={:.1}, buf_h={:.1}",
                 render_elapsed.as_millis(),
-                img_w, img_h,
+                img_w, (buffer_h as i32), phys_w, phys_h, dpr,
                 vis_lines,
                 scroll_y, min_y, buffer_h,
             );
@@ -2862,34 +2890,45 @@ fn should_log_slow_paint(last_log: Option<Instant>, now: Instant) -> bool {
     last_log.is_none_or(|last| now.duration_since(last) >= Duration::from_millis(500))
 }
 
-fn sujian_create_painter(image: &mut qmetaobject::QImage) -> *mut QPainter {
-    let img_ptr = image as *mut qmetaobject::QImage;
-    cpp!(unsafe [img_ptr as "QImage*"] -> *mut QPainter as "QPainter*" {
-        return new QPainter(img_ptr);
+fn sujian_delete_painter(painter: *mut QPainter) {
+    cpp!(unsafe [painter as "QPainter*"] { delete painter; })
+}
+
+fn sujian_item_dpr(item_ptr: *mut std::ffi::c_void) -> f64 {
+    cpp!(unsafe [item_ptr as "QQuickItem*"] -> f64 as "double" {
+        if (!item_ptr || !item_ptr->window()) return 1.0;
+        return item_ptr->window()->devicePixelRatio();
     })
 }
 
-fn sujian_delete_painter(painter: *mut QPainter) {
-    cpp!(unsafe [painter as "QPainter*"] { delete painter; });
+fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, dpr: f64) -> *mut QPainter {
+    let img_ptr = image as *mut qmetaobject::QImage;
+    cpp!(unsafe [img_ptr as "QImage*", dpr as "double"] -> *mut QPainter as "QPainter*" {
+        auto *p = new QPainter(img_ptr);
+        p->scale(dpr, dpr);
+        return p;
+    })
 }
 
 fn sujian_update_source_rect(
     old_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     src_x: f64, src_y: f64, src_w: f64, src_h: f64,
+    dpr: f64,
 ) {
     cpp!(unsafe [
         old_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
         src_x as "double", src_y as "double",
-        src_w as "double", src_h as "double"
+        src_w as "double", src_h as "double",
+        dpr as "double"
     ] {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root || root->childCount() == 0) return;
         auto *imgNode = static_cast<QSGImageNode*>(root->firstChild());
         if (!imgNode) return;
         imgNode->setRect(0, 0, item_ptr->width(), item_ptr->height());
-        imgNode->setSourceRect(src_x, src_y, src_w, src_h);
+        imgNode->setSourceRect(src_x * dpr, src_y * dpr, src_w * dpr, src_h * dpr);
     })
 }
 
@@ -2898,6 +2937,7 @@ fn sujian_update_texture_node(
     item_ptr: *mut std::ffi::c_void,
     image: &qmetaobject::QImage,
     src_x: f64, src_y: f64, src_w: f64, src_h: f64,
+    dpr: f64,
 ) -> *mut std::ffi::c_void {
     let img_ptr = image as *const qmetaobject::QImage;
     cpp!(unsafe [
@@ -2905,7 +2945,8 @@ fn sujian_update_texture_node(
         item_ptr as "QQuickItem*",
         img_ptr as "QImage*",
         src_x as "double", src_y as "double",
-        src_w as "double", src_h as "double"
+        src_w as "double", src_h as "double",
+        dpr as "double"
     ] -> *mut std::ffi::c_void as "QSGNode*" {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root) {
@@ -2918,13 +2959,12 @@ fn sujian_update_texture_node(
         if (!imgNode) {
             imgNode = item_ptr->window()->createImageNode();
             imgNode->setFiltering(QSGTexture::Nearest);
+            imgNode->setOwnsTexture(true);
             root->appendChildNode(imgNode);
         }
         imgNode->setRect(0, 0, item_ptr->width(), item_ptr->height());
-        imgNode->setSourceRect(src_x, src_y, src_w, src_h);
-        QSGTexture *old_tex = imgNode->texture();
+        imgNode->setSourceRect(src_x * dpr, src_y * dpr, src_w * dpr, src_h * dpr);
         imgNode->setTexture(item_ptr->window()->createTextureFromImage(*img_ptr));
-        delete old_tex;
         return root;
     })
 }
