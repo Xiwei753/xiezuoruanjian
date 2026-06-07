@@ -180,6 +180,7 @@ class StarMapCanvasView @JvmOverloads constructor(
                 val graphX = x - panX
                 val graphY = y - panY
 
+                // TODO: 替换为 Core 的 hit_test_nodes（需 UniFFI 暴露）
                 draggingNodeId = null
                 data?.layout?.nodes?.forEach { layout ->
                     if (graphX >= layout.x && graphX <= layout.x + layout.width &&

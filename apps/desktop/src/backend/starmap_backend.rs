@@ -188,6 +188,14 @@ pub struct StarMapBackend {
     save_mind_map_layout_json: qt_method!(
         fn(&mut self, project_id: QString, graph_id: QString, layout_json: QString) -> QString
     ),
+    compute_edge_renders_json:
+        qt_method!(fn(&self, edges_json: QString, nodes_json: QString) -> QString),
+    hit_test_edge_renders_json:
+        qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
+    hit_test_nodes_json:
+        qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
+    calculate_grid_layout_json:
+        qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QString),
     app: SafeAppPtr,
 }
 
@@ -306,6 +314,28 @@ impl StarMapBackend {
     }
     fn unbind_starmap_json(&mut self, starmap_id: QString) -> QString {
         self.with_app_mut("{}".into(), |app| app.unbind_starmap_json(starmap_id))
+    }
+    fn compute_edge_renders_json(&self, edges_json: QString, nodes_json: QString) -> QString {
+        let ej = edges_json.to_string();
+        let nj = nodes_json.to_string();
+        crate::starmap_bridge::compute_edge_renders_json(&ej, &nj).into()
+    }
+    fn hit_test_edge_renders_json(&self, renders_json: QString, x: f64, y: f64) -> QString {
+        let rj = renders_json.to_string();
+        crate::starmap_bridge::hit_test_edge_renders_json(&rj, x as f32, y as f32).into()
+    }
+    fn hit_test_nodes_json(&self, nodes_json: QString, x: f64, y: f64) -> QString {
+        let nj = nodes_json.to_string();
+        crate::starmap_bridge::hit_test_nodes_json(&nj, x as f32, y as f32).into()
+    }
+    fn calculate_grid_layout_json(
+        &self,
+        node_ids_json: QString,
+        existing_layout_json: QString,
+    ) -> QString {
+        let ni = node_ids_json.to_string();
+        let el = existing_layout_json.to_string();
+        crate::starmap_bridge::calculate_grid_layout_json(&ni, &el).into()
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
         self.with_app("{}".into(), |app| app.get_starmap_graph_json(starmap_id))

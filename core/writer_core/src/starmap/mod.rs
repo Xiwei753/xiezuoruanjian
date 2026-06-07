@@ -14,6 +14,7 @@
 pub mod graph;
 pub mod hittest;
 pub mod layout;
+pub mod render;
 pub mod semantic;
 pub mod types;
 

@@ -24,11 +24,14 @@ QtObject {
     property var layoutData: null
     property var nodesModel: []
     property var edgesModel: []
+    property var edgeRenders: []
 
     signal graphChanged()
     signal selectionCleared()
     signal nodeSelected(var node)
     signal edgeSelected(var edge)
+
+    onGraphChanged: invalidateEdgeRenders()
 
     function setError(msg) {
         errorMessage = msg || "";
@@ -100,19 +103,36 @@ QtObject {
     }
 
     function autoLayout() {
-        var curX = 100;
-        var curY = 100;
-        for (var i = 0; i < nodesModel.length; i++) {
-            nodesModel[i].x = curX;
-            nodesModel[i].y = curY;
-            curX += 200;
-            if (curX > 800) {
-                curX = 100;
-                curY += 100;
+        if (!ensureBackend()) return;
+        var nodeIds = [];
+        for (var i = 0; i < nodesModel.length; i++) nodeIds.push(nodesModel[i].id);
+        var existingJson = layoutData ? JSON.stringify(layoutData) : "{}";
+        var res = normalizeBackendResult(backendRef.calculate_grid_layout_json(JSON.stringify(nodeIds), existingJson), qsTr("自动布局失败"));
+        if (res.success && res.data && res.data.nodes) {
+            var layoutNodes = res.data.nodes;
+            for (var j = 0; j < nodesModel.length; j++) {
+                for (var k = 0; k < layoutNodes.length; k++) {
+                    if (nodesModel[j].id === layoutNodes[k].nodeId) {
+                        nodesModel[j].x = layoutNodes[k].x;
+                        nodesModel[j].y = layoutNodes[k].y;
+                        break;
+                    }
+                }
             }
+            nodesModelChanged();
+            saveLayout();
+        } else {
+            var curX = 100;
+            var curY = 100;
+            for (var i2 = 0; i2 < nodesModel.length; i2++) {
+                nodesModel[i2].x = curX;
+                nodesModel[i2].y = curY;
+                curX += 200;
+                if (curX > 800) { curX = 100; curY += 100; }
+            }
+            nodesModelChanged();
+            saveLayout();
         }
-        nodesModelChanged();
-        saveLayout();
     }
 
     function getLayoutNode(id) {
@@ -131,9 +151,15 @@ QtObject {
     }
 
     function findNodeAt(wx, wy) {
+        if (!ensureBackend()) return null;
+        var layoutNodes = [];
         for (var i = 0; i < nodesModel.length; i++) {
             var n = nodesModel[i];
-            if (wx >= n.x && wx <= n.x + n.width && wy >= n.y && wy <= n.y + n.height) return n;
+            layoutNodes.push({ nodeId: n.id, x: n.x, y: n.y, width: n.width, height: n.height, radius: 30, collapsed: false, zIndex: 0, scale: 1.0, depth: 0.0, focusWeight: 0.0, orbitGroup: null });
+        }
+        var res = normalizeBackendResult(backendRef.hit_test_nodes_json(JSON.stringify(layoutNodes), wx, wy), "");
+        if (res.success && res.data) {
+            return getNode(res.data);
         }
         return null;
     }
@@ -271,4 +297,37 @@ QtObject {
             setError(res.userMessage || res.message || qsTr("删除连线失败"));
         }
     }
+
+    function computeEdgeRenders() {
+        if (!ensureBackend()) return;
+        var edgeInputs = [];
+        for (var i = 0; i < edgesModel.length; i++) {
+            var e = edgesModel[i];
+            edgeInputs.push({ id: e.id, from: e.from, to: e.to });
+        }
+        var nodePos = [];
+        for (var j = 0; j < nodesModel.length; j++) {
+            var n = nodesModel[j];
+            nodePos.push({ id: n.id, x: n.x, y: n.y, width: n.width, height: n.height });
+        }
+        var res = normalizeBackendResult(backendRef.compute_edge_renders_json(JSON.stringify(edgeInputs), JSON.stringify(nodePos)), "");
+        if (res.success && res.data) {
+            edgeRenders = res.data;
+        }
+    }
+
+    function hitTestEdge(wx, wy) {
+        if (!ensureBackend()) return null;
+        if (!edgeRenders || edgeRenders.length === 0) computeEdgeRenders();
+        if (!edgeRenders || edgeRenders.length === 0) return null;
+        var res = normalizeBackendResult(backendRef.hit_test_edge_renders_json(JSON.stringify(edgeRenders), wx, wy), "");
+        if (res.success && res.data) {
+            for (var i = 0; i < edgesModel.length; i++) {
+                if (edgesModel[i].id === res.data) return edgesModel[i];
+            }
+        }
+        return null;
+    }
+
+    function invalidateEdgeRenders() { edgeRenders = []; }
 }

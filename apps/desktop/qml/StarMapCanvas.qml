@@ -148,35 +148,8 @@ Item {
                 var mx = (mouse.x - panX) / zoomLevel
                 var my = (mouse.y - panY) / zoomLevel
 
-                // 1. Check if clicking on/near an edge
-                var clickedEdge = null
-                for (var i = 0; i < edgesModel.length; i++) {
-                    var edge = edgesModel[i]
-                    var n1 = getNode(edge.from)
-                    var n2 = getNode(edge.to)
-                    if (!n1 || !n2) continue
-
-                    var x1 = n1.x + n1.width/2
-                    var y1 = n1.y + n1.height/2
-                    var x2 = n2.x + n2.width/2
-                    var y2 = n2.y + n2.height/2
-
-                    var l2 = (x1-x2)*(x1-x2) + (y1-y2)*(y1-y2)
-                    var edgeDist = 1000;
-                    if (l2 === 0) edgeDist = Math.sqrt((mx-x1)*(mx-x1) + (my-y1)*(my-y1))
-                    else {
-                        var t = ((mx - x1) * (x2 - x1) + (my - y1) * (y2 - y1)) / l2
-                        t = Math.max(0, Math.min(1, t))
-                        var projX = x1 + t * (x2 - x1)
-                        var projY = y1 + t * (y2 - y1)
-                        edgeDist = Math.sqrt((mx - projX)*(mx - projX) + (my - projY)*(my - projY))
-                    }
-
-                    if (edgeDist < 10) {
-                        clickedEdge = edge
-                        break
-                    }
-                }
+                // 1. Check if clicking on/near an edge (via Core hit-test)
+                var clickedEdge = graphController.hitTestEdge(mx, my)
 
                 if (clickedEdge) {
                     if (mouse.button === Qt.RightButton) {
@@ -234,80 +207,46 @@ Item {
             ctx.scale(zoomLevel, zoomLevel)
             ctx.lineWidth = 2
 
-            // Draw all edges
-            for (var i = 0; i < edgesModel.length; i++) {
-                var edge = edgesModel[i]
-                var n1 = getNode(edge.from)
-                var n2 = getNode(edge.to)
-                if (!n1 || !n2) continue
-
-                var x1 = n1.x + n1.width/2
-                var y1 = n1.y + n1.height/2
-                var x2 = n2.x + n2.width/2
-                var y2 = n2.y + n2.height/2
-
-                var dx = x2 - x1
-                var dy = y2 - y1
-                var len = Math.sqrt(dx * dx + dy * dy)
-                if (len === 0) continue
-
-                // Check if a bidirectional edge exists
-                var hasBi = false
-                for (var k = 0; k < edgesModel.length; k++) {
-                    if (edgesModel[k].from === edge.to && edgesModel[k].to === edge.from) {
-                        hasBi = true
-                        break
-                    }
+            // Draw all edges using Core precomputed render data
+            graphController.computeEdgeRenders()
+            var renders = graphController.edgeRenders
+            for (var i = 0; i < renders.length; i++) {
+                var r = renders[i]
+                var edge = null
+                for (var ei = 0; ei < edgesModel.length; ei++) {
+                    if (edgesModel[ei].id === r.edgeId) { edge = edgesModel[ei]; break }
                 }
+                if (!edge) continue
 
-                var offset = hasBi ? 12 : 0
-                var ox = 0
-                var oy = 0
-                if (hasBi) {
-                    var px = -dy / len
-                    var py = dx / len
-                    ox = px * offset
-                    oy = py * offset
-                }
-
-                // Stop the arrow slightly away from the target node boundaries so the arrowhead is fully visible
-                var arrowDist = 42
-                var sx = x1 + ox + (dx / len) * arrowDist
-                var sy = y1 + oy + (dy / len) * arrowDist
-                var ax = x2 + ox - (dx / len) * arrowDist
-                var ay = y2 + oy - (dy / len) * arrowDist
+                var color = edge.isSelected ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
 
                 // Draw line
                 ctx.beginPath()
-                ctx.moveTo(sx, sy)
-                ctx.lineTo(ax, ay)
-                ctx.strokeStyle = edge.isSelected ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
+                ctx.moveTo(r.startX, r.startY)
+                ctx.lineTo(r.endX, r.endY)
+                ctx.strokeStyle = color
                 ctx.stroke()
 
-                // Draw arrow head at (ax, ay) pointing towards the node center
-                var angle = Math.atan2(dy, dx)
-                var arrowLength = 10
+                // Draw arrow head
                 ctx.beginPath()
-                ctx.moveTo(ax, ay)
-                ctx.lineTo(ax - arrowLength * Math.cos(angle - Math.PI / 6), ay - arrowLength * Math.sin(angle - Math.PI / 6))
-                ctx.lineTo(ax - arrowLength * Math.cos(angle + Math.PI / 6), ay - arrowLength * Math.sin(angle + Math.PI / 6))
+                ctx.moveTo(r.arrowTipX, r.arrowTipY)
+                ctx.lineTo(r.arrowLeftX, r.arrowLeftY)
+                ctx.lineTo(r.arrowRightX, r.arrowRightY)
                 ctx.closePath()
-                ctx.fillStyle = edge.isSelected ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
+                ctx.fillStyle = color
                 ctx.fill()
 
                 // Label
                 if (edge.label) {
                     ctx.fillStyle = dt ? dt.surface : "#1A1D23"
-                    var midX = (sx + ax)/2
-                    var midY = (sy + ay)/2
                     var tw = ctx.measureText(edge.label).width
-                    ctx.fillRect(midX - tw/2 - 4, midY - 10, tw + 8, 20)
+                    ctx.fillRect(r.labelX - tw/2 - 4, r.labelY - 10, tw + 8, 20)
 
                     ctx.fillStyle = dt ? dt.textPrimary : "#E2E4E9"
                     ctx.font = "12px sans-serif"
                     ctx.textAlign = "center"
                     ctx.textBaseline = "middle"
-                    ctx.fillText(edge.label, midX, midY)
+                    ctx.fillText(edge.label, r.labelX, r.labelY)
                 }
             }
 

@@ -271,3 +271,76 @@ pub fn delete_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_id: &str)
 pub fn find_starmap_references(api: &WriterCoreApi, target_starmap_id: &str) -> String {
     envelope(api.find_starmap_references(target_starmap_id))
 }
+
+pub fn compute_edge_renders_json(edges_json: &str, nodes_json: &str) -> String {
+    let edges: Vec<writer_core::starmap::render::EdgeInput> =
+        match serde_json::from_str(edges_json) {
+            Ok(v) => v,
+            Err(e) => return envelope_err_str(&format!("Invalid edges JSON: {}", e)),
+        };
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct NodePos {
+        id: String,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    }
+
+    let nodes: Vec<NodePos> = match serde_json::from_str(nodes_json) {
+        Ok(v) => v,
+        Err(e) => return envelope_err_str(&format!("Invalid nodes JSON: {}", e)),
+    };
+
+    let centers: std::collections::HashMap<String, (f32, f32)> = nodes
+        .into_iter()
+        .map(|n| (n.id, (n.x + n.width / 2.0, n.y + n.height / 2.0)))
+        .collect();
+
+    let renders = writer_core::starmap::render::compute_edge_renders(
+        &edges,
+        &centers,
+        &writer_core::starmap::render::EdgeRenderParams::default(),
+    );
+    envelope_ok(renders)
+}
+
+pub fn hit_test_edge_renders_json(renders_json: &str, x: f32, y: f32) -> String {
+    let renders: Vec<writer_core::starmap::render::EdgeRender> =
+        match serde_json::from_str(renders_json) {
+            Ok(v) => v,
+            Err(e) => return envelope_err_str(&format!("Invalid renders JSON: {}", e)),
+        };
+
+    let result = writer_core::starmap::render::hit_test_edge_renders(x, y, &renders);
+    envelope_ok(result)
+}
+
+pub fn hit_test_nodes_json(nodes_json: &str, x: f32, y: f32) -> String {
+    let nodes: Vec<writer_core::starmap::types::StarMapLayoutNode> =
+        match serde_json::from_str(nodes_json) {
+            Ok(v) => v,
+            Err(e) => return envelope_err_str(&format!("Invalid nodes JSON: {}", e)),
+        };
+
+    let result = writer_core::starmap::hittest::hit_test_nodes(x, y, &nodes);
+    envelope_ok(result.map(|r| r.id))
+}
+
+pub fn calculate_grid_layout_json(node_ids_json: &str, existing_layout_json: &str) -> String {
+    let node_ids: Vec<String> = match serde_json::from_str(node_ids_json) {
+        Ok(v) => v,
+        Err(e) => return envelope_err_str(&format!("Invalid node IDs JSON: {}", e)),
+    };
+
+    let existing: writer_core::starmap::types::StarMapLayout =
+        match serde_json::from_str(existing_layout_json) {
+            Ok(v) => v,
+            Err(_) => writer_core::starmap::types::StarMapLayout::default(),
+        };
+
+    let layout = writer_core::starmap::layout::calculate_grid_layout(&node_ids, &existing);
+    envelope_ok(layout)
+}

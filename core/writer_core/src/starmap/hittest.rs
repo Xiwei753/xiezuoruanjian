@@ -66,7 +66,7 @@ pub fn hit_test_edges(
     })
 }
 
-fn point_to_segment_distance(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+pub fn point_to_segment_distance(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     let dx = bx - ax;
     let dy = by - ay;
     let len_sq = dx * dx + dy * dy;
