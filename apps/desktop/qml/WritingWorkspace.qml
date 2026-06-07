@@ -683,7 +683,7 @@ Rectangle {
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
                         contentWidth: availableWidth
-                        contentHeight: Math.max(editorCanvas.height, availableHeight)
+                        contentHeight: editorCanvas.implicitHeight
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                         ScrollBar.vertical: ScrollBar {
                             policy: ScrollBar.AsNeeded
@@ -697,7 +697,7 @@ Rectangle {
                             id: editorCanvas
                             readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + (dt ? dt.sp16 : 16) * 2, editorScroll.availableHeight)
                             width: editorScroll.availableWidth
-                            height: root.useSujianEditorItem
+                            implicitHeight: root.useSujianEditorItem
                                     ? Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
                                     : Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight)
 
@@ -795,10 +795,10 @@ Rectangle {
                     TextInput {
                         id: imeBridge
                         property bool suppressCommit: false
-                        width: 1
-                        height: 1
-                        x: parent.width / 2
-                        y: parent.height / 2
+                        width: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_width) : 1
+                        height: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_height) : 1
+                        x: root.useSujianEditorItem && sujianEditor ? sujianEditor.cursor_rect_x : parent.width / 2
+                        y: root.useSujianEditorItem && sujianEditor && editorScroll.contentItem ? sujianEditor.cursor_rect_y - editorScroll.contentItem.contentY : parent.height / 2
                         opacity: 0
                         visible: root.useSujianEditorItem
                         focus: root.useSujianEditorItem

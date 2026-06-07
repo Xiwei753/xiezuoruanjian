@@ -304,7 +304,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: Old TextArea must remain as a plain-text emergency fallback", file_name);
                     has_errors = true;
                 }
-                if !content.contains("contentHeight: Math.max(editorCanvas.height, availableHeight)")
+                if !content.contains("contentHeight: editorCanvas.implicitHeight")
                     || !content.contains("Math.max(sujianEditor.content_height, emptyContentMinimumHeight)")
                 {
                     eprintln!("{}: ScrollView missing SujianEditorItem contentHeight guard", file_name);

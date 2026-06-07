@@ -182,7 +182,7 @@ impl AppBackend {
                         &format!("len={}", len),
                     );
                     self.current_save_status = "已保存".to_string();
-                    self.workspace_content_changed();
+                    self.workspace_state_changed();
                     self.flush_writing_stats();
                     serde_to_qjson_object(serde_json::json!({
                         "success": true,

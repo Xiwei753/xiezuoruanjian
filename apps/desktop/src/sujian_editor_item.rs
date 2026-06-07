@@ -266,6 +266,10 @@ pub struct SujianEditorItem {
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
+    cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
+    cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
+    cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
+    cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
 
     plain_text_changed: qt_signal!(),
     text_changed: qt_signal!(),
@@ -275,6 +279,7 @@ pub struct SujianEditorItem {
     editor_enabled_changed: qt_signal!(),
     visual_settings_changed: qt_signal!(),
     transaction_created: qt_signal!(),
+    cursor_rect_changed: qt_signal!(),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
@@ -361,6 +366,11 @@ impl Default for SujianEditorItem {
             editor_enabled_changed: Default::default(),
             visual_settings_changed: Default::default(),
             transaction_created: Default::default(),
+            cursor_rect_changed: Default::default(),
+            cursor_rect_x: Default::default(),
+            cursor_rect_y: Default::default(),
+            cursor_rect_width: Default::default(),
+            cursor_rect_height: Default::default(),
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
             reload_plain_text: Default::default(),
@@ -648,6 +658,22 @@ impl SujianEditorItem {
 
     fn last_animation_event_count(&self) -> u32 {
         self.last_event_count
+    }
+
+    fn cursor_rect_x(&self) -> f32 {
+        self.target_cursor_x as f32
+    }
+
+    fn cursor_rect_y(&self) -> f32 {
+        self.target_cursor_y as f32
+    }
+
+    fn cursor_rect_width(&self) -> f32 {
+        2.0
+    }
+
+    fn cursor_rect_height(&self) -> f32 {
+        cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string()) as f32
     }
 
     fn visual_changed(&mut self) {
@@ -1219,6 +1245,14 @@ impl QQuickPaintedItem for SujianEditorItem {
         let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
         let cursor_h = cursor_height_for_line(font_size, &font_family);
 
+        let old_x = self.target_cursor_x;
+        let old_y = self.target_cursor_y;
+        if (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01 {
+            self.target_cursor_x = cursor_x;
+            self.target_cursor_y = cursor_y;
+            self.cursor_rect_changed();
+        }
+
         let now = Instant::now();
         let dt_secs = self.last_paint_instant
             .map(|t| now.duration_since(t).as_secs_f64())
@@ -1230,6 +1264,7 @@ impl QQuickPaintedItem for SujianEditorItem {
         let same_line = dy.abs() < 2.0;
         let small_move = dx.abs() <= 160.0;
 
+        let (_old_x, _old_y) = (self.target_cursor_x, self.target_cursor_y);
         if self.current_smooth_cursor_enabled && same_line && small_move {
             let duration_ms = self.current_cursor_animation_duration_ms.max(1) as f64;
             let tau = duration_ms / 1000.0 * 3.0;
@@ -1446,15 +1481,15 @@ fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
 fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
     let ascent = get_font_ascent(font_family, font_size as f32);
     let descent = get_font_descent(font_family, font_size as f32);
-    ascent + descent
+    let visible_ascent = (font_size * 0.85).min(ascent as f64);
+    let visible_descent = (font_size * 0.2).min(descent as f64);
+    visible_ascent + visible_descent
 }
 
 fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
     let ascent = get_font_ascent(font_family, font_size as f32);
-    let descent = get_font_descent(font_family, font_size as f32);
-    let top_padding = (line.height - (ascent + descent)).max(0.0) / 2.0;
-    let baseline = line.y + top_padding + ascent;
-    baseline - ascent
+    let visible_ascent = (font_size * 0.85).min(ascent as f64);
+    text_baseline_y(line, font_size, font_family) - visible_ascent
 }
 
 fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
