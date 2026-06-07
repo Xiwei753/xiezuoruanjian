@@ -735,8 +735,10 @@ Rectangle {
                                 selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
                                 cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
                                 smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                                cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 100
-                                typing_animation_enabled: false
+                                // 自研编辑器光标动画：60-90ms 轻快手感，不沿用旧 TextArea 的 160ms
+                                cursor_animation_duration_ms: settingsBackend ? Math.min(settingsBackend.setting_smooth_cursor_duration_ms, 90) : 80
+                                // 吐字/吞字动画：从设置读取
+                                typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : false
                                 scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                                 is_scrolling: editorScroll.editorIsScrolling
                                 

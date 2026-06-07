@@ -119,6 +119,62 @@ impl CursorAnimationState {
     }
 }
 
+/// 文字吐字动画 — 插入文字时，新字从光标处展开
+#[derive(Clone, Debug)]
+struct InsertAnimation {
+    /// 插入位置的字节偏移
+    offset: usize,
+    /// 插入的文字
+    inserted_text: String,
+    /// 插入后的光标矩形 (x, y, width, height)
+    cursor_rect: (f64, f64, f64, f64),
+    /// 动画开始时间
+    start_time: Instant,
+    /// 动画时长（毫秒）
+    duration_ms: u64,
+}
+
+impl InsertAnimation {
+    /// 计算当前动画进度（0.0 ~ 1.0）
+    fn progress(&self, now: Instant) -> f64 {
+        let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
+        (elapsed_ms / self.duration_ms as f64).min(1.0)
+    }
+
+    /// 动画是否已完成
+    fn is_finished(&self, now: Instant) -> bool {
+        now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
+    }
+}
+
+/// 文字吞字动画 — 删除文字时，旧字向光标收缩并消失
+#[derive(Clone, Debug)]
+struct DeleteAnimation {
+    /// 删除位置的字节偏移
+    offset: usize,
+    /// 删除的文字
+    deleted_text: String,
+    /// 删除前的光标矩形 (x, y, width, height)
+    cursor_rect: (f64, f64, f64, f64),
+    /// 动画开始时间
+    start_time: Instant,
+    /// 动画时长（毫秒）
+    duration_ms: u64,
+}
+
+impl DeleteAnimation {
+    /// 计算当前动画进度（0.0 ~ 1.0）
+    fn progress(&self, now: Instant) -> f64 {
+        let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
+        (elapsed_ms / self.duration_ms as f64).min(1.0)
+    }
+
+    /// 动画是否已完成
+    fn is_finished(&self, now: Instant) -> bool {
+        now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
+    }
+}
+
 #[derive(Clone, Debug)]
 struct EditorBuffer {
     text: String,
@@ -357,6 +413,8 @@ pub struct SujianEditorItem {
     target_cursor_x: f64,
     target_cursor_y: f64,
     cursor_animation: Option<CursorAnimationState>,
+    insert_animation: Option<InsertAnimation>,
+    delete_animation: Option<DeleteAnimation>,
     preedit_text: String,
     preedit_cursor: usize,
     layout_cache: Option<LayoutCache>,
@@ -445,6 +503,8 @@ impl Default for SujianEditorItem {
             target_cursor_x: 0.0,
             target_cursor_y: 0.0,
             cursor_animation: None,
+            insert_animation: None,
+            delete_animation: None,
             preedit_text: String::new(),
             preedit_cursor: 0,
             layout_cache: None,
@@ -770,6 +830,12 @@ impl SujianEditorItem {
         }
         self.preedit_text.clear();
         self.preedit_cursor = 0;
+        
+        // 记录插入前的光标位置（用于动画）
+        let cursor_x = self.target_cursor_x;
+        let cursor_y = self.target_cursor_y;
+        let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
+        
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
@@ -780,6 +846,19 @@ impl SujianEditorItem {
         };
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, cause, true);
+        
+        // 触发吐字动画
+        if self.current_typing_animation_enabled {
+            let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+            self.insert_animation = Some(InsertAnimation {
+                offset: self.buffer.cursor.saturating_sub(inserted.len()),
+                inserted_text: inserted.clone(),
+                cursor_rect: (cursor_x, cursor_y, 2.0, cursor_h),
+                start_time: Instant::now(),
+                duration_ms: duration,
+            });
+        }
+        
         self.emit_content_changed();
     }
 
@@ -793,7 +872,34 @@ impl SujianEditorItem {
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
+        
+        // 记录删除前的光标位置和被删除的文字（用于动画）
+        let cursor_x = self.target_cursor_x;
+        let cursor_y = self.target_cursor_y;
+        let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
+        
+        // 获取被删除的文字（从旧快照中）
+        let deleted_char = if old.cursor > 0 {
+            let char_start = old.text[..old.cursor].char_indices().next_back().map(|(i, _)| i).unwrap_or(0);
+            old.text[char_start..old.cursor].to_string()
+        } else {
+            String::new()
+        };
+        
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        
+        // 触发吞字动画
+        if self.current_typing_animation_enabled && !deleted_char.is_empty() {
+            let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+            self.delete_animation = Some(DeleteAnimation {
+                offset: self.buffer.cursor,
+                deleted_text: deleted_char,
+                cursor_rect: (cursor_x, cursor_y, 2.0, cursor_h),
+                start_time: Instant::now(),
+                duration_ms: duration,
+            });
+        }
+        
         self.emit_content_changed();
     }
 
@@ -1250,6 +1356,11 @@ impl QQuickPaintedItem for SujianEditorItem {
         let vis_end = lines.len().min(lines.partition_point(|l| l.y < scroll_y + viewport_height) + 1);
 
         let selection = self.buffer.selection_range();
+        let now_anim = Instant::now();
+        
+        // 吐字/吞字动画颜色（透明度渐变）
+        let anim_color = color_from_qstring(self.current_text_color.clone());
+        
         for line in &lines[vis_start..vis_end] {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
@@ -1267,15 +1378,87 @@ impl QQuickPaintedItem for SujianEditorItem {
                     self.current_selection_color.clone(),
                 );
             }
+            
+            // 绘制文字，带吐字/吞字动画
             let text = self.buffer.text[line.start..line.end].to_string();
-            draw_text(
-                painter,
-                line.x,
-                text_baseline_y(line, font_size, &font_family),
-                fs,
-                self.current_text_color.clone(),
-                text.into(),
-            );
+            let text_y = text_baseline_y(line, font_size, &font_family);
+            
+            // 检查是否有进行中的吐字动画且命中当前行
+            let has_insert_anim = self.insert_animation.as_ref().map_or(false, |a| {
+                !a.is_finished(now_anim) && a.offset >= line.start && a.offset <= line.end
+            });
+            let has_delete_anim = self.delete_animation.as_ref().map_or(false, |a| {
+                !a.is_finished(now_anim) && a.offset >= line.start && a.offset <= line.end
+            });
+            
+            if has_insert_anim {
+                let insert_anim = self.insert_animation.as_ref().unwrap();
+                let progress = insert_anim.progress(now_anim);
+                let eased = 1.0 - (1.0 - progress).powi(3);
+                
+                // 正常绘制插入点之前的文字
+                if insert_anim.offset > line.start {
+                    let before_text = &self.buffer.text[line.start..insert_anim.offset];
+                    draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before_text.to_string().into());
+                }
+                
+                // 绘制插入的文字（透明度渐入：用颜色 alpha 模拟）
+                let prefix = &self.buffer.text[line.start..insert_anim.offset];
+                let insert_x = line.x + measure_text_width(prefix, font_size, &font_family);
+                let alpha = (eased * 255.0).round() as i32;
+                let base_color = color_from_qstring(self.current_text_color.clone());
+                let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
+                draw_text(painter, insert_x, text_y, fs, fade_qstr.into(), insert_anim.inserted_text.clone().into());
+                
+                // 绘制插入点之后的文字
+                let after_start = insert_anim.offset + insert_anim.inserted_text.len();
+                if after_start < line.end {
+                    let insert_w = measure_text_width(&insert_anim.inserted_text, font_size, &font_family);
+                    let after_x = insert_x + insert_w;
+                    let after_text = &self.buffer.text[after_start..line.end];
+                    draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after_text.to_string().into());
+                }
+                
+                self.request_repaint();
+            } else if has_delete_anim {
+                let delete_anim = self.delete_animation.as_ref().unwrap();
+                let progress = delete_anim.progress(now_anim);
+                let eased = 1.0 - (1.0 - progress).powi(3);
+                
+                // 正常绘制删除点之前的文字
+                if delete_anim.offset > line.start {
+                    let before_text = &self.buffer.text[line.start..delete_anim.offset];
+                    draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before_text.to_string().into());
+                }
+                
+                // 绘制删除的文字（透明度渐出：用颜色 alpha 模拟）
+                let delete_x = line.x + measure_text_width(&self.buffer.text[line.start..delete_anim.offset], font_size, &font_family);
+                let delete_w = measure_text_width(&delete_anim.deleted_text, font_size, &font_family);
+                let offset_x = delete_w * eased; // 向右收缩
+                let alpha = ((1.0 - eased) * 255.0).round() as i32;
+                let base_color = color_from_qstring(self.current_text_color.clone());
+                let fade_qstr = format!("#{:02X}{:02X}{:02X}{:02X}", base_color.red(), base_color.green(), base_color.blue(), alpha);
+                draw_text(painter, delete_x + offset_x, text_y, fs, fade_qstr.into(), delete_anim.deleted_text.clone().into());
+                
+                // 绘制删除点之后的文字
+                let after_x = delete_x + delete_w * (1.0 - eased);
+                if delete_anim.offset < line.end {
+                    let after_text = &self.buffer.text[delete_anim.offset..line.end];
+                    draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after_text.to_string().into());
+                }
+                
+                self.request_repaint();
+            } else {
+                // 普通文字绘制
+                draw_text(
+                    painter,
+                    line.x,
+                    text_y,
+                    fs,
+                    self.current_text_color.clone(),
+                    text.into(),
+                );
+            }
         }
 
         if !self.preedit_text.is_empty() {
@@ -1411,6 +1594,19 @@ impl QQuickPaintedItem for SujianEditorItem {
                 cursor_h,
                 self.current_cursor_color.clone(),
             );
+        }
+        
+        // 清理已完成的吐字/吞字动画
+        let now_cleanup = Instant::now();
+        if let Some(ref anim) = self.insert_animation {
+            if anim.is_finished(now_cleanup) {
+                self.insert_animation = None;
+            }
+        }
+        if let Some(ref anim) = self.delete_animation {
+            if anim.is_finished(now_cleanup) {
+                self.delete_animation = None;
+            }
         }
     }
 }
