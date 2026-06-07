@@ -22,6 +22,7 @@ cpp! {{
     #include <QtQuick/QSGTexture>
     #include <QtQuick/QSGTransformNode>
     #include <QtQuick/QSGImageNode>
+    #include <QtQuick/QSGRectangleNode>
     #include <QGuiApplication>
     #include <vector>
 
@@ -136,6 +137,34 @@ cpp! {{
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
         item->setFlag(QQuickItem::ItemIsFocusScope, true);
         item->setAcceptedMouseButtons(Qt::AllButtons);
+    }
+
+    // Ensure cursor rect child exists on the given QSGTransformNode root.
+    // Returns the QSGRectangleNode* (child 1).
+    QSGRectangleNode* sujian_ensure_cursor_node(QSGTransformNode *root, QQuickItem *item, unsigned int color_rgba) {
+        QSGRectangleNode *cursorNode = nullptr;
+        if (root->childCount() > 1) {
+            cursorNode = dynamic_cast<QSGRectangleNode*>(root->lastChild());
+        }
+        if (!cursorNode) {
+            cursorNode = item->window()->createRectangleNode();
+            cursorNode->setColor(QColor::fromRgba(color_rgba));
+            root->appendChildNode(cursorNode);
+        }
+        return cursorNode;
+    }
+
+    void sujian_update_cursor_rect(QSGTransformNode *root, QQuickItem *item,
+        double cx, double cy, double cw, double ch, bool visible, unsigned int color_rgba) {
+        if (!root) return;
+        auto *cursorNode = sujian_ensure_cursor_node(root, item, color_rgba);
+        if (visible) {
+            cursorNode->setRect(cx, cy, cw, ch);
+            cursorNode->setColor(QColor::fromRgba(color_rgba));
+            cursorNode->markDirty(QSGNode::DirtyMaterial);
+        } else {
+            cursorNode->setRect(QRectF(0, 0, 0, 0));
+        }
     }
 }}
 
@@ -750,6 +779,11 @@ pub struct SujianEditorItem {
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
+    cursor_visual_x: f64,
+    cursor_visual_y: f64,
+    cursor_visual_h: f64,
+    cursor_visible: bool,
+    cursor_dirty: bool,
 }
 
 impl Default for SujianEditorItem {
@@ -846,6 +880,11 @@ impl Default for SujianEditorItem {
             render_dirty: true,
             scroll_buffer: None,
             last_slow_paint_log: None,
+            cursor_visual_x: 0.0,
+            cursor_visual_y: 0.0,
+            cursor_visual_h: 0.0,
+            cursor_visible: false,
+            cursor_dirty: true,
         }
     }
 }
@@ -1922,9 +1961,8 @@ impl QQuickItem for SujianEditorItem {
         use qmetaobject::scenegraph::SGNode;
 
         let frame_start = Instant::now();
-        let has_cursor_anim = self.cursor_animation.is_some();
 
-        if !self.render_dirty && !has_cursor_anim {
+        if !self.render_dirty && !self.cursor_dirty {
             return node;
         }
 
@@ -1932,38 +1970,77 @@ impl QQuickItem for SujianEditorItem {
         let old_raw = node.into_raw();
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let scroll_y = self.current_scroll_y as f64;
+        let paint_offset_y = -scroll_y;
 
-        match self.render_to_image() {
-            Some((image, buf_scroll_y, buf_h)) => {
-                // 新渲染：更新纹理 + source rect
-                // source rect: 在缓冲区图像中，viewport 对应的区域
-                let src_y = scroll_y - buf_scroll_y;
-                let new_raw = sujian_update_texture_node(
-                    old_raw, item_ptr, &image, 0.0, src_y, image.size().width as f64, vp_h,
-                );
-                let total_elapsed = frame_start.elapsed();
-                if total_elapsed.as_millis() > 4 {
-                    eprintln!(
-                        "sujian_update_paint_node: total_ms={}, new_texture=true, buf={:.0}..{:.0}",
-                        total_elapsed.as_millis(), buf_scroll_y, buf_scroll_y + buf_h,
+        // 光标视觉位置（文档坐标系 → 屏幕坐标系）
+        let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
+        let cursor_rgba = color_hex_to_rgba(&self.current_cursor_color);
+
+        // 路径 1: 文字需要重绘
+        if self.render_dirty {
+            match self.render_to_image() {
+                Some((image, buf_scroll_y, _buf_h)) => {
+                    let src_y = scroll_y - buf_scroll_y;
+                    let new_raw = sujian_update_texture_node(
+                        old_raw, item_ptr, &image, 0.0, src_y, image.size().width as f64, vp_h,
                     );
-                }
-                unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(new_raw) }
-            }
-            None => {
-                // 缓冲区命中：只更新 source rect，不重新渲染/上传纹理
-                if !old_raw.is_null() {
-                    if let Some(ref buf) = self.scroll_buffer {
-                        let src_y = scroll_y - buf.buffer_scroll_y;
-                        sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, buf.image.size().width as f64, vp_h);
+                    // 更新光标节点
+                    sujian_update_cursor_rect(
+                        new_raw, item_ptr,
+                        self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                        self.cursor_visible, cursor_rgba,
+                    );
+                    self.cursor_dirty = false;
+                    let total_elapsed = frame_start.elapsed();
+                    if total_elapsed.as_millis() > 4 {
+                        eprintln!(
+                            "sujian_update_paint_node: total_ms={}, new_texture=true, buf={:.0}..{:.0}",
+                            total_elapsed.as_millis(), buf_scroll_y, buf_scroll_y + _buf_h,
+                        );
                     }
+                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(new_raw) }
                 }
-                // 仍然需要处理光标动画
-                if has_cursor_anim {
-                    self.render_dirty = true; // 下帧继续检查
+                None => {
+                    // 缓冲区命中：只更新 source rect
+                    if !old_raw.is_null() {
+                        if let Some(ref buf) = self.scroll_buffer {
+                            let src_y = scroll_y - buf.buffer_scroll_y;
+                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, buf.image.size().width as f64, vp_h);
+                        }
+                        sujian_update_cursor_rect(
+                            old_raw, item_ptr,
+                            self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                            self.cursor_visible, cursor_rgba,
+                        );
+                    }
+                    self.cursor_dirty = false;
+                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
                 }
-                unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
             }
+        } else if self.cursor_dirty && !old_raw.is_null() {
+            // 路径 2: 只有光标变了（动画/滚动），不需要重绘文字
+            if !self.cursor_animation.is_some() {
+                self.cursor_dirty = false;
+            }
+            // 滚动时也要更新 source rect
+            if let Some(ref buf) = self.scroll_buffer {
+                let src_y = scroll_y - buf.buffer_scroll_y;
+                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, buf.image.size().width as f64, vp_h);
+            }
+            sujian_update_cursor_rect(
+                old_raw, item_ptr,
+                self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                self.cursor_visible, cursor_rgba,
+            );
+            // 光标动画继续请求下一帧
+            if self.cursor_animation.is_some() {
+                let item = self as &dyn QQuickItem;
+                item.update();
+            }
+            unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
+        } else {
+            // 路径 3: 无变化
+            unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
         }
     }
 }
@@ -2274,22 +2351,19 @@ impl SujianEditorItem {
         // 更新动画状态
         self.cursor_animation = new_animation;
 
-        // 如果动画还在进行中，请求重绘
+        // 存储光标视觉状态（不绘制，由 update_paint_node 独立管理）
+        self.cursor_visual_x = final_x;
+        self.cursor_visual_y = final_y;
+        self.cursor_visual_h = cursor_h;
+        self.cursor_visible = self.current_editor_enabled && !self.buffer.has_selection();
+        self.cursor_dirty = true;
+
+        // 如果光标动画还在进行中，只请求光标更新（不重绘文字）
         if let Some(ref anim) = self.cursor_animation {
             if !anim.is_finished(now) {
-                self.request_repaint();
+                let item = self as &dyn QQuickItem;
+                item.update();
             }
-        }
-
-        if self.current_editor_enabled && !self.buffer.has_selection() {
-            draw_rect(
-                painter,
-                final_x,
-                final_y + paint_offset_y,
-                2.0,
-                cursor_h,
-                self.current_cursor_color.clone(),
-            );
         }
         
         // 清理已完成的吐字/吞字动画
@@ -2810,9 +2884,9 @@ fn sujian_update_source_rect(
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double"
     ] {
-        QSGTransformNode *root = static_cast<QSGTransformNode*>(old_raw);
+        auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root || root->childCount() == 0) return;
-        QSGImageNode *imgNode = static_cast<QSGImageNode*>(root->firstChild());
+        auto *imgNode = static_cast<QSGImageNode*>(root->firstChild());
         if (!imgNode) return;
         imgNode->setRect(0, 0, item_ptr->width(), item_ptr->height());
         imgNode->setSourceRect(src_x, src_y, src_w, src_h);
@@ -2833,7 +2907,7 @@ fn sujian_update_texture_node(
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double"
     ] -> *mut std::ffi::c_void as "QSGNode*" {
-        QSGTransformNode *root = static_cast<QSGTransformNode*>(old_raw);
+        auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root) {
             root = new QSGTransformNode;
         }
@@ -2853,6 +2927,37 @@ fn sujian_update_texture_node(
         delete old_tex;
         return root;
     })
+}
+
+fn sujian_update_cursor_rect(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    cx: f64, cy: f64, cw: f64, ch: f64,
+    visible: bool,
+    color_rgba: u32,
+) {
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        cx as "double", cy as "double",
+        cw as "double", ch as "double",
+        visible as "bool",
+        color_rgba as "unsigned int"
+    ] {
+        sujian_update_cursor_rect(
+            static_cast<QSGTransformNode*>(root_raw), item_ptr,
+            cx, cy, cw, ch, visible, color_rgba
+        );
+    })
+}
+
+fn color_hex_to_rgba(hex: &QString) -> u32 {
+    let c = QColor::from_name(&hex.to_string());
+    let r = c.red() as u32;
+    let g = c.green() as u32;
+    let b = c.blue() as u32;
+    let a = c.alpha() as u32;
+    (a << 24) | (r << 16) | (g << 8) | b
 }
 
 fn prev_char_boundary(text: &str, index: usize) -> Option<usize> {
