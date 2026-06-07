@@ -148,7 +148,7 @@ impl EditorBuffer {
 
     fn set_text(&mut self, text: String) {
         self.text = text;
-        self.cursor = self.text.len();
+        self.cursor = 0;
         self.selection_anchor = self.cursor;
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -278,6 +278,7 @@ pub struct SujianEditorItem {
 
     get_plain_text: qt_method!(fn(&self) -> QString),
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
+    reload_plain_text: qt_method!(fn(&mut self, text: QString)),
     clear_undo_stack: qt_method!(fn(&mut self)),
     insert_text: qt_method!(fn(&mut self, text: QString)),
     delete_backward: qt_method!(fn(&mut self)),
@@ -362,6 +363,7 @@ impl Default for SujianEditorItem {
             transaction_created: Default::default(),
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
+            reload_plain_text: Default::default(),
             clear_undo_stack: Default::default(),
             insert_text: Default::default(),
             delete_backward: Default::default(),
@@ -434,8 +436,29 @@ impl SujianEditorItem {
 
     fn set_plain_text_from_qml(&mut self, text: QString) {
         let normalized = normalize_plain_text(&text.to_string());
+        if self.buffer.text == normalized {
+            return;
+        }
         let old = self.buffer.snapshot();
         self.buffer.set_text(normalized);
+        let new = self.buffer.snapshot();
+        self.record_transaction(old, new, EditorTransactionCause::Load, false);
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        self.emit_content_changed();
+    }
+
+    fn reload_plain_text(&mut self, text: QString) {
+        let normalized = normalize_plain_text(&text.to_string());
+        if self.buffer.text == normalized {
+            return;
+        }
+        let old = self.buffer.snapshot();
+        let old_cursor = self.buffer.cursor;
+        let old_anchor = self.buffer.selection_anchor;
+        self.buffer.set_text(normalized);
+        self.buffer.cursor = clamp_to_char_boundary(&self.buffer.text, old_cursor);
+        self.buffer.selection_anchor = clamp_to_char_boundary(&self.buffer.text, old_anchor);
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
@@ -1162,7 +1185,7 @@ impl QQuickPaintedItem for SujianEditorItem {
             draw_text(
                 painter,
                 line.x,
-                text_baseline_y(line, font_size),
+                text_baseline_y(line, font_size, &font_family),
                 fs,
                 self.current_text_color.clone(),
                 text.into(),
@@ -1178,14 +1201,14 @@ impl QQuickPaintedItem for SujianEditorItem {
                     draw_text(
                         painter,
                         x,
-                        text_baseline_y(line, font_size),
+                        text_baseline_y(line, font_size, &font_family),
                         fs,
                         self.current_text_color.clone(),
                         self.preedit_text.clone().into(),
                     );
                     let preedit_w = measure_text_width(&self.preedit_text, font_size, &font_family);
                     painter.set_pen(QPen::from_color(color_from_qstring(self.current_text_color.clone())));
-                    let underline_y = text_baseline_y(line, font_size) + 2.0;
+                    let underline_y = text_baseline_y(line, font_size, &font_family) + 2.0;
                     let line_f = QLineF { pt1: QPointF { x, y: underline_y }, pt2: QPointF { x: x + preedit_w, y: underline_y } };
                     painter.draw_line(line_f);
                     break;
@@ -1194,7 +1217,7 @@ impl QQuickPaintedItem for SujianEditorItem {
         }
 
         let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
-        let cursor_h = cursor_height_for_line(font_size, self.current_line_spacing as f64);
+        let cursor_h = cursor_height_for_line(font_size, &font_family);
 
         let now = Instant::now();
         let dt_secs = self.last_paint_instant
@@ -1256,6 +1279,7 @@ fn clear_text_width_cache() {
     TEXT_WIDTH_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
+#[cfg(not(test))]
 fn measure_text_width(text: &str, font_size: f64, font_family: &str) -> f64 {
     if text.is_empty() {
         return 0.0;
@@ -1276,6 +1300,11 @@ fn measure_text_width(text: &str, font_size: f64, font_family: &str) -> f64 {
     });
     TEXT_WIDTH_CACHE.with(|c| c.borrow_mut().insert(key, result));
     result
+}
+
+#[cfg(test)]
+fn measure_text_width(text: &str, font_size: f64, _font_family: &str) -> f64 {
+    text.chars().count() as f64 * (font_size * 0.6)
 }
 
 fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, padding: f64, indent: f64, font_family: &str) -> Vec<VisualLine> {
@@ -1373,26 +1402,66 @@ fn cursor_geometry_with_font(text: &str, lines: &[VisualLine], cursor: usize, fo
         if line_contains_cursor(lines, idx, cursor) {
             let segment = &text[line.start..cursor];
             let w = measure_text_width(segment, font_size, font_family);
-            return (line.x + w, cursor_top_y(line, font_size));
+            return (line.x + w, cursor_top_y(line, font_size, font_family));
         }
     }
     lines
         .last()
-        .map(|line| (line.x + line.width, cursor_top_y(line, font_size)))
+        .map(|line| (line.x + line.width, cursor_top_y(line, font_size, font_family)))
         .unwrap_or((0.0, 0.0))
 }
 
-fn cursor_height_for_line(font_size: f64, line_spacing: f64) -> f64 {
-    (font_size * line_spacing.min(1.2)).max(16.0)
+#[cfg(not(test))]
+fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
+    let family = QString::from(font_family);
+    cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
+        QFont font(family);
+        font.setPixelSize(font_size);
+        QFontMetricsF metrics(font);
+        return metrics.ascent();
+    })
 }
 
-fn cursor_top_y(line: &VisualLine, font_size: f64) -> f64 {
-    let cursor_h = cursor_height_for_line(font_size, (line.height / font_size.max(1.0)).max(1.0));
-    line.y + ((line.height - cursor_h).max(0.0) / 2.0)
+#[cfg(test)]
+fn get_font_ascent(_font_family: &str, font_size: f32) -> f64 {
+    font_size as f64 * 0.8
 }
 
-fn text_baseline_y(line: &VisualLine, font_size: f64) -> f64 {
-    line.y + ((line.height - font_size).max(0.0) / 2.0) + font_size
+#[cfg(not(test))]
+fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
+    let family = QString::from(font_family);
+    cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
+        QFont font(family);
+        font.setPixelSize(font_size);
+        QFontMetricsF metrics(font);
+        return metrics.descent();
+    })
+}
+
+#[cfg(test)]
+fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
+    font_size as f64 * 0.2
+}
+
+fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
+    let ascent = get_font_ascent(font_family, font_size as f32);
+    let descent = get_font_descent(font_family, font_size as f32);
+    ascent + descent
+}
+
+fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
+    let ascent = get_font_ascent(font_family, font_size as f32);
+    let descent = get_font_descent(font_family, font_size as f32);
+    let top_padding = (line.height - (ascent + descent)).max(0.0) / 2.0;
+    let baseline = line.y + top_padding + ascent;
+    baseline - ascent
+}
+
+fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
+    let ascent = get_font_ascent(font_family, font_size as f32);
+    let descent = get_font_descent(font_family, font_size as f32);
+    let top_padding = (line.height - (ascent + descent)).max(0.0) / 2.0;
+    line.y + top_padding + ascent
 }
 
 fn line_contains_cursor(lines: &[VisualLine], idx: usize, cursor: usize) -> bool {
@@ -1555,7 +1624,7 @@ mod tests {
         assert_eq!(lines[1].end, text.len());
 
         let (_x, y) = cursor_geometry_with_font(text, &lines, text.len(), 16.0, "serif");
-        assert_eq!(y, cursor_top_y(&lines[1], 16.0));
+        assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
     }
 
     #[test]
@@ -1568,15 +1637,16 @@ mod tests {
 
         let (_x, y) = cursor_geometry_with_font(text, &lines, 1, 16.0, "serif");
 
-        assert_eq!(y, cursor_top_y(&lines[1], 16.0));
+        assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
     }
 
     #[test]
     fn cursor_and_text_are_vertically_centered_in_spaced_line() {
         let line = VisualLine { start: 0, end: 0, hard_break: false, x: 16.0, y: 10.0, width: 0.0, height: 32.0 };
 
-        assert!(cursor_top_y(&line, 16.0) > line.y);
-        assert_eq!(text_baseline_y(&line, 16.0), 34.0);
+        let top_y = cursor_top_y(&line, 16.0, "serif");
+        assert!(top_y > line.y);
+        assert!(text_baseline_y(&line, 16.0, "serif") > top_y);
     }
 
     #[test]

@@ -797,8 +797,8 @@ Rectangle {
                         property bool suppressCommit: false
                         width: 1
                         height: 1
-                        x: -1000
-                        y: -1000
+                        x: parent.width / 2
+                        y: parent.height / 2
                         opacity: 0
                         visible: root.useSujianEditorItem
                         focus: root.useSujianEditorItem

@@ -351,7 +351,7 @@ ApplicationWindow {
                 projectTitle: appController.writingProjectTitle
                 aiCapable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled
-                useSujianEditorItem: appBackend.sujian_editor_item_enabled
+                useSujianEditorItem: appBackend !== null && appBackend.sujian_editor_item_enabled
 
                 onBackToProjects: {
                     appController.openHub();

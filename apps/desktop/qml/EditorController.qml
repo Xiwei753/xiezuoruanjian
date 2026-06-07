@@ -395,8 +395,13 @@ QtObject {
         var content = normalizePlainText(result.data ? result.data.content || "" : "");
 
         if (useSelfRenderedEditor && targetEditorItem) {
-            targetEditorItem.set_plain_text(content);
-            targetEditorItem.clear_undo_stack();
+            var isReload = (cId === controller.chapterId && pId === controller.projectId);
+            if (isReload) {
+                targetEditorItem.reload_plain_text(content);
+            } else {
+                targetEditorItem.set_plain_text(content);
+                targetEditorItem.clear_undo_stack();
+            }
         } else {
             // TextArea fallback owns plain text; DocumentHandler owns display format only.
             targetTextArea.textFormat = TextEdit.PlainText;
@@ -469,7 +474,7 @@ QtObject {
         autoSaveTimer.stop();
         try {
             if (useSelfRenderedEditor && targetEditorItem) {
-                targetEditorItem.set_plain_text(plain);
+                targetEditorItem.reload_plain_text(plain);
                 targetEditorItem.clear_undo_stack();
             } else {
                 var cursor = targetTextArea.cursorPosition;

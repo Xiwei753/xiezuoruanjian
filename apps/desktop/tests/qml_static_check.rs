@@ -567,7 +567,7 @@ fn test_editor_render_format_is_unified() {
             && editor_controller.contains("useSelfRenderedEditor")
             && editor_controller.contains("readEditorItemPlainText")
             && editor_controller.contains("targetEditorItem.set_plain_text(content)")
-            && editor_controller.contains("targetEditorItem.set_plain_text(plain)"),
+            && editor_controller.contains("targetEditorItem.reload_plain_text(plain)"),
         "EditorController must prefer SujianEditorItem for load/format/save plain text"
     );
     assert!(
