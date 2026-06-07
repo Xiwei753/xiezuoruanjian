@@ -718,6 +718,11 @@ Rectangle {
                                 id: sujianEditor
                                 width: parent.width
                                 height: root.useSujianEditorItem ? Math.max(content_height, parent.emptyContentMinimumHeight) : parent.emptyContentMinimumHeight
+                                
+                                onWidthChanged: {
+                                    Qt.callLater(sujianEditor.flush_content_height)
+                                }
+                                
                                 visible: root.useSujianEditorItem
                                 editor_enabled: editorController.chapterId !== ""
                                 font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)

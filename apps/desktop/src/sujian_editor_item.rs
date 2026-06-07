@@ -1163,7 +1163,6 @@ impl SujianEditorItem {
 impl QQuickItem for SujianEditorItem {
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
         self.recalculate_content_height_quiet();
-        self.flush_content_height();
         self.request_repaint();
     }
 
