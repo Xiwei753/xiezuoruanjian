@@ -266,6 +266,7 @@ pub struct SujianEditorItem {
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
+    is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
@@ -321,6 +322,7 @@ pub struct SujianEditorItem {
     current_cursor_animation_duration_ms: u32,
     current_typing_animation_enabled: bool,
     current_scroll_y: f32,
+    current_is_scrolling: bool,
     last_summary: QString,
     last_event_count: u32,
     target_cursor_x: f64,
@@ -358,6 +360,7 @@ impl Default for SujianEditorItem {
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
             scroll_y: Default::default(),
+            is_scrolling: Default::default(),
             plain_text_changed: Default::default(),
             text_changed: Default::default(),
             content_height_changed: Default::default(),
@@ -410,6 +413,7 @@ impl Default for SujianEditorItem {
             current_cursor_animation_duration_ms: 160,
             current_typing_animation_enabled: false,
             current_scroll_y: 0.0,
+            current_is_scrolling: false,
             last_summary: "".into(),
             last_event_count: 0,
             target_cursor_x: 0.0,
@@ -652,6 +656,21 @@ impl SujianEditorItem {
         }
         self.current_scroll_y = value;
         self.request_repaint();
+    }
+
+    fn is_scrolling(&self) -> bool {
+        self.current_is_scrolling
+    }
+
+    fn set_is_scrolling(&mut self, value: bool) {
+        if self.current_is_scrolling == value {
+            return;
+        }
+        self.current_is_scrolling = value;
+        if !value {
+            self.target_cursor_x = self.animated_cursor_x;
+            self.target_cursor_y = self.animated_cursor_y;
+        }
     }
 
     fn last_transaction_summary(&self) -> QString {
@@ -1144,6 +1163,7 @@ impl SujianEditorItem {
 impl QQuickItem for SujianEditorItem {
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
         self.recalculate_content_height_quiet();
+        self.flush_content_height();
         self.request_repaint();
     }
 
@@ -1268,23 +1288,32 @@ impl QQuickPaintedItem for SujianEditorItem {
             .unwrap_or(0.0);
         self.last_paint_instant = Some(now);
 
-        let dx = cursor_x - self.animated_cursor_x;
-        let dy = cursor_y - self.animated_cursor_y;
-        let same_line = dy.abs() < 2.0;
-        let small_move = dx.abs() <= 160.0;
+        let dist = ((self.target_cursor_x - self.animated_cursor_x).powi(2) + (self.target_cursor_y - self.animated_cursor_y).powi(2)).sqrt();
+        let same_line = (self.target_cursor_y - self.animated_cursor_y).abs() < 2.0;
+        let small_move = dist < font_size * 5.0;
+        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
+        let is_preediting = !self.preedit_text.is_empty();
 
-        let (_old_x, _old_y) = (self.target_cursor_x, self.target_cursor_y);
-        if self.current_smooth_cursor_enabled && same_line && small_move {
+        let should_snap = self.current_is_scrolling 
+            || !same_line 
+            || !small_move 
+            || is_selecting 
+            || is_preediting;
+
+        let dx = self.target_cursor_x - self.animated_cursor_x;
+        let dy = self.target_cursor_y - self.animated_cursor_y;
+
+        if self.current_smooth_cursor_enabled && !should_snap {
             let duration_ms = self.current_cursor_animation_duration_ms.max(1) as f64;
             let tau = duration_ms / 1000.0 * 3.0;
             let alpha = 1.0 - (-dt_secs / tau).exp();
             self.animated_cursor_x += dx * alpha;
-            self.animated_cursor_y = cursor_y;
-            self.target_cursor_x = cursor_x;
-            self.target_cursor_y = cursor_y;
-            let settled = dx.abs() < 0.5;
+            self.animated_cursor_y += dy * alpha;
+            
+            let settled = dx.abs() < 0.5 && dy.abs() < 0.5;
             if settled {
-                self.animated_cursor_x = cursor_x;
+                self.animated_cursor_x = self.target_cursor_x;
+                self.animated_cursor_y = self.target_cursor_y;
                 self.cursor_animating = false;
             } else {
                 self.cursor_animating = true;

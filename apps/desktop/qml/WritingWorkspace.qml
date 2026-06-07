@@ -684,6 +684,18 @@ Rectangle {
                         clip: true
                         contentWidth: availableWidth
                         contentHeight: editorCanvas.implicitHeight
+                        
+                        function clampScroll() {
+                            if (contentItem) {
+                                var maxScroll = Math.max(0, contentHeight - height);
+                                if (contentItem.contentY > maxScroll) {
+                                    contentItem.contentY = maxScroll;
+                                }
+                            }
+                        }
+                        onContentHeightChanged: clampScroll()
+                        onHeightChanged: clampScroll()
+                        
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                         ScrollBar.vertical: ScrollBar {
                             policy: ScrollBar.AsNeeded
@@ -697,6 +709,7 @@ Rectangle {
                             id: editorCanvas
                             readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + (dt ? dt.sp16 : 16) * 2, editorScroll.availableHeight)
                             width: editorScroll.availableWidth
+                            height: implicitHeight
                             implicitHeight: root.useSujianEditorItem
                                     ? Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
                                     : Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight)
@@ -720,6 +733,7 @@ Rectangle {
                                 cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 100
                                 typing_animation_enabled: false
                                 scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
+                                is_scrolling: editorScroll.editorIsScrolling
                                 
                             }
 
