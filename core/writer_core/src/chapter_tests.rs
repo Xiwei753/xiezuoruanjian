@@ -2,7 +2,7 @@
 mod tests {
     use crate::chapter::{
         clear_chapter_content, create_chapter, list_chapters, read_chapter, save_chapter_verified,
-        save_chapter_verified_with_allow_empty_overwrite, Chapter,
+        save_chapter_verified_with_allow_empty_overwrite, Chapter, calculate_word_count,
     };
     use crate::error::Error;
     use crate::project::{create_project, Project};
@@ -371,5 +371,27 @@ mod tests {
         let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");
         assert_eq!(content.meta.word_count, 0);
+    }
+
+    #[test]
+    fn test_calculate_word_count_unicode_punctuation() {
+        // ASCII punctuation and whitespace
+        assert_eq!(calculate_word_count("Hello, World!"), 12);
+        assert_eq!(calculate_word_count("  \t\n"), 0);
+
+        // CJK characters and punctuation
+        assert_eq!(calculate_word_count("你好，世界！"), 6);
+        assert_eq!(calculate_word_count("这是“测试”——它包含不同标点。"), 16);
+
+        // Mixed content
+        assert_eq!(calculate_word_count("Test 测试 123..."), 12);
+
+        // Emoticons and special characters (using chars().filter() counts each code point)
+        assert_eq!(calculate_word_count("😊,🚀"), 3);
+
+        // Zero-width spaces and other unicode whitespaces
+        // U+200B ZERO WIDTH SPACE (not considered whitespace by char.is_whitespace() in rust stdlib by default, but spaces are)
+        // Let's test standard unicode spaces
+        assert_eq!(calculate_word_count(" \u{2000} \u{2001} \u{2028} \u{2029} "), 0);
     }
 }
