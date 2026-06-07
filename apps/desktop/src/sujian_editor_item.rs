@@ -90,6 +90,35 @@ struct LayoutCache {
     content_height: f32,
 }
 
+/// 光标动画状态 — 固定时长 tween，不再用指数追赶
+#[derive(Clone, Debug)]
+struct CursorAnimationState {
+    start_x: f64,
+    start_y: f64,
+    target_x: f64,
+    target_y: f64,
+    start_time: Instant,
+    duration_ms: u64,
+}
+
+impl CursorAnimationState {
+    /// 计算当前动画位置（easeOutCubic）
+    fn current_position(&self, now: Instant) -> (f64, f64) {
+        let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
+        let t = (elapsed_ms / self.duration_ms as f64).min(1.0);
+        // easeOutCubic: 1 - (1 - t)^3
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let x = self.start_x + (self.target_x - self.start_x) * eased;
+        let y = self.start_y + (self.target_y - self.start_y) * eased;
+        (x, y)
+    }
+
+    /// 动画是否已完成
+    fn is_finished(&self, now: Instant) -> bool {
+        now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
+    }
+}
+
 #[derive(Clone, Debug)]
 struct EditorBuffer {
     text: String,
@@ -327,10 +356,7 @@ pub struct SujianEditorItem {
     last_event_count: u32,
     target_cursor_x: f64,
     target_cursor_y: f64,
-    animated_cursor_x: f64,
-    animated_cursor_y: f64,
-    last_paint_instant: Option<Instant>,
-    cursor_animating: bool,
+    cursor_animation: Option<CursorAnimationState>,
     preedit_text: String,
     preedit_cursor: usize,
     layout_cache: Option<LayoutCache>,
@@ -418,10 +444,7 @@ impl Default for SujianEditorItem {
             last_event_count: 0,
             target_cursor_x: 0.0,
             target_cursor_y: 0.0,
-            animated_cursor_x: 0.0,
-            animated_cursor_y: 0.0,
-            last_paint_instant: None,
-            cursor_animating: false,
+            cursor_animation: None,
             preedit_text: String::new(),
             preedit_cursor: 0,
             layout_cache: None,
@@ -668,8 +691,19 @@ impl SujianEditorItem {
         }
         self.current_is_scrolling = value;
         if !value {
-            self.target_cursor_x = self.animated_cursor_x;
-            self.target_cursor_y = self.animated_cursor_y;
+            // 滚动结束时，从当前动画位置继续，避免光标跳动
+            let now = Instant::now();
+            let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
+                if anim.is_finished(now) {
+                    (anim.target_x, anim.target_y)
+                } else {
+                    anim.current_position(now)
+                }
+            } else {
+                (self.target_cursor_x, self.target_cursor_y)
+            };
+            self.target_cursor_x = visual_x;
+            self.target_cursor_y = visual_y;
         }
     }
 
@@ -1181,7 +1215,10 @@ impl QQuickItem for SujianEditorItem {
 impl QQuickPaintedItem for SujianEditorItem {
     fn paint(&mut self, painter: &mut QPainter) {
         let width = self.bounding_width();
-        let lines = self.ensure_layout_cached(width).clone();
+        // 先确保布局缓存有效，然后借用而非 clone
+        {
+            let _ = self.ensure_layout_cached(width);
+        }
         let content_h = self.layout_cache.as_ref().map(|c| c.content_height).unwrap_or(self.current_content_height);
         if (self.current_content_height - content_h).abs() > 0.5 {
             self.current_content_height = content_h;
@@ -1207,6 +1244,8 @@ impl QQuickPaintedItem for SujianEditorItem {
         });
 
         let scroll_y = self.current_scroll_y as f64;
+        // 借用 layout_cache 中的 lines，不 clone
+        let lines = &self.layout_cache.as_ref().unwrap().lines;
         let vis_start = lines.partition_point(|l| l.y + l.height < scroll_y);
         let vis_end = lines.len().min(lines.partition_point(|l| l.y < scroll_y + viewport_height) + 1);
 
@@ -1281,56 +1320,93 @@ impl QQuickPaintedItem for SujianEditorItem {
             });
         }
 
+        // 光标动画：固定时长 tween，不再用指数追赶
         let now = Instant::now();
-        let dt_secs = self.last_paint_instant
-            .map(|t| now.duration_since(t).as_secs_f64())
-            .unwrap_or(0.0);
-        self.last_paint_instant = Some(now);
-
-        let dist = ((self.target_cursor_x - self.animated_cursor_x).powi(2) + (self.target_cursor_y - self.animated_cursor_y).powi(2)).sqrt();
-        let same_line = (self.target_cursor_y - self.animated_cursor_y).abs() < 2.0;
-        let small_move = dist < font_size * 5.0;
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.preedit_text.is_empty();
 
+        // 判断是否应该 snap（直接到位）
         let should_snap = self.current_is_scrolling 
-            || !same_line 
-            || !small_move 
             || is_selecting 
             || is_preediting;
 
-        let dx = self.target_cursor_x - self.animated_cursor_x;
-        let dy = self.target_cursor_y - self.animated_cursor_y;
-
-        if self.current_smooth_cursor_enabled && !should_snap {
-            let duration_ms = self.current_cursor_animation_duration_ms.max(1) as f64;
-            let tau = duration_ms / 1000.0 * 3.0;
-            let alpha = 1.0 - (-dt_secs / tau).exp();
-            self.animated_cursor_x += dx * alpha;
-            self.animated_cursor_y += dy * alpha;
-            
-            let settled = dx.abs() < 0.5 && dy.abs() < 0.5;
-            if settled {
-                self.animated_cursor_x = self.target_cursor_x;
-                self.animated_cursor_y = self.target_cursor_y;
-                self.cursor_animating = false;
+        // 获取当前光标视觉位置
+        let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
+            if anim.is_finished(now) {
+                (anim.target_x, anim.target_y)
             } else {
-                self.cursor_animating = true;
-                self.request_repaint();
+                anim.current_position(now)
             }
         } else {
-            self.animated_cursor_x = cursor_x;
-            self.animated_cursor_y = cursor_y;
-            self.target_cursor_x = cursor_x;
-            self.target_cursor_y = cursor_y;
-            self.cursor_animating = false;
+            (self.target_cursor_x, self.target_cursor_y)
+        };
+
+        // 判断是否跨行或远距离
+        let same_line = (self.target_cursor_y - visual_y).abs() < 2.0;
+        let dist = ((self.target_cursor_x - visual_x).powi(2) + (self.target_cursor_y - visual_y).powi(2)).sqrt();
+        let small_move = dist < font_size * 3.0;
+
+        // 决定最终光标位置
+        let (final_x, final_y, new_animation) = if should_snap || !same_line || !small_move || !self.current_smooth_cursor_enabled {
+            // snap: 直接到位
+            (self.target_cursor_x, self.target_cursor_y, None)
+        } else if let Some(ref anim) = self.cursor_animation {
+            // 动画中，目标点变了 → 从当前视觉位置继续动画到新目标
+            if (anim.target_x - self.target_cursor_x).abs() > 0.01 || (anim.target_y - self.target_cursor_y).abs() > 0.01 {
+                // 目标变了，创建新动画，从当前视觉位置开始
+                let (cur_x, cur_y) = anim.current_position(now);
+                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+                let new_anim = CursorAnimationState {
+                    start_x: cur_x,
+                    start_y: cur_y,
+                    target_x: self.target_cursor_x,
+                    target_y: self.target_cursor_y,
+                    start_time: now,
+                    duration_ms: duration,
+                };
+                (cur_x, cur_y, Some(new_anim))
+            } else if anim.is_finished(now) {
+                // 动画完成
+                (anim.target_x, anim.target_y, None)
+            } else {
+                // 动画进行中
+                let (cur_x, cur_y) = anim.current_position(now);
+                (cur_x, cur_y, Some(anim.clone()))
+            }
+        } else {
+            // 没有动画，目标点变了 → 创建新动画
+            if (visual_x - self.target_cursor_x).abs() > 0.01 || (visual_y - self.target_cursor_y).abs() > 0.01 {
+                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+                let new_anim = CursorAnimationState {
+                    start_x: visual_x,
+                    start_y: visual_y,
+                    target_x: self.target_cursor_x,
+                    target_y: self.target_cursor_y,
+                    start_time: now,
+                    duration_ms: duration,
+                };
+                (visual_x, visual_y, Some(new_anim))
+            } else {
+                // 已经到位
+                (self.target_cursor_x, self.target_cursor_y, None)
+            }
+        };
+
+        // 更新动画状态
+        self.cursor_animation = new_animation;
+
+        // 如果动画还在进行中，请求重绘
+        if let Some(ref anim) = self.cursor_animation {
+            if !anim.is_finished(now) {
+                self.request_repaint();
+            }
         }
 
         if self.current_editor_enabled && !self.buffer.has_selection() {
             draw_rect(
                 painter,
-                self.animated_cursor_x,
-                self.animated_cursor_y,
+                final_x,
+                final_y,
                 2.0,
                 cursor_h,
                 self.current_cursor_color.clone(),

@@ -748,7 +748,10 @@ Rectangle {
                                 width: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_width) : 1
                                 height: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_height) : 1
                                 x: root.useSujianEditorItem && sujianEditor ? sujianEditor.cursor_rect_x : parent.width / 2
-                                y: root.useSujianEditorItem && sujianEditor && editorScroll.contentItem ? sujianEditor.cursor_rect_y - editorScroll.contentItem.contentY : parent.height / 2
+                                // 坐标系修正：editorCanvas 已经在 ScrollView 内容区里滚动，
+                                // cursor_rect_y 是内容区内部坐标，不需要再减 contentY。
+                                // 如果以后把 imeBridge 挪到 ScrollView 外面，用 mapToItem/mapToGlobal 换算。
+                                y: root.useSujianEditorItem && sujianEditor ? sujianEditor.cursor_rect_y : parent.height / 2
                                 
                                 color: "transparent"
                                 selectionColor: "transparent"

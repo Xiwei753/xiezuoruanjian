@@ -182,7 +182,9 @@ impl AppBackend {
                         &format!("len={}", len),
                     );
                     self.current_save_status = "已保存".to_string();
-                    self.workspace_state_changed();
+                    // 正文保存不触发 workspace_state_changed，避免 reload_tree 刷新整棵树。
+                    // 保存只改变章节内容，不改变工作区结构（项目/卷/章节增删改）。
+                    self.save_status_changed();
                     self.flush_writing_stats();
                     serde_to_qjson_object(serde_json::json!({
                         "success": true,
