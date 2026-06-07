@@ -43,7 +43,9 @@ fn layout_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
 }
 
 fn viewport_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
-    starmaps_dir(workspace).join(starmap_id).join("viewport.json")
+    starmaps_dir(workspace)
+        .join(starmap_id)
+        .join("viewport.json")
 }
 
 pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGraph> {

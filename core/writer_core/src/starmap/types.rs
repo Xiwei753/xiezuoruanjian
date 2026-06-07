@@ -405,14 +405,12 @@ impl<'de> Deserialize<'de> for StarMapEmbed {
 
         let host_endpoint = raw.host_endpoint.or_else(|| {
             raw.host_anchor.and_then(|anchor_id| {
-                if let Some(node_id) = &raw.source_node_id {
-                    Some(StarMapEndpoint::Anchor {
+                raw.source_node_id
+                    .as_ref()
+                    .map(|node_id| StarMapEndpoint::Anchor {
                         node_id: node_id.clone(),
                         anchor_id,
                     })
-                } else {
-                    None
-                }
             })
         });
 

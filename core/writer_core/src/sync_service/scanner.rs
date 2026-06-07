@@ -30,10 +30,7 @@ pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Ve
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let file_hash = match SyncService::compute_file_hash(&absolute_path) {
-            Ok(h) => h,
-            Err(_) => String::new(),
-        };
+        let file_hash = SyncService::compute_file_hash(&absolute_path).unwrap_or_default();
 
         let sync_kind = if SyncService::is_whitelisted_path(&rel_path) {
             SyncKind::Upload

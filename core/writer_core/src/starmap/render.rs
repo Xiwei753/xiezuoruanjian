@@ -143,11 +143,7 @@ pub fn compute_edge_renders(
         .collect()
 }
 
-pub fn hit_test_edge_renders(
-    x: f32,
-    y: f32,
-    renders: &[EdgeRender],
-) -> Option<String> {
+pub fn hit_test_edge_renders(x: f32, y: f32, renders: &[EdgeRender]) -> Option<String> {
     hit_test_edge_renders_with_threshold(x, y, renders, DEFAULT_HIT_THRESHOLD)
 }
 
@@ -202,8 +198,16 @@ mod tests {
     #[test]
     fn test_bidirectional_edge_render() {
         let edges = vec![
-            EdgeInput { id: "e1".into(), from: "a".into(), to: "b".into() },
-            EdgeInput { id: "e2".into(), from: "b".into(), to: "a".into() },
+            EdgeInput {
+                id: "e1".into(),
+                from: "a".into(),
+                to: "b".into(),
+            },
+            EdgeInput {
+                id: "e2".into(),
+                from: "b".into(),
+                to: "a".into(),
+            },
         ];
         let cs = centers((0.0, 0.0), (200.0, 0.0));
         let renders = compute_edge_renders(&edges, &cs, &EdgeRenderParams::default());
