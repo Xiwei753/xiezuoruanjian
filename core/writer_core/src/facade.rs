@@ -1295,6 +1295,21 @@ impl WriterCore {
         crate::starmap::graph::save_starmap_layout(&self.workspace_path, starmap_id, layout)
     }
 
+    pub fn get_starmap_viewport(
+        &self,
+        starmap_id: &str,
+    ) -> Result<crate::starmap::types::StarMapViewport> {
+        crate::starmap::graph::get_starmap_viewport(&self.workspace_path, starmap_id)
+    }
+
+    pub fn save_starmap_viewport(
+        &self,
+        starmap_id: &str,
+        viewport: &crate::starmap::types::StarMapViewport,
+    ) -> Result<()> {
+        crate::starmap::graph::save_starmap_viewport(&self.workspace_path, starmap_id, viewport)
+    }
+
     pub fn add_starmap_embed(
         &self,
         starmap_id: &str,

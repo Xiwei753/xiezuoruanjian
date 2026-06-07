@@ -314,6 +314,14 @@ class AppServiceBridge(workspacePath: String) {
         service.saveStarmapLayout(starmapId, layout)
     }
 
+    fun getStarMapViewport(starmapId: String): BridgeResult<uniffi.writer_core.StarMapViewportDto> = wrapResult {
+        service.getStarmapViewport(starmapId)
+    }
+
+    fun saveStarMapViewport(starmapId: String, viewport: uniffi.writer_core.StarMapViewportDto): BridgeResult<Boolean> = wrapResult {
+        service.saveStarmapViewport(starmapId, viewport)
+    }
+
     fun computeStarMapEdgeRenders(graph: uniffi.writer_core.StarMapGraphDto, layout: uniffi.writer_core.StarMapLayoutDto): BridgeResult<List<uniffi.writer_core.StarMapEdgeRenderDto>> = wrapResult {
         service.computeStarmapEdgeRenders(graph, layout)
     }

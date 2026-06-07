@@ -1097,6 +1097,12 @@ interface WriterAppService {
     boolean save_starmap_layout(string starmap_id, StarMapLayoutDto layout);
 
     [Throws=WriterError]
+    StarMapViewportDto get_starmap_viewport(string starmap_id);
+
+    [Throws=WriterError]
+    boolean save_starmap_viewport(string starmap_id, StarMapViewportDto viewport);
+
+    [Throws=WriterError]
     sequence<StarMapEdgeRenderDto> compute_starmap_edge_renders(StarMapGraphDto graph, StarMapLayoutDto layout);
 
     [Throws=WriterError]

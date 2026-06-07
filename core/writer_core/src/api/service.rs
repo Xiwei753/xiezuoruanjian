@@ -797,6 +797,27 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn get_starmap_viewport(
+        &self,
+        starmap_id: &str,
+    ) -> ApiResult<crate::api::types::StarMapViewportDto> {
+        self.core()
+            .get_starmap_viewport(starmap_id)
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    pub fn save_starmap_viewport(
+        &self,
+        starmap_id: &str,
+        viewport: crate::api::types::StarMapViewportDto,
+    ) -> ApiResult<bool> {
+        self.core()
+            .save_starmap_viewport(starmap_id, &viewport.into())
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
     pub fn compute_starmap_edge_renders(
         &self,
         graph: crate::api::types::StarMapGraphDto,

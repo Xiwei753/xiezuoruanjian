@@ -42,6 +42,10 @@ fn layout_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
     starmaps_dir(workspace).join(starmap_id).join("layout.json")
 }
 
+fn viewport_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
+    starmaps_dir(workspace).join(starmap_id).join("viewport.json")
+}
+
 pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGraph> {
     let meta = load_starmap_meta(workspace, starmap_id)?;
 
@@ -118,6 +122,33 @@ pub fn save_starmap_layout(
 
     let json_str = serde_json::to_string_pretty(layout)?;
     atomic_write_string(&layout_path(workspace, starmap_id), &json_str)?;
+    Ok(())
+}
+
+pub fn get_starmap_viewport(workspace: &Path, starmap_id: &str) -> Result<StarMapViewport> {
+    let path = viewport_path(workspace, starmap_id);
+    if !path.exists() {
+        return Ok(StarMapViewport::default());
+    }
+
+    let json_str = fs::read_to_string(&path)?;
+    let viewport: StarMapViewport = serde_json::from_str(&json_str)?;
+    validate_viewport(&viewport)?;
+    Ok(viewport)
+}
+
+pub fn save_starmap_viewport(
+    workspace: &Path,
+    starmap_id: &str,
+    viewport: &StarMapViewport,
+) -> Result<()> {
+    validate_viewport(viewport)?;
+
+    let starmap_dir = starmaps_dir(workspace).join(starmap_id);
+    fs::create_dir_all(&starmap_dir)?;
+
+    let json_str = serde_json::to_string_pretty(viewport)?;
+    atomic_write_string(&viewport_path(workspace, starmap_id), &json_str)?;
     Ok(())
 }
 
@@ -1011,6 +1042,26 @@ fn validate_layout(layout: &StarMapLayout) -> Result<()> {
     Ok(())
 }
 
+fn validate_viewport(viewport: &StarMapViewport) -> Result<()> {
+    if viewport.scale <= 0.0 || !viewport.scale.is_finite() {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Viewport scale must be a finite value > 0",
+        )));
+    }
+    if !viewport.offset_x.is_finite()
+        || !viewport.offset_y.is_finite()
+        || !viewport.width.is_finite()
+        || !viewport.height.is_finite()
+    {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Viewport values must be finite",
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1178,6 +1229,32 @@ mod tests {
         let loaded = get_starmap_layout(dir.path(), &meta.starmap_id).unwrap();
         assert_eq!(loaded.nodes.len(), 1);
         assert_eq!(loaded.nodes[0].x, 100.0);
+    }
+
+    #[test]
+    fn test_starmap_viewport_crud() {
+        let dir = setup_workspace();
+        let meta = create_starmap(dir.path(), "Viewport Map", "desc", None).unwrap();
+
+        let default_viewport = get_starmap_viewport(dir.path(), &meta.starmap_id).unwrap();
+        assert_eq!(default_viewport.scale, 1.0);
+        assert_eq!(default_viewport.offset_x, 0.0);
+
+        let viewport = StarMapViewport {
+            scale: 1.5,
+            offset_x: 120.0,
+            offset_y: -40.0,
+            width: 1080.0,
+            height: 1920.0,
+        };
+        save_starmap_viewport(dir.path(), &meta.starmap_id, &viewport).unwrap();
+
+        let loaded = get_starmap_viewport(dir.path(), &meta.starmap_id).unwrap();
+        assert_eq!(loaded.scale, 1.5);
+        assert_eq!(loaded.offset_x, 120.0);
+        assert_eq!(loaded.offset_y, -40.0);
+        assert_eq!(loaded.width, 1080.0);
+        assert_eq!(loaded.height, 1920.0);
     }
 
     #[test]

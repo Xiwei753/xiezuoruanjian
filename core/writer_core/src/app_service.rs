@@ -574,6 +574,21 @@ impl WriterAppService {
         self.api.save_starmap_layout(&starmap_id, &layout)
     }
 
+    pub fn get_starmap_viewport(
+        &self,
+        starmap_id: String,
+    ) -> Result<crate::api::types::StarMapViewportDto, WriterError> {
+        self.api.get_starmap_viewport(&starmap_id)
+    }
+
+    pub fn save_starmap_viewport(
+        &self,
+        starmap_id: String,
+        viewport: crate::api::types::StarMapViewportDto,
+    ) -> Result<bool, WriterError> {
+        self.api.save_starmap_viewport(&starmap_id, viewport)
+    }
+
     pub fn compute_starmap_edge_renders(
         &self,
         graph: crate::api::types::StarMapGraphDto,

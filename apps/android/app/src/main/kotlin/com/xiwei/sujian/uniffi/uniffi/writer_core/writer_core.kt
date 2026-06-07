@@ -890,6 +890,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -976,6 +980,8 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_fn_method_writerappservice_get_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_get_starmap_viewport(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_writing_speed_curve(`ptr`: Pointer,`startDate`: RustBuffer.ByValue,`endDate`: RustBuffer.ByValue,`bucketMinutes`: Int,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -1064,6 +1070,8 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graph`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layout`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_save_starmap_viewport(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`viewport`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_sync_config(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
@@ -1265,6 +1273,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_get_starmap_viewport(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_writing_stats_by_chapter(
@@ -1352,6 +1362,8 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_viewport(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_sync_config(
     ): Short
@@ -1490,6 +1502,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_graph() != 5563.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_starmap_viewport() != 39120.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_writing_speed_curve() != 22637.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1620,6 +1635,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout() != 21329.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_viewport() != 199.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_config() != 43143.toShort()) {
@@ -2172,6 +2190,8 @@ public interface WriterAppServiceInterface {
 
     fun `getStarmapGraph`(`starmapId`: kotlin.String): StarMapGraphDto
 
+    fun `getStarmapViewport`(`starmapId`: kotlin.String): StarMapViewportDto
+
     fun `getWritingSpeedCurve`(`startDate`: kotlin.String, `endDate`: kotlin.String, `bucketMinutes`: kotlin.UInt): SpeedCurveSummaryDto
 
     fun `getWritingStatsByChapter`(`startDate`: kotlin.String, `endDate`: kotlin.String): ChapterStatsSummaryDto
@@ -2259,6 +2279,8 @@ public interface WriterAppServiceInterface {
     fun `saveMindmapGraph`(`projectId`: kotlin.String, `graph`: MindMapGraphDto): kotlin.Boolean
 
     fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layout`: StarMapLayoutDto): kotlin.Boolean
+
+    fun `saveStarmapViewport`(`starmapId`: kotlin.String, `viewport`: StarMapViewportDto): kotlin.Boolean
 
     fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean
 
@@ -2760,6 +2782,19 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_starmap_graph(
+        it, FfiConverterString.lower(`starmapId`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `getStarmapViewport`(`starmapId`: kotlin.String): StarMapViewportDto {
+            return FfiConverterTypeStarMapViewportDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_starmap_viewport(
         it, FfiConverterString.lower(`starmapId`),_status)
 }
     }
@@ -3322,6 +3357,19 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(
         it, FfiConverterString.lower(`starmapId`),FfiConverterTypeStarMapLayoutDto.lower(`layout`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(WriterException::class)override fun `saveStarmapViewport`(`starmapId`: kotlin.String, `viewport`: StarMapViewportDto): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_starmap_viewport(
+        it, FfiConverterString.lower(`starmapId`),FfiConverterTypeStarMapViewportDto.lower(`viewport`),_status)
 }
     }
     )

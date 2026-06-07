@@ -5,6 +5,7 @@ import android.widget.Toast
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.StarMapBridge
 import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapViewportData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -66,6 +67,11 @@ class StarMapController(
             saveLayout()
         }
 
+        canvasView.onViewportChangedListener = { viewport ->
+            currentData = currentData?.copy(viewport = viewport)
+            saveViewport(viewport)
+        }
+
         if (starmapId.isEmpty()) {
             CoroutineScope(Dispatchers.IO).launch {
                 var starmaps = bridge.listStarmaps()
@@ -88,11 +94,16 @@ class StarMapController(
         if (starmapId.isEmpty()) return
         CoroutineScope(Dispatchers.IO).launch {
             val result = bridge.getStarmapGraph(starmapId)
+            val viewport = when (val viewportResult = bridge.getStarmapViewport(starmapId)) {
+                is BridgeResult.Success -> viewportResult.data
+                else -> StarMapViewportData()
+            }
             withContext(Dispatchers.Main) {
                 when (result) {
                     is BridgeResult.Success -> {
-                        val data = result.data.withCoreEdgeRenders()
+                        val data = result.data.copy(viewport = viewport).withCoreEdgeRenders()
                         currentData = data
+                        canvasView.setViewport(data.viewport)
                         canvasView.setData(data)
                     }
                     is BridgeResult.Error -> {
@@ -108,6 +119,13 @@ class StarMapController(
         val data = canvasView.getData() ?: return
         CoroutineScope(Dispatchers.IO).launch {
             bridge.saveStarmapLayout(starmapId, data.layout)
+        }
+    }
+
+    private fun saveViewport(viewport: StarMapViewportData) {
+        if (starmapId.isEmpty()) return
+        CoroutineScope(Dispatchers.IO).launch {
+            bridge.saveStarmapViewport(starmapId, viewport)
         }
     }
 

@@ -12,6 +12,7 @@ import com.xiwei.sujian.model.StarMapLayoutKind
 import com.xiwei.sujian.model.StarMapLayoutNodeData
 import com.xiwei.sujian.model.StarMapMeta
 import com.xiwei.sujian.model.StarMapNodeKind
+import com.xiwei.sujian.model.StarMapViewportData
 import uniffi.writer_core.StarMapDisplayPolicyDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgeKindDto
@@ -32,6 +33,7 @@ import uniffi.writer_core.StarMapOpenBehaviorDto
 import uniffi.writer_core.StarMapProvenanceDto
 import uniffi.writer_core.StarMapReviewStatusDto
 import uniffi.writer_core.StarMapSourceKindDto
+import uniffi.writer_core.StarMapViewportDto
 
 private val starMapPayloadGson = Gson()
 
@@ -109,6 +111,18 @@ class StarMapBridge(private val appService: AppServiceBridge) {
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
         }
+    }
+
+    fun getStarmapViewport(starmapId: String): BridgeResult<StarMapViewportData> {
+        return when (val result = appService.getStarMapViewport(starmapId)) {
+            is BridgeResult.Success -> BridgeResult.Success(result.data.toModel())
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun saveStarmapViewport(starmapId: String, viewport: StarMapViewportData): BridgeResult<Boolean> {
+        return appService.saveStarMapViewport(starmapId, viewport.toDto())
     }
 
     fun computeEdgeRenders(data: StarMapData): BridgeResult<List<StarMapEdgeRenderData>> {
@@ -375,6 +389,22 @@ private fun StarMapEdgeRenderDto.toModel(): StarMapEdgeRenderData = StarMapEdgeR
     labelX = labelX,
     labelY = labelY,
     hasBidirectional = hasBidirectional
+)
+
+private fun StarMapViewportDto.toModel(): StarMapViewportData = StarMapViewportData(
+    scale = scale,
+    offsetX = offsetX,
+    offsetY = offsetY,
+    width = width,
+    height = height
+)
+
+private fun StarMapViewportData.toDto(): StarMapViewportDto = StarMapViewportDto(
+    scale = scale,
+    offsetX = offsetX,
+    offsetY = offsetY,
+    width = width,
+    height = height
 )
 
 private fun StarMapNodeKindDto.toModel(): StarMapNodeKind = when (this) {

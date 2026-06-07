@@ -66,3 +66,7 @@ ldd target/debug/sujian-desktop | grep -Ei 'Qt5|Qt6|qml|quick'
 ```bash
 SUJIAN_DESKTOP_USE_SUJIAN_EDITOR=1 cargo run -p sujian-desktop
 ```
+
+该开关只用于验证，不代表自研写作区可默认接管正文。默认启用前必须实测中文输入、删除、换行、复制粘贴、全选、撤销重做、滚动裁剪和保存保护。
+
+吐字动画继续保持关闭；必须等 Core transaction 与 `SujianEditorItem` 的插入/删除事务稳定后，才能由事务驱动动画。

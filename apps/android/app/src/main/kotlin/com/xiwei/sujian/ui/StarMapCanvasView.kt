@@ -12,11 +12,13 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapNodeKind
+import com.xiwei.sujian.model.StarMapViewportData
 
 /**
  * StarMapCanvasView — 星图画布自定义 View
  *
  * 使用 Canvas 绘制星图节点和连线，支持平移和缩放交互。
+ * 连线几何和节点命中测试由 Rust Core 计算；节点样式、文字和颜色仍是 Android 端绘制逻辑。
  *
  * ## 架构定位
  * - StarMapController → StarMapCanvasView → Canvas 绘制
@@ -72,7 +74,9 @@ class StarMapCanvasView @JvmOverloads constructor(
     var draggingNodeId: String? = null
     var onNodeDragListener: ((String, Float, Float) -> Unit)? = null
     var onNodeHitTestListener: ((Float, Float) -> String?)? = null
+    var onViewportChangedListener: ((StarMapViewportData) -> Unit)? = null
     var onLayoutSavedListener: (() -> Unit)? = null
+    private var viewportDirty = false
 
     private val scaleGestureDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
@@ -87,8 +91,13 @@ class StarMapCanvasView @JvmOverloads constructor(
             zoom = newZoom
             panX = focusX - graphFocusX * zoom
             panY = focusY - graphFocusY * zoom
+            viewportDirty = true
             invalidate()
             return true
+        }
+
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            notifyViewportChangedIfNeeded()
         }
     })
 
@@ -97,6 +106,28 @@ class StarMapCanvasView @JvmOverloads constructor(
     fun setData(newData: StarMapData) {
         this.data = newData
         invalidate()
+    }
+
+    fun setViewport(viewport: StarMapViewportData) {
+        zoom = viewport.scale.coerceIn(0.35f, 3.0f)
+        panX = viewport.offsetX
+        panY = viewport.offsetY
+        viewportDirty = false
+        invalidate()
+    }
+
+    fun currentViewport(): StarMapViewportData = StarMapViewportData(
+        scale = zoom,
+        offsetX = panX,
+        offsetY = panY,
+        width = width.toFloat(),
+        height = height.toFloat()
+    )
+
+    private fun notifyViewportChangedIfNeeded() {
+        if (!viewportDirty) return
+        viewportDirty = false
+        onViewportChangedListener?.invoke(currentViewport())
     }
 
     private fun getKindColor(kind: StarMapNodeKind): Int {
@@ -212,6 +243,7 @@ class StarMapCanvasView @JvmOverloads constructor(
                 } else {
                     panX += dx
                     panY += dy
+                    viewportDirty = true
                 }
 
                 lastTouchX = x
@@ -223,6 +255,7 @@ class StarMapCanvasView @JvmOverloads constructor(
                     onLayoutSavedListener?.invoke()
                 }
                 draggingNodeId = null
+                notifyViewportChangedIfNeeded()
             }
         }
         return true

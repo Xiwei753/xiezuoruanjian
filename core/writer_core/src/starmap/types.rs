@@ -291,6 +291,18 @@ pub struct StarMapViewport {
     pub height: f32,
 }
 
+impl Default for StarMapViewport {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbedPlacement {

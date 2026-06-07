@@ -75,8 +75,11 @@
 - `save_mindmap_graph(project_id: &str, graph: MindMapGraphDto) -> Result<bool, WriterError>`：MindMap 整图保存接收强类型 DTO，Core API 不再提供 `graph_json` 写入入口。
 - `add_starmap_node(starmap_id: &str, node: StarMapNodeDto, x: f32, y: f32) -> Result<StarMapNodeDto, WriterError>`：StarMap 节点写入接收强类型 DTO。
 - `save_starmap_layout(starmap_id: &str, layout: &StarMapLayoutDto) -> Result<bool, WriterError>`：StarMap 布局保存接收强类型 DTO。
+- `get_starmap_viewport(starmap_id: &str) -> Result<StarMapViewportDto, WriterError>` / `save_starmap_viewport(starmap_id: &str, viewport: StarMapViewportDto) -> Result<bool, WriterError>`：StarMap 顶层画布视口（缩放、平移、视口尺寸）由 Core 持久化到星图目录，客户端不能只保存在 View 内存里。
 - `compute_starmap_edge_renders(graph: StarMapGraphDto, layout: StarMapLayoutDto) -> Result<Vec<StarMapEdgeRenderDto>, WriterError>`：StarMap 连线几何由 Core 统一计算，Android/Desktop 不应各自实现边偏移、箭头和双向边规则。
 - `hit_test_starmap_node(layout: StarMapLayoutDto, x: f32, y: f32) -> Result<Option<String>, WriterError>`：StarMap 节点命中测试由 Core 统一按布局和 `z_index` 判定，客户端只传入画布坐标。
+
+当前 StarMap 渲染统一的边界是连线几何、节点命中和顶层 viewport 状态。节点样式、文字排版、颜色和完整边标签背景仍未统一进 Core 渲染层，客户端不得把现阶段称为完整渲染层统一。
 - `list_starmaps_for_project(project_id: &str) -> Result<Vec<StarMapMetaDto>, WriterError>`
 - `get_starmap(starmap_id: &str) -> Result<StarMapMetaDto, WriterError>`
 - `create_child_starmap(parent_id: &str, title: &str, desc: &str, accent_color: Option<&str>) -> Result<StarMapMetaDto, WriterError>`：创建子星图的正式入口；旧 `create_child_starmap_legacy` 仅保留为兼容转发。
