@@ -407,20 +407,26 @@ ApplicationWindow {
             }
         }
 
-        // EmptyWorkspace: shown when no workspace
-        EmptyWorkspace {
+        // EmptyWorkspace: loaded only when no workspace (Loader destroys on deactivate)
+        Loader {
+            id: emptyWorkspaceLoader
             anchors.fill: parent
-            visible: !rootHasWorkspace
-            backendRef: workspaceBackend
-            appTheme: designTokens
-            onCreateWorkspaceWithPath: (path) => {
-                appController.createWorkspaceWithPath(path, false);
+            active: !rootHasWorkspace
+            onActiveChanged: {
+                window.debugLog("app", "empty_workspace_loader_active_changed", "active=" + active);
             }
-            onOpenWorkspaceWithPath: (path) => {
-                appController.createWorkspaceWithPath(path, true);
-            }
-            onInitFromGithub: {
-                openSyncDialog();
+            sourceComponent: EmptyWorkspace {
+                backendRef: workspaceBackend
+                appTheme: designTokens
+                onCreateWorkspaceWithPath: (path) => {
+                    appController.createWorkspaceWithPath(path, false);
+                }
+                onOpenWorkspaceWithPath: (path) => {
+                    appController.createWorkspaceWithPath(path, true);
+                }
+                onInitFromGithub: {
+                    openSyncDialog();
+                }
             }
         }
     }

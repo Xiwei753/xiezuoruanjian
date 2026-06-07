@@ -43,6 +43,18 @@ Rectangle {
     signal renameItemRequested(var itemData)
     signal deleteItemRequested(var itemData)
 
+    function requestEditorFocus() {
+        Qt.callLater(function() {
+            if (root.useSujianEditorItem && sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
+                console.log("[QML] editor_force_active_focus_self_rendered");
+                sujianEditor.forceActiveFocus();
+            } else if (editorArea && editorArea.visible && editorArea.enabled) {
+                console.log("[QML] editor_force_active_focus_textarea");
+                editorArea.forceActiveFocus();
+            }
+        });
+    }
+
     WritingTreeController {
         id: writingTree
         tree: root.tree
@@ -127,6 +139,8 @@ Rectangle {
                 ""
             );
         }
+        console.log("[QML] enter_writing_focus_requested");
+        root.requestEditorFocus();
     }
 
     function openChapter(pId, vId, cId, cTitle) {
@@ -150,6 +164,8 @@ Rectangle {
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
             smoothCursorOverlay.snapNextCursorUpdate();
+            console.log("[QML] chapter_loaded_focus_requested chapterId=" + (d.chapterId || cId));
+            root.requestEditorFocus();
         }
     }
 
@@ -912,5 +928,20 @@ Rectangle {
         function onIsDarkChanged() {
             editorController.applyCurrentSettings();
         }
+    }
+
+    Connections {
+        target: editorController
+        function onChapterIdChanged() {
+            if (editorController.chapterId) {
+                console.log("[QML] chapter_id_changed_focus_requested chapterId=" + editorController.chapterId);
+                root.requestEditorFocus();
+            }
+        }
+    }
+
+    onUseSujianEditorItemChanged: {
+        console.log("[QML] use_sujian_editor_item_changed focus_requested val=" + useSujianEditorItem);
+        root.requestEditorFocus();
     }
 }
