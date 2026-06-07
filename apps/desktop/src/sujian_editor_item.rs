@@ -205,11 +205,12 @@ cpp! {{
     }
 
     // Given paragraph text, a cursor QChar offset, and line layout params,
-    // returns x position on the specific QTextLine (qtextline_idx).
-    // Uses the same wrap_w / indent_w logic as layout_lines().
+    // returns x position relative to the specific QTextLine's content start.
+    // `paragraph_wrap_w` is the full paragraph wrap width (line_wrap_width + line_indent_x).
+    // Does NOT add indent to the returned x — caller adds line.x which already has indent.
     double sujian_cursor_to_x_on_line(
         const QString& paraText, int cursor_qchar, double fs, const QString& ff,
-        double wrap_w, double indent_w, int qtextline_idx
+        double paragraph_wrap_w, double indent_w, int qtextline_idx
     ) {
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
@@ -225,12 +226,11 @@ cpp! {{
         while (true) {
             QTextLine line = layout.createLine();
             if (!line.isValid()) break;
-            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
                 int local_qchar = cursor_qchar - line.textStart();
                 x = line.cursorToX(local_qchar);
-                if (first) x += indent_w;
                 break;
             }
             first = false;
@@ -243,10 +243,11 @@ cpp! {{
     // Given paragraph text, a cursor QChar offset (para-relative), and line layout params,
     // returns glyph positions for [range_qchar_start, range_qchar_end) on the specific QTextLine.
     // Results stored in g_layout_buf as {byteStart=para_qchar_offset, width=glyph_width, xPos=glyph_x}.
-    // Uses the same wrap_w / indent_w / setLineWidth logic as layout_lines().
+    // `paragraph_wrap_w` is the full paragraph wrap width (line_wrap_width + line_indent_x).
+    // Does NOT add indent to xPos — caller adds line.x which already has indent.
     void sujian_glyph_positions_on_line(
         const QString& paraText, int range_qchar_start, int range_qchar_end,
-        double fs, const QString& ff, double wrap_w, double indent_w, int qtextline_idx
+        double fs, const QString& ff, double paragraph_wrap_w, double indent_w, int qtextline_idx
     ) {
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
@@ -262,7 +263,7 @@ cpp! {{
         while (true) {
             QTextLine line = layout.createLine();
             if (!line.isValid()) break;
-            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
                 int line_start = line.textStart();
@@ -272,7 +273,6 @@ cpp! {{
                 for (int i = r_start; i < r_end; i++) {
                     double x1 = line.cursorToX(i - line_start);
                     double x2 = line.cursorToX(i - line_start + 1);
-                    if (first) { x1 += indent_w; x2 += indent_w; }
                     QTextLayoutEntry e;
                     e.byteStart = i;  // QChar offset within paragraph
                     e.width = std::abs(x2 - x1);
@@ -312,6 +312,44 @@ cpp! {{
                 target_idx = line.textStart() + target_idx;
                 break;
             }
+            cur_idx++;
+        }
+        layout.endLayout();
+        return target_idx;
+    }
+
+    // Given paragraph text, an x position (relative to line content start), and line layout params,
+    // returns QChar offset within paragraph on the specific QTextLine.
+    // `paragraph_wrap_w` is the full paragraph wrap width (line_wrap_width + line_indent_x).
+    // `x` is relative to line content start (not including indent), so for the first line
+    // we subtract indent before calling xToCursor.
+    int sujian_x_to_cursor_on_line(
+        const QString& paraText, double x, double fs, const QString& ff,
+        double paragraph_wrap_w, double indent_w, int qtextline_idx
+    ) {
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+
+        int target_idx = 0;
+        int cur_idx = 0;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
+            line.setLineWidth(lineWrap);
+            if (cur_idx == qtextline_idx) {
+                // x is relative to line content start; xToCursor expects x relative to QTextLine start
+                target_idx = line.xToCursor(x);
+                target_idx = line.textStart() + target_idx;
+                break;
+            }
+            first = false;
             cur_idx++;
         }
         layout.endLayout();
@@ -374,10 +412,11 @@ fn qtextlayout_cursor_to_x(para_text: &str, text_before_cursor: &str, font_size:
 
 /// QTextLayout-based cursor-to-x on a specific visual line with correct wrap/indent.
 /// `cursor_abs_byte` is the absolute byte offset of the cursor in the full text.
+/// `paragraph_wrap_w` should be `line.line_wrap_width + line.line_indent_x`.
 fn qtextlayout_cursor_to_x_on_line(
     para_text: &str, cursor_abs_byte: usize, para_start: usize,
     font_size: f64, font_family: &str,
-    wrap_w: f64, indent_w: f64, qtextline_idx: i32,
+    paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
 ) -> f64 {
     let cursor_in_para = cursor_abs_byte.saturating_sub(para_start);
     let cursor_qchar = byte_offset_to_qchar_offset(para_text, cursor_in_para) as i32;
@@ -387,19 +426,20 @@ fn qtextlayout_cursor_to_x_on_line(
     cpp!(unsafe [
         para as "QString", cursor_qchar as "int",
         fs as "float", ff as "QString",
-        wrap_w as "double", indent_w as "double", qtextline_idx as "int"
+        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int"
     ] -> f64 as "double" {
-        return sujian_cursor_to_x_on_line(para, cursor_qchar, fs, ff, wrap_w, indent_w, qtextline_idx);
+        return sujian_cursor_to_x_on_line(para, cursor_qchar, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
     })
 }
 
 /// QTextLayout-based glyph positions on a specific visual line with correct wrap/indent.
 /// `range_start` and `range_end` are absolute byte offsets in the full text.
+/// `paragraph_wrap_w` should be `line.line_wrap_width + line.line_indent_x`.
 /// Returns per-glyph (abs_byte_offset, x, width).
 fn qtextlayout_glyph_positions_on_line(
     para_text: &str, range_start: usize, range_end: usize, para_start: usize,
     font_size: f64, font_family: &str,
-    wrap_w: f64, indent_w: f64, qtextline_idx: i32,
+    paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
 ) -> Vec<(usize, f64, f64)> {
     let seg_start_in_para = range_start.saturating_sub(para_start);
     let seg_end_in_para = range_end.saturating_sub(para_start).min(para_text.len());
@@ -411,9 +451,9 @@ fn qtextlayout_glyph_positions_on_line(
     let count = cpp!(unsafe [
         para as "QString", qchar_start as "int", qchar_end as "int",
         fs as "float", ff as "QString",
-        wrap_w as "double", indent_w as "double", qtextline_idx as "int"
+        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int"
     ] -> i32 as "int" {
-        sujian_glyph_positions_on_line(para, qchar_start, qchar_end, fs, ff, wrap_w, indent_w, qtextline_idx);
+        sujian_glyph_positions_on_line(para, qchar_start, qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
         return static_cast<int>(g_layout_buf.size());
     });
     let mut result = Vec::with_capacity(count as usize);
@@ -437,6 +477,7 @@ fn qtextlayout_glyph_positions_on_line(
 
 /// QTextLayout-based x-to-cursor: given paragraph text and x position,
 /// returns QChar offset within paragraph. Caller converts to UTF-8 byte offset.
+/// DEPRECATED: use qtextlayout_x_to_cursor_on_line for wrapped-line accuracy.
 fn qtextlayout_x_to_cursor_qchar(para_text: &str, x: f64, font_size: f64, font_family: &str, qtextline_idx: i32) -> i32 {
     let para: QString = para_text.to_string().into();
     let fs = font_size as f32;
@@ -444,6 +485,29 @@ fn qtextlayout_x_to_cursor_qchar(para_text: &str, x: f64, font_size: f64, font_f
     cpp!(unsafe [para as "QString", x as "double", fs as "float", ff as "QString", qtextline_idx as "int"] -> i32 as "int" {
         return sujian_x_to_cursor(para, x, fs, ff, qtextline_idx);
     })
+}
+
+/// QTextLayout-based x-to-cursor on a specific visual line with correct wrap/indent.
+/// `x` is relative to the line content start (i.e., caller already subtracted line.x).
+/// `paragraph_wrap_w` should be `line.line_wrap_width + line.line_indent_x`.
+/// Returns absolute byte offset in the full text.
+fn qtextlayout_x_to_cursor_on_line(
+    para_text: &str, x: f64, para_start: usize,
+    font_size: f64, font_family: &str,
+    paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
+) -> usize {
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    let qchar_off = cpp!(unsafe [
+        para as "QString", x as "double",
+        fs as "float", ff as "QString",
+        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int"
+    ] -> i32 as "int" {
+        return sujian_x_to_cursor_on_line(para, x, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
+    });
+    let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off as usize);
+    para_start + para_byte
 }
 
 /// QTextLayout-based glyph positions: returns per-glyph (byte_offset_in_para, x, width) for a range.
@@ -1923,11 +1987,12 @@ impl SujianEditorItem {
         if line.para_text.is_empty() {
             return line.start;
         }
-        let qchar_off = qtextlayout_x_to_cursor_qchar(
-            &line.para_text, relative, font_size, &font_family, line.qtextline_idx,
-        );
-        let para_byte = qchar_offset_to_byte_offset(&line.para_text, qchar_off as usize);
-        line.para_start + para_byte
+        let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
+        qtextlayout_x_to_cursor_on_line(
+            &line.para_text, relative, line.para_start,
+            font_size, &font_family,
+            paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
+        )
     }
 
     fn cursor_line_and_x(&self, lines: &[VisualLine]) -> Option<(usize, f64)> {
@@ -1941,10 +2006,11 @@ impl SujianEditorItem {
                 if line.para_text.is_empty() {
                     return Some((idx, line.x));
                 }
+                let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
                 let w = qtextlayout_cursor_to_x_on_line(
                     &line.para_text, self.buffer.cursor, line.para_start,
                     font_size, &font_family,
-                    line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                    paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
                 );
                 return Some((idx, line.x + w));
             }
@@ -1992,7 +2058,7 @@ impl SujianEditorItem {
             let glyph_data = qtextlayout_glyph_positions_on_line(
                 &line.para_text, seg_start, seg_end, line.para_start,
                 font_size, &font_family,
-                line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                line.line_wrap_width + line.line_indent_x, line.line_indent_x, line.qtextline_idx,
             );
             for (abs_byte, x_pos, ch_w) in glyph_data {
                 // Get the character at this position
@@ -2314,11 +2380,12 @@ impl SujianEditorItem {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
                 let sel_end = selection.1.min(line.end);
+                let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
                 let x_start = if !line.para_text.is_empty() {
                     line.x + qtextlayout_cursor_to_x_on_line(
                         &line.para_text, sel_start, line.para_start,
                         font_size, &font_family,
-                        line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                        paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
                     )
                 } else {
                     line.x
@@ -2327,7 +2394,7 @@ impl SujianEditorItem {
                     line.x + qtextlayout_cursor_to_x_on_line(
                         &line.para_text, sel_end, line.para_start,
                         font_size, &font_family,
-                        line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                        paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
                     )
                 } else {
                     line.x
@@ -2454,11 +2521,12 @@ impl SujianEditorItem {
             let pc = self.buffer.cursor;
             for line in &lines[vis_start..vis_end] {
                 if pc >= line.start && pc <= line.end {
+                    let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
                     let x = if !line.para_text.is_empty() {
                         line.x + qtextlayout_cursor_to_x_on_line(
                             &line.para_text, pc, line.para_start,
                             font_size, &font_family,
-                            line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                            paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
                         )
                     } else {
                         line.x
@@ -3020,10 +3088,11 @@ fn cursor_geometry_with_font(_text: &str, lines: &[VisualLine], cursor: usize, f
             if line.para_text.is_empty() {
                 return (line.x, cursor_top_y(line, font_size, font_family));
             }
+            let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
             let w = qtextlayout_cursor_to_x_on_line(
                 &line.para_text, cursor, line.para_start,
                 font_size, font_family,
-                line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
             );
             return (line.x + w, cursor_top_y(line, font_size, font_family));
         }
