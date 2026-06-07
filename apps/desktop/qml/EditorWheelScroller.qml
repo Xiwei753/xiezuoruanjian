@@ -13,11 +13,11 @@ Item {
 
     // Tuned in one place so WritingWorkspace stays a layout container.
     property real angleLinesPerStep: 2.2
-    property real velocityGain: 14.0
-    property real pixelVelocityGain: 7.0
+    property real velocityGain: 25.0
+    property real pixelVelocityGain: 10.0
     property real decayPerSecond: 0.006
-    property real maxVelocityViewportMultiplier: 2.4
-    property real minMaxVelocity: 900
+    property real maxVelocityViewportMultiplier: 4.0
+    property real minMaxVelocity: 1400
     property real stopVelocityFontMultiplier: 0.35
     property real minStopVelocity: 6
 

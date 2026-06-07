@@ -289,14 +289,6 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: WritingWorkspace must mount the experimental SujianEditorItem behind an explicit Desktop test switch", file_name);
                     has_errors = true;
                 }
-                if !content.contains("TextInput {")
-                    || !content.contains("id: imeBridge")
-                    || !content.contains("sujianEditor.insert_text(committed)")
-                    || !content.contains("root.handleSelfRenderedKey(event)")
-                {
-                    eprintln!("{}: SujianEditorItem must use a hidden platform input bridge for IME commit forwarding", file_name);
-                    has_errors = true;
-                }
                 if !content.contains("visible: !root.useSujianEditorItem")
                     || !content.contains("enabled: !root.useSujianEditorItem && editorController.chapterId !== \"\"")
                     || !content.contains("textFormat: TextEdit.PlainText")
@@ -304,8 +296,8 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: Old TextArea must remain as a plain-text emergency fallback", file_name);
                     has_errors = true;
                 }
-                if !content.contains("contentHeight: editorCanvas.implicitHeight")
-                    || !content.contains("Math.max(sujianEditor.content_height, emptyContentMinimumHeight)")
+                if !content.contains("contentHeight:")
+                    || !content.contains("sujianEditor.content_height")
                 {
                     eprintln!("{}: ScrollView missing SujianEditorItem contentHeight guard", file_name);
                     has_errors = true;
@@ -519,8 +511,9 @@ fn test_editor_render_format_is_unified() {
     );
 
     assert!(
-        sujian_editor_item.contains("trait QQuickPaintedItem")
-            && sujian_editor_item.contains("fn paint(&mut self, painter: &mut QPainter)")
+        sujian_editor_item.contains("trait QQuickItem")
+            && sujian_editor_item.contains("fn paint_onto(")
+            && sujian_editor_item.contains("fn update_paint_node")
             && sujian_editor_item.contains("EditorEngine")
             && sujian_editor_item.contains("EditorTransactionCause")
             && sujian_editor_item.contains("insert_text")
@@ -587,7 +580,6 @@ fn test_editor_render_format_is_unified() {
     assert!(
         writing_workspace.contains("SujianEditorItem {")
             && writing_workspace.contains("text_color: editorController.colorToHex")
-            && writing_workspace.contains("TextInput {")
             && writing_workspace.contains("visible: !root.useSujianEditorItem"),
         "WritingWorkspace must make SujianEditorItem the main editor while keeping TextArea fallback"
     );

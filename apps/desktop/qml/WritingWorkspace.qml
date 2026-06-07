@@ -129,47 +129,6 @@ Rectangle {
         }
     }
 
-    function copySelfRenderedSelection() {
-        if (!sujianEditor) return false;
-        return sujianEditor.clipboard_copy();
-    }
-
-    function handleSelfRenderedKey(event) {
-        if (!root.useSujianEditorItem || !sujianEditor) return;
-
-        var ctrl = (event.modifiers & Qt.ControlModifier) !== 0;
-        var alt = (event.modifiers & Qt.AltModifier) !== 0;
-        var meta = (event.modifiers & Qt.MetaModifier) !== 0;
-        if (ctrl && event.key === Qt.Key_C) {
-            event.accepted = copySelfRenderedSelection();
-            return;
-        }
-        if (ctrl && event.key === Qt.Key_V) {
-            sujianEditor.clipboard_paste();
-            event.accepted = true;
-            return;
-        }
-        if (ctrl && event.key === Qt.Key_X) {
-            if (sujianEditor.clipboard_copy()) {
-                editorController.markPotentialExplicitClear();
-                sujianEditor.delete_selection();
-                event.accepted = true;
-            }
-            return;
-        }
-        if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete) {
-            editorController.markPotentialExplicitClear();
-        }
-        if (sujianEditor.handle_key && sujianEditor.handle_key(event.key, event.modifiers)) {
-            event.accepted = true;
-            return;
-        }
-        if (!ctrl && !alt && !meta && event.text && event.text.length > 0) {
-            sujianEditor.insert_text(event.text);
-            event.accepted = true;
-        }
-    }
-
     function openChapter(pId, vId, cId, cTitle) {
         if (!pId || !vId || !cId) return;
         // Prevent re-opening the same chapter (anti-loop guard)
@@ -684,7 +643,7 @@ Rectangle {
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
                         contentWidth: availableWidth
-                        contentHeight: editorCanvas.implicitHeight
+                        contentHeight: root.useSujianEditorItem ? sujianEditor.content_height : editorCanvas.implicitHeight
                         
                         function clampScroll() {
                             if (contentItem) {
@@ -725,7 +684,7 @@ Rectangle {
                             id: editorCanvas
                             readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + (dt ? dt.sp16 : 16) * 2, editorScroll.availableHeight)
                             width: editorScroll.availableWidth
-                            height: implicitHeight
+                            height: editorScroll.availableHeight
                             implicitHeight: root.useSujianEditorItem
                                     ? Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
                                     : Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight)
@@ -733,13 +692,16 @@ Rectangle {
                             SujianEditorItem {
                                 id: sujianEditor
                                 width: parent.width
-                                height: root.useSujianEditorItem ? Math.max(content_height, parent.emptyContentMinimumHeight) : parent.emptyContentMinimumHeight
+                                height: editorScroll.availableHeight
+                                y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                                 
                                 onWidthChanged: {
                                     Qt.callLater(sujianEditor.flush_content_height)
                                 }
                                 
                                 visible: root.useSujianEditorItem
+                                focus: root.useSujianEditorItem
+                                activeFocusOnTab: true
                                 editor_enabled: editorController.chapterId !== ""
                                 font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
                                 font_family: "serif"
@@ -751,67 +713,13 @@ Rectangle {
                                 selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
                                 cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
                                 smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                                // 自研编辑器光标动画：60-90ms 轻快手感，不沿用旧 TextArea 的 160ms
                                 cursor_animation_duration_ms: settingsBackend ? Math.min(settingsBackend.setting_smooth_cursor_duration_ms, 90) : 80
-                                // 吐字/吞字动画：从设置读取
                                 typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : false
                                 scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
+                                viewport_height: editorScroll.availableHeight
                                 is_scrolling: editorScroll.editorAnimationSuppressed
-                                
-                            }
 
-                            TextInput {
-                                id: imeBridge
-                                property bool suppressCommit: false
-                                width: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_width) : 1
-                                height: root.useSujianEditorItem && sujianEditor ? Math.max(1, sujianEditor.cursor_rect_height) : 1
-                                x: root.useSujianEditorItem && sujianEditor ? sujianEditor.cursor_rect_x : parent.width / 2
-                                // 坐标系修正：editorCanvas 已经在 ScrollView 内容区里滚动，
-                                // cursor_rect_y 是内容区内部坐标，不需要再减 contentY。
-                                // 如果以后把 imeBridge 挪到 ScrollView 外面，用 mapToItem/mapToGlobal 换算。
-                                y: root.useSujianEditorItem && sujianEditor ? sujianEditor.cursor_rect_y : parent.height / 2
-                                
-                                color: "transparent"
-                                selectionColor: "transparent"
-                                selectedTextColor: "transparent"
-                                font.family: sujianEditor ? sujianEditor.font_family : "serif"
-                                font.pixelSize: sujianEditor ? sujianEditor.font_pixel_size : 16
-                                
-                                opacity: 0
-                                visible: root.useSujianEditorItem
-                                focus: root.useSujianEditorItem
-                                enabled: root.useSujianEditorItem && sujianEditor.editor_enabled
-                                inputMethodHints: Qt.ImhNoPredictiveText
-                                selectByMouse: false
-                                Keys.priority: Keys.BeforeItem
-                                
-                                onTextChanged: {
-                                    if (suppressCommit || !root.useSujianEditorItem || !sujianEditor || text.length === 0) return;
-                                    var committed = text;
-                                    suppressCommit = true;
-                                    text = "";
-                                    suppressCommit = false;
-                                    sujianEditor.insert_text(committed);
-                                }
-                                
-                                Keys.onPressed: function(event) {
-                                    root.handleSelfRenderedKey(event);
-                                }
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                visible: root.useSujianEditorItem
-                                enabled: root.useSujianEditorItem && sujianEditor.editor_enabled
-                                acceptedButtons: Qt.LeftButton
-                                hoverEnabled: true
-                                onPressed: function(mouse) {
-                                    sujianEditor.click_at(mouse.x, mouse.y, (mouse.modifiers & Qt.ShiftModifier) !== 0);
-                                    imeBridge.forceActiveFocus();
-                                }
-                                onPositionChanged: function(mouse) {
-                                    if (pressed) sujianEditor.drag_select_at(mouse.x, mouse.y);
-                                }
+                                onExplicit_clear_requested: editorController.markPotentialExplicitClear()
                             }
 
                             TextArea {
