@@ -1592,7 +1592,11 @@ mod tests {
                 Some(chapter.id.clone()),
             ),
             (
-                api.reorder_chapters_envelope_json(&project.id, &volume.id, &vec![chapter.id.clone()]),
+                api.reorder_chapters_envelope_json(
+                    &project.id,
+                    &volume.id,
+                    &vec![chapter.id.clone()],
+                ),
                 "ChaptersReordered",
                 Some(volume.id.clone()),
             ),
@@ -1610,7 +1614,10 @@ mod tests {
 
         for (json, entity_type, entity_id) in cases {
             let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-            assert_eq!(value["success"], true, "{entity_type} envelope failed: {json}");
+            assert_eq!(
+                value["success"], true,
+                "{entity_type} envelope failed: {json}"
+            );
             assert_eq!(value["changedEntities"][0]["entityType"], entity_type);
             match entity_id {
                 Some(id) => assert_eq!(value["changedEntities"][0]["entityId"], id),
@@ -1697,7 +1704,8 @@ mod tests {
             .save_chapter_content(&project.id, &volume.id, &chapter.id, content)
             .unwrap();
 
-        assert_eq!(receipt.content_len, content.len() as u32);        assert!(receipt.word_count > 0);
+        assert_eq!(receipt.content_len, content.len() as u32);
+        assert!(receipt.word_count > 0);
         assert!(!receipt.content_hash.is_empty());
 
         let reopened = api
@@ -1799,7 +1807,9 @@ mod tests {
 
         assert!(value["success"].is_boolean());
         assert!(value["data"].is_object());
-        assert!(value["data"]["backend_type"].is_string() || value["data"]["backendType"].is_string());
+        assert!(
+            value["data"]["backend_type"].is_string() || value["data"]["backendType"].is_string()
+        );
     }
 
     #[test]
