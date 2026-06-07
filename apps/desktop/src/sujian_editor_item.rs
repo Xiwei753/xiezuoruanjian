@@ -204,6 +204,89 @@ cpp! {{
         return x;
     }
 
+    // Given paragraph text, a cursor QChar offset, and line layout params,
+    // returns x position on the specific QTextLine (qtextline_idx).
+    // Uses the same wrap_w / indent_w logic as layout_lines().
+    double sujian_cursor_to_x_on_line(
+        const QString& paraText, int cursor_qchar, double fs, const QString& ff,
+        double wrap_w, double indent_w, int qtextline_idx
+    ) {
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+
+        double x = 0.0;
+        int cur_idx = 0;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+            line.setLineWidth(lineWrap);
+            if (cur_idx == qtextline_idx) {
+                int local_qchar = cursor_qchar - line.textStart();
+                x = line.cursorToX(local_qchar);
+                if (first) x += indent_w;
+                break;
+            }
+            first = false;
+            cur_idx++;
+        }
+        layout.endLayout();
+        return x;
+    }
+
+    // Given paragraph text, a cursor QChar offset (para-relative), and line layout params,
+    // returns glyph positions for [range_qchar_start, range_qchar_end) on the specific QTextLine.
+    // Results stored in g_layout_buf as {byteStart=para_qchar_offset, width=glyph_width, xPos=glyph_x}.
+    // Uses the same wrap_w / indent_w / setLineWidth logic as layout_lines().
+    void sujian_glyph_positions_on_line(
+        const QString& paraText, int range_qchar_start, int range_qchar_end,
+        double fs, const QString& ff, double wrap_w, double indent_w, int qtextline_idx
+    ) {
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+
+        g_layout_buf.clear();
+        int cur_idx = 0;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+            line.setLineWidth(lineWrap);
+            if (cur_idx == qtextline_idx) {
+                int line_start = line.textStart();
+                int line_end = line_start + line.textLength();
+                int r_start = std::max(range_qchar_start, line_start);
+                int r_end = std::min(range_qchar_end, line_end);
+                for (int i = r_start; i < r_end; i++) {
+                    double x1 = line.cursorToX(i - line_start);
+                    double x2 = line.cursorToX(i - line_start + 1);
+                    if (first) { x1 += indent_w; x2 += indent_w; }
+                    QTextLayoutEntry e;
+                    e.byteStart = i;  // QChar offset within paragraph
+                    e.width = std::abs(x2 - x1);
+                    e.xPos = x1;
+                    g_layout_buf.push_back(e);
+                }
+                break;
+            }
+            first = false;
+            cur_idx++;
+        }
+        layout.endLayout();
+    }
+
     // Given paragraph text and an x position, return byte offset within paragraph.
     // Returns the QChar offset; caller converts to UTF-8 byte offset.
     int sujian_x_to_cursor(
@@ -278,6 +361,7 @@ cpp! {{
 
 /// QTextLayout-based cursor-to-x: given paragraph text and text before cursor,
 /// returns x position relative to paragraph origin.
+/// DEPRECATED: use qtextlayout_cursor_to_x_on_line for wrapped-line accuracy.
 fn qtextlayout_cursor_to_x(para_text: &str, text_before_cursor: &str, font_size: f64, font_family: &str) -> f64 {
     let para: QString = para_text.to_string().into();
     let before: QString = text_before_cursor.to_string().into();
@@ -286,6 +370,69 @@ fn qtextlayout_cursor_to_x(para_text: &str, text_before_cursor: &str, font_size:
     cpp!(unsafe [para as "QString", before as "QString", fs as "float", ff as "QString"] -> f64 as "double" {
         return sujian_cursor_to_x(para, fs, ff, before);
     })
+}
+
+/// QTextLayout-based cursor-to-x on a specific visual line with correct wrap/indent.
+/// `cursor_abs_byte` is the absolute byte offset of the cursor in the full text.
+fn qtextlayout_cursor_to_x_on_line(
+    para_text: &str, cursor_abs_byte: usize, para_start: usize,
+    font_size: f64, font_family: &str,
+    wrap_w: f64, indent_w: f64, qtextline_idx: i32,
+) -> f64 {
+    let cursor_in_para = cursor_abs_byte.saturating_sub(para_start);
+    let cursor_qchar = byte_offset_to_qchar_offset(para_text, cursor_in_para) as i32;
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    cpp!(unsafe [
+        para as "QString", cursor_qchar as "int",
+        fs as "float", ff as "QString",
+        wrap_w as "double", indent_w as "double", qtextline_idx as "int"
+    ] -> f64 as "double" {
+        return sujian_cursor_to_x_on_line(para, cursor_qchar, fs, ff, wrap_w, indent_w, qtextline_idx);
+    })
+}
+
+/// QTextLayout-based glyph positions on a specific visual line with correct wrap/indent.
+/// `range_start` and `range_end` are absolute byte offsets in the full text.
+/// Returns per-glyph (abs_byte_offset, x, width).
+fn qtextlayout_glyph_positions_on_line(
+    para_text: &str, range_start: usize, range_end: usize, para_start: usize,
+    font_size: f64, font_family: &str,
+    wrap_w: f64, indent_w: f64, qtextline_idx: i32,
+) -> Vec<(usize, f64, f64)> {
+    let seg_start_in_para = range_start.saturating_sub(para_start);
+    let seg_end_in_para = range_end.saturating_sub(para_start).min(para_text.len());
+    let qchar_start = byte_offset_to_qchar_offset(para_text, seg_start_in_para) as i32;
+    let qchar_end = byte_offset_to_qchar_offset(para_text, seg_end_in_para) as i32;
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    let count = cpp!(unsafe [
+        para as "QString", qchar_start as "int", qchar_end as "int",
+        fs as "float", ff as "QString",
+        wrap_w as "double", indent_w as "double", qtextline_idx as "int"
+    ] -> i32 as "int" {
+        sujian_glyph_positions_on_line(para, qchar_start, qchar_end, fs, ff, wrap_w, indent_w, qtextline_idx);
+        return static_cast<int>(g_layout_buf.size());
+    });
+    let mut result = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let idx = i;
+        let qchar_off = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+            return static_cast<qulonglong>(g_layout_buf[idx].byteStart);
+        });
+        let w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_layout_buf[idx].width;
+        });
+        let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_layout_buf[idx].xPos;
+        });
+        let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off);
+        let abs_byte = para_start + para_byte;
+        result.push((abs_byte, x_pos, w));
+    }
+    result
 }
 
 /// QTextLayout-based x-to-cursor: given paragraph text and x position,
@@ -393,7 +540,9 @@ struct EditorSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 struct VisualLine {
+    /// 全文绝对字节起始 (UTF-8)
     start: usize,
+    /// 全文绝对字节结束 (UTF-8)
     end: usize,
     hard_break: bool,
     x: f64,
@@ -402,10 +551,18 @@ struct VisualLine {
     height: f64,
     /// 所属段落的完整文本（用于 QTextLayout 查询）
     para_text: String,
-    /// 段落在全文中的字节起始偏移
+    /// 段落在全文中的字节起始偏移 (UTF-8)
     para_start: usize,
     /// 在 QTextLayout 中的行索引（同一段落内从 0 开始）
     qtextline_idx: i32,
+    /// 段落内此行起始的 QChar (UTF-16) 偏移
+    para_qchar_start: usize,
+    /// 段落内此行结束的 QChar (UTF-16) 偏移
+    para_qchar_end: usize,
+    /// 此行的 wrap width（第一行需减去 indent）
+    line_wrap_width: f64,
+    /// 此行的 indent x 偏移（仅段落首行为 indent_w，其余为 0）
+    line_indent_x: f64,
 }
 
 struct LayoutCache {
@@ -1784,9 +1941,11 @@ impl SujianEditorItem {
                 if line.para_text.is_empty() {
                     return Some((idx, line.x));
                 }
-                let cursor_in_para = self.buffer.cursor.saturating_sub(line.para_start);
-                let text_before = &line.para_text[..cursor_in_para.min(line.para_text.len())];
-                let w = qtextlayout_cursor_to_x(&line.para_text, text_before, font_size, &font_family);
+                let w = qtextlayout_cursor_to_x_on_line(
+                    &line.para_text, self.buffer.cursor, line.para_start,
+                    font_size, &font_family,
+                    line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                );
                 return Some((idx, line.x + w));
             }
         }
@@ -1830,11 +1989,12 @@ impl SujianEditorItem {
             if line.para_text.is_empty() {
                 continue;
             }
-            let glyph_data = qtextlayout_glyph_positions(
-                &line.para_text, seg_start, seg_end, font_size, &font_family, line.qtextline_idx,
+            let glyph_data = qtextlayout_glyph_positions_on_line(
+                &line.para_text, seg_start, seg_end, line.para_start,
+                font_size, &font_family,
+                line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
             );
-            for (para_byte_off, x_pos, ch_w) in glyph_data {
-                let abs_byte = line.para_start + para_byte_off;
+            for (abs_byte, x_pos, ch_w) in glyph_data {
                 // Get the character at this position
                 if abs_byte >= self.buffer.text.len() {
                     continue;
@@ -2155,16 +2315,20 @@ impl SujianEditorItem {
                 let sel_start = selection.0.max(line.start);
                 let sel_end = selection.1.min(line.end);
                 let x_start = if !line.para_text.is_empty() {
-                    let start_in_para = sel_start.saturating_sub(line.para_start);
-                    let text_before_start = &line.para_text[..start_in_para.min(line.para_text.len())];
-                    line.x + qtextlayout_cursor_to_x(&line.para_text, text_before_start, font_size, &font_family)
+                    line.x + qtextlayout_cursor_to_x_on_line(
+                        &line.para_text, sel_start, line.para_start,
+                        font_size, &font_family,
+                        line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                    )
                 } else {
                     line.x
                 };
                 let x_end = if !line.para_text.is_empty() {
-                    let end_in_para = sel_end.saturating_sub(line.para_start);
-                    let text_before_end = &line.para_text[..end_in_para.min(line.para_text.len())];
-                    line.x + qtextlayout_cursor_to_x(&line.para_text, text_before_end, font_size, &font_family)
+                    line.x + qtextlayout_cursor_to_x_on_line(
+                        &line.para_text, sel_end, line.para_start,
+                        font_size, &font_family,
+                        line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                    )
                 } else {
                     line.x
                 };
@@ -2291,9 +2455,11 @@ impl SujianEditorItem {
             for line in &lines[vis_start..vis_end] {
                 if pc >= line.start && pc <= line.end {
                     let x = if !line.para_text.is_empty() {
-                        let cursor_in_para = pc.saturating_sub(line.para_start);
-                        let text_before = &line.para_text[..cursor_in_para.min(line.para_text.len())];
-                        line.x + qtextlayout_cursor_to_x(&line.para_text, text_before, font_size, &font_family)
+                        line.x + qtextlayout_cursor_to_x_on_line(
+                            &line.para_text, pc, line.para_start,
+                            font_size, &font_family,
+                            line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+                        )
                     } else {
                         line.x
                     };
@@ -2306,6 +2472,7 @@ impl SujianEditorItem {
                         self.current_text_color.clone(),
                         self.preedit_text.clone().into(),
                     );
+                    // Preedit width: use a single-line layout for the preedit text itself
                     let preedit_w = qtextlayout_cursor_to_x(&self.preedit_text, &self.preedit_text, font_size, &font_family);
                     painter.set_pen(QPen::from_color(color_from_qstring(self.current_text_color.clone())));
                     let underline_y = baseline + 2.0;
@@ -2652,11 +2819,18 @@ extern "C" fn sujian_request_repaint(rust_item: *mut std::ffi::c_void) {
     item.request_repaint();
 }
 
+/// Convert UTF-16 QChar offset to UTF-8 byte offset within a string.
+/// Properly handles surrogate pairs (emoji, CJK extension B, etc.).
 fn qchar_offset_to_byte_offset(text: &str, qchar_offset: usize) -> usize {
-    text.char_indices()
-        .nth(qchar_offset)
-        .map(|(byte_pos, _)| byte_pos)
-        .unwrap_or(text.len())
+    let mut qchar_count: usize = 0;
+    for (byte_pos, ch) in text.char_indices() {
+        if qchar_count >= qchar_offset {
+            return byte_pos;
+        }
+        qchar_count += ch.len_utf16();
+    }
+    // If qchar_offset is beyond the end, return text.len()
+    text.len()
 }
 
 fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, padding: f64, indent: f64, font_family: &str) -> Vec<VisualLine> {
@@ -2683,6 +2857,10 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
                 para_text: String::new(),
                 para_start: paragraph_start,
                 qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: available - indent,
+                line_indent_x: indent,
             });
             y += line_height;
             paragraph_start += paragraph.len();
@@ -2755,7 +2933,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
 
             let byte_off = qchar_offset_to_byte_offset(paragraph_text, qchar_off);
             let abs_start = para_start + byte_off;
-            let abs_end = if line_idx + 1 < line_count {
+            let para_qchar_end = if line_idx + 1 < line_count {
                 let next_idx = line_idx + 1;
                 let next_qchar = cpp!(unsafe [next_idx as "int"] -> usize as "qulonglong" {
                     if (next_idx >= 0 && next_idx < static_cast<int>(g_layout_buf.size())) {
@@ -2763,10 +2941,16 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
                     }
                     return 0;
                 });
-                para_start + qchar_offset_to_byte_offset(paragraph_text, next_qchar)
+                next_qchar
+            } else {
+                byte_offset_to_qchar_offset(paragraph_text, paragraph_text.len())
+            };
+            let abs_end = if line_idx + 1 < line_count {
+                para_start + qchar_offset_to_byte_offset(paragraph_text, para_qchar_end)
             } else {
                 paragraph_text_end
             };
+            let is_first = line_idx == 0;
 
             result.push(VisualLine {
                 start: abs_start,
@@ -2779,6 +2963,10 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
                 para_text: paragraph_text.to_string(),
                 para_start,
                 qtextline_idx: line_idx as i32,
+                para_qchar_start: qchar_off,
+                para_qchar_end,
+                line_wrap_width: if is_first { available - indent } else { available },
+                line_indent_x: if is_first { indent } else { 0.0 },
             });
             y += line_height;
         }
@@ -2798,6 +2986,10 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
             para_text: String::new(),
             para_start: text.len(),
             qtextline_idx: 0,
+            para_qchar_start: 0,
+            para_qchar_end: 0,
+            line_wrap_width: available - indent,
+            line_indent_x: indent,
         });
     }
 
@@ -2813,6 +3005,10 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
             para_text: String::new(),
             para_start: 0,
             qtextline_idx: 0,
+            para_qchar_start: 0,
+            para_qchar_end: 0,
+            line_wrap_width: available - indent,
+            line_indent_x: indent,
         });
     }
     result
@@ -2824,9 +3020,11 @@ fn cursor_geometry_with_font(_text: &str, lines: &[VisualLine], cursor: usize, f
             if line.para_text.is_empty() {
                 return (line.x, cursor_top_y(line, font_size, font_family));
             }
-            let cursor_in_para = cursor.saturating_sub(line.para_start);
-            let text_before = &line.para_text[..cursor_in_para.min(line.para_text.len())];
-            let w = qtextlayout_cursor_to_x(&line.para_text, text_before, font_size, font_family);
+            let w = qtextlayout_cursor_to_x_on_line(
+                &line.para_text, cursor, line.para_start,
+                font_size, font_family,
+                line.line_wrap_width, line.line_indent_x, line.qtextline_idx,
+            );
             return (line.x + w, cursor_top_y(line, font_size, font_family));
         }
     }
@@ -3163,8 +3361,8 @@ mod tests {
     fn cursor_geometry_prefers_next_visual_line_at_boundary() {
         let text = "ab";
         let lines = vec![
-            VisualLine { start: 0, end: 1, hard_break: false, x: 16.0, y: 10.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0 },
-            VisualLine { start: 1, end: 2, hard_break: false, x: 16.0, y: 34.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0 },
+            VisualLine { start: 0, end: 1, hard_break: false, x: 16.0, y: 10.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 1, line_wrap_width: 468.0, line_indent_x: 32.0 },
+            VisualLine { start: 1, end: 2, hard_break: false, x: 16.0, y: 34.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 1, para_qchar_end: 2, line_wrap_width: 500.0, line_indent_x: 0.0 },
         ];
 
         let (_x, y) = cursor_geometry_with_font(text, &lines, 1, 16.0, "serif");
@@ -3174,7 +3372,7 @@ mod tests {
 
     #[test]
     fn cursor_and_text_are_vertically_centered_in_spaced_line() {
-        let line = VisualLine { start: 0, end: 0, hard_break: false, x: 16.0, y: 10.0, width: 0.0, height: 32.0, para_text: String::new(), para_start: 0, qtextline_idx: 0 };
+        let line = VisualLine { start: 0, end: 0, hard_break: false, x: 16.0, y: 10.0, width: 0.0, height: 32.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 468.0, line_indent_x: 32.0 };
 
         let top_y = cursor_top_y(&line, 16.0, "serif");
         assert!(top_y > line.y);
@@ -3187,5 +3385,77 @@ mod tests {
         let line_end = "第一行".len();
 
         assert_eq!(byte_index_at_char_offset_in_range(text, 0, line_end, 3), line_end);
+    }
+
+    #[test]
+    fn qchar_to_byte_mixed_text() {
+        // ASCII: 1 byte per char, 1 UTF-16 unit per char
+        assert_eq!(qchar_offset_to_byte_offset("hello", 0), 0);
+        assert_eq!(qchar_offset_to_byte_offset("hello", 3), 3);
+        assert_eq!(qchar_offset_to_byte_offset("hello", 5), 5);
+
+        // Chinese: 3 bytes per char, 1 UTF-16 unit per char
+        let cn = "你好世界";
+        assert_eq!(qchar_offset_to_byte_offset(cn, 0), 0);
+        assert_eq!(qchar_offset_to_byte_offset(cn, 1), 3);
+        assert_eq!(qchar_offset_to_byte_offset(cn, 2), 6);
+        assert_eq!(qchar_offset_to_byte_offset(cn, 4), 12);
+
+        // Emoji: 4 bytes, 2 UTF-16 units (surrogate pair)
+        let emoji = "😀b"; // U+1F600 (2 UTF-16 units) + 'b' (1 unit)
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 0), 0);   // start of 😀
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 2), 4);   // after 😀, start of 'b'
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 3), 5);   // after 'b'
+
+        // Mixed: "你😀好"
+        let mixed = "你😀好"; // 你(3 bytes, 1 unit) + 😀(4 bytes, 2 units) + 好(3 bytes, 1 unit)
+        assert_eq!(qchar_offset_to_byte_offset(mixed, 0), 0);   // start of 你
+        assert_eq!(qchar_offset_to_byte_offset(mixed, 1), 3);   // after 你, start of 😀
+        assert_eq!(qchar_offset_to_byte_offset(mixed, 3), 7);   // after 😀, start of 好
+        assert_eq!(qchar_offset_to_byte_offset(mixed, 4), 10);  // after 好
+    }
+
+    #[test]
+    fn byte_to_qchar_mixed_text() {
+        // ASCII
+        assert_eq!(byte_offset_to_qchar_offset("hello", 0), 0);
+        assert_eq!(byte_offset_to_qchar_offset("hello", 3), 3);
+
+        // Chinese
+        assert_eq!(byte_offset_to_qchar_offset("你好", 0), 0);
+        assert_eq!(byte_offset_to_qchar_offset("你好", 3), 1);
+
+        // Emoji
+        assert_eq!(byte_offset_to_qchar_offset("😀b", 0), 0);
+        assert_eq!(byte_offset_to_qchar_offset("😀b", 4), 2);
+
+        // Mixed
+        assert_eq!(byte_offset_to_qchar_offset("你😀好", 0), 0);
+        assert_eq!(byte_offset_to_qchar_offset("你😀好", 3), 1);
+        assert_eq!(byte_offset_to_qchar_offset("你😀好", 7), 3);
+    }
+
+    #[test]
+    fn qchar_byte_roundtrip() {
+        let texts = [
+            "hello world",
+            "你好世界",
+            "Hello 你好 World",
+            "a😀b🎉c",
+            "写作者：测试emoji🎉混合",
+        ];
+        for text in &texts {
+            for (byte_pos, ch) in text.char_indices() {
+                let qchar = byte_offset_to_qchar_offset(text, byte_pos);
+                let back = qchar_offset_to_byte_offset(text, qchar);
+                assert_eq!(back, byte_pos,
+                    "roundtrip failed for '{}' at byte {}: qchar={}, back={}",
+                    text, byte_pos, qchar, back);
+            }
+            // Also check end-of-string
+            let qchar_end = byte_offset_to_qchar_offset(text, text.len());
+            let back_end = qchar_offset_to_byte_offset(text, qchar_end);
+            assert_eq!(back_end, text.len(), "roundtrip failed for end of '{}'", text);
+        }
     }
 }
