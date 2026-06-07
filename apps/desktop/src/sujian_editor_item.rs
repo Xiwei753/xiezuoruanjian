@@ -873,6 +873,7 @@ impl SujianEditorItem {
 
         // 触发吐字动画：先 invalidate 再 re-layout，然后取新字形位置
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            self.delete_animation = None;  // 清除可能存在的吞字动画
             let insert_byte_end = insert_byte_start + inserted.len();
             // 强制重新布局以获取插入后的字形位置
             self.invalidate_layout_cache();
@@ -919,6 +920,7 @@ impl SujianEditorItem {
 
         // 在删除前取被删字形的原始位置（从旧 layout）
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            self.insert_animation = None;  // 清除可能存在的吐字动画
             if let Some((del_start, del_end)) = del_range {
                 let glyphs = self.glyph_rects_for_range(del_start, del_end);
                 if !glyphs.is_empty() {
@@ -1386,19 +1388,29 @@ impl SujianEditorItem {
     }
 
     /// 给定字节范围 [byte_start, byte_end)，返回每个字形的矩形信息。
-    /// 使用当前 layout_cache 中的行布局。
+    /// 使用当前 layout_cache 中的行布局。只搜索可能包含目标字节的行。
     fn glyph_rects_for_range(&self, byte_start: usize, byte_end: usize) -> Vec<AnimatedGlyph> {
         let Some(ref cache) = self.layout_cache else {
             return Vec::new();
         };
         let lines = &cache.lines;
+        if lines.is_empty() || byte_start >= byte_end {
+            return Vec::new();
+        }
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
         let text = &self.buffer.text;
         let mut result = Vec::new();
 
-        for (line_idx, line) in lines.iter().enumerate() {
-            // 行与 [byte_start, byte_end) 无交集
+        // 二分查找第一个可能包含 byte_start 的行
+        let search_start = lines.partition_point(|l| l.end <= byte_start);
+        // 只搜索到 byte_end 所在行
+        let search_end = lines.len().min(
+            search_start + lines[search_start..].partition_point(|l| l.start < byte_end) + 1
+        );
+
+        for line_idx in search_start..search_end {
+            let line = &lines[line_idx];
             if line.end <= byte_start || line.start >= byte_end {
                 continue;
             }
@@ -1408,14 +1420,12 @@ impl SujianEditorItem {
                 continue;
             }
 
-            // 行内前缀宽度 → 起始 x
             let prefix = &text[line.start..seg_start];
             let prefix_w = measure_text_width(prefix, font_size, &font_family);
             let baseline_y = text_baseline_y(line, font_size, &font_family);
             let top_y = cursor_top_y(line, font_size, &font_family);
             let h = cursor_height_for_line(font_size, &font_family);
 
-            // 逐字符拆字形
             let segment = &text[seg_start..seg_end];
             let mut cursor_x = line.x + prefix_w;
             for ch in segment.chars() {
