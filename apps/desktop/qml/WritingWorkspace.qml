@@ -715,8 +715,10 @@ Rectangle {
                                 selection_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
                                 selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
                                 cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
-                                smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                                cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
+                                // The self-rendered editor is still in validation mode; keep cursor exact
+                                // until input, undo and scroll paths are stable enough for animation.
+                                smooth_cursor_enabled: false
+                                cursor_animation_duration_ms: 0
                                 typing_animation_enabled: false
                                 scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                             }
@@ -803,6 +805,7 @@ Rectangle {
                         enabled: root.useSujianEditorItem && sujianEditor.editor_enabled
                         inputMethodHints: Qt.ImhNoPredictiveText
                         selectByMouse: false
+                        Keys.priority: Keys.BeforeItem
                         onTextChanged: {
                             if (suppressCommit || !root.useSujianEditorItem || !sujianEditor || text.length === 0) return;
                             var committed = text;
