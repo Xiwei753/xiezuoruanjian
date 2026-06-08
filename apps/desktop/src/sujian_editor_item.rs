@@ -195,7 +195,7 @@ cpp! {{
             int line_start = line.textStart();
             int line_len = line.textLength();
             if (qchar_count >= line_start && qchar_count <= line_start + line_len) {
-                x = line.cursorToX(qchar_count - line_start);
+                x = line.cursorToX(qchar_count);
                 break;
             }
         }
@@ -228,8 +228,7 @@ cpp! {{
             double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
-                int local_qchar = cursor_qchar - line.textStart();
-                x = line.cursorToX(local_qchar);
+                x = line.cursorToX(cursor_qchar);
                 break;
             }
             first = false;
@@ -270,8 +269,8 @@ cpp! {{
                 int r_start = std::max(range_qchar_start, line_start);
                 int r_end = std::min(range_qchar_end, line_end);
                 for (int i = r_start; i < r_end; i++) {
-                    double x1 = line.cursorToX(i - line_start);
-                    double x2 = line.cursorToX(i - line_start + 1);
+                    double x1 = line.cursorToX(i);
+                    double x2 = line.cursorToX(i + 1);
                     QTextLayoutEntry e;
                     e.byteStart = i;  // QChar offset within paragraph
                     e.width = std::abs(x2 - x1);
@@ -1637,7 +1636,7 @@ impl SujianEditorItem {
     }
 
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
-        let (index, affinity) = self.hit_test_with_affinity(x as f64, y as f64);
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.current_cursor_affinity = affinity;
         if sujian_editor_debug_enabled() {
             eprintln!(
@@ -1654,7 +1653,7 @@ impl SujianEditorItem {
     }
 
     fn drag_select_at(&mut self, x: f32, y: f32) {
-        let (index, affinity) = self.hit_test_with_affinity(x as f64, y as f64);
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.current_cursor_affinity = affinity;
         self.buffer.move_cursor(index, true);
         self.cursor_position_changed();
@@ -1893,12 +1892,7 @@ impl SujianEditorItem {
         &self.layout_cache.as_ref().unwrap().lines
     }
 
-    fn hit_test(&mut self, x: f64, y: f64) -> usize {
-        let (index, _) = self.hit_test_with_affinity(x, y);
-        index
-    }
-
-    fn hit_test_with_affinity(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
+    fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
         let width = self.bounding_width();
         let lines = self.ensure_layout_cached(width).clone();
         if lines.is_empty() {
@@ -3364,6 +3358,7 @@ fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
     text[..clamp_to_char_boundary(text, byte_index)].chars().count()
 }
 
+#[allow(dead_code)]
 fn byte_index_at_char_offset_in_range(text: &str, start: usize, end: usize, char_offset: usize) -> usize {
     if char_offset == 0 {
         return start;
