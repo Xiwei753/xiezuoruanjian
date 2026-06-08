@@ -124,7 +124,66 @@ pub fn sync_error_category(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sync_error_category_from_code;
+    use super::{sync_error_category, sync_error_category_from_code};
+
+    #[test]
+    fn sync_error_category_mappings() {
+        // configured_untested
+        assert_eq!(sync_error_category("Token is missing"), "configured_untested");
+        assert_eq!(sync_error_category("Empty token"), "configured_untested");
+        assert_eq!(sync_error_category("Token not provided"), "configured_untested");
+
+        // auth_failed
+        assert_eq!(sync_error_category("repository not found"), "auth_failed");
+        assert_eq!(sync_error_category("repo not found"), "auth_failed");
+        assert_eq!(sync_error_category("error 404"), "auth_failed");
+        assert_eq!(sync_error_category("permission denied"), "auth_failed");
+        assert_eq!(sync_error_category("error 403"), "auth_failed");
+        assert_eq!(sync_error_category("authentication error"), "auth_failed");
+        assert_eq!(sync_error_category("auth failed"), "auth_failed");
+        assert_eq!(sync_error_category("401"), "auth_failed");
+        assert_eq!(sync_error_category("could not authenticate"), "auth_failed");
+        assert_eq!(sync_error_category("bad credentials"), "auth_failed");
+
+        // branch_missing
+        assert_eq!(sync_error_category("ref not found"), "branch_missing");
+        assert_eq!(sync_error_category("couldn't find remote ref"), "branch_missing");
+        assert_eq!(sync_error_category("remote branch not found"), "branch_missing");
+        assert_eq!(sync_error_category("branch not found"), "branch_missing");
+
+        // non_fast_forward
+        assert_eq!(sync_error_category("non-fast-forward"), "non_fast_forward");
+        assert_eq!(sync_error_category("non fast forward"), "non_fast_forward");
+        assert_eq!(sync_error_category("nonfastforward"), "non_fast_forward");
+        assert_eq!(sync_error_category("fetch first push"), "non_fast_forward");
+
+        // conflict
+        assert_eq!(sync_error_category("checkout_conflict"), "conflict");
+        assert_eq!(sync_error_category("local_blocking_file"), "conflict");
+        assert_eq!(sync_error_category("merge conflict"), "conflict");
+        assert_eq!(sync_error_category("conflict"), "conflict");
+
+        // unrelated_histories
+        assert_eq!(sync_error_category("unrelated"), "unrelated_histories");
+
+        // network_failed
+        assert_eq!(sync_error_category("failed to resolve"), "network_failed");
+        assert_eq!(sync_error_category("timeout"), "network_failed");
+        assert_eq!(sync_error_category("connection refused"), "network_failed");
+        assert_eq!(sync_error_category("dns"), "network_failed");
+        assert_eq!(sync_error_category("network"), "network_failed");
+        assert_eq!(sync_error_category("proxy"), "network_failed");
+        assert_eq!(sync_error_category("eof"), "network_failed");
+        assert_eq!(sync_error_category("tls"), "network_failed");
+        assert_eq!(sync_error_category("ssl"), "network_failed");
+        assert_eq!(sync_error_category("certificate"), "network_failed");
+        assert_eq!(sync_error_category("unreachable"), "network_failed");
+        assert_eq!(sync_error_category("connection reset"), "network_failed");
+        assert_eq!(sync_error_category("no route to host"), "network_failed");
+
+        // error
+        assert_eq!(sync_error_category("unknown error"), "error");
+    }
 
     #[test]
     fn typed_sync_error_category_takes_precedence() {
