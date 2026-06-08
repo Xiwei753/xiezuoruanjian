@@ -109,6 +109,7 @@ ApplicationWindow {
         if (backend === null || !backend.log_qml) return;
         backend.log_qml("info", "theme", event,
                         "themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
+                        + " systemPaletteIsDark=" + window.systemPaletteIsDark()
                         + " isDark=" + designTokens.isDark
                         + " textPrimary=" + designTokens.textPrimary
                         + " textSecondary=" + designTokens.textSecondary
@@ -121,7 +122,7 @@ ApplicationWindow {
         isDark: {
             if (appState.settings && appState.settings.themeMode === "dark") return true;
             if (appState.settings && appState.settings.themeMode === "light") return false;
-            return true;
+            return window.systemPaletteIsDark();
         }
         monetColor: settingsBackend !== null ? settingsBackend.setting_monet_color : ""
     }

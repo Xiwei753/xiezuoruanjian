@@ -1322,13 +1322,13 @@ impl SujianEditorItem {
     }
 
     fn typing_animation_enabled(&self) -> bool {
-        self.current_typing_animation_enabled
+        false
     }
 
-    fn set_typing_animation_enabled(&mut self, value: bool) {
-        self.current_typing_animation_enabled = value;
+    fn set_typing_animation_enabled(&mut self, _value: bool) {
+        self.current_typing_animation_enabled = false;
         if editor_animation_debug_enabled() {
-            eprintln!("typing_animation_enabled_changed: enabled={}", value);
+            eprintln!("typing_animation_enabled_changed: forced false");
         }
         self.visual_settings_changed();
     }
@@ -1476,40 +1476,8 @@ impl SujianEditorItem {
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, cause, true);
 
-        // 触发吐字动画：先 invalidate 再 re-layout，然后取新字形位置
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            self.delete_animation = None;  // 清除可能存在的吞字动画
-            let insert_byte_end = insert_byte_start + inserted.len();
-            // 强制重新布局以获取插入后的字形位置
-            self.invalidate_layout_cache();
-            let width = self.bounding_width();
-            let _ = self.ensure_layout_cached(width);
-            let glyphs = self.glyph_rects_for_range(insert_byte_start, insert_byte_end);
-            self.log_animation_created(
-                "insert_animation_created",
-                insert_byte_start,
-                glyphs.len(),
-                self.animation_visible_hit(&glyphs),
-            );
-
-            if !glyphs.is_empty() {
-                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-                self.insert_animation = Some(InsertAnimation {
-                    glyphs,
-                    origin_cursor_rect: (origin_cx, origin_cy, 2.0, cursor_h),
-                    start_time: Instant::now(),
-                    duration_ms: duration,
-                });
-            }
-        } else if editor_animation_debug_enabled() {
-            eprintln!(
-                "insert_animation_skipped: offset={}, len={}, enabled={}, scrolling={}",
-                insert_byte_start,
-                inserted.len(),
-                self.current_typing_animation_enabled,
-                self.current_is_scrolling,
-            );
-        }
+        self.delete_animation = None;
+        self.insert_animation = None;
 
         self.emit_content_changed();
     }
@@ -1520,44 +1488,14 @@ impl SujianEditorItem {
         }
         let old = self.buffer.snapshot();
 
-        // 确定要删除的字节范围
-        let del_range: Option<(usize, usize)> = if self.buffer.has_selection() {
-            let (s, e) = self.buffer.selection_range();
-            Some((s, e))
-        } else if self.buffer.cursor > 0 {
-            let prev = prev_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(0);
-            Some((prev, self.buffer.cursor))
-        } else {
-            None
-        };
-
-        let anim_glyphs = if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            self.insert_animation = None;
-            if let Some((del_start, del_end)) = del_range {
-                let width = self.bounding_width();
-                let _ = self.ensure_layout_cached(width);
-                let glyphs = self.glyph_rects_for_range(del_start, del_end);
-                self.log_animation_created(
-                    "delete_animation_created",
-                    del_start,
-                    glyphs.len(),
-                    self.animation_visible_hit(&glyphs),
-                );
-                glyphs
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
         if !self.buffer.delete_backward() {
             return;
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
 
-        self.start_delete_animation(anim_glyphs);
+        self.insert_animation = None;
+        self.delete_animation = None;
 
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
@@ -1569,44 +1507,14 @@ impl SujianEditorItem {
         }
         let old = self.buffer.snapshot();
 
-        // 确定要删除的字节范围
-        let del_range: Option<(usize, usize)> = if self.buffer.has_selection() {
-            let (s, e) = self.buffer.selection_range();
-            Some((s, e))
-        } else if self.buffer.cursor < self.buffer.text.len() {
-            let next = next_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.text.len());
-            Some((self.buffer.cursor, next))
-        } else {
-            None
-        };
-
-        let anim_glyphs = if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            self.insert_animation = None;
-            if let Some((del_start, del_end)) = del_range {
-                let width = self.bounding_width();
-                let _ = self.ensure_layout_cached(width);
-                let glyphs = self.glyph_rects_for_range(del_start, del_end);
-                self.log_animation_created(
-                    "delete_animation_created",
-                    del_start,
-                    glyphs.len(),
-                    self.animation_visible_hit(&glyphs),
-                );
-                glyphs
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
         if !self.buffer.delete_forward() {
             return;
         }
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
 
-        self.start_delete_animation(anim_glyphs);
+        self.insert_animation = None;
+        self.delete_animation = None;
 
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
@@ -1617,24 +1525,6 @@ impl SujianEditorItem {
             return;
         }
         let old = self.buffer.snapshot();
-        let (sel_start, sel_end) = self.buffer.selection_range();
-
-        // 在删除前取选区字形的原始位置
-        let anim_glyphs = if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            self.insert_animation = None;
-            let width = self.bounding_width();
-            let _ = self.ensure_layout_cached(width);
-            let glyphs = self.glyph_rects_for_range(sel_start, sel_end);
-            self.log_animation_created(
-                "delete_animation_created",
-                sel_start,
-                glyphs.len(),
-                self.animation_visible_hit(&glyphs),
-            );
-            glyphs
-        } else {
-            Vec::new()
-        };
 
         if !self.buffer.delete_selection() {
             return;
@@ -1642,7 +1532,8 @@ impl SujianEditorItem {
         self.buffer.push_undo(old.clone());
         let new = self.buffer.snapshot();
 
-        self.start_delete_animation(anim_glyphs);
+        self.insert_animation = None;
+        self.delete_animation = None;
 
         self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         self.emit_content_changed();
@@ -2205,8 +2096,6 @@ impl QQuickItem for SujianEditorItem {
         let scroll_y = self.current_scroll_y as f64;
         let paint_offset_y = -scroll_y;
 
-        // 光标视觉位置（文档坐标系 → 屏幕坐标系）
-        let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
         let cursor_rgba = color_hex_to_rgba(&self.current_cursor_color);
 
         // 路径 1: 文字需要重绘
@@ -2218,6 +2107,7 @@ impl QQuickItem for SujianEditorItem {
                     let new_raw = sujian_update_texture_node(
                         old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, dpr,
                     );
+                    let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
                     sujian_update_cursor_rect(
                         new_raw, item_ptr,
                         self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
@@ -2243,13 +2133,16 @@ impl QQuickItem for SujianEditorItem {
                     unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(new_raw) }
                 }
                 None => {
-                    // 缓冲区命中：只更新 source rect
+                    // 缓冲区命中：只更新 source rect，但先用 helper 重新算光标位置
+                    self.update_cursor_visual_position();
+
                     if !old_raw.is_null() {
                         if let Some(ref buf) = self.scroll_buffer {
                             let src_y = scroll_y - buf.buffer_scroll_y;
                             let logical_img_w = buf.image.size().width as f64 / dpr;
                             sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, dpr);
                         }
+                        let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
                         sujian_update_cursor_rect(
                             old_raw, item_ptr,
                             self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
@@ -2332,6 +2225,105 @@ impl QQuickItem for SujianEditorItem {
 }
 
 impl SujianEditorItem {
+    fn update_cursor_visual_position(&mut self) {
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
+
+        let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
+        let cursor_h = cursor_height_for_line(font_size, &font_family);
+
+        let old_x = self.target_cursor_x;
+        let old_y = self.target_cursor_y;
+        if (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01 {
+            self.target_cursor_x = cursor_x;
+            self.target_cursor_y = cursor_y;
+            self.cursor_rect_changed();
+            
+            let obj_ptr = self.get_cpp_object();
+            cpp!(unsafe [obj_ptr as "QQuickItem*"] {
+                if (obj_ptr) {
+                    QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+                }
+            });
+        }
+
+        let now = Instant::now();
+        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
+        let is_preediting = !self.preedit_text.is_empty();
+
+        let should_snap = self.current_is_scrolling 
+            || is_selecting 
+            || is_preediting;
+
+        let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
+            if anim.is_finished(now) {
+                (anim.target_x, anim.target_y)
+            } else {
+                anim.current_position(now)
+            }
+        } else {
+            (self.target_cursor_x, self.target_cursor_y)
+        };
+
+        let same_line = (self.target_cursor_y - visual_y).abs() < 2.0;
+        let dist = ((self.target_cursor_x - visual_x).powi(2) + (self.target_cursor_y - visual_y).powi(2)).sqrt();
+        let small_move = dist < font_size * 3.0;
+
+        let (final_x, final_y, new_animation) = if should_snap || !same_line || !small_move || !self.current_smooth_cursor_enabled {
+            (self.target_cursor_x, self.target_cursor_y, None)
+        } else if let Some(ref anim) = self.cursor_animation {
+            if (anim.target_x - self.target_cursor_x).abs() > 0.01 || (anim.target_y - self.target_cursor_y).abs() > 0.01 {
+                let (cur_x, cur_y) = anim.current_position(now);
+                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+                let new_anim = CursorAnimationState {
+                    start_x: cur_x,
+                    start_y: cur_y,
+                    target_x: self.target_cursor_x,
+                    target_y: self.target_cursor_y,
+                    start_time: now,
+                    duration_ms: duration,
+                };
+                (cur_x, cur_y, Some(new_anim))
+            } else if anim.is_finished(now) {
+                (anim.target_x, anim.target_y, None)
+            } else {
+                let (cur_x, cur_y) = anim.current_position(now);
+                (cur_x, cur_y, Some(anim.clone()))
+            }
+        } else {
+            if (visual_x - self.target_cursor_x).abs() > 0.01 || (visual_y - self.target_cursor_y).abs() > 0.01 {
+                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
+                let new_anim = CursorAnimationState {
+                    start_x: visual_x,
+                    start_y: visual_y,
+                    target_x: self.target_cursor_x,
+                    target_y: self.target_cursor_y,
+                    start_time: now,
+                    duration_ms: duration,
+                };
+                (visual_x, visual_y, Some(new_anim))
+            } else {
+                (self.target_cursor_x, self.target_cursor_y, None)
+            }
+        };
+
+        self.cursor_animation = new_animation;
+        self.cursor_visual_x = final_x;
+        self.cursor_visual_y = final_y;
+        self.cursor_visual_h = cursor_h;
+        self.cursor_visible = self.current_editor_enabled && !self.buffer.has_selection();
+        self.cursor_dirty = true;
+
+        if let Some(ref anim) = self.cursor_animation {
+            if !anim.is_finished(now) {
+                let item = self as &dyn QQuickItem;
+                item.update();
+            }
+        }
+    }
+
     /// 渲染文字到 painter。buffer_scroll_y 和 buffer_h 定义缓冲区可见范围。
     /// paint_offset_y 将文档坐标系转换为图片坐标系。
     fn paint_onto(&mut self, painter: &mut QPainter, buffer_scroll_y: f64, buffer_h: f64) {
@@ -2411,10 +2403,10 @@ impl SujianEditorItem {
         }
 
         // ── Layer 2: Base text ──
-        let active_insert = self.insert_animation.as_ref().filter(|a| !self.current_is_scrolling && !a.is_finished(now_anim));
-        let active_delete = self.delete_animation.as_ref().filter(|a| !self.current_is_scrolling && !a.is_finished(now_anim));
-        let had_insert_animation = active_insert.is_some();
-        let had_delete_animation = active_delete.is_some();
+        let active_insert: Option<&InsertAnimation> = None;
+        let active_delete: Option<&DeleteAnimation> = None;
+        let had_insert_animation = false;
+        let had_delete_animation = false;
 
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
@@ -2552,114 +2544,7 @@ impl SujianEditorItem {
         }
 
         // ── Layer 4: Cursor ──
-
-        let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
-        let cursor_h = cursor_height_for_line(font_size, &font_family);
-
-        let old_x = self.target_cursor_x;
-        let old_y = self.target_cursor_y;
-        if (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01 {
-            self.target_cursor_x = cursor_x;
-            self.target_cursor_y = cursor_y;
-            self.cursor_rect_changed();
-            
-            let obj_ptr = self.get_cpp_object();
-            cpp!(unsafe [obj_ptr as "QQuickItem*"] {
-                if (obj_ptr) {
-                    QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
-                }
-            });
-        }
-
-        // 光标动画：固定时长 tween，不再用指数追赶
-        let now = Instant::now();
-        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
-        let is_preediting = !self.preedit_text.is_empty();
-
-        // 判断是否应该 snap（直接到位）
-        let should_snap = self.current_is_scrolling 
-            || is_selecting 
-            || is_preediting;
-
-        // 获取当前光标视觉位置
-        let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
-            if anim.is_finished(now) {
-                (anim.target_x, anim.target_y)
-            } else {
-                anim.current_position(now)
-            }
-        } else {
-            (self.target_cursor_x, self.target_cursor_y)
-        };
-
-        // 判断是否跨行或远距离
-        let same_line = (self.target_cursor_y - visual_y).abs() < 2.0;
-        let dist = ((self.target_cursor_x - visual_x).powi(2) + (self.target_cursor_y - visual_y).powi(2)).sqrt();
-        let small_move = dist < font_size * 3.0;
-
-        // 决定最终光标位置
-        let (final_x, final_y, new_animation) = if should_snap || !same_line || !small_move || !self.current_smooth_cursor_enabled {
-            // snap: 直接到位
-            (self.target_cursor_x, self.target_cursor_y, None)
-        } else if let Some(ref anim) = self.cursor_animation {
-            // 动画中，目标点变了 → 从当前视觉位置继续动画到新目标
-            if (anim.target_x - self.target_cursor_x).abs() > 0.01 || (anim.target_y - self.target_cursor_y).abs() > 0.01 {
-                // 目标变了，创建新动画，从当前视觉位置开始
-                let (cur_x, cur_y) = anim.current_position(now);
-                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-                let new_anim = CursorAnimationState {
-                    start_x: cur_x,
-                    start_y: cur_y,
-                    target_x: self.target_cursor_x,
-                    target_y: self.target_cursor_y,
-                    start_time: now,
-                    duration_ms: duration,
-                };
-                (cur_x, cur_y, Some(new_anim))
-            } else if anim.is_finished(now) {
-                // 动画完成
-                (anim.target_x, anim.target_y, None)
-            } else {
-                // 动画进行中
-                let (cur_x, cur_y) = anim.current_position(now);
-                (cur_x, cur_y, Some(anim.clone()))
-            }
-        } else {
-            // 没有动画，目标点变了 → 创建新动画
-            if (visual_x - self.target_cursor_x).abs() > 0.01 || (visual_y - self.target_cursor_y).abs() > 0.01 {
-                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-                let new_anim = CursorAnimationState {
-                    start_x: visual_x,
-                    start_y: visual_y,
-                    target_x: self.target_cursor_x,
-                    target_y: self.target_cursor_y,
-                    start_time: now,
-                    duration_ms: duration,
-                };
-                (visual_x, visual_y, Some(new_anim))
-            } else {
-                // 已经到位
-                (self.target_cursor_x, self.target_cursor_y, None)
-            }
-        };
-
-        // 更新动画状态
-        self.cursor_animation = new_animation;
-
-        // 存储光标视觉状态（不绘制，由 update_paint_node 独立管理）
-        self.cursor_visual_x = final_x;
-        self.cursor_visual_y = final_y;
-        self.cursor_visual_h = cursor_h;
-        self.cursor_visible = self.current_editor_enabled && !self.buffer.has_selection();
-        self.cursor_dirty = true;
-
-        // 如果光标动画还在进行中，只请求光标更新（不重绘文字）
-        if let Some(ref anim) = self.cursor_animation {
-            if !anim.is_finished(now) {
-                let item = self as &dyn QQuickItem;
-                item.update();
-            }
-        }
+        self.update_cursor_visual_position();
         
         // 清理已完成的吐字/吞字动画
         let now_cleanup = Instant::now();
