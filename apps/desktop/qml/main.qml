@@ -105,10 +105,42 @@ ApplicationWindow {
         return colorLuminance(systemPalette.window) < colorLuminance(systemPalette.windowText);
     }
 
+    function systemThemeIsDark() {
+        // Try Qt.styleHints (Qt 6.5+)
+        if (typeof Qt !== "undefined" && Qt.styleHints && typeof Qt.styleHints.colorScheme !== "undefined") {
+            var scheme = Qt.styleHints.colorScheme;
+            if (scheme === 2 || (Qt.ColorScheme && scheme === Qt.ColorScheme.Dark)) {
+                return true;
+            }
+            if (scheme === 1 || (Qt.ColorScheme && scheme === Qt.ColorScheme.Light)) {
+                return false;
+            }
+        }
+        // Try Qt.application.styleHints
+        if (typeof Qt !== "undefined" && Qt.application && Qt.application.styleHints && typeof Qt.application.styleHints.colorScheme !== "undefined") {
+            var schemeApp = Qt.application.styleHints.colorScheme;
+            if (schemeApp === 2 || (Qt.ColorScheme && schemeApp === Qt.ColorScheme.Dark)) {
+                return true;
+            }
+            if (schemeApp === 1 || (Qt.ColorScheme && schemeApp === Qt.ColorScheme.Light)) {
+                return false;
+            }
+        }
+        // Fallback to SystemPalette brightness inference
+        return systemPaletteIsDark();
+    }
+
     function logThemeDiagnostics(event) {
         if (backend === null || !backend.log_qml) return;
+        var schemeStr = "<unknown>";
+        if (typeof Qt !== "undefined" && Qt.styleHints && typeof Qt.styleHints.colorScheme !== "undefined") {
+            schemeStr = Qt.styleHints.colorScheme;
+        } else if (typeof Qt !== "undefined" && Qt.application && Qt.application.styleHints && typeof Qt.application.styleHints.colorScheme !== "undefined") {
+            schemeStr = Qt.application.styleHints.colorScheme;
+        }
         backend.log_qml("info", "theme", event,
                         "themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
+                        + " colorScheme=" + schemeStr
                         + " systemPaletteIsDark=" + window.systemPaletteIsDark()
                         + " isDark=" + designTokens.isDark
                         + " textPrimary=" + designTokens.textPrimary
@@ -122,7 +154,7 @@ ApplicationWindow {
         isDark: {
             if (appState.settings && appState.settings.themeMode === "dark") return true;
             if (appState.settings && appState.settings.themeMode === "light") return false;
-            return window.systemPaletteIsDark();
+            return window.systemThemeIsDark();
         }
         monetColor: settingsBackend !== null ? settingsBackend.setting_monet_color : ""
     }
