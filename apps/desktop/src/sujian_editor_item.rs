@@ -139,21 +139,6 @@ cpp! {{
         item->setAcceptedMouseButtons(Qt::AllButtons);
     }
 
-    // Ensure cursor rect child exists on the given QSGTransformNode root.
-    // Returns the QSGRectangleNode* (child 1).
-    QSGRectangleNode* sujian_ensure_cursor_node(QSGTransformNode *root, QQuickItem *item, unsigned int color_rgba) {
-        QSGRectangleNode *cursorNode = nullptr;
-        if (root->childCount() > 1) {
-            cursorNode = dynamic_cast<QSGRectangleNode*>(root->lastChild());
-        }
-        if (!cursorNode) {
-            cursorNode = item->window()->createRectangleNode();
-            cursorNode->setColor(QColor::fromRgba(color_rgba));
-            root->appendChildNode(cursorNode);
-        }
-        return cursorNode;
-    }
-
     void sujian_update_cursor_rect(QSGTransformNode *root, QQuickItem *item,
         double cx, double cy, double cw, double ch, bool visible, unsigned int color_rgba) {
         if (!root) return;
