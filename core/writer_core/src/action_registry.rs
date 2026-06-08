@@ -102,6 +102,11 @@ impl Default for ActionRegistry {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    pub static INJECT_DUMMY_ACTIONS: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
 impl ActionRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
@@ -109,6 +114,28 @@ impl ActionRegistry {
             providers: Vec::new(),
         };
         registry.register_v1_actions();
+
+        #[cfg(test)]
+        {
+            if INJECT_DUMMY_ACTIONS.with(|flag| flag.get()) {
+                for i in 0..10_000 {
+                    registry.actions.push(ActionDescriptor {
+                        id: format!("dummy.action.{}", i),
+                        title: format!("Dummy Action {}", i),
+                        description: format!("Description {}", i),
+                        category: "dummy".to_string(),
+                        kind: ActionKind::Query,
+                        risk_level: ActionRiskLevel::SafeRead,
+                        confirm_required: false,
+                        undoable: false,
+                        platforms: vec!["all".to_string()],
+                        input_schema: None,
+                        ui_schema: None,
+                    });
+                }
+            }
+        }
+
         registry
     }
 

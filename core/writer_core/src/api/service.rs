@@ -1114,6 +1114,40 @@ mod tests {
     use std::fs::File;
     use tempfile::tempdir;
 
+    #[test]
+    fn test_list_registered_actions_json_large_list() {
+        use crate::action_registry::INJECT_DUMMY_ACTIONS;
+        use std::time::Instant;
+
+        let dir = tempdir().unwrap();
+        let api = WriterCoreApi::new(dir.path());
+
+        // Enable test injection (thread local to avoid affecting concurrent tests)
+        INJECT_DUMMY_ACTIONS.with(|flag| flag.set(true));
+
+        let start = Instant::now();
+        let json_str = api.list_registered_actions_json();
+        let duration = start.elapsed();
+
+        // Disable test injection
+        INJECT_DUMMY_ACTIONS.with(|flag| flag.set(false));
+
+        // Verify the output and performance
+        assert!(
+            json_str.contains("dummy.action.9999"),
+            "JSON should contain the last injected dummy action"
+        );
+        assert!(
+            json_str.len() > 1_000_000,
+            "JSON payload should be large enough to verify OOM prevention"
+        );
+        assert!(
+            duration.as_secs() < 5,
+            "Serialization of large action list took excessively long: {}s",
+            duration.as_secs_f32()
+        );
+    }
+
     fn valid_graph(project_id: &str) -> MindMapGraph {
         MindMapGraph {
             schema_version: 2,
