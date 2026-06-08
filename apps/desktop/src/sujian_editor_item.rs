@@ -157,14 +157,26 @@ cpp! {{
     void sujian_update_cursor_rect(QSGTransformNode *root, QQuickItem *item,
         double cx, double cy, double cw, double ch, bool visible, unsigned int color_rgba) {
         if (!root) return;
-        auto *cursorNode = sujian_ensure_cursor_node(root, item, color_rgba);
-        if (visible) {
-            cursorNode->setRect(cx, cy, cw, ch);
-            cursorNode->setColor(QColor::fromRgba(color_rgba));
-            cursorNode->markDirty(QSGNode::DirtyMaterial);
-        } else {
-            cursorNode->setRect(QRectF(0, 0, 0, 0));
+        // Find existing cursor node (always last child if present)
+        QSGRectangleNode *cursorNode = nullptr;
+        if (root->childCount() > 1) {
+            cursorNode = dynamic_cast<QSGRectangleNode*>(root->lastChild());
         }
+        if (!visible) {
+            if (cursorNode) {
+                root->removeChildNode(cursorNode);
+                delete cursorNode;
+            }
+            return;
+        }
+        // Visible: create if needed, position, mark dirty
+        if (!cursorNode) {
+            cursorNode = item->window()->createRectangleNode();
+            root->appendChildNode(cursorNode);
+        }
+        cursorNode->setRect(QRectF(cx, cy, cw, ch));
+        cursorNode->setColor(QColor::fromRgba(color_rgba));
+        cursorNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
     }
 }}
 
@@ -2325,6 +2337,29 @@ impl SujianEditorItem {
         self.ime_cursor_rect_y = cursor_y;
         self.ime_cursor_rect_h = cursor_h;
 
+        // Viewport check: hide cursor when not visible, avoid per-frame dirty
+        let scroll_top = self.current_scroll_y as f64;
+        let scroll_bottom = scroll_top + self.current_viewport_height.max(1.0) as f64;
+        let in_viewport = self.target_cursor_y + cursor_h > scroll_top
+            && self.target_cursor_y < scroll_bottom;
+        let old_visible = self.cursor_visible;
+        let new_visible = self.current_editor_enabled
+            && !self.buffer.has_selection()
+            && in_viewport;
+
+        if !new_visible {
+            // Off-screen or disabled: stop animation, hide once
+            self.cursor_animation = None;
+            if old_visible {
+                self.cursor_visible = false;
+                self.cursor_dirty = true;
+                let item = self as &dyn QQuickItem;
+                item.update();
+            }
+            return;
+        }
+
+        // Update target position
         let old_x = self.target_cursor_x;
         let old_y = self.target_cursor_y;
         if (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01 {
@@ -2400,15 +2435,15 @@ impl SujianEditorItem {
         self.cursor_visual_x = final_x;
         self.cursor_visual_y = final_y;
         self.cursor_visual_h = cursor_h;
+        self.cursor_visible = true;
 
-        let scroll_top = self.current_scroll_y as f64;
-        let scroll_bottom = scroll_top + self.current_viewport_height.max(1.0) as f64;
-        let in_viewport = self.target_cursor_y + cursor_h > scroll_top
-            && self.target_cursor_y < scroll_bottom;
-        self.cursor_visible = self.current_editor_enabled
-            && !self.buffer.has_selection()
-            && in_viewport;
-        self.cursor_dirty = true;
+        // Only dirty when position actually changed or visibility transitioned
+        let pos_changed = (final_x - old_x).abs() > 0.01
+            || (final_y - old_y).abs() > 0.01
+            || !old_visible;
+        if pos_changed {
+            self.cursor_dirty = true;
+        }
 
         if sujian_editor_debug_enabled() {
             eprintln!(
@@ -2419,6 +2454,7 @@ impl SujianEditorItem {
 
         if let Some(ref anim) = self.cursor_animation {
             if !anim.is_finished(now) {
+                self.cursor_dirty = true;
                 let item = self as &dyn QQuickItem;
                 item.update();
             }
