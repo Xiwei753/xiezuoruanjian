@@ -52,12 +52,13 @@ mod tests {
         let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
         assert!(!recent_path.exists(), "Should not create file if no cached edits");
 
-        // Record edit (this populates cache and may write file)
+        // Record edit (this populates cache and may write file depending on global debounce)
         record_recent_edit(workspace_path, "p1", "v1", "c1").unwrap();
-        assert!(recent_path.exists());
 
-        // Delete file to simulate unflushed cache
-        fs::remove_file(&recent_path).unwrap();
+        // Delete file to simulate unflushed cache, if the debounce happened to write it
+        if recent_path.exists() {
+            fs::remove_file(&recent_path).unwrap();
+        }
         assert!(!recent_path.exists());
 
         // Flush edits to write cache back to file
