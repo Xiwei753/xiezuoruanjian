@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::chapter::{
-        clear_chapter_content, create_chapter, list_chapters, read_chapter, save_chapter_verified,
-        save_chapter_verified_with_allow_empty_overwrite, Chapter,
+        calculate_word_count, clear_chapter_content, create_chapter, list_chapters, read_chapter,
+        save_chapter_verified, save_chapter_verified_with_allow_empty_overwrite, Chapter,
     };
     use crate::error::Error;
     use crate::project::{create_project, Project};
@@ -350,6 +350,38 @@ mod tests {
 
         let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "Some content");
+    }
+
+    #[test]
+    fn test_calculate_word_count() {
+        // Empty strings
+        assert_eq!(calculate_word_count(""), 0);
+
+        // Strings with only whitespaces
+        assert_eq!(calculate_word_count(" "), 0);
+        assert_eq!(calculate_word_count("   \t\n  \r "), 0);
+
+        // Standard English words
+        assert_eq!(calculate_word_count("Hello"), 5);
+        assert_eq!(calculate_word_count("Hello World"), 10);
+        assert_eq!(calculate_word_count("A B C"), 3);
+
+        // English words with ASCII punctuation
+        assert_eq!(calculate_word_count("Hello, world!"), 12);
+        assert_eq!(calculate_word_count("It's a beautiful day."), 18);
+
+        // CJK characters with Unicode punctuation
+        assert_eq!(calculate_word_count("你好，世界！"), 6);
+        assert_eq!(calculate_word_count("測試—-…“”‘’"), 9);
+        assert_eq!(calculate_word_count("这是一个测试章节的内容。"), 12);
+
+        // Mixed English and CJK text
+        assert_eq!(calculate_word_count("Hello 世界"), 7);
+        assert_eq!(calculate_word_count("Rust语言真的很好用"), 11);
+
+        // Emoji and special symbols
+        assert_eq!(calculate_word_count("Hello 😊"), 6);
+        assert_eq!(calculate_word_count("🚀✨🎉"), 3);
     }
 
     #[test]

@@ -438,7 +438,8 @@ fn test_session_gap_detection() {
     let temp_dir = tempdir().unwrap();
     let store = StatsStore::new(temp_dir.path());
 
-    let base_ms = chrono::Utc::now().timestamp_millis();
+    // Align base_ms to the middle of a day to ensure base_ms and base_ms + 10 min fall on the same day.
+    let base_ms = chrono::DateTime::parse_from_rfc3339("2026-06-08T12:00:00Z").unwrap().timestamp_millis();
 
     let event1 = WritingInputEvent {
         event_id: uuid::Uuid::new_v4().to_string(),
