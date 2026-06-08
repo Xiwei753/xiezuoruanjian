@@ -109,7 +109,7 @@ pub fn record_recent_edit(
     } else {
         let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
         if recent_path.exists() {
-            let content = fs::read_to_string(&recent_path).unwrap_or_else(|_| "[]".to_string());
+            let content = fs::read_to_string(&recent_path)?;
             serde_json::from_str(&content).unwrap_or_default()
         } else {
             Vec::new()
