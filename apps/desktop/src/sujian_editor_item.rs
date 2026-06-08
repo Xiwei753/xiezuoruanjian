@@ -1019,6 +1019,8 @@ pub struct SujianEditorItem {
     cursor_visible: bool,
     cursor_dirty: bool,
     current_cursor_affinity: CaretAffinity,
+    ime_cursor_rect_y: f64,
+    ime_cursor_rect_h: f64,
 }
 
 impl Default for SujianEditorItem {
@@ -1122,6 +1124,8 @@ impl Default for SujianEditorItem {
             cursor_visible: false,
             cursor_dirty: true,
             current_cursor_affinity: CaretAffinity::Downstream,
+            ime_cursor_rect_y: 0.0,
+            ime_cursor_rect_h: 0.0,
         }
     }
 }
@@ -1419,7 +1423,7 @@ impl SujianEditorItem {
     }
 
     fn cursor_rect_y(&self) -> f32 {
-        self.target_cursor_y as f32
+        self.ime_cursor_rect_y as f32
     }
 
     fn cursor_rect_width(&self) -> f32 {
@@ -1427,7 +1431,7 @@ impl SujianEditorItem {
     }
 
     fn cursor_rect_height(&self) -> f32 {
-        cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string()) as f32
+        self.ime_cursor_rect_h as f32
     }
 
     fn visual_changed(&mut self) {
@@ -2010,8 +2014,7 @@ impl SujianEditorItem {
             }
 
             let baseline_y = text_baseline_y(line, font_size, &font_family);
-            let top_y = cursor_top_y(line, font_size, &font_family);
-            let h = cursor_height_for_line_with_cap(line, font_size, &font_family);
+            let (top_y, h) = cursor_rect_for_line(line, font_size, &font_family);
 
             if line.para_text.is_empty() {
                 continue;
@@ -2053,7 +2056,7 @@ impl SujianEditorItem {
         let font_family = self.current_font_family.to_string();
         let (target_x, target_y, target_line_idx) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
         let cursor_h = if target_line_idx < lines.len() {
-            cursor_height_for_line_with_cap(&lines[target_line_idx], font_size, &font_family)
+            cursor_rect_for_line(&lines[target_line_idx], font_size, &font_family).1
         } else {
             cursor_height_for_line(font_size, &font_family)
         };
@@ -2313,12 +2316,14 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
 
-        let (cursor_x, cursor_y, cursor_line_idx) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-        let cursor_h = if cursor_line_idx < lines.len() {
-            cursor_height_for_line_with_cap(&lines[cursor_line_idx], font_size, &font_family)
+        let (cursor_x, cursor_line_y, cursor_line_idx) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
+        let (cursor_y, cursor_h) = if cursor_line_idx < lines.len() {
+            cursor_rect_for_line(&lines[cursor_line_idx], font_size, &font_family)
         } else {
-            cursor_height_for_line(font_size, &font_family)
+            (cursor_line_y, cursor_height_for_line(font_size, &font_family))
         };
+        self.ime_cursor_rect_y = cursor_y;
+        self.ime_cursor_rect_h = cursor_h;
 
         let old_x = self.target_cursor_x;
         let old_y = self.target_cursor_y;
@@ -2395,7 +2400,14 @@ impl SujianEditorItem {
         self.cursor_visual_x = final_x;
         self.cursor_visual_y = final_y;
         self.cursor_visual_h = cursor_h;
-        self.cursor_visible = self.current_editor_enabled && !self.buffer.has_selection();
+
+        let scroll_top = self.current_scroll_y as f64;
+        let scroll_bottom = scroll_top + self.current_viewport_height.max(1.0) as f64;
+        let in_viewport = self.target_cursor_y + cursor_h > scroll_top
+            && self.target_cursor_y < scroll_bottom;
+        self.cursor_visible = self.current_editor_enabled
+            && !self.buffer.has_selection()
+            && in_viewport;
         self.cursor_dirty = true;
 
         if sujian_editor_debug_enabled() {
@@ -3114,13 +3126,13 @@ fn cursor_geometry_with_font(
                     paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
                 )
             };
-            return (line.x + w, cursor_top_y(line, font_size, font_family), idx);
+            return (line.x + w, cursor_rect_for_line(line, font_size, font_family).0, idx);
         }
     }
     let last_idx = lines.len().saturating_sub(1);
     lines
         .last()
-        .map(|line| (line.x + line.width, cursor_top_y(line, font_size, font_family), last_idx))
+        .map(|line| (line.x + line.width, cursor_rect_for_line(line, font_size, font_family).0, last_idx))
         .unwrap_or((0.0, 0.0, 0))
 }
 
@@ -3162,15 +3174,18 @@ fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
     (ascent + descent) as f64
 }
 
-fn cursor_height_for_line_with_cap(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
-    let raw = cursor_height_for_line(font_size, font_family);
-    let capped = line.height * 0.84;
-    if raw > capped { capped } else { raw }
+/// Unified cursor rect: (top_y, height), centered in the line box.
+/// Height is capped at line.height * 0.84 so the caret never bleeds into adjacent lines.
+fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str) -> (f64, f64) {
+    let raw_h = cursor_height_for_line(font_size, font_family);
+    let h = raw_h.min(line.height * 0.84);
+    let top_y = line.y + (line.height - h) / 2.0;
+    (top_y, h)
 }
 
+/// Cursor top Y, derived from the unified cursor rect.
 fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
-    let ascent = get_font_ascent(font_family, font_size as f32);
-    text_baseline_y(line, font_size, font_family) - (ascent as f64)
+    cursor_rect_for_line(line, font_size, font_family).0
 }
 
 fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
