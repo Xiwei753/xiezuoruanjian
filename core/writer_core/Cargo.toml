@@ -41,3 +41,7 @@ criterion = "0.5.1"
 [[bench]]
 name = "index_bench"
 harness = false
+
+[[bench]]
+name = "aggregate_events"
+harness = false
