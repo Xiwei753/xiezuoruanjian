@@ -717,7 +717,7 @@ Rectangle {
                                 
                                 visible: root.useSujianEditorItem
                                 focus: root.useSujianEditorItem
-                                activeFocusOnTab: true
+
                                 editor_enabled: editorController.chapterId !== ""
                                 font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
                                 font_family: "serif"
@@ -755,7 +755,7 @@ Rectangle {
                                 background: Rectangle { color: "transparent" }
                                 enabled: !root.useSujianEditorItem && editorController.chapterId !== ""
                                 focus: !root.useSujianEditorItem
-                                activeFocusOnTab: true
+
                                 selectByMouse: true
                                 persistentSelection: true
                                 leftPadding: dt ? dt.sp16 : 16
