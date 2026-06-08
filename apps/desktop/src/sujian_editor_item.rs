@@ -1662,6 +1662,7 @@ impl SujianEditorItem {
         self.preedit_cursor = 0;
         self.cursor_position_changed();
         self.selection_changed();
+        self.cursor_dirty = true;
         self.request_repaint();
     }
 
@@ -2319,39 +2320,20 @@ impl SujianEditorItem {
         } else {
             (cursor_line_y, cursor_height_for_line(font_size, &font_family))
         };
-        self.ime_cursor_rect_y = cursor_y;
-        self.ime_cursor_rect_h = cursor_h;
 
-        // Viewport check: hide cursor when not visible, avoid per-frame dirty
-        let scroll_top = self.current_scroll_y as f64;
-        let scroll_bottom = scroll_top + self.current_viewport_height.max(1.0) as f64;
-        let in_viewport = self.target_cursor_y + cursor_h > scroll_top
-            && self.target_cursor_y < scroll_bottom;
-        let old_visible = self.cursor_visible;
-        let new_visible = self.current_editor_enabled
-            && !self.buffer.has_selection()
-            && in_viewport;
-
-        if !new_visible {
-            // Off-screen or disabled: stop animation, hide once
-            self.cursor_animation = None;
-            if old_visible {
-                self.cursor_visible = false;
-                self.cursor_dirty = true;
-                let item = self as &dyn QQuickItem;
-                item.update();
-            }
-            return;
-        }
-
-        // Update target position
+        // Always save new target position and IME rect — regardless of visibility
         let old_x = self.target_cursor_x;
         let old_y = self.target_cursor_y;
+        let old_visible = self.cursor_visible;
+
+        self.target_cursor_x = cursor_x;
+        self.target_cursor_y = cursor_y;
+        self.ime_cursor_rect_y = cursor_y;
+        self.ime_cursor_rect_h = cursor_h;
+        self.cursor_visual_h = cursor_h;
+
         if (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01 {
-            self.target_cursor_x = cursor_x;
-            self.target_cursor_y = cursor_y;
             self.cursor_rect_changed();
-            
             let obj_ptr = self.get_cpp_object();
             cpp!(unsafe [obj_ptr as "QQuickItem*"] {
                 if (obj_ptr) {
@@ -2360,13 +2342,37 @@ impl SujianEditorItem {
             });
         }
 
+        // Viewport check uses NEW candidate position, not old target
+        let scroll_top = self.current_scroll_y as f64;
+        let scroll_bottom = scroll_top + self.current_viewport_height.max(1.0) as f64;
+        let in_viewport = cursor_y + cursor_h > scroll_top
+            && cursor_y < scroll_bottom;
+        let new_visible = self.current_editor_enabled
+            && !self.buffer.has_selection()
+            && in_viewport;
+        self.cursor_visible = new_visible;
+
+        if !new_visible {
+            // Not in viewport: stop animation, snap visual to target, hide node
+            self.cursor_animation = None;
+            self.cursor_visual_x = cursor_x;
+            self.cursor_visual_y = cursor_y;
+            if old_visible {
+                self.cursor_dirty = true;
+                let item = self as &dyn QQuickItem;
+                item.update();
+            }
+            return;
+        }
+
         let now = Instant::now();
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.preedit_text.is_empty();
 
         let should_snap = self.current_is_scrolling 
             || is_selecting 
-            || is_preediting;
+            || is_preediting
+            || !old_visible; // snap when becoming visible again
 
         let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
             if anim.is_finished(now) {
@@ -2375,20 +2381,20 @@ impl SujianEditorItem {
                 anim.current_position(now)
             }
         } else {
-            (self.target_cursor_x, self.target_cursor_y)
+            (old_x, old_y)
         };
 
         let (final_x, final_y, new_animation) = if should_snap || !self.current_smooth_cursor_enabled {
-            (self.target_cursor_x, self.target_cursor_y, None)
+            (cursor_x, cursor_y, None)
         } else if let Some(ref anim) = self.cursor_animation {
-            if (anim.target_x - self.target_cursor_x).abs() > 0.01 || (anim.target_y - self.target_cursor_y).abs() > 0.01 {
+            if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
                 let (cur_x, cur_y) = anim.current_position(now);
                 let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
                 let new_anim = CursorAnimationState {
                     start_x: cur_x,
                     start_y: cur_y,
-                    target_x: self.target_cursor_x,
-                    target_y: self.target_cursor_y,
+                    target_x: cursor_x,
+                    target_y: cursor_y,
                     start_time: now,
                     duration_ms: duration,
                 };
@@ -2400,29 +2406,27 @@ impl SujianEditorItem {
                 (cur_x, cur_y, Some(anim.clone()))
             }
         } else {
-            if (visual_x - self.target_cursor_x).abs() > 0.01 || (visual_y - self.target_cursor_y).abs() > 0.01 {
+            if (visual_x - cursor_x).abs() > 0.01 || (visual_y - cursor_y).abs() > 0.01 {
                 let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
                 let new_anim = CursorAnimationState {
                     start_x: visual_x,
                     start_y: visual_y,
-                    target_x: self.target_cursor_x,
-                    target_y: self.target_cursor_y,
+                    target_x: cursor_x,
+                    target_y: cursor_y,
                     start_time: now,
                     duration_ms: duration,
                 };
                 (visual_x, visual_y, Some(new_anim))
             } else {
-                (self.target_cursor_x, self.target_cursor_y, None)
+                (cursor_x, cursor_y, None)
             }
         };
 
         self.cursor_animation = new_animation;
         self.cursor_visual_x = final_x;
         self.cursor_visual_y = final_y;
-        self.cursor_visual_h = cursor_h;
-        self.cursor_visible = true;
 
-        // Only dirty when position actually changed or visibility transitioned
+        // Dirty when position changed or visibility transitioned
         let pos_changed = (final_x - old_x).abs() > 0.01
             || (final_y - old_y).abs() > 0.01
             || !old_visible;
