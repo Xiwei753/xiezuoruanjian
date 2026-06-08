@@ -38,6 +38,41 @@ mod tests {
         assert_eq!(edits[0].chapter_id, "c1");
     }
 
+    use crate::workspace::flush_recent_edits;
+
+    #[test]
+    fn test_flush_recent_edits() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+
+        create_workspace(workspace_path).unwrap();
+
+        // Initially no cache, flushing shouldn't create file
+        flush_recent_edits(workspace_path).unwrap();
+        let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
+        assert!(!recent_path.exists(), "Should not create file if no cached edits");
+
+        // Record edit (this populates cache and may write file)
+        record_recent_edit(workspace_path, "p1", "v1", "c1").unwrap();
+        assert!(recent_path.exists());
+
+        // Delete file to simulate unflushed cache
+        fs::remove_file(&recent_path).unwrap();
+        assert!(!recent_path.exists());
+
+        // Flush edits to write cache back to file
+        flush_recent_edits(workspace_path).unwrap();
+        assert!(recent_path.exists(), "File should be re-created by flush_recent_edits");
+
+        // Verify content
+        let content = fs::read_to_string(&recent_path).unwrap();
+        let edits: Vec<crate::workspace::RecentEdit> = serde_json::from_str(&content).unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].project_id, "p1");
+        assert_eq!(edits[0].volume_id, "v1");
+        assert_eq!(edits[0].chapter_id, "c1");
+    }
+
     #[test]
     fn test_record_recent_edit_limit_20() {
         let dir = tempdir().unwrap();
