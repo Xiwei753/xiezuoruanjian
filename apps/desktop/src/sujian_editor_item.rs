@@ -18,6 +18,7 @@ cpp! {{
     #include <QtGui/QTextOption>
     #include <QtGui/QInputMethodEvent>
     #include <QtGui/QKeyEvent>
+    #include <QtGui/QMouseEvent>
     #include <QtQuick/QSGSimpleTextureNode>
     #include <QtQuick/QSGTexture>
     #include <QtQuick/QSGTransformNode>
@@ -640,6 +641,12 @@ struct LayoutCache {
     content_height: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaretAffinity {
+    Upstream,   // 靠前（上一行尾）
+    Downstream, // 靠后（下一行首）
+}
+
 /// 滚动缓冲区 — 缓存超大 QImage + 纹理，滚动时只更新 rect 不重绘
 struct ScrollBuffer {
     image: qmetaobject::QImage,
@@ -1006,6 +1013,7 @@ pub struct SujianEditorItem {
     cursor_visual_h: f64,
     cursor_visible: bool,
     cursor_dirty: bool,
+    current_cursor_affinity: CaretAffinity,
 }
 
 impl Default for SujianEditorItem {
@@ -1107,6 +1115,7 @@ impl Default for SujianEditorItem {
             cursor_visual_h: 0.0,
             cursor_visible: false,
             cursor_dirty: true,
+            current_cursor_affinity: CaretAffinity::Downstream,
         }
     }
 }
@@ -1140,6 +1149,7 @@ impl SujianEditorItem {
         self.buffer.set_text(normalized);
         self.buffer.cursor = 0;
         self.buffer.selection_anchor = 0;
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
@@ -1158,6 +1168,7 @@ impl SujianEditorItem {
         self.buffer.set_text(normalized);
         self.buffer.cursor = clamp_to_char_boundary(&self.buffer.text, old_cursor);
         self.buffer.selection_anchor = clamp_to_char_boundary(&self.buffer.text, old_anchor);
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
@@ -1467,6 +1478,7 @@ impl SujianEditorItem {
         };
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         let cause = if inserted.chars().count() == 1 {
             EditorTransactionCause::Typing
         } else {
@@ -1491,6 +1503,7 @@ impl SujianEditorItem {
             return;
         }
         self.buffer.push_undo(old.clone());
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         let new = self.buffer.snapshot();
 
         self.insert_animation = None;
@@ -1510,6 +1523,7 @@ impl SujianEditorItem {
             return;
         }
         self.buffer.push_undo(old.clone());
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         let new = self.buffer.snapshot();
 
         self.insert_animation = None;
@@ -1529,6 +1543,7 @@ impl SujianEditorItem {
             return;
         }
         self.buffer.push_undo(old.clone());
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         let new = self.buffer.snapshot();
 
         self.insert_animation = None;
@@ -1540,6 +1555,7 @@ impl SujianEditorItem {
 
     fn select_all(&mut self) {
         self.buffer.select_all();
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         self.cursor_position_changed();
         self.selection_changed();
         self.request_repaint();
@@ -1553,6 +1569,7 @@ impl SujianEditorItem {
         let Some((old, new)) = self.buffer.undo() else {
             return;
         };
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         self.record_transaction(old, new, EditorTransactionCause::Undo, true);
         self.emit_content_changed();
     }
@@ -1561,6 +1578,7 @@ impl SujianEditorItem {
         let Some((old, new)) = self.buffer.redo() else {
             return;
         };
+        self.current_cursor_affinity = CaretAffinity::Downstream;
         self.record_transaction(old, new, EditorTransactionCause::Redo, true);
         self.emit_content_changed();
     }
@@ -1619,11 +1637,12 @@ impl SujianEditorItem {
     }
 
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
-        let index = self.hit_test(x as f64, y as f64);
+        let (index, affinity) = self.hit_test_with_affinity(x as f64, y as f64);
+        self.current_cursor_affinity = affinity;
         if sujian_editor_debug_enabled() {
             eprintln!(
-                "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, extend={}",
-                x, y, self.current_scroll_y, index, extend
+                "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
+                x, y, self.current_scroll_y, index, affinity, extend
             );
         }
         self.buffer.move_cursor(index, extend);
@@ -1635,7 +1654,8 @@ impl SujianEditorItem {
     }
 
     fn drag_select_at(&mut self, x: f32, y: f32) {
-        let index = self.hit_test(x as f64, y as f64);
+        let (index, affinity) = self.hit_test_with_affinity(x as f64, y as f64);
+        self.current_cursor_affinity = affinity;
         self.buffer.move_cursor(index, true);
         self.cursor_position_changed();
         self.selection_changed();
@@ -1707,6 +1727,11 @@ impl SujianEditorItem {
         } else {
             prev_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
         };
+        self.current_cursor_affinity = if forward {
+            CaretAffinity::Downstream
+        } else {
+            CaretAffinity::Upstream
+        };
         self.buffer.move_cursor(next, extend);
         self.cursor_position_changed();
         self.selection_changed();
@@ -1728,6 +1753,7 @@ impl SujianEditorItem {
             return;
         }
         let index = self.index_at_line_x(&lines[target_idx], x);
+        self.current_cursor_affinity = affinity_for_index_on_line(&lines[target_idx], index);
         self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
@@ -1741,7 +1767,13 @@ impl SujianEditorItem {
             return;
         };
         let line = &lines[line_idx];
-        self.buffer.move_cursor(if end { line.end } else { line.start }, extend);
+        let (index, affinity) = if end {
+            (line.end, CaretAffinity::Upstream)
+        } else {
+            (line.start, CaretAffinity::Downstream)
+        };
+        self.current_cursor_affinity = affinity;
+        self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
         self.request_repaint();
@@ -1862,10 +1894,15 @@ impl SujianEditorItem {
     }
 
     fn hit_test(&mut self, x: f64, y: f64) -> usize {
+        let (index, _) = self.hit_test_with_affinity(x, y);
+        index
+    }
+
+    fn hit_test_with_affinity(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
         let width = self.bounding_width();
         let lines = self.ensure_layout_cached(width).clone();
         if lines.is_empty() {
-            return 0;
+            return (0, CaretAffinity::Downstream);
         }
         // Model B: y is already in document coordinate space
         let doc_y = y;
@@ -1878,13 +1915,18 @@ impl SujianEditorItem {
             None => (lines.len() - 1, lines.last().unwrap()),
         };
         let index = self.index_at_line_x(line, x);
+        let affinity = if index == line.end && line.start != line.end {
+            CaretAffinity::Upstream
+        } else {
+            CaretAffinity::Downstream
+        };
         if sujian_editor_debug_enabled() {
             eprintln!(
-                "hit_test: mouse_x={:.1}, mouse_y={:.1}, doc_y={:.1}, current_scroll_y={:.1}, hit_visual_line_idx={}, line_range={}..{}, index={}, cursor_rect_x={:.1}, cursor_rect_y={:.1}",
-                x, y, doc_y, self.current_scroll_y, line_idx, line.start, line.end, index, self.target_cursor_x, self.target_cursor_y
+                "hit_test: mouse_x={:.1}, mouse_y={:.1}, doc_y={:.1}, current_scroll_y={:.1}, hit_visual_line_idx={}, line_range={}..{}, index={}, affinity={:?}, cursor_rect_x={:.1}, cursor_rect_y={:.1}",
+                x, y, doc_y, self.current_scroll_y, line_idx, line.start, line.end, index, affinity, self.target_cursor_x, self.target_cursor_y
             );
         }
-        index
+        (index, affinity)
     }
 
     fn index_at_line_x(&self, line: &VisualLine, x: f64) -> usize {
@@ -1996,7 +2038,7 @@ impl SujianEditorItem {
         let lines = self.ensure_layout_cached(width).clone();
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
-        let (target_x, target_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
+        let (target_x, target_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
         let cursor_h = cursor_height_for_line(font_size, &font_family);
         let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
         self.delete_animation = Some(DeleteAnimation {
@@ -2054,6 +2096,12 @@ impl SujianEditorItem {
     }
 }
 
+fn is_left_button_pressed(event: &QMouseEvent) -> bool {
+    cpp!(unsafe [event as "const QMouseEvent*"] -> bool as "bool" {
+        return event ? (event->buttons() & Qt::LeftButton) : false;
+    })
+}
+
 impl QQuickItem for SujianEditorItem {
     fn component_complete(&mut self) {
         let obj_ptr = self.get_cpp_object();
@@ -2082,7 +2130,11 @@ impl QQuickItem for SujianEditorItem {
                     if (obj_ptr) obj_ptr->setFocus(true);
                 });
             }
-            qmetaobject::QMouseEventType::MouseMove => self.drag_select_at(pos.x as f32, pos.y as f32),
+            qmetaobject::QMouseEventType::MouseMove => {
+                if is_left_button_pressed(&event) {
+                    self.drag_select_at(pos.x as f32, pos.y as f32);
+                }
+            }
             qmetaobject::QMouseEventType::MouseButtonRelease => {}
             _ => {}
         }
@@ -2241,7 +2293,7 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
 
-        let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, font_size, &font_family);
+        let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
         let cursor_h = cursor_height_for_line(font_size, &font_family);
 
         let old_x = self.target_cursor_x;
@@ -2524,8 +2576,11 @@ impl SujianEditorItem {
         // ── Layer 3: Preedit ──
         if !self.preedit_text.is_empty() {
             let pc = self.buffer.cursor;
-            for line in &lines[vis_start..vis_end] {
-                if pc >= line.start && pc <= line.end {
+            for (idx, line) in lines.iter().enumerate() {
+                if idx < vis_start || idx >= vis_end {
+                    continue;
+                }
+                if line_contains_cursor_with_affinity(lines, idx, pc, self.current_cursor_affinity) {
                     let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
                     let x = if !line.para_text.is_empty() {
                         line.x + qtextlayout_cursor_to_x_on_line(
@@ -3001,9 +3056,16 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
     result
 }
 
-fn cursor_geometry_with_font(_text: &str, lines: &[VisualLine], cursor: usize, font_size: f64, font_family: &str) -> (f64, f64) {
+fn cursor_geometry_with_font(
+    _text: &str,
+    lines: &[VisualLine],
+    cursor: usize,
+    affinity: CaretAffinity,
+    font_size: f64,
+    font_family: &str,
+) -> (f64, f64) {
     for (idx, line) in lines.iter().enumerate() {
-        if line_contains_cursor(lines, idx, cursor) {
+        if line_contains_cursor_with_affinity(lines, idx, cursor, affinity) {
             if line.para_text.is_empty() {
                 return (line.x, cursor_top_y(line, font_size, font_family));
             }
@@ -3072,15 +3134,48 @@ fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 
     line.y + top_padding + ascent
 }
 
-fn line_contains_cursor(lines: &[VisualLine], idx: usize, cursor: usize) -> bool {
+fn affinity_for_index_on_line(line: &VisualLine, index: usize) -> CaretAffinity {
+    if index == line.end && line.start != line.end {
+        CaretAffinity::Upstream
+    } else {
+        CaretAffinity::Downstream
+    }
+}
+
+fn line_contains_cursor_with_affinity(
+    lines: &[VisualLine],
+    idx: usize,
+    cursor: usize,
+    affinity: CaretAffinity,
+) -> bool {
     let line = &lines[idx];
-    if cursor == line.start {
-        return true;
+    if line.start == line.end {
+        return cursor == line.start;
     }
     if cursor > line.start && cursor < line.end {
         return true;
     }
-    cursor == line.end && lines.get(idx + 1).is_none_or(|next| next.start != cursor)
+    if cursor == line.start {
+        let has_prev_overlap = idx > 0 && lines[idx - 1].end == line.start;
+        if has_prev_overlap {
+            return affinity == CaretAffinity::Downstream;
+        } else {
+            return true;
+        }
+    }
+    if cursor == line.end {
+        let has_next_overlap = idx + 1 < lines.len() && lines[idx + 1].start == line.end;
+        if has_next_overlap {
+            return affinity == CaretAffinity::Upstream;
+        } else {
+            return true;
+        }
+    }
+    false
+}
+
+fn line_contains_cursor(lines: &[VisualLine], idx: usize, cursor: usize) -> bool {
+    line_contains_cursor_with_affinity(lines, idx, cursor, CaretAffinity::Downstream)
 }
 
 fn draw_text(painter: &mut QPainter, x: f64, baseline_y: f64, font_size: f32, color: QString, text: QString) {
@@ -3349,7 +3444,7 @@ mod tests {
         assert_eq!(lines[1].start, text.len());
         assert_eq!(lines[1].end, text.len());
 
-        let (_x, y) = cursor_geometry_with_font(text, &lines, text.len(), 16.0, "serif");
+        let (_x, y) = cursor_geometry_with_font(text, &lines, text.len(), CaretAffinity::Downstream, 16.0, "serif");
         assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
     }
 
@@ -3361,9 +3456,26 @@ mod tests {
             VisualLine { start: 1, end: 2, hard_break: false, x: 16.0, y: 34.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 1, para_qchar_end: 2, line_wrap_width: 500.0, line_indent_x: 0.0 },
         ];
 
-        let (_x, y) = cursor_geometry_with_font(text, &lines, 1, 16.0, "serif");
+        let (_x, y) = cursor_geometry_with_font(text, &lines, 1, CaretAffinity::Downstream, 16.0, "serif");
 
         assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
+    }
+
+    #[test]
+    fn test_caret_affinity_boundary_matching() {
+        let lines = vec![
+            VisualLine { start: 0, end: 10, hard_break: false, x: 16.0, y: 10.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 10, line_wrap_width: 500.0, line_indent_x: 0.0 },
+            VisualLine { start: 10, end: 20, hard_break: false, x: 16.0, y: 34.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 10, para_qchar_end: 20, line_wrap_width: 500.0, line_indent_x: 0.0 },
+        ];
+
+        // At boundary index 10:
+        // With CaretAffinity::Upstream, it should belong to lines[0]
+        assert!(line_contains_cursor_with_affinity(&lines, 0, 10, CaretAffinity::Upstream));
+        assert!(!line_contains_cursor_with_affinity(&lines, 1, 10, CaretAffinity::Upstream));
+
+        // With CaretAffinity::Downstream, it should belong to lines[1]
+        assert!(!line_contains_cursor_with_affinity(&lines, 0, 10, CaretAffinity::Downstream));
+        assert!(line_contains_cursor_with_affinity(&lines, 1, 10, CaretAffinity::Downstream));
     }
 
     #[test]
