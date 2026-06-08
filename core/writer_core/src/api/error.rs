@@ -117,7 +117,10 @@ impl From<crate::error::Error> for WriterError {
                 transaction_id,
                 missing_files.join(",")
             )),
-            Error::DiskFull { path, required_bytes } => WriterError::Io(format!(
+            Error::DiskFull {
+                path,
+                required_bytes,
+            } => WriterError::Io(format!(
                 "disk_full: path={} required={}",
                 path, required_bytes
             )),

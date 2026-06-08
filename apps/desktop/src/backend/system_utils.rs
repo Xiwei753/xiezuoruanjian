@@ -15,14 +15,7 @@ fn command_stdout(cmd: &str, args: &[&str]) -> Option<String> {
 fn read_kde_config_value(cmd: &str, group: &str, key: &str) -> Option<String> {
     command_stdout(
         cmd,
-        &[
-            "--file",
-            "kdeglobals",
-            "--group",
-            group,
-            "--key",
-            key,
-        ],
+        &["--file", "kdeglobals", "--group", group, "--key", key],
     )
 }
 
@@ -135,7 +128,8 @@ fn detect_gsettings_color_scheme() -> Option<String> {
     .to_lowercase();
     if value.contains("prefer-dark") || value.contains("dark") {
         Some("dark".to_string())
-    } else if value.contains("prefer-light") || value.contains("light") || value.contains("default") {
+    } else if value.contains("prefer-light") || value.contains("light") || value.contains("default")
+    {
         Some("light".to_string())
     } else {
         None

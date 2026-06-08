@@ -58,7 +58,10 @@ pub struct LocalSettings {
     pub ai_enabled: bool,
     #[serde(default)]
     pub stats_device_id: Option<String>,
-    #[serde(default = "default_desktop_sidebar_width", alias = "linux_sidebar_width")]
+    #[serde(
+        default = "default_desktop_sidebar_width",
+        alias = "linux_sidebar_width"
+    )]
     pub desktop_sidebar_width: f64,
     #[serde(default = "default_desktop_editor_width")]
     pub desktop_editor_width: f64,

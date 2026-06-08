@@ -133,14 +133,15 @@ impl WriterCoreApi {
                         .error
                         .clone()
                         .unwrap_or_else(|| format!("sync status: {}", status));
-                    let error_code = dto.error_category.clone().unwrap_or_else(|| {
-                        match status.as_str() {
-                            "dirty_repo_blocked" => "DIRTY_REPO_BLOCKED".to_string(),
-                            "fatal_error" => "SYNC_FATAL_ERROR".to_string(),
-                            "recoverable_error" => "SYNC_RECOVERABLE_ERROR".to_string(),
-                            _ => "SYNC_FAILED".to_string(),
-                        }
-                    });
+                    let error_code =
+                        dto.error_category
+                            .clone()
+                            .unwrap_or_else(|| match status.as_str() {
+                                "dirty_repo_blocked" => "DIRTY_REPO_BLOCKED".to_string(),
+                                "fatal_error" => "SYNC_FATAL_ERROR".to_string(),
+                                "recoverable_error" => "SYNC_RECOVERABLE_ERROR".to_string(),
+                                _ => "SYNC_FAILED".to_string(),
+                            });
                     ResultEnvelope {
                         success: false,
                         data: Some(dto),
