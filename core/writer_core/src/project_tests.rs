@@ -1,8 +1,41 @@
 #[cfg(test)]
 mod tests {
-    use crate::project::{create_project, list_projects};
+    use crate::project::{create_project, list_projects, rename_project};
     use crate::workspace::create_workspace;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_rename_project_duplicate_title() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project1 = create_project(workspace_path, "First Project").unwrap();
+        let project2 = create_project(workspace_path, "Second Project").unwrap();
+
+        // Rename the second project to match the first project's title
+        let result = rename_project(workspace_path, &project2.id, "First Project");
+        assert!(result.is_ok(), "Renaming project to an existing title should succeed");
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert_eq!(projects.len(), 2);
+
+        let p2_updated = projects.iter().find(|p| p.id == project2.id).unwrap();
+        assert_eq!(p2_updated.title, "First Project");
+    }
+
+    #[test]
+    fn test_rename_project_not_found() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let result = rename_project(workspace_path, "non-existent-id", "New Title");
+        assert!(
+            matches!(result, Err(crate::error::Error::ProjectNotFound)),
+            "Should return ProjectNotFound error"
+        );
+    }
 
     #[test]
     fn test_create_and_list_project() {
