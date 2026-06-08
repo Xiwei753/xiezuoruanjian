@@ -2342,12 +2342,13 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
 
     override fun destroy() {
         // Only allow a single call to this method.
-        // TODO: maybe we should log a warning if called more than once?
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
                 cleanable.clean()
             }
+        } else {
+            android.util.Log.w("Uniffi", "destroy() called more than once on ${this.javaClass.simpleName}")
         }
     }
 
