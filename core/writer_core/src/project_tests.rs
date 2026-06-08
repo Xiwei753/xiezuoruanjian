@@ -24,6 +24,39 @@ mod tests {
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].title, "第一卷");
     }
+
+    #[test]
+    fn test_rename_project_duplicate_title() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project1 = create_project(workspace_path, "First Project").unwrap();
+        let project2 = create_project(workspace_path, "Second Project").unwrap();
+
+        // Rename the second project to the same title as the first project.
+        // This should succeed because projects use UUIDs as directory names.
+        crate::project::rename_project(workspace_path, &project2.id, "First Project").unwrap();
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert_eq!(projects.len(), 2);
+
+        let p1 = projects.iter().find(|p| p.id == project1.id).unwrap();
+        let p2 = projects.iter().find(|p| p.id == project2.id).unwrap();
+
+        assert_eq!(p1.title, "First Project");
+        assert_eq!(p2.title, "First Project");
+    }
+
+    #[test]
+    fn test_rename_project_not_found() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let result = crate::project::rename_project(workspace_path, "non-existent-id", "New Title");
+        assert!(matches!(result, Err(crate::error::Error::ProjectNotFound)));
+    }
 }
 
 #[cfg(test)]
