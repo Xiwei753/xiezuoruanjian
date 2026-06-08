@@ -124,7 +124,69 @@ pub fn sync_error_category(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sync_error_category_from_code;
+    use super::{sync_error_category, sync_error_category_from_code};
+
+    #[test]
+    fn test_sync_error_category_fallback_parsing() {
+        // configured_untested
+        assert_eq!(sync_error_category("token is missing"), "configured_untested");
+        assert_eq!(sync_error_category("TOKEN is EMPTY"), "configured_untested");
+        assert_eq!(sync_error_category("token not provided here"), "configured_untested");
+
+        // auth_failed (first block)
+        assert_eq!(sync_error_category("repository not found on github"), "auth_failed");
+        assert_eq!(sync_error_category("error: not found repo"), "auth_failed");
+        assert_eq!(sync_error_category("status 404"), "auth_failed");
+        assert_eq!(sync_error_category("Permission denied (publickey)"), "auth_failed");
+        assert_eq!(sync_error_category("HTTP 403 Forbidden"), "auth_failed");
+
+        // branch_missing
+        assert_eq!(sync_error_category("fatal: ref not found"), "branch_missing");
+        assert_eq!(sync_error_category("couldn't find remote ref main"), "branch_missing");
+        assert_eq!(sync_error_category("remote branch not found"), "branch_missing");
+        assert_eq!(sync_error_category("branch main not found"), "branch_missing");
+
+        // non_fast_forward
+        assert_eq!(sync_error_category("hint: Updates were rejected because the tip of your current branch is behind (non-fast-forward)"), "non_fast_forward");
+        assert_eq!(sync_error_category("non fast forward error"), "non_fast_forward");
+        assert_eq!(sync_error_category("nonfastforward"), "non_fast_forward");
+        assert_eq!(sync_error_category("fetch first before push"), "non_fast_forward");
+
+        // conflict
+        assert_eq!(sync_error_category("checkout_conflict"), "conflict");
+        assert_eq!(sync_error_category("local_blocking_file"), "conflict");
+        assert_eq!(sync_error_category("merge conflict"), "conflict");
+        assert_eq!(sync_error_category("we have a conflict here"), "conflict");
+
+        // unrelated_histories
+        assert_eq!(sync_error_category("fatal: refusing to merge unrelated histories"), "unrelated_histories");
+
+        // auth_failed (second block)
+        assert_eq!(sync_error_category("authentication failed"), "auth_failed");
+        assert_eq!(sync_error_category("auth failed"), "auth_failed");
+        assert_eq!(sync_error_category("status 401"), "auth_failed");
+        assert_eq!(sync_error_category("invalid credentials"), "auth_failed");
+        assert_eq!(sync_error_category("could not authenticate"), "auth_failed");
+        assert_eq!(sync_error_category("bad credentials"), "auth_failed");
+
+        // network_failed
+        assert_eq!(sync_error_category("could not resolve host"), "network_failed");
+        assert_eq!(sync_error_category("connection timeout"), "network_failed");
+        assert_eq!(sync_error_category("Connection refused"), "network_failed");
+        assert_eq!(sync_error_category("dns error"), "network_failed");
+        assert_eq!(sync_error_category("network is unreachable"), "network_failed");
+        assert_eq!(sync_error_category("proxy error"), "network_failed");
+        assert_eq!(sync_error_category("unexpected eof"), "network_failed");
+        assert_eq!(sync_error_category("tls handshake failed"), "network_failed");
+        assert_eq!(sync_error_category("ssl certificate problem"), "network_failed");
+        assert_eq!(sync_error_category("invalid certificate"), "network_failed");
+        assert_eq!(sync_error_category("host is unreachable"), "network_failed");
+        assert_eq!(sync_error_category("connection reset by peer"), "network_failed");
+        assert_eq!(sync_error_category("no route to host"), "network_failed");
+
+        // error (default)
+        assert_eq!(sync_error_category("some unknown strange issue"), "error");
+    }
 
     #[test]
     fn typed_sync_error_category_takes_precedence() {
