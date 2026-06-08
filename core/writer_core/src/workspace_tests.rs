@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::workspace::{create_workspace, validate_workspace, record_recent_edit, get_recent_edits};
+    use crate::workspace::{create_workspace, validate_workspace, record_recent_edit, get_recent_edits, flush_recent_edits};
     use std::fs;
     use tempfile::tempdir;
 
@@ -57,5 +57,38 @@ mod tests {
         assert_eq!(edits[0].chapter_id, "ch_25");
 
         assert_eq!(edits[19].chapter_id, "ch_6");
+    }
+
+    #[test]
+    fn test_flush_recent_edits() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+
+        create_workspace(workspace_path).unwrap();
+
+        // Populate in-memory cache and write to disk
+        record_recent_edit(workspace_path, "proj_1", "vol_1", "ch_1").unwrap();
+
+        let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
+
+        // Assert file exists initially
+        assert!(recent_path.exists());
+
+        // Delete file to simulate desync between cache and disk
+        fs::remove_file(&recent_path).unwrap();
+        assert!(!recent_path.exists());
+
+        // Flush cache to disk
+        flush_recent_edits(workspace_path).unwrap();
+
+        // Assert file exists again
+        assert!(recent_path.exists());
+
+        // Verify contents
+        let edits = get_recent_edits(workspace_path).unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].project_id, "proj_1");
+        assert_eq!(edits[0].volume_id, "vol_1");
+        assert_eq!(edits[0].chapter_id, "ch_1");
     }
 }
