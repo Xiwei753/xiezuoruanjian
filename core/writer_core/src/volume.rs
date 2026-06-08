@@ -24,6 +24,14 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+/// Normalize path for tombstone, safely handling paths that are not prefixed
+pub(crate) fn normalize_rel_path(path: &Path, base: &Path) -> String {
+    path.strip_prefix(base)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace("\\", "/")
+}
+
 /// 卷元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Volume {
@@ -148,28 +156,15 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
 
     // Also update tombstone
     if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
-        let rel_volume_dir = volume_dir
-            .strip_prefix(workspace_path)
-            .unwrap_or(&volume_dir)
-            .to_string_lossy()
-            .replace("\\", "/");
-        let rel_trash_path = trash_path
-            .strip_prefix(workspace_path)
-            .unwrap_or(&trash_path)
-            .to_string_lossy()
-            .replace("\\", "/");
+        let rel_volume_dir = normalize_rel_path(&volume_dir, workspace_path);
+        let rel_trash_path = normalize_rel_path(&trash_path, workspace_path);
 
         for entry in walkdir::WalkDir::new(&trash_path)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
-            let rel_file_path = entry
-                .path()
-                .strip_prefix(&trash_path)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace("\\", "/");
+            let rel_file_path = normalize_rel_path(entry.path(), &trash_path);
             let original_file_path = format!("{}/{}", rel_volume_dir, rel_file_path);
             let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
 
