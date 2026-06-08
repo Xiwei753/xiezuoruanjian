@@ -14,11 +14,7 @@ pub enum HitKind {
     Edge,
 }
 
-pub fn hit_test_nodes(
-    x: f32,
-    y: f32,
-    nodes: &[StarMapLayoutNode],
-) -> Option<HitResult> {
+pub fn hit_test_nodes(x: f32, y: f32, nodes: &[StarMapLayoutNode]) -> Option<HitResult> {
     let mut best: Option<(i32, &StarMapLayoutNode)> = None;
     for node in nodes {
         if x >= node.x && x <= node.x + node.width && y >= node.y && y <= node.y + node.height {
@@ -140,7 +136,10 @@ mod tests {
         assert!(d < 10.0, "distance {} should be < 10", d);
 
         let r = hit_test_edges(50.0, 5.0, &edges, &positions);
-        assert!(r.is_some(), "expected edge hit at (50,5) near segment (0,0)-(100,0), got None");
+        assert!(
+            r.is_some(),
+            "expected edge hit at (50,5) near segment (0,0)-(100,0), got None"
+        );
         assert_eq!(r.unwrap().kind, HitKind::Edge);
     }
 

@@ -33,9 +33,7 @@ pub struct SaveTransaction {
 impl SaveTransaction {
     pub fn new(workspace_path: &Path) -> Self {
         let transaction_id = Uuid::new_v4().to_string();
-        let tx_dir = workspace_path
-            .join(TRANSACTIONS_DIR)
-            .join(&transaction_id);
+        let tx_dir = workspace_path.join(TRANSACTIONS_DIR).join(&transaction_id);
         Self {
             workspace_path: workspace_path.to_path_buf(),
             transaction_id,
@@ -217,14 +215,25 @@ mod tests {
         let ws = tmp.path();
 
         let mut tx = SaveTransaction::new(ws);
-        tx.add_file("projects/p1/volumes/v1/chapters/c1/chapter.md", "hello world").unwrap();
-        tx.add_file("projects/p1/volumes/v1/chapters/c1/chapter.meta.json", r#"{"word_count":2}"#).unwrap();
+        tx.add_file(
+            "projects/p1/volumes/v1/chapters/c1/chapter.md",
+            "hello world",
+        )
+        .unwrap();
+        tx.add_file(
+            "projects/p1/volumes/v1/chapters/c1/chapter.meta.json",
+            r#"{"word_count":2}"#,
+        )
+        .unwrap();
         tx.commit().unwrap();
 
-        let md = fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.md")).unwrap();
+        let md =
+            fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.md")).unwrap();
         assert_eq!(md, "hello world");
 
-        let meta = fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.meta.json")).unwrap();
+        let meta =
+            fs::read_to_string(ws.join("projects/p1/volumes/v1/chapters/c1/chapter.meta.json"))
+                .unwrap();
         assert_eq!(meta, r#"{"word_count":2}"#);
 
         let tx_base = ws.join(TRANSACTIONS_DIR);
@@ -237,8 +246,13 @@ mod tests {
         let ws = tmp.path();
 
         let mut tx = SaveTransaction::new(ws);
-        tx.add_file("projects/p1/volumes/v1/chapters/c1/chapter.md", "recovered").unwrap();
-        tx.add_file("projects/p1/volumes/v1/chapters/c1/chapter.meta.json", r#"{"word_count":1}"#).unwrap();
+        tx.add_file("projects/p1/volumes/v1/chapters/c1/chapter.md", "recovered")
+            .unwrap();
+        tx.add_file(
+            "projects/p1/volumes/v1/chapters/c1/chapter.meta.json",
+            r#"{"word_count":1}"#,
+        )
+        .unwrap();
 
         let tx_dir = ws.join(TRANSACTIONS_DIR).join(tx.transaction_id());
         fs::create_dir_all(&tx_dir).unwrap();
@@ -257,7 +271,11 @@ mod tests {
             if let Some(parent) = target_path.parent() {
                 fs::create_dir_all(parent).unwrap();
             }
-            fs::write(&staging_path, fs::read_to_string(target_path).unwrap_or_default()).unwrap();
+            fs::write(
+                &staging_path,
+                fs::read_to_string(target_path).unwrap_or_default(),
+            )
+            .unwrap();
         }
 
         let recovered = recover_pending_transactions(ws);

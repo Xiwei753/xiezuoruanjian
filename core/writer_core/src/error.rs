@@ -52,7 +52,9 @@ pub enum Error {
     SyncNetworkUnavailable { reason: String },
     #[error("Sync rate limited: retry_after_secs={retry_after_secs}")]
     SyncRateLimited { retry_after_secs: u64 },
-    #[error("Sync document conflict: path={path}, local_hash={local_hash}, remote_hash={remote_hash}")]
+    #[error(
+        "Sync document conflict: path={path}, local_hash={local_hash}, remote_hash={remote_hash}"
+    )]
     SyncDocumentConflict {
         path: String,
         local_hash: String,
@@ -66,10 +68,7 @@ pub enum Error {
 
     // --- Storage errors ---
     #[error("Disk full: path={path}, required={required_bytes} bytes")]
-    DiskFull {
-        path: String,
-        required_bytes: u64,
-    },
+    DiskFull { path: String, required_bytes: u64 },
     #[error("Storage transaction incomplete: tx_id={transaction_id}")]
     StorageTransactionIncomplete { transaction_id: String },
 
@@ -173,7 +172,10 @@ impl Error {
                 m.insert("transaction_id".into(), transaction_id.clone());
                 m.insert("missing_files".into(), missing_files.join(","));
             }
-            Error::DiskFull { path, required_bytes } => {
+            Error::DiskFull {
+                path,
+                required_bytes,
+            } => {
                 m.insert("path".into(), path.clone());
                 m.insert("required_bytes".into(), required_bytes.to_string());
             }
@@ -236,11 +238,7 @@ mod tests {
 
     #[test]
     fn test_recoverable() {
-        assert!(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "test"
-        ))
-        .recoverable());
+        assert!(Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "test")).recoverable());
         assert!(!Error::ProjectNotFound.recoverable());
         assert!(Error::SyncNetworkUnavailable {
             reason: "timeout".into()

@@ -269,8 +269,7 @@ mod tests {
 
         let project = create_project(workspace_path, "My Novel").unwrap();
         let volume = create_volume(workspace_path, &project.id, "Volume 1").unwrap();
-        let chapter =
-            create_chapter(workspace_path, &project.id, &volume.id, "Chapter 1").unwrap();
+        let chapter = create_chapter(workspace_path, &project.id, &volume.id, "Chapter 1").unwrap();
 
         let content = "这是一个测试章节的内容。\n它包含多行中文文本，用于验证字数统计和哈希校验。\n第三行内容，确保换行符被正确处理。";
         let receipt = save_chapter_verified(
@@ -339,13 +338,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = save_chapter_verified(
-            workspace_path,
-            &project.id,
-            &volume.id,
-            &chapter.id,
-            "",
-        );
+        let result =
+            save_chapter_verified(workspace_path, &project.id, &volume.id, &chapter.id, "");
         assert!(matches!(result, Err(Error::EmptyOverwriteBlocked { .. })));
 
         let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
