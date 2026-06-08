@@ -324,27 +324,30 @@ impl StatsStore {
             return Ok(Vec::new());
         }
 
-        let mut by_date_device: HashMap<(String, String), Vec<&WritingInputEvent>> = HashMap::new();
+        let mut by_date_device: HashMap<(chrono::NaiveDate, &str), Vec<&WritingInputEvent>> =
+            HashMap::new();
         for event in events {
-            let date = self.timestamp_to_date(event.timestamp_ms)?;
-            let key = (date, event.device_id.clone());
+            let dt = chrono::DateTime::from_timestamp_millis(event.timestamp_ms)
+                .ok_or_else(|| crate::Error::Other("Invalid timestamp".to_string()))?;
+            let date = dt.date_naive();
+            let key = (date, event.device_id.as_str());
             by_date_device.entry(key).or_default().push(event);
         }
 
         let mut daily_stats_list = Vec::new();
-        for ((date, device_id), day_events) in &by_date_device {
+        for ((date, device_id), day_events) in by_date_device {
             let platform = day_events
                 .first()
                 .map(|e| e.platform.to_string())
                 .unwrap_or_default();
             let mut stats = DailyStats {
-                date: date.clone(),
-                device_id: device_id.clone(),
+                date: date.format("%Y-%m-%d").to_string(),
+                device_id: device_id.to_string(),
                 platform,
                 ..Default::default()
             };
 
-            for event in day_events {
+            for event in &day_events {
                 match event.source {
                     crate::writing_stats::EventSource::HumanTyped => {
                         stats.total_human_typed_chars += event.inserted_chars as u64;
