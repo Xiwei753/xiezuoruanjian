@@ -165,13 +165,13 @@ impl SearchIndex {
 
         for entry in &self.entries {
             for (line_idx, line) in entry.lines.iter().enumerate() {
-                let line_to_search = if options.case_sensitive {
-                    std::borrow::Cow::Borrowed(line.as_str())
+                let is_match = if options.case_sensitive {
+                    line.contains(query_to_match)
                 } else {
-                    std::borrow::Cow::Owned(line.to_lowercase())
+                    line.to_lowercase().contains(query_to_match)
                 };
 
-                if line_to_search.contains(query_to_match) {
+                if is_match {
                     let ctx_start = line_idx.saturating_sub(options.context_lines);
                     let ctx_end = (line_idx + options.context_lines + 1).min(entry.lines.len());
 
@@ -250,13 +250,13 @@ impl SearchIndex {
                 continue;
             }
             for (line_idx, line) in entry.lines.iter().enumerate() {
-                let line_to_search = if options.case_sensitive {
-                    std::borrow::Cow::Borrowed(line.as_str())
+                let is_match = if options.case_sensitive {
+                    line.contains(query_to_match)
                 } else {
-                    std::borrow::Cow::Owned(line.to_lowercase())
+                    line.to_lowercase().contains(query_to_match)
                 };
 
-                if line_to_search.contains(query_to_match) {
+                if is_match {
                     let ctx_start = line_idx.saturating_sub(options.context_lines);
                     let ctx_end = (line_idx + options.context_lines + 1).min(entry.lines.len());
 
