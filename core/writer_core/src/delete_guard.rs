@@ -118,12 +118,35 @@ mod tests {
         assert_eq!(validate_id_segment("valid_id").unwrap(), "valid_id");
         assert_eq!(validate_id_segment(" valid_id ").unwrap(), "valid_id");
 
-        assert!(validate_id_segment("").is_err());
-        assert!(validate_id_segment("   ").is_err());
-        assert!(validate_id_segment("with/slash").is_err());
-        assert!(validate_id_segment("with\\backslash").is_err());
-        assert!(validate_id_segment("..").is_err());
-        assert!(validate_id_segment(".").is_err());
+        match validate_id_segment("") {
+            Err(Error::InvalidDeleteTarget(msg)) => assert_eq!(msg, "ID cannot be empty"),
+            _ => panic!("Expected InvalidDeleteTarget error for empty ID"),
+        }
+
+        match validate_id_segment("   ") {
+            Err(Error::InvalidDeleteTarget(msg)) => assert_eq!(msg, "ID cannot be empty"),
+            _ => panic!("Expected InvalidDeleteTarget error for spaces"),
+        }
+
+        match validate_id_segment("with/slash") {
+            Err(Error::InvalidDeleteTarget(msg)) => assert_eq!(msg, "ID contains invalid characters: with/slash"),
+            _ => panic!("Expected InvalidDeleteTarget error for slash"),
+        }
+
+        match validate_id_segment("with\\backslash") {
+            Err(Error::InvalidDeleteTarget(msg)) => assert_eq!(msg, "ID contains invalid characters: with\\backslash"),
+            _ => panic!("Expected InvalidDeleteTarget error for backslash"),
+        }
+
+        match validate_id_segment("..") {
+            Err(Error::InvalidDeleteTarget(msg)) => assert_eq!(msg, "ID contains invalid characters: .."),
+            _ => panic!("Expected InvalidDeleteTarget error for .."),
+        }
+
+        match validate_id_segment(".") {
+            Err(Error::InvalidDeleteTarget(msg)) => assert_eq!(msg, "ID contains invalid characters: ."),
+            _ => panic!("Expected InvalidDeleteTarget error for ."),
+        }
     }
 
     #[test]
