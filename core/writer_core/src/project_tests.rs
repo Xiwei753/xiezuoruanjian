@@ -1,8 +1,26 @@
 #[cfg(test)]
 mod tests {
-    use crate::project::{create_project, list_projects};
+    use crate::project::{create_project, list_projects, rename_project};
     use crate::workspace::create_workspace;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_rename_project_duplicate_title() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let _project1 = create_project(workspace_path, "Project 1").unwrap();
+        let project2 = create_project(workspace_path, "Project 2").unwrap();
+
+        let result = rename_project(workspace_path, &project2.id, "Project 1");
+        assert!(result.is_ok());
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].title, "Project 1");
+        assert_eq!(projects[1].title, "Project 1");
+    }
 
     #[test]
     fn test_create_and_list_project() {
