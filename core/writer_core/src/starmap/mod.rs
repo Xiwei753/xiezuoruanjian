@@ -575,6 +575,17 @@ mod tests {
     }
 
     #[test]
+    fn test_starmap_graph_path() {
+        let workspace = std::path::Path::new("/dummy/workspace");
+        let starmap_id = "test_starmap_id";
+
+        let path = starmap_graph_path(workspace, starmap_id);
+
+        let expected = std::path::PathBuf::from("/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json");
+        assert_eq!(path, expected);
+    }
+
+    #[test]
     fn test_create_and_list_starmaps() {
         let dir = setup_workspace();
         let _meta1 = create_starmap(dir.path(), "Star Map 1", "desc1", None).unwrap();
