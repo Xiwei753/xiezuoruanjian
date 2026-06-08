@@ -710,6 +710,7 @@ pub struct SujianEditorItem {
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
+    activeFocusOnTab: qt_property!(bool; READ activeFocusOnTab WRITE set_activeFocusOnTab NOTIFY activeFocusOnTab_changed),
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
@@ -724,6 +725,7 @@ pub struct SujianEditorItem {
     visual_settings_changed: qt_signal!(),
     transaction_created: qt_signal!(),
     cursor_rect_changed: qt_signal!(),
+    activeFocusOnTab_changed: qt_signal!(),
     explicit_clear_requested: qt_signal!(),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -814,6 +816,8 @@ impl Default for SujianEditorItem {
             scroll_y: Default::default(),
             viewport_height: Default::default(),
             is_scrolling: Default::default(),
+            activeFocusOnTab: true,
+            activeFocusOnTab_changed: Default::default(),
             plain_text_changed: Default::default(),
             text_changed: Default::default(),
             content_height_changed: Default::default(),
@@ -892,6 +896,8 @@ impl Default for SujianEditorItem {
 }
 
 impl SujianEditorItem {
+    fn activeFocusOnTab(&self) -> bool { true }
+    fn set_activeFocusOnTab(&mut self, _value: bool) { /* ignoring */ }
     fn request_repaint(&mut self) {
         self.render_dirty = true;
         let item = self as &dyn QQuickItem;
