@@ -21,6 +21,9 @@ on:
       - 'Cargo.toml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   linux-appimage:
     name: Linux AppImage (${{ matrix.flavor }})
