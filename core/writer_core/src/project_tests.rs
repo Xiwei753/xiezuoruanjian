@@ -24,6 +24,24 @@ mod tests {
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].title, "第一卷");
     }
+
+    #[test]
+    fn test_rename_project_duplicate_title() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let _project1 = create_project(workspace_path, "Project A").unwrap();
+        let project2 = create_project(workspace_path, "Project B").unwrap();
+
+        let result = crate::project::rename_project(workspace_path, &project2.id, "Project A");
+        assert!(result.is_err());
+        if let Err(crate::error::Error::Other(msg)) = result {
+            assert_eq!(msg, "Project title already exists");
+        } else {
+            panic!("Expected Error::Other(\"Project title already exists\")");
+        }
+    }
 }
 
 #[cfg(test)]
