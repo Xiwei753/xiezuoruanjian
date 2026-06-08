@@ -67,6 +67,12 @@ pub struct ProjectStats {
     pub chapter_count: u32,
 }
 
+#[derive(Deserialize)]
+struct ChapterWordCount {
+    #[serde(default)]
+    word_count: u32,
+}
+
 pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<ProjectStats> {
     let mut stats = ProjectStats {
         total_word_count: 0,
@@ -74,14 +80,44 @@ pub fn get_project_stats(workspace_path: &Path, project_id: &str) -> Result<Proj
         chapter_count: 0,
     };
 
-    let volumes = crate::volume::list_volumes(workspace_path, project_id)?;
-    stats.volume_count = volumes.len() as u32;
+    let volumes_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes");
 
-    for volume in volumes {
-        let chapters = crate::chapter::list_chapters(workspace_path, project_id, &volume.id)?;
-        stats.chapter_count += chapters.len() as u32;
-        for chapter in chapters {
-            stats.total_word_count += chapter.word_count;
+    if !volumes_dir.exists() {
+        return Ok(stats);
+    }
+
+    for vol_entry in fs::read_dir(&volumes_dir)? {
+        let vol_entry = vol_entry?;
+
+        if !vol_entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let vol_path = vol_entry.path();
+        if vol_path.join("volume.json").exists() {
+            stats.volume_count += 1;
+
+            let chapters_dir = vol_path.join("chapters");
+            if let Ok(chap_iter) = fs::read_dir(&chapters_dir) {
+                for chap_entry in chap_iter {
+                    let chap_entry = chap_entry?;
+
+                    if !chap_entry.file_type()?.is_dir() {
+                        continue;
+                    }
+
+                    let meta_path = chap_entry.path().join("chapter.meta.json");
+                    if let Ok(content) = fs::read(&meta_path) {
+                        stats.chapter_count += 1;
+                        if let Ok(meta) = serde_json::from_slice::<ChapterWordCount>(&content) {
+                            stats.total_word_count += meta.word_count;
+                        }
+                    }
+                }
+            }
         }
     }
 
