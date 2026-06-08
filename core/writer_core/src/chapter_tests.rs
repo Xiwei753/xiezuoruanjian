@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::chapter::{
-        clear_chapter_content, create_chapter, list_chapters, read_chapter, save_chapter_verified,
-        save_chapter_verified_with_allow_empty_overwrite, Chapter,
+        calculate_word_count, clear_chapter_content, create_chapter, list_chapters, read_chapter,
+        save_chapter_verified, save_chapter_verified_with_allow_empty_overwrite, Chapter,
     };
     use crate::error::Error;
     use crate::project::{create_project, Project};
@@ -22,6 +22,23 @@ mod tests {
             create_chapter(workspace_path, &project.id, &volume.id, "Test Chapter").unwrap();
 
         (dir, project, volume, chapter)
+    }
+
+    #[test]
+    fn test_calculate_word_count_includes_cjk_punctuation_and_emoji() {
+        // English text (whitespace not counted)
+        assert_eq!(calculate_word_count("hello world"), 10);
+        // CJK text
+        assert_eq!(calculate_word_count("你好世界"), 4);
+        // Mixed content
+        assert_eq!(calculate_word_count("hello 世界"), 7);
+        // Unicode punctuation
+        assert_eq!(calculate_word_count("。，！？；：“”‘’（）《》〈〉【】『』「」〔〕…—～·"), 28);
+        // Emojis
+        assert_eq!(calculate_word_count("🤔✨"), 2);
+        // Empty string and whitespace
+        assert_eq!(calculate_word_count(""), 0);
+        assert_eq!(calculate_word_count(" \n\t\r"), 0);
     }
 
     #[test]
