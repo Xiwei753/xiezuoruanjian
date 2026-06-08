@@ -241,21 +241,24 @@ fn should_animate_changes(
     cause: EditorTransactionCause,
     max_animated_chars: usize,
 ) -> bool {
-    if !matches!(cause, EditorTransactionCause::Typing | EditorTransactionCause::Delete) {
+    if !matches!(
+        cause,
+        EditorTransactionCause::Typing | EditorTransactionCause::Delete
+    ) {
         return false;
     }
     if changes.len() != 1 {
         return false;
     }
     let text = changes[0].text();
-    !text.is_empty()
-        && !text.contains('\n')
-        && text.chars().count() <= max_animated_chars
+    !text.is_empty() && !text.contains('\n') && text.chars().count() <= max_animated_chars
 }
 
 fn common_prefix_byte_len(old_text: &str, new_text: &str) -> usize {
     let mut prefix = 0;
-    for ((old_index, old_char), (_, new_char)) in old_text.char_indices().zip(new_text.char_indices()) {
+    for ((old_index, old_char), (_, new_char)) in
+        old_text.char_indices().zip(new_text.char_indices())
+    {
         if old_char != new_char {
             break;
         }
@@ -268,7 +271,11 @@ fn common_suffix_byte_len(old_text: &str, new_text: &str, prefix: usize) -> usiz
     let old_tail = &old_text[prefix..];
     let new_tail = &new_text[prefix..];
     let mut suffix = 0;
-    for ((_, old_char), (_, new_char)) in old_tail.char_indices().rev().zip(new_tail.char_indices().rev()) {
+    for ((_, old_char), (_, new_char)) in old_tail
+        .char_indices()
+        .rev()
+        .zip(new_tail.char_indices().rev())
+    {
         if old_char != new_char {
             break;
         }

@@ -87,11 +87,7 @@ pub(crate) fn is_document_content_path(path: &str) -> bool {
     classify_content_path(path) == ContentClass::UserTextDocument
 }
 
-fn three_way_resolve(
-    base_hash: &str,
-    local_hash: &str,
-    remote_hash: &str,
-) -> ThreeWayResult {
+fn three_way_resolve(base_hash: &str, local_hash: &str, remote_hash: &str) -> ThreeWayResult {
     if local_hash == remote_hash {
         return ThreeWayResult::NoConflict;
     }
@@ -442,7 +438,11 @@ fn execute_lww_sync_attempt(
             }
             (Some(local_rec), Some(remote_rec)) => {
                 if is_document_content_path(&path) {
-                    let base_hash = state.known_files.get(&path).map(|s| s.as_str()).unwrap_or("");
+                    let base_hash = state
+                        .known_files
+                        .get(&path)
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
                     let local_hash = &local_rec.content_hash;
                     let remote_hash = &remote_rec.content_hash;
 
@@ -526,8 +526,9 @@ fn execute_lww_sync_attempt(
                                     remote_hash: remote_hash.clone(),
                                     base_hash: base_hash.to_string(),
                                     created_at: chrono::Utc::now().timestamp(),
-                                    description: "正文文件冲突：本地已修改，远端已删除。保留本地文件。"
-                                        .to_string(),
+                                    description:
+                                        "正文文件冲突：本地已修改，远端已删除。保留本地文件。"
+                                            .to_string(),
                                 })
                             } else {
                                 None
@@ -747,7 +748,9 @@ fn execute_lww_sync_attempt(
     // so that next sync's three-way comparison sees base=remote, local=local,
     // remote=remote → BothChanged again (conflict persists).
     for conflict in &doc_conflicts {
-        state.known_files.insert(conflict.remote_path.clone(), conflict.remote_hash.clone());
+        state
+            .known_files
+            .insert(conflict.remote_path.clone(), conflict.remote_hash.clone());
     }
 
     state
@@ -785,10 +788,7 @@ fn execute_lww_sync_attempt(
         ));
     } else {
         result.status = SyncStatus::NoChanges;
-        result.user_message = Some(format!(
-            "同步完成，无变更 (网络模式: {})。",
-            mode
-        ));
+        result.user_message = Some(format!("同步完成，无变更 (网络模式: {})。", mode));
     }
 
     result.uploaded_files = to_upload;

@@ -90,7 +90,12 @@ mod tests {
     use super::*;
     use crate::editor::transaction::EditorChange;
 
-    fn insert_cmd(index: usize, text: &str, cursor_before: usize, cursor_after: usize) -> TextEditCommand {
+    fn insert_cmd(
+        index: usize,
+        text: &str,
+        cursor_before: usize,
+        cursor_after: usize,
+    ) -> TextEditCommand {
         TextEditCommand::new(
             vec![EditorChange::Insert {
                 index,

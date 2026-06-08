@@ -460,7 +460,7 @@ fn test_session_gap_detection() {
 
     let event2 = WritingInputEvent {
         event_id: uuid::Uuid::new_v4().to_string(),
-        timestamp_ms: base_ms + 10 * 60 * 1000,
+        timestamp_ms: base_ms + 10 * 60 * 1000 + 1, // Add 1ms to ensure it strictly > SESSION_GAP_MS
         device_id: "dev-1".to_string(),
         platform: Platform::Linux,
         project_id: "proj1".to_string(),
@@ -472,7 +472,7 @@ fn test_session_gap_detection() {
         pasted_chars: 0,
         ai_inserted_chars: 0,
         net_delta_chars: 5,
-        session_id: "s1".to_string(),
+        session_id: "s2".to_string(),
     };
     store.record_event(event2).unwrap();
     store.flush_events().unwrap();
