@@ -119,6 +119,11 @@ impl ActionRegistry {
     }
 
     fn register_v1_actions(&mut self) {
+        self.register_editor_settings_actions();
+        self.register_sync_actions();
+    }
+
+    fn register_editor_settings_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.editor.font_size.get".to_string(),
             title: "获取字号".to_string(),
@@ -132,7 +137,6 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.font_size.set".to_string(),
             title: "设置字号".to_string(),
@@ -157,7 +161,6 @@ impl ActionRegistry {
                 "step": 1
             })),
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.auto_save.get".to_string(),
             title: "获取自动保存状态".to_string(),
@@ -171,7 +174,6 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.auto_save.set".to_string(),
             title: "设置自动保存".to_string(),
@@ -193,7 +195,6 @@ impl ActionRegistry {
                 "type": "switch"
             })),
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.auto_save_delay.set".to_string(),
             title: "设置自动保存延迟".to_string(),
@@ -218,49 +219,6 @@ impl ActionRegistry {
                 "step": 500
             })),
         });
-
-        self.actions.push(ActionDescriptor {
-            id: "settings.sync.config.get".to_string(),
-            title: "获取同步配置".to_string(),
-            description: "获取当前同步配置".to_string(),
-            category: "sync".to_string(),
-            kind: ActionKind::Query,
-            risk_level: ActionRiskLevel::SafeRead,
-            confirm_required: false,
-            undoable: false,
-            platforms: vec!["android".to_string(), "linux".to_string()],
-            input_schema: None,
-            ui_schema: None,
-        });
-
-        self.actions.push(ActionDescriptor {
-            id: "sync.diagnostics.run".to_string(),
-            title: "运行同步诊断".to_string(),
-            description: "检查同步连接状态，不会实际同步数据".to_string(),
-            category: "sync".to_string(),
-            kind: ActionKind::Preview,
-            risk_level: ActionRiskLevel::SafeRead,
-            confirm_required: false,
-            undoable: false,
-            platforms: vec!["android".to_string(), "linux".to_string()],
-            input_schema: None,
-            ui_schema: None,
-        });
-
-        self.actions.push(ActionDescriptor {
-            id: "sync.plan.preview".to_string(),
-            title: "预览同步计划".to_string(),
-            description: "计算将要同步的文件变更，不会实际同步".to_string(),
-            category: "sync".to_string(),
-            kind: ActionKind::Preview,
-            risk_level: ActionRiskLevel::SafeRead,
-            confirm_required: false,
-            undoable: false,
-            platforms: vec!["android".to_string(), "linux".to_string()],
-            input_schema: None,
-            ui_schema: None,
-        });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.line_spacing.get".to_string(),
             title: "获取行距".to_string(),
@@ -274,7 +232,6 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.line_spacing.set".to_string(),
             title: "设置行距".to_string(),
@@ -300,7 +257,6 @@ impl ActionRegistry {
                 "displayScale": 0.01
             })),
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.auto_indent.get".to_string(),
             title: "获取自动缩进".to_string(),
@@ -314,7 +270,6 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.auto_indent.set".to_string(),
             title: "设置自动缩进".to_string(),
@@ -337,7 +292,6 @@ impl ActionRegistry {
                 "type": "switch"
             })),
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.typing_animation.get".to_string(),
             title: "获取输入动画".to_string(),
@@ -351,7 +305,6 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.typing_animation.set".to_string(),
             title: "设置输入动画".to_string(),
@@ -374,7 +327,6 @@ impl ActionRegistry {
                 "type": "switch"
             })),
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.smooth_cursor.get".to_string(),
             title: "获取平滑光标".to_string(),
@@ -388,7 +340,6 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
-
         self.actions.push(ActionDescriptor {
             id: "settings.editor.smooth_cursor.set".to_string(),
             title: "设置平滑光标".to_string(),
@@ -410,6 +361,48 @@ impl ActionRegistry {
             ui_schema: Some(serde_json::json!({
                 "type": "switch"
             })),
+        });
+    }
+
+    fn register_sync_actions(&mut self) {
+        self.actions.push(ActionDescriptor {
+            id: "settings.sync.config.get".to_string(),
+            title: "获取同步配置".to_string(),
+            description: "获取当前同步配置".to_string(),
+            category: "sync".to_string(),
+            kind: ActionKind::Query,
+            risk_level: ActionRiskLevel::SafeRead,
+            confirm_required: false,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: None,
+            ui_schema: None,
+        });
+        self.actions.push(ActionDescriptor {
+            id: "sync.diagnostics.run".to_string(),
+            title: "运行同步诊断".to_string(),
+            description: "检查同步连接状态，不会实际同步数据".to_string(),
+            category: "sync".to_string(),
+            kind: ActionKind::Preview,
+            risk_level: ActionRiskLevel::SafeRead,
+            confirm_required: false,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: None,
+            ui_schema: None,
+        });
+        self.actions.push(ActionDescriptor {
+            id: "sync.plan.preview".to_string(),
+            title: "预览同步计划".to_string(),
+            description: "计算将要同步的文件变更，不会实际同步".to_string(),
+            category: "sync".to_string(),
+            kind: ActionKind::Preview,
+            risk_level: ActionRiskLevel::SafeRead,
+            confirm_required: false,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: None,
+            ui_schema: None,
         });
     }
 
