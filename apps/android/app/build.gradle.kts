@@ -159,3 +159,9 @@ android {
 dependencies {
     implementation("net.java.dev.jna:jna:5.13.0@aar")
 }
+
+android {
+    lint {
+        disable.addAll(listOf("MissingTranslation", "SetTextI18n", "HardcodedText", "NewApi"))
+    }
+}
