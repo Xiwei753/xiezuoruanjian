@@ -181,7 +181,7 @@ pub struct StarMapEdge {
     pub updated_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum StarMapLayoutKind {
     Freeform,

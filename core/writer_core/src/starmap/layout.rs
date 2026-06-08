@@ -209,4 +209,14 @@ mod tests {
         let layout = calculate_radial_layout(&ids, &parent_map, &StarMapLayout { kind: StarMapLayoutKind::AutoRadial, nodes: vec![] });
         assert_eq!(layout.nodes.len(), 3);
     }
+
+    #[test]
+    fn test_radial_layout_empty_nodes() {
+        let ids: Vec<String> = vec![];
+        let parent_map = std::collections::HashMap::new();
+        let layout = calculate_radial_layout(&ids, &parent_map, &StarMapLayout { kind: StarMapLayoutKind::AutoRadial, nodes: vec![] });
+
+        assert_eq!(layout.kind, StarMapLayoutKind::AutoRadial);
+        assert!(layout.nodes.is_empty());
+    }
 }
