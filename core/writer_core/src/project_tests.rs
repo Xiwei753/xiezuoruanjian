@@ -42,6 +42,76 @@ mod tests {
             panic!("Expected Error::Other(\"Project title already exists\")");
         }
     }
+
+    #[test]
+    fn test_get_project_stats_empty() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "Test Stats Empty").unwrap();
+
+        let stats = crate::project::get_project_stats(workspace_path, &project.id).unwrap();
+        assert_eq!(stats.volume_count, 1); // create_project automatically generates a default volume
+        assert_eq!(stats.chapter_count, 0);
+        assert_eq!(stats.total_word_count, 0);
+    }
+
+    #[test]
+    fn test_get_project_stats_with_data() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "Test Stats Data").unwrap();
+
+        // project already has 1 default volume "第一卷"
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        assert_eq!(volumes.len(), 1);
+        let vol1_id = &volumes[0].id;
+
+        // Add second volume
+        let vol2 = crate::volume::create_volume(workspace_path, &project.id, "第二卷").unwrap();
+
+        // Add chapters
+        let c1 = crate::chapter::create_chapter(workspace_path, &project.id, vol1_id, "Chapter 1").unwrap();
+        let c2 = crate::chapter::create_chapter(workspace_path, &project.id, vol1_id, "Chapter 2").unwrap();
+        let c3 = crate::chapter::create_chapter(workspace_path, &project.id, &vol2.id, "Chapter 3").unwrap();
+
+        // Write content
+        let content1 = "This is a test content.";
+        crate::chapter::save_chapter(workspace_path, &project.id, vol1_id, &c1.id, content1).unwrap();
+
+        let content2 = "More content.";
+        crate::chapter::save_chapter(workspace_path, &project.id, vol1_id, &c2.id, content2).unwrap();
+
+        let content3 = "Even more testing content.";
+        crate::chapter::save_chapter(workspace_path, &project.id, &vol2.id, &c3.id, content3).unwrap();
+
+        // Calculate exact word counts using the core function for robust testing
+
+        let stats = crate::project::get_project_stats(workspace_path, &project.id).unwrap();
+        assert_eq!(stats.volume_count, 2);
+        assert_eq!(stats.chapter_count, 3);
+
+        let expected_word_count = crate::chapter::calculate_word_count(content1) +
+                                  crate::chapter::calculate_word_count(content2) +
+                                  crate::chapter::calculate_word_count(content3);
+
+        assert_eq!(stats.total_word_count, expected_word_count);
+    }
+
+    #[test]
+    fn test_get_project_stats_non_existent() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let stats = crate::project::get_project_stats(workspace_path, "non-existent-id").unwrap();
+        assert_eq!(stats.volume_count, 0);
+        assert_eq!(stats.chapter_count, 0);
+        assert_eq!(stats.total_word_count, 0);
+    }
 }
 
 #[cfg(test)]
