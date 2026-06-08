@@ -19,6 +19,9 @@
 use super::*;
 use crate::backend::SafeAppPtr;
 
+use qmetaobject::QJsonObject;
+use super::super::json_utils::qjson_object_from_json;
+
 #[path = "github_init_operations.rs"]
 mod github_init_operations;
 
@@ -47,10 +50,10 @@ pub struct WorkspaceBackend {
     workspace_state_changed: qt_signal!(),
     pending_github_init_path_changed: qt_signal!(),
     try_restore_last_workspace: qt_method!(fn(&mut self)),
-    create_new_workspace: qt_method!(fn(&mut self) -> QString),
-    open_existing_workspace: qt_method!(fn(&mut self) -> QString),
-    create_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QString),
-    open_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QString),
+    create_new_workspace: qt_method!(fn(&mut self) -> QJsonObject),
+    open_existing_workspace: qt_method!(fn(&mut self) -> QJsonObject),
+    create_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QJsonObject),
+    open_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QJsonObject),
     close_workspace: qt_method!(fn(&mut self)),
     clear_last_workspace: qt_method!(fn(&mut self)),
     switch_workspace: qt_method!(fn(&mut self)),
@@ -121,19 +124,19 @@ impl WorkspaceBackend {
         self.with_app_mut((), |app| app.try_restore_last_workspace());
         self.emit_workspace_changed();
     }
-    fn create_new_workspace(&mut self) -> QString {
+    fn create_new_workspace(&mut self) -> QJsonObject {
         let res = self.with_app_mut(backend_link_broken_json(), |app| app.create_new_workspace());
         self.emit_workspace_changed();
-        res
+        qjson_object_from_json(&res.to_string())
     }
-    fn open_existing_workspace(&mut self) -> QString {
+    fn open_existing_workspace(&mut self) -> QJsonObject {
         let res = self.with_app_mut(backend_link_broken_json(), |app| {
             app.open_existing_workspace()
         });
         self.emit_workspace_changed();
-        res
+        qjson_object_from_json(&res.to_string())
     }
-    fn create_workspace_with_path(&mut self, path: QString) -> QString {
+    fn create_workspace_with_path(&mut self, path: QString) -> QJsonObject {
         let path_str = path.to_string();
         crate::backend::app_backend::debug_log_static(
             "workspace",
@@ -160,9 +163,9 @@ impl WorkspaceBackend {
             "workspace_state_updated",
             &format!("has_workspace={}", has),
         );
-        res
+        qjson_object_from_json(&res.to_string())
     }
-    fn open_workspace_with_path(&mut self, path: QString) -> QString {
+    fn open_workspace_with_path(&mut self, path: QString) -> QJsonObject {
         let path_str = path.to_string();
         crate::backend::app_backend::debug_log_static(
             "workspace",
@@ -189,7 +192,7 @@ impl WorkspaceBackend {
             "workspace_state_updated",
             &format!("has_workspace={}", has),
         );
-        res
+        qjson_object_from_json(&res.to_string())
     }
     fn close_workspace(&mut self) {
         self.with_app_mut((), |app| app.close_workspace());

@@ -70,7 +70,7 @@ QtObject {
     function refreshState(fallbackMessage) {
         var projectApi = stateBackendRef || appBackendRef || backendRef;
         if (!projectApi) return;
-        var state = parseJson(projectApi.refresh_app_state_json(), fallbackMessage || qsTr("刷新应用状态失败"));
+        var state = projectApi.refresh_app_state();
         if (state) applyState(state);
     }
 
@@ -119,13 +119,12 @@ QtObject {
     function createWorkspace(openExisting) {
         var workspaceApi = workspaceBackendRef || backendRef;
         if (!workspaceApi) return;
-        var rawResult = "";
+        var res = null;
         if (openExisting) {
-            rawResult = workspaceApi.open_existing_workspace();
+            res = workspaceApi.open_existing_workspace();
         } else {
-            rawResult = workspaceApi.create_new_workspace();
+            res = workspaceApi.create_new_workspace();
         }
-        var res = parseJson(rawResult, qsTr("操作失败"));
         if (!res) { 
             refreshState(qsTr("解析结果失败")); 
             return; 
@@ -141,13 +140,12 @@ QtObject {
     function createWorkspaceWithPath(path, openExisting) {
         var workspaceApi = workspaceBackendRef || backendRef;
         if (!workspaceApi) return;
-        var rawResult = "";
+        var res = null;
         if (openExisting) {
-            rawResult = workspaceApi.open_workspace_with_path(path);
+            res = workspaceApi.open_workspace_with_path(path);
         } else {
-            rawResult = workspaceApi.create_workspace_with_path(path);
+            res = workspaceApi.create_workspace_with_path(path);
         }
-        var res = parseJson(rawResult, qsTr("操作失败"));
         if (!res) { 
             refreshState(qsTr("解析结果失败")); 
             return; 
@@ -160,8 +158,7 @@ QtObject {
         }
     }
 
-    function handleMutationResult(raw, fallbackMessage) {
-        var res = parseJson(raw, fallbackMessage || qsTr("操作失败"));
+    function handleMutationResult(res, fallbackMessage) {
         if (!res) return false;
         if (res.success) {
             if (res.state) applyState(res.state);

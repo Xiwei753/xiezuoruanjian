@@ -4,6 +4,8 @@
 
 use super::*;
 use crate::backend::SafeAppPtr;
+use qmetaobject::QJsonObject;
+use super::super::json_utils::qjson_object_from_json;
 
 #[path = "project_operations.rs"]
 mod project_operations;
@@ -17,24 +19,24 @@ pub struct ProjectBackend {
     projectsReloaded: qt_signal!(),
     selected_item_changed: qt_signal!(),
     workspace_content_changed: qt_signal!(),
-    refresh_app_state_json: qt_method!(fn(&mut self) -> QString),
+    refresh_app_state: qt_method!(fn(&mut self) -> QJsonObject),
     refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
     get_tree_model_json: qt_method!(fn(&self) -> QString),
     get_tree_model: qt_method!(fn(&self) -> QJsonArray),
-    create_project_json: qt_method!(fn(&mut self, title: QString, action_id: QString) -> QString),
-    create_volume_json: qt_method!(
-        fn(&mut self, project_id: QString, title: QString, action_id: QString) -> QString
+    create_project: qt_method!(fn(&mut self, title: QString, action_id: QString) -> QJsonObject),
+    create_volume: qt_method!(
+        fn(&mut self, project_id: QString, title: QString, action_id: QString) -> QJsonObject
     ),
-    create_chapter_json: qt_method!(
+    create_chapter: qt_method!(
         fn(
             &mut self,
             project_id: QString,
             volume_id: QString,
             title: QString,
             action_id: QString,
-        ) -> QString
+        ) -> QJsonObject
     ),
-    select_tree_item_json: qt_method!(
+    select_tree_item: qt_method!(
         fn(
             &mut self,
             item_type: QString,
@@ -42,42 +44,42 @@ pub struct ProjectBackend {
             volume_id: QString,
             chapter_id: QString,
             action_id: QString,
-        ) -> QString
+        ) -> QJsonObject
     ),
-    delete_project_json:
-        qt_method!(fn(&mut self, project_id: QString, action_id: QString) -> QString),
-    delete_volume_json: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QString
+    delete_project_result:
+        qt_method!(fn(&mut self, project_id: QString, action_id: QString) -> QJsonObject),
+    delete_volume_result: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, action_id: QString) -> QJsonObject
     ),
-    delete_chapter_json: qt_method!(
+    delete_chapter_result: qt_method!(
         fn(
             &mut self,
             project_id: QString,
             volume_id: QString,
             chapter_id: QString,
             action_id: QString,
-        ) -> QString
+        ) -> QJsonObject
     ),
     create_new_volume: qt_method!(fn(&mut self, project_id: QString, title: QString)),
     create_new_chapter:
         qt_method!(fn(&mut self, project_id: QString, volume_id: QString, title: QString)),
-    rename_project_json:
-        qt_method!(fn(&mut self, project_id: QString, new_title: QString) -> QString),
+    rename_project:
+        qt_method!(fn(&mut self, project_id: QString, new_title: QString) -> QJsonObject),
     delete_project: qt_method!(fn(&mut self, project_id: QString)),
     reorder_projects: qt_method!(fn(&mut self, ordered_ids_joined: QString)),
-    rename_volume_json: qt_method!(
-        fn(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QString
+    rename_volume: qt_method!(
+        fn(&mut self, project_id: QString, volume_id: QString, new_title: QString) -> QJsonObject
     ),
     delete_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
     reorder_volumes: qt_method!(fn(&mut self, project_id: QString, ordered_ids_joined: QString)),
-    rename_chapter_json: qt_method!(
+    rename_chapter: qt_method!(
         fn(
             &mut self,
             project_id: QString,
             volume_id: QString,
             chapter_id: QString,
             new_title: QString,
-        ) -> QString
+        ) -> QJsonObject
     ),
     delete_chapter:
         qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
@@ -128,8 +130,9 @@ impl ProjectBackend {
         self.workspace_content_changed();
         self.selected_item_changed();
     }
-    fn refresh_app_state_json(&mut self) -> QString {
-        self.with_app_mut("{}".into(), |app| app.refresh_app_state_json())
+    fn refresh_app_state(&mut self) -> QJsonObject {
+        let res = self.with_app_mut("{}".into(), |app| app.refresh_app_state_json());
+        qjson_object_from_json(&res.to_string())
     }
     fn refresh_tree_model_json(&mut self) -> QString {
         let out = self.with_app_mut("[]".into(), |app| app.refresh_tree_model_json());
@@ -142,81 +145,81 @@ impl ProjectBackend {
     fn get_tree_model(&self) -> QJsonArray {
         self.with_app(QJsonArray::default(), |app| app.get_tree_model())
     }
-    fn create_project_json(&mut self, title: QString, action_id: QString) -> QString {
+    fn create_project(&mut self, title: QString, action_id: QString) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| app.create_project_json(title, action_id));
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
-    fn create_volume_json(
+    fn create_volume(
         &mut self,
         project_id: QString,
         title: QString,
         action_id: QString,
-    ) -> QString {
+    ) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.create_volume_json(project_id, title, action_id)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
-    fn create_chapter_json(
+    fn create_chapter(
         &mut self,
         project_id: QString,
         volume_id: QString,
         title: QString,
         action_id: QString,
-    ) -> QString {
+    ) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.create_chapter_json(project_id, volume_id, title, action_id)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
-    fn select_tree_item_json(
+    fn select_tree_item(
         &mut self,
         item_type: QString,
         project_id: QString,
         volume_id: QString,
         chapter_id: QString,
         action_id: QString,
-    ) -> QString {
+    ) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.select_tree_item_json(item_type, project_id, volume_id, chapter_id, action_id)
         });
         self.selected_item_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
-    fn delete_project_json(&mut self, project_id: QString, action_id: QString) -> QString {
+    fn delete_project_result(&mut self, project_id: QString, action_id: QString) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.delete_project_json(project_id, action_id)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
-    fn delete_volume_json(
+    fn delete_volume_result(
         &mut self,
         project_id: QString,
         volume_id: QString,
         action_id: QString,
-    ) -> QString {
+    ) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.delete_volume_json(project_id, volume_id, action_id)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
-    fn delete_chapter_json(
+    fn delete_chapter_result(
         &mut self,
         project_id: QString,
         volume_id: QString,
         chapter_id: QString,
         action_id: QString,
-    ) -> QString {
+    ) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.delete_chapter_json(project_id, volume_id, chapter_id, action_id)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
     fn create_new_volume(&mut self, project_id: QString, title: QString) {
         self.with_app_mut((), |app| {
@@ -234,12 +237,12 @@ impl ProjectBackend {
         });
         self.emit_changed();
     }
-    fn rename_project_json(&mut self, project_id: QString, new_title: QString) -> QString {
+    fn rename_project(&mut self, project_id: QString, new_title: QString) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.rename_project_json(project_id, new_title)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
     fn delete_project(&mut self, project_id: QString) {
         self.with_app_mut((), |app| {
@@ -253,17 +256,17 @@ impl ProjectBackend {
         self.with_app_mut((), |app| app.reorder_projects(ordered_ids_joined));
         self.emit_changed();
     }
-    fn rename_volume_json(
+    fn rename_volume(
         &mut self,
         project_id: QString,
         volume_id: QString,
         new_title: QString,
-    ) -> QString {
+    ) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.rename_volume_json(project_id, volume_id, new_title)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
     fn delete_volume(&mut self, project_id: QString, volume_id: QString) {
         self.with_app_mut((), |app| {
@@ -279,18 +282,18 @@ impl ProjectBackend {
         });
         self.emit_changed();
     }
-    fn rename_chapter_json(
+    fn rename_chapter(
         &mut self,
         project_id: QString,
         volume_id: QString,
         chapter_id: QString,
         new_title: QString,
-    ) -> QString {
+    ) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {
             app.rename_chapter_json(project_id, volume_id, chapter_id, new_title)
         });
         self.emit_changed();
-        out
+        qjson_object_from_json(&out.to_string())
     }
     fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {
         self.with_app_mut((), |app| {

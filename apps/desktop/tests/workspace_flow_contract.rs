@@ -8,13 +8,13 @@ fn workspace_backend_exposes_path_based_methods() {
 
     assert!(
         workspace_backend.contains(
-            "create_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QString)"
+            "create_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QJsonObject)"
         ),
         "WorkspaceBackend must expose create_workspace_with_path"
     );
     assert!(
         workspace_backend.contains(
-            "open_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QString)"
+            "open_workspace_with_path: qt_method!(fn(&mut self, path: QString) -> QJsonObject)"
         ),
         "WorkspaceBackend must expose open_workspace_with_path"
     );
