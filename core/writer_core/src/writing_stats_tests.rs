@@ -438,7 +438,8 @@ fn test_session_gap_detection() {
     let temp_dir = tempdir().unwrap();
     let store = StatsStore::new(temp_dir.path());
 
-    let base_ms = chrono::Utc::now().timestamp_millis();
+    // Use a fixed timestamp (e.g. 2025-01-01 12:00:00 UTC) to avoid boundary issues
+    let base_ms = 1735732800000;
 
     let event1 = WritingInputEvent {
         event_id: uuid::Uuid::new_v4().to_string(),
