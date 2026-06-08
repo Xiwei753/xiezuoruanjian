@@ -166,9 +166,9 @@ impl SearchIndex {
         for entry in &self.entries {
             for (line_idx, line) in entry.lines.iter().enumerate() {
                 let line_to_search = if options.case_sensitive {
-                    line.clone()
+                    std::borrow::Cow::Borrowed(line.as_str())
                 } else {
-                    line.to_lowercase()
+                    std::borrow::Cow::Owned(line.to_lowercase())
                 };
 
                 if line_to_search.contains(query_to_match) {
@@ -253,9 +253,9 @@ impl SearchIndex {
             }
             for (line_idx, line) in entry.lines.iter().enumerate() {
                 let line_to_search = if options.case_sensitive {
-                    line.clone()
+                    std::borrow::Cow::Borrowed(line.as_str())
                 } else {
-                    line.to_lowercase()
+                    std::borrow::Cow::Owned(line.to_lowercase())
                 };
 
                 if line_to_search.contains(query_to_match) {
