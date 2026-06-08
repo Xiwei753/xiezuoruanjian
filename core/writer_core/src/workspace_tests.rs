@@ -84,11 +84,36 @@ mod tests {
         // Assert file exists again
         assert!(recent_path.exists());
 
-        // Verify contents
+        // Verify contents from memory cache
         let edits = get_recent_edits(workspace_path).unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].project_id, "proj_1");
         assert_eq!(edits[0].volume_id, "vol_1");
         assert_eq!(edits[0].chapter_id, "ch_1");
+
+        // Verify that flush actually wrote the expected content to disk
+        let file_content = fs::read_to_string(&recent_path).unwrap();
+        let parsed_edits: Vec<serde_json::Value> = serde_json::from_str(&file_content).unwrap();
+        assert_eq!(parsed_edits.len(), 1);
+        assert_eq!(parsed_edits[0]["project_id"], "proj_1");
+        assert_eq!(parsed_edits[0]["volume_id"], "vol_1");
+        assert_eq!(parsed_edits[0]["chapter_id"], "ch_1");
+        assert!(parsed_edits[0]["timestamp"].is_string());
+    }
+
+    #[test]
+    fn test_flush_recent_edits_empty_cache() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+
+        create_workspace(workspace_path).unwrap();
+
+        // Flush cache to disk without any prior edits
+        flush_recent_edits(workspace_path).unwrap();
+
+        let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
+
+        // Assert file is not created
+        assert!(!recent_path.exists());
     }
 }
