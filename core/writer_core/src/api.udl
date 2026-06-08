@@ -219,6 +219,7 @@ enum WriterError {
     "ChapterNotFound",
     "EmptyOverwriteBlocked",
     "NotImplemented",
+    "DuplicateTitle",
     "RefuseToDeleteWorkspaceRoot",
     "InvalidDeleteTarget",
     "SyncConflict",

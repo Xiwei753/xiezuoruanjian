@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::project::{create_project, list_projects};
+    use crate::project::{create_project, list_projects, rename_project};
     use crate::workspace::create_workspace;
     use tempfile::tempdir;
 
@@ -23,6 +23,31 @@ mod tests {
         let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].title, "第一卷");
+    }
+
+    #[test]
+    fn test_rename_project_duplicate_title() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project1 = create_project(workspace_path, "First Project").unwrap();
+        let project2 = create_project(workspace_path, "Second Project").unwrap();
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].title, "First Project");
+        assert_eq!(projects[1].title, "Second Project");
+
+        // Rename second project to same title as first project
+        let result = rename_project(workspace_path, &project2.id, "First Project");
+        assert!(matches!(result, Err(crate::error::Error::DuplicateTitle)));
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert_eq!(projects.len(), 2);
+        // Both projects should retain their original titles
+        assert_eq!(projects[0].title, "First Project");
+        assert_eq!(projects[1].title, "Second Project");
     }
 }
 

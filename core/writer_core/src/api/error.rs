@@ -23,6 +23,8 @@ pub enum WriterError {
     },
     #[error("Not implemented")]
     NotImplemented,
+    #[error("Duplicate title")]
+    DuplicateTitle,
     #[error("Refuse to delete workspace root")]
     RefuseToDeleteWorkspaceRoot,
     #[error("Invalid delete target: {0}")]
@@ -46,6 +48,7 @@ impl WriterError {
             WriterError::ChapterNotFound => "CHAPTER_NOT_FOUND",
             WriterError::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             WriterError::NotImplemented => "NOT_IMPLEMENTED",
+            WriterError::DuplicateTitle => "DUPLICATE_TITLE",
             WriterError::RefuseToDeleteWorkspaceRoot => "REFUSE_DELETE_WORKSPACE_ROOT",
             WriterError::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
             WriterError::SyncConflict(_) => "SYNC_CONFLICT",
@@ -64,6 +67,7 @@ impl WriterError {
             WriterError::ChapterNotFound => "章节不存在或已被删除",
             WriterError::EmptyOverwriteBlocked { .. } => "已阻止空内容覆盖现有章节",
             WriterError::NotImplemented => "该功能尚未实现",
+            WriterError::DuplicateTitle => "同名作品已存在",
             WriterError::RefuseToDeleteWorkspaceRoot => "拒绝删除工作区根目录",
             WriterError::InvalidDeleteTarget(_) => "删除目标无效",
             WriterError::SyncConflict(_) => "同步冲突，请手动处理冲突文件后重试",
@@ -94,6 +98,7 @@ impl From<crate::error::Error> for WriterError {
                 reason,
             },
             Error::NotImplemented => WriterError::NotImplemented,
+            Error::DuplicateTitle => WriterError::DuplicateTitle,
             Error::RefuseToDeleteWorkspaceRoot => WriterError::RefuseToDeleteWorkspaceRoot,
             Error::InvalidDeleteTarget(s) => WriterError::InvalidDeleteTarget(s),
             Error::SyncAuthFailed { reason } => WriterError::SyncFailed(reason),

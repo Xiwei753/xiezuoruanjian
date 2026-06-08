@@ -40,6 +40,8 @@ pub enum Error {
     },
     #[error("Not implemented")]
     NotImplemented,
+    #[error("Duplicate title")]
+    DuplicateTitle,
     #[error("Refuse to delete workspace root")]
     RefuseToDeleteWorkspaceRoot,
     #[error("Invalid delete target: {0}")]
@@ -92,6 +94,7 @@ impl Error {
             Error::ChapterNotFound => "CHAPTER_NOT_FOUND",
             Error::EmptyOverwriteBlocked { .. } => "EMPTY_OVERWRITE_BLOCKED",
             Error::NotImplemented => "NOT_IMPLEMENTED",
+            Error::DuplicateTitle => "DUPLICATE_TITLE",
             Error::RefuseToDeleteWorkspaceRoot => "REFUSE_DELETE_WORKSPACE_ROOT",
             Error::InvalidDeleteTarget(_) => "INVALID_DELETE_TARGET",
             Error::SyncAuthFailed { .. } => "SYNC_AUTH_FAILED",
@@ -118,6 +121,7 @@ impl Error {
             Error::ChapterNotFound => false,
             Error::EmptyOverwriteBlocked { .. } => false,
             Error::NotImplemented => false,
+            Error::DuplicateTitle => false,
             Error::RefuseToDeleteWorkspaceRoot => false,
             Error::InvalidDeleteTarget(_) => false,
             Error::SyncAuthFailed { .. } => false,

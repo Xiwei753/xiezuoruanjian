@@ -123,6 +123,12 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
 }
 
 pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) -> Result<()> {
+    // Check for duplicate title
+    let projects = list_projects(workspace_path)?;
+    if projects.iter().any(|p| p.title == new_title && p.id != project_id) {
+        return Err(crate::error::Error::DuplicateTitle);
+    }
+
     let project_dir = workspace_path.join("projects").join(project_id);
     let meta_path = project_dir.join("project.json");
 
