@@ -605,8 +605,6 @@ fn test_execute_invalid_json() {
 
 #[test]
 fn test_action_provider_registration() {
-    use super::*;
-
     struct MockProvider;
     impl ActionProvider for MockProvider {
         fn name(&self) -> &str {

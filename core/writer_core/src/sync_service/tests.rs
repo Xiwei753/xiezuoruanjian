@@ -2027,9 +2027,7 @@ mod tests {
         assert!(is_document_content_path(
             "projects/abc/volumes/001/chapters/xyz/chapter.md"
         ));
-        assert!(!is_document_content_path(
-            "projects/p1/project.json"
-        ));
+        assert!(!is_document_content_path("projects/p1/project.json"));
         assert!(!is_document_content_path(
             "projects/p1/volumes/v1/chapters/c1/chapter.meta.json"
         ));
@@ -2042,13 +2040,13 @@ mod tests {
 
         // P1-3: expanded user text document paths
         assert!(is_document_content_path("projects/p1/note.md"));
-        assert!(is_document_content_path("projects/p1/volumes/v1/outline.md"));
+        assert!(is_document_content_path(
+            "projects/p1/volumes/v1/outline.md"
+        ));
         assert!(is_document_content_path(
             "projects/p1/volumes/v1/chapters/c1/scene.md"
         ));
-        assert!(is_document_content_path(
-            "projects/p1/character_notes.md"
-        ));
+        assert!(is_document_content_path("projects/p1/character_notes.md"));
         assert!(is_document_content_path("projects/p1/timeline_notes.md"));
         assert!(is_document_content_path("projects/p1/draft.md"));
         // backups and app-meta are local-only, not user text
@@ -2131,15 +2129,9 @@ mod tests {
         assert!(!res.conflicts.is_empty());
         assert_eq!(res.conflicts[0].local_path, chapter_rel);
         assert_eq!(res.conflicts[0].base_hash, base_hash);
-        assert!(!res
-            .overwritten_files
-            .contains(&chapter_rel.to_string()));
-        assert!(!res
-            .downloaded_files
-            .contains(&chapter_rel.to_string()));
-        assert!(!res
-            .uploaded_files
-            .contains(&chapter_rel.to_string()));
+        assert!(!res.overwritten_files.contains(&chapter_rel.to_string()));
+        assert!(!res.downloaded_files.contains(&chapter_rel.to_string()));
+        assert!(!res.uploaded_files.contains(&chapter_rel.to_string()));
 
         let local_after = std::fs::read_to_string(&chapter_abs).unwrap();
         assert_eq!(local_after, local_content);
@@ -2269,13 +2261,11 @@ mod tests {
         std::fs::write(&chapter_abs, local_content).unwrap();
 
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
-        let local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
+        let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
-        state
-            .known_files
-            .insert(chapter_rel.to_string(), base_hash);
+        state.known_files.insert(chapter_rel.to_string(), base_hash);
         state
             .known_files_updated_at
             .insert(chapter_rel.to_string(), 1000);
@@ -2323,9 +2313,7 @@ mod tests {
         let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
 
         assert_eq!(res.status, SyncStatus::LatestWinsApplied);
-        assert!(res
-            .uploaded_files
-            .contains(&chapter_rel.to_string()));
+        assert!(res.uploaded_files.contains(&chapter_rel.to_string()));
         assert!(res.conflicts.is_empty());
         assert!(res.overwritten_files.is_empty());
 
@@ -2351,9 +2339,7 @@ mod tests {
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
-        state
-            .known_files
-            .insert(chapter_rel.to_string(), base_hash);
+        state.known_files.insert(chapter_rel.to_string(), base_hash);
         state
             .known_files_updated_at
             .insert(chapter_rel.to_string(), 1000);
@@ -2401,9 +2387,7 @@ mod tests {
         let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
 
         assert_eq!(res.status, SyncStatus::LatestWinsApplied);
-        assert!(res
-            .downloaded_files
-            .contains(&chapter_rel.to_string()));
+        assert!(res.downloaded_files.contains(&chapter_rel.to_string()));
         assert!(res.conflicts.is_empty());
         assert!(res.overwritten_files.is_empty());
 

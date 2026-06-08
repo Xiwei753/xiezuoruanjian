@@ -175,10 +175,8 @@ impl SearchIndex {
                     let ctx_start = line_idx.saturating_sub(options.context_lines);
                     let ctx_end = (line_idx + options.context_lines + 1).min(entry.lines.len());
 
-                    let context_before: Vec<String> =
-                        entry.lines[ctx_start..line_idx].to_vec();
-                    let context_after: Vec<String> =
-                        entry.lines[line_idx + 1..ctx_end].to_vec();
+                    let context_before: Vec<String> = entry.lines[ctx_start..line_idx].to_vec();
+                    let context_after: Vec<String> = entry.lines[line_idx + 1..ctx_end].to_vec();
 
                     hits.push(SearchHit {
                         project_id: entry.project_id.clone(),
@@ -262,10 +260,8 @@ impl SearchIndex {
                     let ctx_start = line_idx.saturating_sub(options.context_lines);
                     let ctx_end = (line_idx + options.context_lines + 1).min(entry.lines.len());
 
-                    let context_before: Vec<String> =
-                        entry.lines[ctx_start..line_idx].to_vec();
-                    let context_after: Vec<String> =
-                        entry.lines[line_idx + 1..ctx_end].to_vec();
+                    let context_before: Vec<String> = entry.lines[ctx_start..line_idx].to_vec();
+                    let context_after: Vec<String> = entry.lines[line_idx + 1..ctx_end].to_vec();
 
                     hits.push(SearchHit {
                         project_id: entry.project_id.clone(),

@@ -392,12 +392,8 @@ impl WriterAppService {
         chapter_id: String,
         content: String,
     ) -> String {
-        self.api.save_chapter_content_envelope_json(
-            &project_id,
-            &volume_id,
-            &chapter_id,
-            &content,
-        )
+        self.api
+            .save_chapter_content_envelope_json(&project_id, &volume_id, &chapter_id, &content)
     }
 
     pub fn delete_project_envelope_json(&self, project_id: String) -> String {
@@ -405,7 +401,8 @@ impl WriterAppService {
     }
 
     pub fn delete_volume_envelope_json(&self, project_id: String, volume_id: String) -> String {
-        self.api.delete_volume_envelope_json(&project_id, &volume_id)
+        self.api
+            .delete_volume_envelope_json(&project_id, &volume_id)
     }
 
     pub fn delete_chapter_envelope_json(

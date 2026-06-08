@@ -257,13 +257,10 @@ pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
         .filter(|r| r.host_starmap_id != starmap_id)
         .collect();
     if !external_refs.is_empty() {
-        return Err(crate::error::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!(
-                "Cannot delete StarMap because it is referenced by {} external places.",
-                external_refs.len()
-            ),
-        )));
+        return Err(crate::error::Error::Io(std::io::Error::other(format!(
+            "Cannot delete StarMap because it is referenced by {} external places.",
+            external_refs.len()
+        ))));
     }
 
     let meta = load_starmap_meta(workspace, starmap_id)?;

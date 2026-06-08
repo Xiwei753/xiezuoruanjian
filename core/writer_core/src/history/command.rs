@@ -9,11 +9,7 @@ pub struct TextEditCommand {
 }
 
 impl TextEditCommand {
-    pub fn new(
-        forward: Vec<EditorChange>,
-        cursor_before: usize,
-        cursor_after: usize,
-    ) -> Self {
+    pub fn new(forward: Vec<EditorChange>, cursor_before: usize, cursor_after: usize) -> Self {
         let inverse = compute_inverse(&forward);
         Self {
             forward,

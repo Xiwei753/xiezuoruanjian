@@ -354,7 +354,10 @@ fn save_chapter_verified_with_options(
         if let Ok(vol_raw) = fs::read_to_string(&volume_meta_path) {
             if let Ok(mut vol_val) = serde_json::from_str::<serde_json::Value>(&vol_raw) {
                 if let Some(obj) = vol_val.as_object_mut() {
-                    obj.insert("updated_at".to_string(), serde_json::Value::String(Utc::now().to_rfc3339()));
+                    obj.insert(
+                        "updated_at".to_string(),
+                        serde_json::Value::String(Utc::now().to_rfc3339()),
+                    );
                     let vol_relative = volume_meta_path
                         .strip_prefix(workspace_path)
                         .unwrap_or(&volume_meta_path)
@@ -370,7 +373,10 @@ fn save_chapter_verified_with_options(
         if let Ok(proj_raw) = fs::read_to_string(&project_meta_path) {
             if let Ok(mut proj_val) = serde_json::from_str::<serde_json::Value>(&proj_raw) {
                 if let Some(obj) = proj_val.as_object_mut() {
-                    obj.insert("updated_at".to_string(), serde_json::Value::String(Utc::now().to_rfc3339()));
+                    obj.insert(
+                        "updated_at".to_string(),
+                        serde_json::Value::String(Utc::now().to_rfc3339()),
+                    );
                     let proj_relative = project_meta_path
                         .strip_prefix(workspace_path)
                         .unwrap_or(&project_meta_path)

@@ -242,20 +242,20 @@ fn handle_pull_error(
                 format!("Pull failed: {}", e),
             ));
         }
-        return PullOutcome::Continue {
+        PullOutcome::Continue {
             pull_branch_missing: true,
-        };
+        }
     } else if e.to_string().contains("SyncConflict_Detected") {
-        return handle_merge_conflict(workspace_path, result, first_sync_mode);
+        handle_merge_conflict(workspace_path, result, first_sync_mode)
     } else {
-        return PullOutcome::Return(SyncResult::error(
+        PullOutcome::Return(SyncResult::error(
             classify_error(&e.to_string()),
             first_sync_mode,
             Some(get_user_friendly_error(
                 &(format!("Pull failed: {}", e)).to_string(),
             )),
             format!("Pull failed: {}", e),
-        ));
+        ))
     }
 }
 

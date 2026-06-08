@@ -1,0 +1,306 @@
+   611	fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
+   612	    let mut node_ids = std::collections::HashSet::new();
+   613	    for node in &graph.nodes {
+   614	        if !node_ids.insert(&node.id) {
+   615	            return Err(Error::Io(std::io::Error::new(
+   616	                std::io::ErrorKind::InvalidData,
+   617	                "Duplicate node ID",
+   618	            )));
+   619	        }
+   620
+   621	        if let crate::starmap::semantic::StarMapNodeContent::ChapterRef {
+   622	            range_start,
+   623	            range_end,
+   624	            ..
+   625	        } = &node.content
+   626	        {
+   627	            if let (Some(s), Some(e)) = (range_start, range_end) {
+   628	                if s > e {
+   629	                    return Err(Error::Io(std::io::Error::new(
+   630	                        std::io::ErrorKind::InvalidData,
+   631	                        "Content range_start cannot be greater than range_end",
+   632	                    )));
+   633	                }
+   634	            }
+   635	        }
+   636
+   637	        let mut anchor_ids = std::collections::HashSet::new();
+   638	        for anchor in &node.anchors {
+   639	            if !anchor_ids.insert(&anchor.anchor_id) {
+   640	                return Err(Error::Io(std::io::Error::new(
+   641	                    std::io::ErrorKind::InvalidData,
+   642	                    "Duplicate anchor ID in node",
+   643	                )));
+   644	            }
+   645	            if let crate::starmap::semantic::StarMapAnchorTarget::ChapterRange {
+   646	                range_start,
+   647	                range_end,
+   648	                ..
+   649	            } = &anchor.target
+   650	            {
+   651	                if let (Some(s), Some(e)) = (range_start, range_end) {
+   652	                    if s > e {
+   653	                        return Err(Error::Io(std::io::Error::new(
+   654	                            std::io::ErrorKind::InvalidData,
+   655	                            "Anchor range_start cannot be greater than range_end",
+   656	                        )));
+   657	                    }
+   658	                }
+   659	            }
+   660	        }
+   661
+   662	        if let Some(portal) = &node.portal {
+   663	            if portal.mode == crate::starmap::semantic::StarMapPortalMode::EnterChild {
+   664	                let target_id = portal
+   665	                    .deep_target
+   666	                    .as_ref()
+   667	                    .map(|t| t.starmap_id.clone())
+   668	                    .unwrap_or_else(|| portal.target_starmap_id.clone());
+   669
+   670	                if crate::starmap::load_starmap_meta(workspace, &target_id).is_err() {
+   671	                    return Err(Error::Io(std::io::Error::new(
+   672	                        std::io::ErrorKind::InvalidData,
+   673	                        "Portal target starmap does not exist",
+   674	                    )));
+   675	                }
+   676
+   677	                if let Some(dt) = &portal.deep_target {
+   678	                    let status = resolve_deep_target(workspace, dt);
+   679	                    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+   680	                    match status {
+   681	                        CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+   682	                        | InvalidRange => {
+   683	                            return Err(Error::Io(std::io::Error::new(
+   684	                                std::io::ErrorKind::InvalidData,
+   685	                                format!("Deep target resolve failed: {:?}", status),
+   686	                            )));
+   687	                        }
+   688	                        _ => {}
+   689	                    }
+   690	                }
+   691	            }
+   692	        }
+   693
+   694	        crate::starmap::semantic::validate_display_policy(&node.display_policy)?;
+   695	    }
+   696
+   697	    for edge in &graph.edges {
+   698	        let validate_edge_endpoint = |ep: &Option<crate::starmap::types::StarMapEdgeEndpoint>,
+   699	                                      legacy_id: &Option<String>,
+   700	                                      legacy_target: &Option<
+   701	            crate::starmap::semantic::StarMapDeepTarget,
+   702	        >,
+   703	                                      endpoint_name: &str|
+   704	         -> Result<()> {
+   705	            if let Some(endpoint) = ep {
+   706	                match endpoint {
+   707	                    crate::starmap::types::StarMapEdgeEndpoint::Node { node_id } => {
+   708	                        if !node_ids.contains(node_id) {
+   709	                            return Err(Error::Io(std::io::Error::new(
+   710	                                std::io::ErrorKind::InvalidData,
+   711	                                format!(
+   712	                                    "Edge {} endpoint references non-existent node",
+   713	                                    endpoint_name
+   714	                                ),
+   715	                            )));
+   716	                        }
+   717	                    }
+   718	                    crate::starmap::types::StarMapEdgeEndpoint::Anchor { node_id, anchor_id } => {
+   719	                        let mut anchor_found = false;
+   720	                        if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
+   721	                            if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+   722	                                anchor_found = true;
+   723	                            }
+   724	                        }
+   725	                        if !anchor_found {
+   726	                            return Err(Error::Io(std::io::Error::new(
+   727	                                std::io::ErrorKind::InvalidData,
+   728	                                format!(
+   729	                                    "Edge {} endpoint references non-existent anchor",
+   730	                                    endpoint_name
+   731	                                ),
+   732	                            )));
+   733	                        }
+   734	                    }
+   735	                    crate::starmap::types::StarMapEdgeEndpoint::Starmap => {}
+   736	                    crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target } => {
+   737	                        let status = resolve_deep_target(workspace, target);
+   738	                        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+   739	                        match status {
+   740	                            CycleDetected | TooDeep | MissingStarmap | MissingNode
+   741	                            | MissingAnchor | InvalidRange => {
+   742	                                return Err(Error::Io(std::io::Error::new(
+   743	                                    std::io::ErrorKind::InvalidData,
+   744	                                    format!("Edge deep target resolve failed: {:?}", status),
+   745	                                )));
+   746	                            }
+   747	                            _ => {}
+   748	                        }
+   749	                    }
+   750	                }
+   751	            } else if let Some(target) = legacy_target {
+   752	                let status = resolve_deep_target(workspace, target);
+   753	                use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+   754	                match status {
+   755	                    CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+   756	                    | InvalidRange => {
+   757	                        return Err(Error::Io(std::io::Error::new(
+   758	                            std::io::ErrorKind::InvalidData,
+   759	                            format!("Edge deep target resolve failed: {:?}", status),
+   760	                        )));
+   761	                    }
+   762	                    _ => {}
+   763	                }
+   764	            } else if let Some(id) = legacy_id {
+   765	                if !node_ids.contains(id) {
+   766	                    return Err(Error::Io(std::io::Error::new(
+   767	                        std::io::ErrorKind::InvalidData,
+   768	                        format!("Edge {} references non-existent node", endpoint_name),
+   769	                    )));
+   770	                }
+   771	            }
+   772	            Ok(())
+   773	        };
+   774
+   775	        validate_edge_endpoint(&edge.from_endpoint, &edge.from, &edge.from_target, "from")?;
+   776	        validate_edge_endpoint(&edge.to_endpoint, &edge.to, &edge.to_target, "to")?;
+   777	    }
+   778
+   779	    let mut instance_ids = std::collections::HashSet::new();
+   780	    for embed in &graph.embeds {
+   781	        if !instance_ids.insert(&embed.instance_id) {
+   782	            return Err(Error::Io(std::io::Error::new(
+   783	                std::io::ErrorKind::InvalidData,
+   784	                "Duplicate embed instance_id",
+   785	            )));
+   786	        }
+   787	        if embed.target_starmap_id == graph.starmap_id {
+   788	            return Err(Error::Io(std::io::Error::new(
+   789	                std::io::ErrorKind::InvalidData,
+   790	                "Self-embed is prohibited",
+   791	            )));
+   792	        }
+   793
+   794	        if crate::starmap::load_starmap_meta(workspace, &embed.target_starmap_id).is_err() {
+   795	            return Err(Error::Io(std::io::Error::new(
+   796	                std::io::ErrorKind::InvalidData,
+   797	                "Embed target starmap does not exist",
+   798	            )));
+   799	        }
+   800
+   801	        let p = &embed.placement;
+   802	        if p.width < 0.0
+   803	            || p.height < 0.0
+   804	            || p.scale <= 0.0
+   805	            || p.width.is_nan()
+   806	            || p.height.is_nan()
+   807	            || p.scale.is_nan()
+   808	            || p.x.is_nan()
+   809	            || p.y.is_nan()
+   810	        {
+   811	            return Err(Error::Io(std::io::Error::new(
+   812	                std::io::ErrorKind::InvalidData,
+   813	                "Invalid embed placement values",
+   814	            )));
+   815	        }
+   816
+   817	        let tvp = &embed.target_viewport;
+   818	        if tvp.scale <= 0.0 || tvp.scale.is_nan() || tvp.offset_x.is_nan() || tvp.offset_y.is_nan()
+   819	        {
+   820	            return Err(Error::Io(std::io::Error::new(
+   821	                std::io::ErrorKind::InvalidData,
+   822	                "Invalid embed target_viewport values",
+   823	            )));
+   824	        }
+   825
+   826	        if let Some(sni) = &embed.source_node_id {
+   827	            if !node_ids.contains(sni) {
+   828	                return Err(Error::Io(std::io::Error::new(
+   829	                    std::io::ErrorKind::InvalidData,
+   830	                    "Embed source_node_id does not exist",
+   831	                )));
+   832	            }
+   833	        }
+   834
+   835	        if let Some(ep) = &embed.host_endpoint {
+   836	            match ep {
+   837	                crate::starmap::types::StarMapEndpoint::Node { node_id } => {
+   838	                    if !node_ids.contains(node_id) {
+   839	                        return Err(Error::Io(std::io::Error::new(
+   840	                            std::io::ErrorKind::InvalidData,
+   841	                            "Embed host_endpoint references non-existent node",
+   842	                        )));
+   843	                    }
+   844	                }
+   845	                crate::starmap::types::StarMapEndpoint::Anchor { node_id, anchor_id } => {
+   846	                    let mut anchor_found = false;
+   847	                    if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
+   848	                        if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+   849	                            anchor_found = true;
+   850	                        }
+   851	                    }
+   852	                    if !anchor_found {
+   853	                        return Err(Error::Io(std::io::Error::new(
+   854	                            std::io::ErrorKind::InvalidData,
+   855	                            "Embed host_endpoint references non-existent anchor",
+   856	                        )));
+   857	                    }
+   858	                }
+   859	                crate::starmap::types::StarMapEndpoint::Starmap => {}
+   860	            }
+   861	        }
+   862
+   863	        crate::starmap::semantic::validate_display_policy(&embed.display_policy)?;
+   864	    }
+   865
+   866	    let mut link_ids = std::collections::HashSet::new();
+   867	    for link in &graph.links {
+   868	        if !link_ids.insert(&link.link_id) {
+   869	            return Err(Error::Io(std::io::Error::new(
+   870	                std::io::ErrorKind::InvalidData,
+   871	                "Duplicate link_id",
+   872	            )));
+   873	        }
+   874	        match &link.source {
+   875	            crate::starmap::types::StarMapEndpoint::Node { node_id } => {
+   876	                if !node_ids.contains(node_id) {
+   877	                    return Err(Error::Io(std::io::Error::new(
+   878	                        std::io::ErrorKind::InvalidData,
+   879	                        "Link source node does not exist",
+   880	                    )));
+   881	                }
+   882	            }
+   883	            crate::starmap::types::StarMapEndpoint::Anchor { node_id, anchor_id } => {
+   884	                if let Some(n) = graph.nodes.iter().find(|n| &n.id == node_id) {
+   885	                    if !n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+   886	                        return Err(Error::Io(std::io::Error::new(
+   887	                            std::io::ErrorKind::InvalidData,
+   888	                            "Link source anchor does not exist",
+   889	                        )));
+   890	                    }
+   891	                } else {
+   892	                    return Err(Error::Io(std::io::Error::new(
+   893	                        std::io::ErrorKind::InvalidData,
+   894	                        "Link source node for anchor does not exist",
+   895	                    )));
+   896	                }
+   897	            }
+   898	            crate::starmap::types::StarMapEndpoint::Starmap => {}
+   899	        }
+   900
+   901	        let status = resolve_deep_target(workspace, &link.target);
+   902	        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+   903	        match status {
+   904	            CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+   905	            | InvalidRange => {
+   906	                return Err(Error::Io(std::io::Error::new(
+   907	                    std::io::ErrorKind::InvalidData,
+   908	                    format!("Link deep target resolve failed: {:?}", status),
+   909	                )));
+   910	            }
+   911	            _ => {}
+   912	        }
+   913	    }
+   914
+   915	    Ok(())
+   916	}
