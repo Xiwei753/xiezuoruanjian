@@ -69,6 +69,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 /// 进程内缓存：避免频繁磁盘读取。
 /// Key = workspace_path，Value = 最近编辑列表。
+#[cfg(test)]
+pub static RECENT_EDITS_CACHE: OnceLock<Mutex<HashMap<PathBuf, Vec<RecentEdit>>>> = OnceLock::new();
+
+#[cfg(not(test))]
 static RECENT_EDITS_CACHE: OnceLock<Mutex<HashMap<PathBuf, Vec<RecentEdit>>>> = OnceLock::new();
 
 /// 获取最近编辑列表（优先从缓存读取，否则从磁盘加载）。
