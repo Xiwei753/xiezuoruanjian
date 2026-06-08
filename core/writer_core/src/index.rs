@@ -150,28 +150,19 @@ impl SearchIndex {
             return Vec::new();
         }
 
-        let query_lower = if options.case_sensitive {
-            String::new()
-        } else {
-            query.to_lowercase()
-        };
-        let query_to_match = if options.case_sensitive {
-            query
-        } else {
-            &query_lower
-        };
-
         let mut hits = Vec::new();
+
+        let ac = match aho_corasick::AhoCorasick::builder()
+            .ascii_case_insensitive(!options.case_sensitive)
+            .build(&[query])
+        {
+            Ok(ac) => ac,
+            Err(_) => return hits, // Fallback for empty/invalid patterns, though build rarely fails for string slices
+        };
 
         for entry in &self.entries {
             for (line_idx, line) in entry.lines.iter().enumerate() {
-                let line_to_search = if options.case_sensitive {
-                    std::borrow::Cow::Borrowed(line.as_str())
-                } else {
-                    std::borrow::Cow::Owned(line.to_lowercase())
-                };
-
-                if line_to_search.contains(query_to_match) {
+                if ac.is_match(line) {
                     let ctx_start = line_idx.saturating_sub(options.context_lines);
                     let ctx_end = (line_idx + options.context_lines + 1).min(entry.lines.len());
 
@@ -232,31 +223,22 @@ impl SearchIndex {
             return Vec::new();
         }
 
-        let query_lower = if options.case_sensitive {
-            String::new()
-        } else {
-            query.to_lowercase()
-        };
-        let query_to_match = if options.case_sensitive {
-            query
-        } else {
-            &query_lower
-        };
-
         let mut hits = Vec::new();
+
+        let ac = match aho_corasick::AhoCorasick::builder()
+            .ascii_case_insensitive(!options.case_sensitive)
+            .build(&[query])
+        {
+            Ok(ac) => ac,
+            Err(_) => return hits,
+        };
 
         for entry in &self.entries {
             if entry.project_id != project_id {
                 continue;
             }
             for (line_idx, line) in entry.lines.iter().enumerate() {
-                let line_to_search = if options.case_sensitive {
-                    std::borrow::Cow::Borrowed(line.as_str())
-                } else {
-                    std::borrow::Cow::Owned(line.to_lowercase())
-                };
-
-                if line_to_search.contains(query_to_match) {
+                if ac.is_match(line) {
                     let ctx_start = line_idx.saturating_sub(options.context_lines);
                     let ctx_end = (line_idx + options.context_lines + 1).min(entry.lines.len());
 
