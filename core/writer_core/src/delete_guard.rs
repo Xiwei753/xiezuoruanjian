@@ -227,4 +227,30 @@ mod tests {
         let res = validate_delete_target(workspace.path(), &actual_target, "marker.txt");
         assert!(res.is_err()); // "Marker file ... is a symlink"
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_delete_target_symlink_traversal() {
+        use std::os::unix::fs::symlink;
+        let workspace = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let outside_target = outside.path().join("outside_target");
+        fs::create_dir(&outside_target).unwrap();
+        let marker = outside_target.join("marker.txt");
+        fs::write(&marker, "marker").unwrap();
+
+        // Create a symlink inside the workspace pointing to the outside target
+        let symlink_target = workspace.path().join("symlinked_target");
+        symlink(&outside_target, &symlink_target).unwrap();
+
+        // Ensure validate_delete_target rejects the symlink
+        let res = validate_delete_target(workspace.path(), &symlink_target, "marker.txt");
+        assert!(res.is_err());
+        match res {
+            Err(Error::InvalidDeleteTarget(msg)) => {
+                assert!(msg.contains("Target is a symlink"));
+            }
+            _ => panic!("Expected InvalidDeleteTarget error"),
+        }
+    }
 }
