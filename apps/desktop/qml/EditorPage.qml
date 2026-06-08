@@ -96,7 +96,7 @@ Rectangle {
                         background: Rectangle { color: "transparent" }
                         enabled: root.backendRef && root.backendRef.has_selected_chapter_prop
                         focus: true
-                        activeFocusOnTab: true
+                        // activeFocusOnTab: true
                         selectByMouse: true
                         persistentSelection: true
                         leftPadding: root.appTheme ? root.appTheme.sp4 : 4
