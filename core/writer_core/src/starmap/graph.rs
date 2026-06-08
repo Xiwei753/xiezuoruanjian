@@ -43,7 +43,9 @@ fn layout_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
 }
 
 fn viewport_path(workspace: &Path, starmap_id: &str) -> std::path::PathBuf {
-    starmaps_dir(workspace).join(starmap_id).join("viewport.json")
+    starmaps_dir(workspace)
+        .join(starmap_id)
+        .join("viewport.json")
 }
 
 pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGraph> {
@@ -608,7 +610,10 @@ pub fn delete_starmap_link(workspace: &Path, starmap_id: &str, link_id: &str) ->
     Ok(())
 }
 
-fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
+fn validate_nodes<'a>(
+    workspace: &Path,
+    graph: &'a StarMapGraph,
+) -> Result<std::collections::HashSet<&'a String>> {
     let mut node_ids = std::collections::HashSet::new();
     for node in &graph.nodes {
         if !node_ids.insert(&node.id) {
@@ -693,7 +698,14 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
 
         crate::starmap::semantic::validate_display_policy(&node.display_policy)?;
     }
+    Ok(node_ids)
+}
 
+fn validate_edges(
+    workspace: &Path,
+    graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<&String>,
+) -> Result<()> {
     for edge in &graph.edges {
         let validate_edge_endpoint = |ep: &Option<crate::starmap::types::StarMapEdgeEndpoint>,
                                       legacy_id: &Option<String>,
@@ -775,7 +787,14 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
         validate_edge_endpoint(&edge.from_endpoint, &edge.from, &edge.from_target, "from")?;
         validate_edge_endpoint(&edge.to_endpoint, &edge.to, &edge.to_target, "to")?;
     }
+    Ok(())
+}
 
+fn validate_embeds(
+    workspace: &Path,
+    graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<&String>,
+) -> Result<()> {
     let mut instance_ids = std::collections::HashSet::new();
     for embed in &graph.embeds {
         if !instance_ids.insert(&embed.instance_id) {
@@ -862,7 +881,14 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
 
         crate::starmap::semantic::validate_display_policy(&embed.display_policy)?;
     }
+    Ok(())
+}
 
+fn validate_links(
+    workspace: &Path,
+    graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<&String>,
+) -> Result<()> {
     let mut link_ids = std::collections::HashSet::new();
     for link in &graph.links {
         if !link_ids.insert(&link.link_id) {
@@ -911,7 +937,14 @@ fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
             _ => {}
         }
     }
+    Ok(())
+}
 
+fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
+    let node_ids = validate_nodes(workspace, graph)?;
+    validate_edges(workspace, graph, &node_ids)?;
+    validate_embeds(workspace, graph, &node_ids)?;
+    validate_links(workspace, graph, &node_ids)?;
     Ok(())
 }
 
