@@ -317,6 +317,27 @@ mod tests {
     }
 
     #[test]
+    fn detects_diff_with_empty_inputs() {
+        assert_eq!(diff_plain_text("", ""), vec![]);
+
+        assert_eq!(
+            diff_plain_text("", "text"),
+            vec![EditorChange::Insert {
+                index: 0,
+                text: "text".to_string(),
+            }]
+        );
+
+        assert_eq!(
+            diff_plain_text("text", ""),
+            vec![EditorChange::Delete {
+                index: 0,
+                text: "text".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn replacement_is_delete_then_insert() {
         let changes = diff_plain_text("alpha beta", "alpha gamma");
         assert_eq!(
