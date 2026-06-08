@@ -83,19 +83,16 @@ pub enum StarMapAnchorTarget {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum StarMapAnchorRole {
     Source,
     Destination,
+    #[default]
     Reference,
     #[serde(other)]
     Custom,
 }
 
-impl Default for StarMapAnchorRole {
-    fn default() -> Self {
-        StarMapAnchorRole::Reference
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -111,31 +108,25 @@ pub struct StarMapPortal {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum StarMapPortalMode {
     EnterChild,
     PreviewInline,
+    #[default]
     ReferenceOnly,
 }
 
-impl Default for StarMapPortalMode {
-    fn default() -> Self {
-        StarMapPortalMode::ReferenceOnly
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum StarMapPortalPreviewPolicy {
+    #[default]
     Auto,
     Always,
     Never,
 }
 
-impl Default for StarMapPortalPreviewPolicy {
-    fn default() -> Self {
-        StarMapPortalPreviewPolicy::Auto
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -634,7 +634,7 @@ impl WriterCore {
             }
         } else {
             source_str = "deleted";
-            deleted = diff.abs() as u32;
+            deleted = diff.unsigned_abs();
             inserted = 0;
         }
 

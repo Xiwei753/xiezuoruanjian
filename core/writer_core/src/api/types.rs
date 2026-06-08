@@ -432,7 +432,7 @@ pub struct NetworkProbeResultDto {
 impl From<crate::sync_service::NetworkProbeResult> for NetworkProbeResultDto {
     fn from(p: crate::sync_service::NetworkProbeResult) -> Self {
         Self {
-            mode: p.mode.into(),
+            mode: p.mode,
             success: p.success,
             status: p.status,
             message: p.message,
@@ -704,7 +704,7 @@ impl From<crate::mind_map::MindMapSnapshotEdge> for MindMapSnapshotEdgeDto {
             id: e.id,
             from: e.from,
             to: e.to,
-            kind: e.kind.into(),
+            kind: e.kind,
             label: e.label,
         }
     }
@@ -931,7 +931,7 @@ impl From<crate::mind_map::MindMapLink> for MindMapLinkDto {
             id: l.id,
             node_id: l.node_id,
             anchor_id: l.anchor_id,
-            kind: l.kind.into(),
+            kind: l.kind,
             created_at: l.created_at,
             updated_at: l.updated_at,
         }
@@ -3072,20 +3072,17 @@ impl Default for StarMapTargetDetailDto {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum StarMapSourceKindDto {
     Human,
     Import,
     Plugin,
     Ai,
     System,
+    #[default]
     Unknown,
 }
 
-impl Default for StarMapSourceKindDto {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 impl From<crate::starmap::semantic::StarMapSourceKind> for StarMapSourceKindDto {
     fn from(k: crate::starmap::semantic::StarMapSourceKind) -> Self {
@@ -3115,19 +3112,16 @@ impl From<StarMapSourceKindDto> for crate::starmap::semantic::StarMapSourceKind 
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum StarMapReviewStatusDto {
     Accepted,
     Draft,
     NeedsReview,
     Rejected,
+    #[default]
     Unknown,
 }
 
-impl Default for StarMapReviewStatusDto {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 impl From<crate::starmap::semantic::StarMapReviewStatus> for StarMapReviewStatusDto {
     fn from(s: crate::starmap::semantic::StarMapReviewStatus) -> Self {
