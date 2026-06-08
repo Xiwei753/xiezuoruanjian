@@ -37,4 +37,25 @@ mod tests {
         assert_eq!(edits[0].volume_id, "v1");
         assert_eq!(edits[0].chapter_id, "c1");
     }
+
+    #[test]
+    fn test_record_recent_edit_limit_20() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+
+        create_workspace(workspace_path).unwrap();
+
+        for i in 1..=25 {
+            let chapter_id = format!("ch_{}", i);
+            record_recent_edit(workspace_path, "proj_1", "vol_1", &chapter_id).unwrap();
+        }
+
+        let edits = get_recent_edits(workspace_path).unwrap();
+
+        assert_eq!(edits.len(), 20);
+
+        assert_eq!(edits[0].chapter_id, "ch_25");
+
+        assert_eq!(edits[19].chapter_id, "ch_6");
+    }
 }

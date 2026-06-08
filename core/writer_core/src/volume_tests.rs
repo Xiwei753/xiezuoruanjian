@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::project::create_project;
-    use crate::volume::{create_volume, list_volumes, reorder_volumes};
+    use crate::volume::{create_volume, list_volumes, normalize_rel_path, reorder_volumes};
     use crate::workspace::create_workspace;
     use tempfile::tempdir;
 
@@ -54,5 +54,29 @@ mod tests {
             Err(crate::error::Error::Other(msg)) => assert_eq!(msg, "Invalid ordered_ids for reorder"),
             _ => panic!("Expected Error::Other for extra non-existent IDs"),
         }
+    }
+
+    #[test]
+    fn test_normalize_rel_path() {
+        use std::path::Path;
+
+        let base = Path::new("workspace/my_project");
+        let path = Path::new("workspace/my_project/volumes/vol1");
+
+        let rel = normalize_rel_path(path, base);
+        assert_eq!(rel, "volumes/vol1");
+
+        let out_of_bounds_path = Path::new("other/path/vol1");
+        assert_eq!(
+            normalize_rel_path(out_of_bounds_path, base),
+            "other/path/vol1"
+        );
+
+        let path_with_backslash = Path::new("volumes\\vol1\\file.txt");
+        let base_empty = Path::new("");
+        assert_eq!(
+            normalize_rel_path(&path_with_backslash, base_empty),
+            "volumes/vol1/file.txt"
+        );
     }
 }
