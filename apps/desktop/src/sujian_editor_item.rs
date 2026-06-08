@@ -147,18 +147,18 @@ cpp! {{
         if (root->childCount() > 1) {
             cursorNode = dynamic_cast<QSGRectangleNode*>(root->lastChild());
         }
-        if (!visible) {
-            if (cursorNode) {
-                root->removeChildNode(cursorNode);
-                delete cursorNode;
-            }
-            return;
-        }
-        // Visible: create if needed, position, mark dirty
+        // Create if needed
         if (!cursorNode) {
             cursorNode = item->window()->createRectangleNode();
             root->appendChildNode(cursorNode);
         }
+        if (!visible) {
+            // Move offscreen instead of deleting
+            cursorNode->setRect(QRectF(-100000, -100000, 0, 0));
+            cursorNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+            return;
+        }
+        // Visible: position and mark dirty
         cursorNode->setRect(QRectF(cx, cy, cw, ch));
         cursorNode->setColor(QColor::fromRgba(color_rgba));
         cursorNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
@@ -603,6 +603,8 @@ struct EditorSnapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 struct VisualLine {
+    /// 视觉行唯一 ID（从 0 开始递增）
+    id: usize,
     /// 全文绝对字节起始 (UTF-8)
     start: usize,
     /// 全文绝对字节结束 (UTF-8)
@@ -1016,8 +1018,10 @@ pub struct SujianEditorItem {
     cursor_visible: bool,
     cursor_dirty: bool,
     current_cursor_affinity: CaretAffinity,
+    current_visual_line_id: Option<usize>,
     ime_cursor_rect_y: f64,
     ime_cursor_rect_h: f64,
+    force_snap_next_cursor: bool,
 }
 
 impl Default for SujianEditorItem {
@@ -1121,8 +1125,10 @@ impl Default for SujianEditorItem {
             cursor_visible: false,
             cursor_dirty: true,
             current_cursor_affinity: CaretAffinity::Downstream,
+            current_visual_line_id: None,
             ime_cursor_rect_y: 0.0,
             ime_cursor_rect_h: 0.0,
+            force_snap_next_cursor: false,
         }
     }
 }
@@ -1359,6 +1365,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_scroll_y = value;
+        self.force_snap_next_cursor = true;
         self.request_repaint();
     }
 
@@ -1387,6 +1394,7 @@ impl SujianEditorItem {
             self.cursor_animation = None;
             self.insert_animation = None;
             self.delete_animation = None;
+            self.force_snap_next_cursor = true;
             self.request_repaint();
             return;
         }
@@ -1420,7 +1428,8 @@ impl SujianEditorItem {
     }
 
     fn cursor_rect_y(&self) -> f32 {
-        self.ime_cursor_rect_y as f32
+        // Viewport coordinates: target_cursor_y is already viewport-relative
+        self.target_cursor_y as f32
     }
 
     fn cursor_rect_width(&self) -> f32 {
@@ -1651,6 +1660,7 @@ impl SujianEditorItem {
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.current_cursor_affinity = affinity;
+        self.force_snap_next_cursor = true;
         if sujian_editor_debug_enabled() {
             eprintln!(
                 "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
@@ -1669,6 +1679,7 @@ impl SujianEditorItem {
     fn drag_select_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.current_cursor_affinity = affinity;
+        self.force_snap_next_cursor = true;
         self.buffer.move_cursor(index, true);
         self.cursor_position_changed();
         self.selection_changed();
@@ -1912,8 +1923,9 @@ impl SujianEditorItem {
         if lines.is_empty() {
             return (0, CaretAffinity::Downstream);
         }
-        // Model B: y is already in document coordinate space
-        let doc_y = y;
+        // Viewport model: y is viewport coordinate, convert to document coordinate
+        let scroll_y = self.current_scroll_y as f64;
+        let doc_y = y + scroll_y;
         let line_opt = lines
             .iter()
             .enumerate()
@@ -1922,7 +1934,13 @@ impl SujianEditorItem {
             Some((idx, l)) => (idx, l),
             None => (lines.len() - 1, lines.last().unwrap()),
         };
-        let index = self.index_at_line_x(line, x);
+        let raw_index = self.index_at_line_x(line, x);
+        // Lock to current visual line: clamp byte_index to line.start..=line.end
+        let index = raw_index.max(line.start).min(line.end);
+        debug_assert!(
+            index >= line.start && index <= line.end,
+            "hit_test: index {} out of line range {}..{}", index, line.start, line.end
+        );
         let affinity = if index == line.end && line.start != line.end {
             CaretAffinity::Upstream
         } else {
@@ -1930,8 +1948,8 @@ impl SujianEditorItem {
         };
         if sujian_editor_debug_enabled() {
             eprintln!(
-                "hit_test: mouse_x={:.1}, mouse_y={:.1}, doc_y={:.1}, current_scroll_y={:.1}, hit_visual_line_idx={}, line_range={}..{}, index={}, affinity={:?}, cursor_rect_x={:.1}, cursor_rect_y={:.1}",
-                x, y, doc_y, self.current_scroll_y, line_idx, line.start, line.end, index, affinity, self.target_cursor_x, self.target_cursor_y
+                "hit_test: mouse_x={:.1}, mouse_y={:.1}, doc_y={:.1}, current_scroll_y={:.1}, hit_visual_line_idx={}, line_range={}..{}, raw_index={}, clamped_index={}, affinity={:?}",
+                x, y, doc_y, self.current_scroll_y, line_idx, line.start, line.end, raw_index, index, affinity
             );
         }
         (index, affinity)
@@ -2192,8 +2210,9 @@ impl QQuickItem for SujianEditorItem {
                 Some((image, buf_scroll_y, _buf_h)) => {
                     let src_y = scroll_y - buf_scroll_y;
                     let logical_img_w = image.size().width as f64 / dpr;
+                    // Viewport model: image rect at (0, 0), sourceRect scrolls
                     let new_raw = sujian_update_texture_node(
-                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, scroll_y, vp_h, dpr,
+                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, 0.0, vp_h, dpr,
                     );
                     sujian_update_cursor_rect(
                         new_raw, item_ptr,
@@ -2227,7 +2246,8 @@ impl QQuickItem for SujianEditorItem {
                         if let Some(ref buf) = self.scroll_buffer {
                             let src_y = scroll_y - buf.buffer_scroll_y;
                             let logical_img_w = buf.image.size().width as f64 / dpr;
-                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, scroll_y, vp_h, dpr);
+                            // Viewport model: image rect at (0, 0), sourceRect scrolls
+                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, 0.0, vp_h, dpr);
                         }
                         sujian_update_cursor_rect(
                             old_raw, item_ptr,
@@ -2270,7 +2290,8 @@ impl QQuickItem for SujianEditorItem {
             if let Some(ref buf) = self.scroll_buffer {
                 let src_y = scroll_y - buf.buffer_scroll_y;
                 let logical_img_w = buf.image.size().width as f64 / dpr;
-                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, scroll_y, vp_h, dpr);
+                // Viewport model: image rect at (0, 0), sourceRect scrolls
+                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, 0.0, vp_h, dpr);
             }
             sujian_update_cursor_rect(
                 old_raw, item_ptr,
@@ -2314,12 +2335,25 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
 
-        let (cursor_x, cursor_line_y, cursor_line_idx) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-        let (cursor_y, cursor_h) = if cursor_line_idx < lines.len() {
-            cursor_rect_for_line(&lines[cursor_line_idx], font_size, &font_family)
+        let (cursor_x, cursor_line_y, visual_line_id) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
+        // Prefer visual_line_id lookup over global byte_index search
+        let cursor_y_doc = if let Some(line) = lines.iter().find(|l| l.id == visual_line_id) {
+            cursor_rect_for_line(line, font_size, &font_family).0
         } else {
-            (cursor_line_y, cursor_height_for_line(font_size, &font_family))
+            cursor_line_y
         };
+        let cursor_h = if let Some(line) = lines.iter().find(|l| l.id == visual_line_id) {
+            cursor_rect_for_line(line, font_size, &font_family).1
+        } else {
+            cursor_height_for_line(font_size, &font_family)
+        };
+
+        // Store the visual line id for future lookups
+        self.current_visual_line_id = Some(visual_line_id);
+
+        // Convert to viewport coordinates
+        let scroll_y = self.current_scroll_y as f64;
+        let cursor_y = cursor_y_doc - scroll_y;
 
         // Always save new target position and IME rect — regardless of visibility
         let old_x = self.target_cursor_x;
@@ -2328,7 +2362,7 @@ impl SujianEditorItem {
 
         self.target_cursor_x = cursor_x;
         self.target_cursor_y = cursor_y;
-        self.ime_cursor_rect_y = cursor_y;
+        self.ime_cursor_rect_y = cursor_y_doc;  // IME needs document coordinates
         self.ime_cursor_rect_h = cursor_h;
         self.cursor_visual_h = cursor_h;
 
@@ -2342,11 +2376,9 @@ impl SujianEditorItem {
             });
         }
 
-        // Viewport check uses NEW candidate position, not old target
-        let scroll_top = self.current_scroll_y as f64;
-        let scroll_bottom = scroll_top + self.current_viewport_height.max(1.0) as f64;
-        let in_viewport = cursor_y + cursor_h > scroll_top
-            && cursor_y < scroll_bottom;
+        // Viewport check: cursor is in viewport coordinates, just check bounds
+        let vp_h = self.current_viewport_height.max(1.0) as f64;
+        let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < vp_h;
         let new_visible = self.current_editor_enabled
             && !self.buffer.has_selection()
             && in_viewport;
@@ -2369,10 +2401,12 @@ impl SujianEditorItem {
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.preedit_text.is_empty();
 
+        // Click/drag/scroll should snap immediately (no animation)
         let should_snap = self.current_is_scrolling 
             || is_selecting 
             || is_preediting
-            || !old_visible; // snap when becoming visible again
+            || !old_visible  // snap when becoming visible again
+            || self.force_snap_next_cursor;
 
         let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
             if anim.is_finished(now) {
@@ -2425,6 +2459,7 @@ impl SujianEditorItem {
         self.cursor_animation = new_animation;
         self.cursor_visual_x = final_x;
         self.cursor_visual_y = final_y;
+        self.force_snap_next_cursor = false;
 
         // Dirty when position changed or visibility transitioned
         let pos_changed = (final_x - old_x).abs() > 0.01
@@ -2436,8 +2471,8 @@ impl SujianEditorItem {
 
         if sujian_editor_debug_enabled() {
             eprintln!(
-                "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, current_scroll_y={:.1}",
-                self.buffer.cursor, self.target_cursor_x, self.target_cursor_y, self.cursor_visual_x, self.cursor_visual_y, self.cursor_animation.is_some(), self.current_scroll_y
+                "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, scroll_y={:.1}",
+                self.buffer.cursor, self.target_cursor_x, self.target_cursor_y, self.cursor_visual_x, self.cursor_visual_y, self.cursor_animation.is_some(), scroll_y
             );
         }
 
@@ -2952,6 +2987,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
     let mut result = Vec::new();
     let mut y = padding;
     let mut paragraph_start = 0;
+    let mut line_id: usize = 0;
 
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
@@ -2960,6 +2996,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
 
         if paragraph_text.is_empty() {
             result.push(VisualLine {
+                id: line_id,
                 start: paragraph_start,
                 end: paragraph_start,
                 hard_break,
@@ -2975,6 +3012,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
                 line_wrap_width: available - indent,
                 line_indent_x: indent,
             });
+            line_id += 1;
             y += line_height;
             paragraph_start += paragraph.len();
             continue;
@@ -3066,6 +3104,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
             let is_first = line_idx == 0;
 
             result.push(VisualLine {
+                id: line_id,
                 start: abs_start,
                 end: abs_end,
                 hard_break: hard_break && abs_end == paragraph_text_end,
@@ -3081,6 +3120,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
                 line_wrap_width: if is_first { available - indent } else { available },
                 line_indent_x: if is_first { indent } else { 0.0 },
             });
+            line_id += 1;
             y += line_height;
         }
 
@@ -3089,6 +3129,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
 
     if text.ends_with('\n') {
         result.push(VisualLine {
+            id: line_id,
             start: text.len(),
             end: text.len(),
             hard_break: false,
@@ -3104,10 +3145,12 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
             line_wrap_width: available - indent,
             line_indent_x: indent,
         });
+        line_id += 1;
     }
 
     if text.is_empty() {
         result.push(VisualLine {
+            id: line_id,
             start: 0,
             end: 0,
             hard_break: false,
@@ -3135,6 +3178,8 @@ fn cursor_geometry_with_font(
     font_size: f64,
     font_family: &str,
 ) -> (f64, f64, usize) {
+    // First try to find by visual_line_id if available (fast path)
+    // Fall back to searching all lines
     for (idx, line) in lines.iter().enumerate() {
         if line_contains_cursor_with_affinity(lines, idx, cursor, affinity) {
             let w = if affinity == CaretAffinity::Upstream && cursor == line.end {
@@ -3151,13 +3196,13 @@ fn cursor_geometry_with_font(
                     paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
                 )
             };
-            return (line.x + w, cursor_rect_for_line(line, font_size, font_family).0, idx);
+            return (line.x + w, cursor_rect_for_line(line, font_size, font_family).0, line.id);
         }
     }
     let last_idx = lines.len().saturating_sub(1);
     lines
         .last()
-        .map(|line| (line.x + line.width, cursor_rect_for_line(line, font_size, font_family).0, last_idx))
+        .map(|line| (line.x + line.width, cursor_rect_for_line(line, font_size, font_family).0, line.id))
         .unwrap_or((0.0, 0.0, 0))
 }
 
@@ -3540,8 +3585,8 @@ mod tests {
     fn cursor_geometry_prefers_next_visual_line_at_boundary() {
         let text = "ab";
         let lines = vec![
-            VisualLine { start: 0, end: 1, hard_break: false, x: 16.0, y: 10.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 1, line_wrap_width: 468.0, line_indent_x: 32.0 },
-            VisualLine { start: 1, end: 2, hard_break: false, x: 16.0, y: 34.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 1, para_qchar_end: 2, line_wrap_width: 500.0, line_indent_x: 0.0 },
+            VisualLine { id: 0, start: 0, end: 1, hard_break: false, x: 16.0, y: 10.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 1, line_wrap_width: 468.0, line_indent_x: 32.0 },
+            VisualLine { id: 1, start: 1, end: 2, hard_break: false, x: 16.0, y: 34.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 1, para_qchar_end: 2, line_wrap_width: 500.0, line_indent_x: 0.0 },
         ];
 
         let (_x, y, _li) = cursor_geometry_with_font(text, &lines, 1, CaretAffinity::Downstream, 16.0, "serif");
@@ -3552,8 +3597,8 @@ mod tests {
     #[test]
     fn test_caret_affinity_boundary_matching() {
         let lines = vec![
-            VisualLine { start: 0, end: 10, hard_break: false, x: 16.0, y: 10.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 10, line_wrap_width: 500.0, line_indent_x: 0.0 },
-            VisualLine { start: 10, end: 20, hard_break: false, x: 16.0, y: 34.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 10, para_qchar_end: 20, line_wrap_width: 500.0, line_indent_x: 0.0 },
+            VisualLine { id: 0, start: 0, end: 10, hard_break: false, x: 16.0, y: 10.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 10, line_wrap_width: 500.0, line_indent_x: 0.0 },
+            VisualLine { id: 1, start: 10, end: 20, hard_break: false, x: 16.0, y: 34.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 10, para_qchar_end: 20, line_wrap_width: 500.0, line_indent_x: 0.0 },
         ];
 
         // At boundary index 10:
@@ -3577,7 +3622,7 @@ mod tests {
 
     #[test]
     fn cursor_and_text_are_vertically_centered_in_spaced_line() {
-        let line = VisualLine { start: 0, end: 0, hard_break: false, x: 16.0, y: 10.0, width: 0.0, height: 32.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 468.0, line_indent_x: 32.0 };
+        let line = VisualLine { id: 0, start: 0, end: 0, hard_break: false, x: 16.0, y: 10.0, width: 0.0, height: 32.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 468.0, line_indent_x: 32.0 };
 
         let top_y = cursor_top_y(&line, 16.0, "serif");
         assert!(top_y > line.y);
@@ -3699,6 +3744,7 @@ mod tests {
         // Mock 3 visual lines manually instead of calling layout_lines (which calls QFont and crashes without QGuiApplication)
         let lines = vec![
             VisualLine {
+                id: 0,
                 start: 0,
                 end: 10,
                 hard_break: true,
@@ -3715,6 +3761,7 @@ mod tests {
                 line_indent_x: 0.0,
             },
             VisualLine {
+                id: 1,
                 start: 11,
                 end: 22,
                 hard_break: true,
@@ -3731,6 +3778,7 @@ mod tests {
                 line_indent_x: 0.0,
             },
             VisualLine {
+                id: 2,
                 start: 23,
                 end: 33,
                 hard_break: true,

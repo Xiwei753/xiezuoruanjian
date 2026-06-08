@@ -708,7 +708,7 @@ Rectangle {
                             SujianEditorItem {
                                 id: sujianEditor
                                 width: parent.width
-                                height: Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
+                                height: editorScroll.availableHeight
                                 y: 0
                                 
                                 onWidthChanged: {
