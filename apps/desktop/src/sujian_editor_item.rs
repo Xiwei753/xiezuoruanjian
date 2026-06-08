@@ -557,6 +557,7 @@ const KEY_RIGHT: i32 = 0x0100_0014;
 const KEY_DOWN: i32 = 0x0100_0015;
 const KEY_HOME: i32 = 0x0100_0010;
 const KEY_END: i32 = 0x0100_0011;
+const KEY_ESCAPE: i32 = 0x0100_0000;
 const KEY_A: i32 = 0x41;
 const KEY_C: i32 = 0x43;
 const KEY_V: i32 = 0x56;
@@ -1007,6 +1008,7 @@ pub struct SujianEditorItem {
     delete_animation: Option<DeleteAnimation>,
     preedit_text: String,
     preedit_cursor: usize,
+    suppress_next_ime_commit: bool,
     layout_cache: Option<LayoutCache>,
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
@@ -1109,6 +1111,7 @@ impl Default for SujianEditorItem {
             delete_animation: None,
             preedit_text: String::new(),
             preedit_cursor: 0,
+            suppress_next_ime_commit: false,
             layout_cache: None,
             render_dirty: true,
             scroll_buffer: None,
@@ -1624,6 +1627,11 @@ impl SujianEditorItem {
         }
 
         match key {
+            KEY_ESCAPE => {
+                self.preedit_text.clear();
+                self.preedit_cursor = 0;
+                self.suppress_next_ime_commit = true;
+            }
             KEY_BACKSPACE => self.delete_backward(),
             KEY_DELETE => self.delete_forward(),
             KEY_RETURN | KEY_ENTER => self.insert_text("\n".into()),
@@ -2003,7 +2011,7 @@ impl SujianEditorItem {
 
             let baseline_y = text_baseline_y(line, font_size, &font_family);
             let top_y = cursor_top_y(line, font_size, &font_family);
-            let h = cursor_height_for_line(font_size, &font_family);
+            let h = cursor_height_for_line_with_cap(line, font_size, &font_family);
 
             if line.para_text.is_empty() {
                 continue;
@@ -2043,8 +2051,12 @@ impl SujianEditorItem {
         let lines = self.ensure_layout_cached(width).clone();
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
-        let (target_x, target_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-        let cursor_h = cursor_height_for_line(font_size, &font_family);
+        let (target_x, target_y, target_line_idx) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
+        let cursor_h = if target_line_idx < lines.len() {
+            cursor_height_for_line_with_cap(&lines[target_line_idx], font_size, &font_family)
+        } else {
+            cursor_height_for_line(font_size, &font_family)
+        };
         let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
         self.delete_animation = Some(DeleteAnimation {
             glyphs,
@@ -2301,8 +2313,12 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
 
-        let (cursor_x, cursor_y) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-        let cursor_h = cursor_height_for_line(font_size, &font_family);
+        let (cursor_x, cursor_y, cursor_line_idx) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
+        let cursor_h = if cursor_line_idx < lines.len() {
+            cursor_height_for_line_with_cap(&lines[cursor_line_idx], font_size, &font_family)
+        } else {
+            cursor_height_for_line(font_size, &font_family)
+        };
 
         let old_x = self.target_cursor_x;
         let old_y = self.target_cursor_y;
@@ -2764,7 +2780,8 @@ impl SujianEditorItem {
 }
 
 fn normalize_plain_text(text: &str) -> String {
-    text.replace('\u{2029}', "\n").replace("\r\n", "\n").replace('\r', "\n")
+    let replaced = text.replace('\u{2029}', "\n").replace("\r\n", "\n").replace('\r', "\n");
+    replaced.chars().filter(|&c| c == '\n' || c == '\t' || !c.is_control()).collect()
 }
 
 // =============================================================================
@@ -2820,6 +2837,12 @@ extern "C" fn sujian_ime_commit(rust_item: *mut std::ffi::c_void, text: *const u
     if !item.current_editor_enabled || text_len <= 0 {
         return;
     }
+    if item.suppress_next_ime_commit {
+        item.suppress_next_ime_commit = false;
+        item.preedit_text.clear();
+        item.preedit_cursor = 0;
+        return;
+    }
     let text_str = unsafe {
         let slice = std::slice::from_raw_parts(text, text_len as usize);
         String::from_utf16_lossy(slice)
@@ -2847,6 +2870,9 @@ extern "C" fn sujian_ime_preedit(
         let slice = std::slice::from_raw_parts(text, text_len as usize);
         String::from_utf16_lossy(slice)
     };
+    if !text_str.is_empty() {
+        item.suppress_next_ime_commit = false;
+    }
     item.preedit_text = text_str;
     item.preedit_cursor = cursor.max(0) as usize;
     if item.preedit_cursor > item.preedit_text.len() {
@@ -3071,7 +3097,7 @@ fn cursor_geometry_with_font(
     affinity: CaretAffinity,
     font_size: f64,
     font_family: &str,
-) -> (f64, f64) {
+) -> (f64, f64, usize) {
     for (idx, line) in lines.iter().enumerate() {
         if line_contains_cursor_with_affinity(lines, idx, cursor, affinity) {
             let w = if affinity == CaretAffinity::Upstream && cursor == line.end {
@@ -3088,13 +3114,14 @@ fn cursor_geometry_with_font(
                     paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
                 )
             };
-            return (line.x + w, cursor_top_y(line, font_size, font_family));
+            return (line.x + w, cursor_top_y(line, font_size, font_family), idx);
         }
     }
+    let last_idx = lines.len().saturating_sub(1);
     lines
         .last()
-        .map(|line| (line.x + line.width, cursor_top_y(line, font_size, font_family)))
-        .unwrap_or((0.0, 0.0))
+        .map(|line| (line.x + line.width, cursor_top_y(line, font_size, font_family), last_idx))
+        .unwrap_or((0.0, 0.0, 0))
 }
 
 #[cfg(not(test))]
@@ -3133,6 +3160,12 @@ fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
     let ascent = get_font_ascent(font_family, font_size as f32);
     let descent = get_font_descent(font_family, font_size as f32);
     (ascent + descent) as f64
+}
+
+fn cursor_height_for_line_with_cap(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
+    let raw = cursor_height_for_line(font_size, font_family);
+    let capped = line.height * 0.84;
+    if raw > capped { capped } else { raw }
 }
 
 fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
@@ -3459,7 +3492,7 @@ mod tests {
         assert_eq!(lines[1].start, text.len());
         assert_eq!(lines[1].end, text.len());
 
-        let (_x, y) = cursor_geometry_with_font(text, &lines, text.len(), CaretAffinity::Downstream, 16.0, "serif");
+        let (_x, y, _li) = cursor_geometry_with_font(text, &lines, text.len(), CaretAffinity::Downstream, 16.0, "serif");
         assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
     }
 
@@ -3471,7 +3504,7 @@ mod tests {
             VisualLine { start: 1, end: 2, hard_break: false, x: 16.0, y: 34.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 1, para_qchar_end: 2, line_wrap_width: 500.0, line_indent_x: 0.0 },
         ];
 
-        let (_x, y) = cursor_geometry_with_font(text, &lines, 1, CaretAffinity::Downstream, 16.0, "serif");
+        let (_x, y, _li) = cursor_geometry_with_font(text, &lines, 1, CaretAffinity::Downstream, 16.0, "serif");
 
         assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
     }
@@ -3493,11 +3526,11 @@ mod tests {
         assert!(line_contains_cursor_with_affinity(&lines, 1, 10, CaretAffinity::Downstream));
 
         // Test visual coordinates resolved directly
-        let (x_up, y_up) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Upstream, 16.0, "serif");
+        let (x_up, y_up, _li_up) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Upstream, 16.0, "serif");
         assert_eq!(x_up, 16.0 + 100.0);
         assert_eq!(y_up, cursor_top_y(&lines[0], 16.0, "serif"));
 
-        let (x_down, y_down) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Downstream, 16.0, "serif");
+        let (x_down, y_down, _li_down) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Downstream, 16.0, "serif");
         assert_eq!(x_down, 16.0);
         assert_eq!(y_down, cursor_top_y(&lines[1], 16.0, "serif"));
     }
