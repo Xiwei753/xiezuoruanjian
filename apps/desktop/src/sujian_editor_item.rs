@@ -195,7 +195,7 @@ cpp! {{
             int line_start = line.textStart();
             int line_len = line.textLength();
             if (qchar_count >= line_start && qchar_count <= line_start + line_len) {
-                x = line.cursorToX(qchar_count);
+                x = line.cursorToX(qchar_count - line_start);
                 break;
             }
         }
@@ -228,7 +228,8 @@ cpp! {{
             double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
-                x = line.cursorToX(cursor_qchar);
+                int local_qchar = cursor_qchar - line.textStart();
+                x = line.cursorToX(local_qchar);
                 break;
             }
             first = false;
@@ -269,8 +270,8 @@ cpp! {{
                 int r_start = std::max(range_qchar_start, line_start);
                 int r_end = std::min(range_qchar_end, line_end);
                 for (int i = r_start; i < r_end; i++) {
-                    double x1 = line.cursorToX(i);
-                    double x2 = line.cursorToX(i + 1);
+                    double x1 = line.cursorToX(i - line_start);
+                    double x2 = line.cursorToX(i - line_start + 1);
                     QTextLayoutEntry e;
                     e.byteStart = i;  // QChar offset within paragraph
                     e.width = std::abs(x2 - x1);
@@ -379,8 +380,8 @@ cpp! {{
                 int r_start = std::max(range_qchar_start, line_start);
                 int r_end = std::min(range_qchar_end, line_end);
                 for (int i = r_start; i < r_end; i++) {
-                    double x1 = line.cursorToX(i);
-                    double x2 = line.cursorToX(i + 1);
+                    double x1 = line.cursorToX(i - line_start);
+                    double x2 = line.cursorToX(i - line_start + 1);
                     QTextLayoutEntry e;
                     e.byteStart = i;  // QChar offset within paragraph
                     e.width = std::abs(x2 - x1);
@@ -476,6 +477,7 @@ fn qtextlayout_glyph_positions_on_line(
 /// QTextLayout-based x-to-cursor: given paragraph text and x position,
 /// returns QChar offset within paragraph. Caller converts to UTF-8 byte offset.
 /// DEPRECATED: use qtextlayout_x_to_cursor_on_line for wrapped-line accuracy.
+#[allow(dead_code)]
 fn qtextlayout_x_to_cursor_qchar(para_text: &str, x: f64, font_size: f64, font_family: &str, qtextline_idx: i32) -> i32 {
     let para: QString = para_text.to_string().into();
     let fs = font_size as f32;
@@ -509,6 +511,7 @@ fn qtextlayout_x_to_cursor_on_line(
 }
 
 /// QTextLayout-based glyph positions: returns per-glyph (byte_offset_in_para, x, width) for a range.
+#[allow(dead_code)]
 fn qtextlayout_glyph_positions(para_text: &str, range_start: usize, range_end: usize, font_size: f64, font_family: &str, qtextline_idx: i32) -> Vec<(usize, f64, f64)> {
     let para: QString = para_text.to_string().into();
     let fs = font_size as f32;
@@ -718,6 +721,7 @@ impl InsertAnimation {
     }
 
     /// 插入内容的总包围盒
+    #[allow(dead_code)]
     fn bounding_rect(&self) -> (f64, f64, f64, f64) {
         if self.glyphs.is_empty() {
             return self.origin_cursor_rect;
@@ -1945,16 +1949,21 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
         for (idx, line) in lines.iter().enumerate() {
-            if line_contains_cursor(lines, idx, self.buffer.cursor) {
-                if line.para_text.is_empty() {
-                    return Some((idx, line.x));
-                }
+            if line_contains_cursor_with_affinity(lines, idx, self.buffer.cursor, self.current_cursor_affinity) {
                 let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
-                let w = qtextlayout_cursor_to_x_on_line(
-                    &line.para_text, self.buffer.cursor, line.para_start,
-                    font_size, &font_family,
-                    paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
-                );
+                let w = if self.current_cursor_affinity == CaretAffinity::Upstream && self.buffer.cursor == line.end {
+                    line.width
+                } else if self.current_cursor_affinity == CaretAffinity::Downstream && self.buffer.cursor == line.start {
+                    0.0
+                } else if line.para_text.is_empty() {
+                    0.0
+                } else {
+                    qtextlayout_cursor_to_x_on_line(
+                        &line.para_text, self.buffer.cursor, line.para_start,
+                        font_size, &font_family,
+                        paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
+                    )
+                };
                 return Some((idx, line.x + w));
             }
         }
@@ -1963,6 +1972,7 @@ impl SujianEditorItem {
 
     /// 给定字节范围 [byte_start, byte_end)，返回每个字形的矩形信息。
     /// 使用 QTextLayout 精确定位每个字形。
+    #[allow(dead_code)]
     fn glyph_rects_for_range(&self, byte_start: usize, byte_end: usize) -> Vec<AnimatedGlyph> {
         let Some(ref cache) = self.layout_cache else {
             return Vec::new();
@@ -2023,6 +2033,7 @@ impl SujianEditorItem {
         result
     }
 
+    #[allow(dead_code)]
     fn start_delete_animation(&mut self, glyphs: Vec<AnimatedGlyph>) {
         if glyphs.is_empty() || self.current_is_scrolling {
             return;
@@ -2043,6 +2054,7 @@ impl SujianEditorItem {
         });
     }
 
+    #[allow(dead_code)]
     fn animation_visible_hit(&self, glyphs: &[AnimatedGlyph]) -> bool {
         if glyphs.is_empty() {
             return false;
@@ -2056,6 +2068,7 @@ impl SujianEditorItem {
         })
     }
 
+    #[allow(dead_code)]
     fn log_animation_created(&self, label: &str, offset: usize, glyph_count: usize, visible_line_hit: bool) {
         if editor_animation_debug_enabled() {
             eprintln!(
@@ -2071,6 +2084,7 @@ impl SujianEditorItem {
     }
 
     /// 给定字节范围，返回 (min_x, min_y, max_x, max_y) 包围盒
+    #[allow(dead_code)]
     fn bounding_rect_for_range(&self, byte_start: usize, byte_end: usize) -> (f64, f64, f64, f64) {
         let glyphs = self.glyph_rects_for_range(byte_start, byte_end);
         if glyphs.is_empty() {
@@ -3060,15 +3074,20 @@ fn cursor_geometry_with_font(
 ) -> (f64, f64) {
     for (idx, line) in lines.iter().enumerate() {
         if line_contains_cursor_with_affinity(lines, idx, cursor, affinity) {
-            if line.para_text.is_empty() {
-                return (line.x, cursor_top_y(line, font_size, font_family));
-            }
-            let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
-            let w = qtextlayout_cursor_to_x_on_line(
-                &line.para_text, cursor, line.para_start,
-                font_size, font_family,
-                paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
-            );
+            let w = if affinity == CaretAffinity::Upstream && cursor == line.end {
+                line.width
+            } else if affinity == CaretAffinity::Downstream && cursor == line.start {
+                0.0
+            } else if line.para_text.is_empty() {
+                0.0
+            } else {
+                let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
+                qtextlayout_cursor_to_x_on_line(
+                    &line.para_text, cursor, line.para_start,
+                    font_size, font_family,
+                    paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
+                )
+            };
             return (line.x + w, cursor_top_y(line, font_size, font_family));
         }
     }
@@ -3168,6 +3187,7 @@ fn line_contains_cursor_with_affinity(
     false
 }
 
+#[allow(dead_code)]
 fn line_contains_cursor(lines: &[VisualLine], idx: usize, cursor: usize) -> bool {
     line_contains_cursor_with_affinity(lines, idx, cursor, CaretAffinity::Downstream)
 }
@@ -3471,6 +3491,15 @@ mod tests {
         // With CaretAffinity::Downstream, it should belong to lines[1]
         assert!(!line_contains_cursor_with_affinity(&lines, 0, 10, CaretAffinity::Downstream));
         assert!(line_contains_cursor_with_affinity(&lines, 1, 10, CaretAffinity::Downstream));
+
+        // Test visual coordinates resolved directly
+        let (x_up, y_up) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Upstream, 16.0, "serif");
+        assert_eq!(x_up, 16.0 + 100.0);
+        assert_eq!(y_up, cursor_top_y(&lines[0], 16.0, "serif"));
+
+        let (x_down, y_down) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Downstream, 16.0, "serif");
+        assert_eq!(x_down, 16.0);
+        assert_eq!(y_down, cursor_top_y(&lines[1], 16.0, "serif"));
     }
 
     #[test]
@@ -3548,7 +3577,7 @@ mod tests {
             "写作者：测试emoji🎉混合",
         ];
         for text in &texts {
-            for (byte_pos, ch) in text.char_indices() {
+            for (byte_pos, _ch) in text.char_indices() {
                 let qchar = byte_offset_to_qchar_offset(text, byte_pos);
                 let back = qchar_offset_to_byte_offset(text, qchar);
                 assert_eq!(back, byte_pos,
