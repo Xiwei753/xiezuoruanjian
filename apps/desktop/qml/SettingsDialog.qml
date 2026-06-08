@@ -148,7 +148,8 @@ Dialog {
                     id: typingAnimDuration
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: qsTr("打字动画持续时间")
+                    label: qsTr("打字动画持续时间（当前自研写作区下不可用）")
+                    enabled: false
                     valueText: Math.round(value) + " ms"
                     from: 0
                     to: 1000

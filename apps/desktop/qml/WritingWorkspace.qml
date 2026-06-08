@@ -708,8 +708,8 @@ Rectangle {
                             SujianEditorItem {
                                 id: sujianEditor
                                 width: parent.width
-                                height: editorScroll.availableHeight
-                                y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
+                                height: Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
+                                y: 0
                                 
                                 onWidthChanged: {
                                     Qt.callLater(sujianEditor.flush_content_height)

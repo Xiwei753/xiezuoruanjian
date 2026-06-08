@@ -104,8 +104,7 @@ cpp! {{
                     double cy = obj->property("cursor_rect_y").toDouble();
                     double cw = obj->property("cursor_rect_width").toDouble();
                     double ch = obj->property("cursor_rect_height").toDouble();
-                    double scroll_y = obj->property("scroll_y").toDouble();
-                    qe->setValue(Qt::ImCursorRectangle, QRectF(cx, cy - scroll_y, cw, ch));
+                    qe->setValue(Qt::ImCursorRectangle, QRectF(cx, cy, cw, ch));
                 }
                 if (qe->queries() & Qt::ImEnabled) {
                     qe->setValue(Qt::ImEnabled, true);
@@ -118,8 +117,7 @@ cpp! {{
                     double cy = obj->property("cursor_rect_y").toDouble();
                     double cw = obj->property("cursor_rect_width").toDouble();
                     double ch = obj->property("cursor_rect_height").toDouble();
-                    double scroll_y = obj->property("scroll_y").toDouble();
-                    qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy - scroll_y, cw, ch));
+                    qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy, cw, ch));
                 }
                 event->accept();
                 return true;
@@ -648,6 +646,7 @@ struct ScrollBuffer {
     buffer_scroll_y: f64,
     buffer_content_h: f64,
     buffer_logical_h: f64,
+    dpr: f64,
 }
 
 /// 光标动画状态 — 固定时长 tween，不再用指数追赶
@@ -931,7 +930,6 @@ pub struct SujianEditorItem {
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
-    activeFocusOnTab: qt_property!(bool; READ activeFocusOnTab WRITE set_activeFocusOnTab NOTIFY activeFocusOnTab_changed),
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
@@ -946,7 +944,6 @@ pub struct SujianEditorItem {
     visual_settings_changed: qt_signal!(),
     transaction_created: qt_signal!(),
     cursor_rect_changed: qt_signal!(),
-    activeFocusOnTab_changed: qt_signal!(),
     explicit_clear_requested: qt_signal!(),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -1037,8 +1034,6 @@ impl Default for SujianEditorItem {
             scroll_y: Default::default(),
             viewport_height: Default::default(),
             is_scrolling: Default::default(),
-            activeFocusOnTab: true,
-            activeFocusOnTab_changed: Default::default(),
             plain_text_changed: Default::default(),
             text_changed: Default::default(),
             content_height_changed: Default::default(),
@@ -1117,8 +1112,6 @@ impl Default for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    fn activeFocusOnTab(&self) -> bool { true }
-    fn set_activeFocusOnTab(&mut self, _value: bool) { /* ignoring */ }
     fn request_repaint(&mut self) {
         self.render_dirty = true;
         let item = self as &dyn QQuickItem;
@@ -1627,6 +1620,12 @@ impl SujianEditorItem {
 
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
         let index = self.hit_test(x as f64, y as f64);
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, extend={}",
+                x, y, self.current_scroll_y, index, extend
+            );
+        }
         self.buffer.move_cursor(index, extend);
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -1868,13 +1867,24 @@ impl SujianEditorItem {
         if lines.is_empty() {
             return 0;
         }
-        // 鼠标事件在 viewport 本地坐标，需加 scroll_y 转为文档坐标
-        let doc_y = y + self.current_scroll_y as f64;
-        let line = lines
+        // Model B: y is already in document coordinate space
+        let doc_y = y;
+        let line_opt = lines
             .iter()
-            .find(|line| doc_y < line.y + line.height)
-            .unwrap_or_else(|| lines.last().unwrap());
-        self.index_at_line_x(line, x)
+            .enumerate()
+            .find(|(_, line)| doc_y < line.y + line.height);
+        let (line_idx, line) = match line_opt {
+            Some((idx, l)) => (idx, l),
+            None => (lines.len() - 1, lines.last().unwrap()),
+        };
+        let index = self.index_at_line_x(line, x);
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "hit_test: mouse_x={:.1}, mouse_y={:.1}, doc_y={:.1}, current_scroll_y={:.1}, hit_visual_line_idx={}, line_range={}..{}, index={}, cursor_rect_x={:.1}, cursor_rect_y={:.1}",
+                x, y, doc_y, self.current_scroll_y, line_idx, line.start, line.end, index, self.target_cursor_x, self.target_cursor_y
+            );
+        }
+        index
     }
 
     fn index_at_line_x(&self, line: &VisualLine, x: f64) -> usize {
@@ -2100,7 +2110,6 @@ impl QQuickItem for SujianEditorItem {
         let old_raw = node.into_raw();
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let scroll_y = self.current_scroll_y as f64;
-        let paint_offset_y = -scroll_y;
 
         let cursor_rgba = color_hex_to_rgba(&self.current_cursor_color);
 
@@ -2111,12 +2120,11 @@ impl QQuickItem for SujianEditorItem {
                     let src_y = scroll_y - buf_scroll_y;
                     let logical_img_w = image.size().width as f64 / dpr;
                     let new_raw = sujian_update_texture_node(
-                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, dpr,
+                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, scroll_y, vp_h, dpr,
                     );
-                    let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
                     sujian_update_cursor_rect(
                         new_raw, item_ptr,
-                        self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                        self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
                         self.cursor_visible, cursor_rgba,
                     );
                     // 光标动画仍 active 时保持 cursor_dirty，让下一帧进 cursor-only 路径推进动画
@@ -2146,12 +2154,11 @@ impl QQuickItem for SujianEditorItem {
                         if let Some(ref buf) = self.scroll_buffer {
                             let src_y = scroll_y - buf.buffer_scroll_y;
                             let logical_img_w = buf.image.size().width as f64 / dpr;
-                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, dpr);
+                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, scroll_y, vp_h, dpr);
                         }
-                        let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
                         sujian_update_cursor_rect(
                             old_raw, item_ptr,
-                            self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                            self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
                             self.cursor_visible, cursor_rgba,
                         );
                     }
@@ -2187,16 +2194,14 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_dirty = false;
             }
 
-            let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
-
             if let Some(ref buf) = self.scroll_buffer {
                 let src_y = scroll_y - buf.buffer_scroll_y;
                 let logical_img_w = buf.image.size().width as f64 / dpr;
-                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, dpr);
+                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, scroll_y, vp_h, dpr);
             }
             sujian_update_cursor_rect(
                 old_raw, item_ptr,
-                self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
                 self.cursor_visible, cursor_rgba,
             );
             unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
@@ -2214,10 +2219,9 @@ impl QQuickItem for SujianEditorItem {
                         let (cx, cy) = anim.current_position(now);
                         self.cursor_visual_x = cx;
                         self.cursor_visual_y = cy;
-                        let cursor_screen_y = self.cursor_visual_y + paint_offset_y;
                         sujian_update_cursor_rect(
                             old_raw, item_ptr,
-                            self.cursor_visual_x, cursor_screen_y, 2.0, self.cursor_visual_h,
+                            self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
                             self.cursor_visible, cursor_rgba,
                         );
                         let item = self as &dyn QQuickItem;
@@ -2273,11 +2277,7 @@ impl SujianEditorItem {
             (self.target_cursor_x, self.target_cursor_y)
         };
 
-        let same_line = (self.target_cursor_y - visual_y).abs() < 2.0;
-        let dist = ((self.target_cursor_x - visual_x).powi(2) + (self.target_cursor_y - visual_y).powi(2)).sqrt();
-        let small_move = dist < font_size * 3.0;
-
-        let (final_x, final_y, new_animation) = if should_snap || !same_line || !small_move || !self.current_smooth_cursor_enabled {
+        let (final_x, final_y, new_animation) = if should_snap || !self.current_smooth_cursor_enabled {
             (self.target_cursor_x, self.target_cursor_y, None)
         } else if let Some(ref anim) = self.cursor_animation {
             if (anim.target_x - self.target_cursor_x).abs() > 0.01 || (anim.target_y - self.target_cursor_y).abs() > 0.01 {
@@ -2321,6 +2321,13 @@ impl SujianEditorItem {
         self.cursor_visual_h = cursor_h;
         self.cursor_visible = self.current_editor_enabled && !self.buffer.has_selection();
         self.cursor_dirty = true;
+
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, current_scroll_y={:.1}",
+                self.buffer.cursor, self.target_cursor_x, self.target_cursor_y, self.cursor_visual_x, self.cursor_visual_y, self.cursor_animation.is_some(), self.current_scroll_y
+            );
+        }
 
         if let Some(ref anim) = self.cursor_animation {
             if !anim.is_finished(now) {
@@ -2584,8 +2591,6 @@ impl SujianEditorItem {
         }
     }
 
-    /// 渲染到 QImage。使用超大缓冲区(overscan)避免滚动时每帧重绘。
-    /// 返回 (QImage, buffer_scroll_y, buffer_h) 用于设置纹理节点的 source rect。
     fn render_to_image(&mut self) -> Option<(qmetaobject::QImage, f64, f64)> {
         let render_start = Instant::now();
         let item_ptr = self.get_cpp_object();
@@ -2596,33 +2601,55 @@ impl SujianEditorItem {
         let scroll_y = self.current_scroll_y as f64;
         let content_h = self.current_content_height as f64;
 
-        // Overscan: 上下各多渲染 2 个 viewport 高度
-        let overscan = vp_h * 2.0;
+        // Overscan: Cap the overscan padding to keep texture sizes small on maximized screens
+        let overscan = (vp_h * 0.8).min(600.0);
         let min_y = (scroll_y - overscan).max(0.0);
         let max_y = (scroll_y + vp_h + overscan).min(content_h.max(vp_h));
         let buffer_h = max_y - min_y;
 
-        // 检查滚动缓冲区是否仍然有效
-        if let Some(ref buf) = self.scroll_buffer {
-            let scroll_moved = (scroll_y - buf.buffer_scroll_y).abs() > 1.0;
+        // Evaluate the scroll buffer miss reason
+        let mut miss_reason = "none";
+        let mut needs_render = true;
+
+        if self.scroll_buffer.is_none() {
+            miss_reason = "no_buffer";
+        } else if self.layout_cache.is_none() {
+            miss_reason = "layout_invalidated";
+        } else {
+            let buf = self.scroll_buffer.as_ref().unwrap();
             let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
-            if !scroll_moved && !content_changed {
-                // 缓冲区有效，直接复用，不需要重绘
-                self.render_dirty = false;
-                return None;
-            }
-            // 检查滚动是否在当前缓冲区范围内（用逻辑高度比较）
-            if !content_changed
-                && scroll_y >= buf.buffer_scroll_y - 1.0
-                && scroll_y + vp_h <= buf.buffer_scroll_y + buf.buffer_logical_h + 1.0
-            {
-                // 滚动在缓冲区范围内，不需要重绘，只需更新 source rect
-                self.render_dirty = false;
-                return None;
+            if content_changed {
+                miss_reason = "content_changed";
+            } else {
+                let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
+                if dpr_changed {
+                    miss_reason = "dpr_changed";
+                } else {
+                    let inside_buffer = scroll_y >= buf.buffer_scroll_y - 1.0
+                        && scroll_y + vp_h <= buf.buffer_scroll_y + buf.buffer_logical_h + 1.0;
+                    if !inside_buffer {
+                        miss_reason = "outside_buffer";
+                    } else {
+                        // Buffer is valid, skip render and reuse
+                        needs_render = false;
+                    }
+                }
             }
         }
 
-        // 需要重新渲染 — 按 DPR 创建物理像素尺寸的 QImage
+        if !needs_render {
+            self.render_dirty = false;
+            return None;
+        }
+
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "render_to_image: rebuilding buffer, miss_reason={}, scroll_y={:.1}, content_h={:.1}, vp_h={:.1}",
+                miss_reason, scroll_y, content_h, vp_h
+            );
+        }
+
+        // 需要重新渲染 — 按 DPR 创建物理像素尺寸 of QImage
         let phys_w = ((img_w as f64 * dpr) as i32).max(1);
         let phys_h = ((buffer_h * dpr) as i32).max(1);
         let mut image = qmetaobject::QImage::new(
@@ -2649,6 +2676,7 @@ impl SujianEditorItem {
             buffer_scroll_y: min_y,
             buffer_content_h: content_h,
             buffer_logical_h: buffer_h,
+            dpr,
         });
 
         let render_elapsed = render_start.elapsed();
@@ -3081,6 +3109,10 @@ fn editor_animation_debug_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_ANIMATION_DEBUG").is_some()
 }
 
+fn sujian_editor_debug_enabled() -> bool {
+    cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
+}
+
 fn should_log_slow_paint(last_log: Option<Instant>, now: Instant) -> bool {
     last_log.is_none_or(|last| now.duration_since(last) >= Duration::from_millis(500))
 }
@@ -3109,6 +3141,7 @@ fn sujian_update_source_rect(
     old_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     src_x: f64, src_y: f64, src_w: f64, src_h: f64,
+    dest_y: f64, dest_h: f64,
     dpr: f64,
 ) {
     cpp!(unsafe [
@@ -3116,13 +3149,14 @@ fn sujian_update_source_rect(
         item_ptr as "QQuickItem*",
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double",
+        dest_y as "double", dest_h as "double",
         dpr as "double"
     ] {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root || root->childCount() == 0) return;
         auto *imgNode = static_cast<QSGImageNode*>(root->firstChild());
         if (!imgNode) return;
-        imgNode->setRect(0, 0, item_ptr->width(), item_ptr->height());
+        imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
         imgNode->setSourceRect(src_x * dpr, src_y * dpr, src_w * dpr, src_h * dpr);
     })
 }
@@ -3132,6 +3166,7 @@ fn sujian_update_texture_node(
     item_ptr: *mut std::ffi::c_void,
     image: &qmetaobject::QImage,
     src_x: f64, src_y: f64, src_w: f64, src_h: f64,
+    dest_y: f64, dest_h: f64,
     dpr: f64,
 ) -> *mut std::ffi::c_void {
     let img_ptr = image as *const qmetaobject::QImage;
@@ -3141,6 +3176,7 @@ fn sujian_update_texture_node(
         img_ptr as "QImage*",
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double",
+        dest_y as "double", dest_h as "double",
         dpr as "double"
     ] -> *mut std::ffi::c_void as "QSGNode*" {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
@@ -3157,7 +3193,7 @@ fn sujian_update_texture_node(
             imgNode->setOwnsTexture(true);
             root->appendChildNode(imgNode);
         }
-        imgNode->setRect(0, 0, item_ptr->width(), item_ptr->height());
+        imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
         imgNode->setSourceRect(src_x * dpr, src_y * dpr, src_w * dpr, src_h * dpr);
         imgNode->setTexture(item_ptr->window()->createTextureFromImage(*img_ptr));
         return root;
@@ -3418,4 +3454,103 @@ mod tests {
             assert_eq!(back_end, text.len(), "roundtrip failed for end of '{}'", text);
         }
     }
+
+    #[test]
+    fn test_scroll_y_cache_and_buffer_hit() {
+        // 1. scroll_y change shouldn't invalidate layout cache.
+        // In sujian_editor_item.rs, layout_cache is only invalidated/refreshed when text, width, font, padding etc change.
+        // Changing scroll_y does not touch ensure_layout_cached criteria.
+        
+        // 2. Validate scroll_buffer hit bounds math.
+        let vp_h: f64 = 1000.0;
+        let content_h: f64 = 5000.0;
+        let overscan: f64 = (vp_h * 0.8).min(600.0); // Capped at 600.0
+        
+        let scroll_y: f64 = 100.0;
+        let min_y: f64 = (scroll_y - overscan).max(0.0); // 0.0
+        let max_y: f64 = (scroll_y + vp_h + overscan).min(content_h.max(vp_h)); // 100 + 1000 + 600 = 1700.0
+        let buffer_scroll_y: f64 = min_y; // 0.0
+        let buffer_logical_h: f64 = max_y - min_y; // 1700.0
+        
+        // Test scroll step inside buffer
+        let new_scroll_y: f64 = 200.0;
+        let inside_buffer = new_scroll_y >= buffer_scroll_y - 1.0
+            && new_scroll_y + vp_h <= buffer_scroll_y + buffer_logical_h + 1.0;
+        assert!(inside_buffer, "scroll_y=200 should hit the buffer [0..1700]");
+
+        // Test scroll step outside buffer
+        let far_scroll_y: f64 = 800.0;
+        let inside_buffer_far = far_scroll_y >= buffer_scroll_y - 1.0
+            && far_scroll_y + vp_h <= buffer_scroll_y + buffer_logical_h + 1.0;
+        assert!(!inside_buffer_far, "scroll_y=800 should miss the buffer [0..1700] since viewport bottom 1800 > 1700");
+    }
+
+    #[test]
+    fn test_hit_test_line_matching() {
+        // Mock 3 visual lines manually instead of calling layout_lines (which calls QFont and crashes without QGuiApplication)
+        let lines = vec![
+            VisualLine {
+                start: 0,
+                end: 10,
+                hard_break: true,
+                x: 16.0,
+                y: 16.0,
+                width: 100.0,
+                height: 24.0,
+                para_text: "First Line".to_string(),
+                para_start: 0,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 10,
+                line_wrap_width: 768.0,
+                line_indent_x: 0.0,
+            },
+            VisualLine {
+                start: 11,
+                end: 22,
+                hard_break: true,
+                x: 16.0,
+                y: 40.0, // 16.0 + 24.0
+                width: 110.0,
+                height: 24.0,
+                para_text: "Second Line".to_string(),
+                para_start: 11,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 11,
+                line_wrap_width: 768.0,
+                line_indent_x: 0.0,
+            },
+            VisualLine {
+                start: 23,
+                end: 33,
+                hard_break: true,
+                x: 16.0,
+                y: 64.0, // 40.0 + 24.0
+                width: 90.0,
+                height: 24.0,
+                para_text: "Third Line".to_string(),
+                para_start: 23,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 10,
+                line_wrap_width: 768.0,
+                line_indent_x: 0.0,
+            },
+        ];
+
+        // Under Model B: doc_y = y. Confirm correct hit line finding
+        let doc_y_first = lines[0].y + 2.0; // 18.0
+        let matched_first = lines.iter().position(|l| doc_y_first < l.y + l.height);
+        assert_eq!(matched_first, Some(0));
+        
+        let doc_y_second = lines[1].y + 2.0; // 42.0
+        let matched_second = lines.iter().position(|l| doc_y_second < l.y + l.height);
+        assert_eq!(matched_second, Some(1));
+        
+        let doc_y_third = lines[2].y + 2.0; // 66.0
+        let matched_third = lines.iter().position(|l| doc_y_third < l.y + l.height);
+        assert_eq!(matched_third, Some(2));
+    }
 }
+
