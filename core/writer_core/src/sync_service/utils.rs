@@ -15,3 +15,29 @@ impl crate::sync_service::SyncService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::sync_service::SyncService;
+
+    #[test]
+    fn test_compute_git_hash_empty_string() {
+        let content = b"";
+        let hash = SyncService::compute_git_hash(content);
+        assert_eq!(hash, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+    }
+
+    #[test]
+    fn test_compute_git_hash_hello_world() {
+        let content = b"hello world";
+        let hash = SyncService::compute_git_hash(content);
+        assert_eq!(hash, "95d09f2b10159347eece71399a7e2e907ea3df4f");
+    }
+
+    #[test]
+    fn test_compute_git_hash_hello() {
+        let content = b"hello";
+        let hash = SyncService::compute_git_hash(content);
+        assert_eq!(hash, "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0");
+    }
+}
