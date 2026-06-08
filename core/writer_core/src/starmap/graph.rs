@@ -611,19 +611,19 @@ pub fn delete_starmap_link(workspace: &Path, starmap_id: &str, link_id: &str) ->
 }
 
 fn validate_graph(workspace: &Path, graph: &StarMapGraph) -> Result<()> {
-    let node_ids = validate_nodes(workspace, &graph.nodes)?;
-    validate_edges(workspace, &graph.edges, &node_ids, graph)?;
-    validate_embeds(workspace, &graph.embeds, &node_ids, graph)?;
-    validate_links(workspace, &graph.links, &node_ids, graph)?;
+    let node_ids = validate_nodes(workspace, graph)?;
+    validate_edges(workspace, graph, &node_ids)?;
+    validate_embeds(workspace, graph, &node_ids)?;
+    validate_links(workspace, graph, &node_ids)?;
     Ok(())
 }
 
 fn validate_nodes(
     workspace: &Path,
-    nodes: &[StarMapNode],
+    graph: &StarMapGraph,
 ) -> Result<std::collections::HashSet<String>> {
     let mut node_ids = std::collections::HashSet::new();
-    for node in nodes {
+    for node in &graph.nodes {
         if !node_ids.insert(node.id.clone()) {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -711,11 +711,10 @@ fn validate_nodes(
 
 fn validate_edges(
     workspace: &Path,
-    edges: &[StarMapEdge],
-    node_ids: &std::collections::HashSet<String>,
     graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
-    for edge in edges {
+    for edge in &graph.edges {
         let validate_edge_endpoint = |ep: &Option<crate::starmap::types::StarMapEdgeEndpoint>,
                                       legacy_id: &Option<String>,
                                       legacy_target: &Option<
@@ -801,12 +800,11 @@ fn validate_edges(
 
 fn validate_embeds(
     workspace: &Path,
-    embeds: &[crate::starmap::types::StarMapEmbed],
-    node_ids: &std::collections::HashSet<String>,
     graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
     let mut instance_ids = std::collections::HashSet::new();
-    for embed in embeds {
+    for embed in &graph.embeds {
         if !instance_ids.insert(&embed.instance_id) {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -896,12 +894,11 @@ fn validate_embeds(
 
 fn validate_links(
     workspace: &Path,
-    links: &[crate::starmap::types::StarMapLink],
-    node_ids: &std::collections::HashSet<String>,
     graph: &StarMapGraph,
+    node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
     let mut link_ids = std::collections::HashSet::new();
-    for link in links {
+    for link in &graph.links {
         if !link_ids.insert(&link.link_id) {
             return Err(Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -1612,7 +1609,7 @@ mod tests {
         assert!(save_starmap_graph(dir.path(), &meta_a.starmap_id, &g2).is_ok());
 
         // 3. Edge with deep path (Cycle detection)
-        let mut dt_cycle = crate::starmap::semantic::StarMapDeepTarget {
+        let dt_cycle = crate::starmap::semantic::StarMapDeepTarget {
             starmap_id: meta_b.starmap_id.clone(),
             path: vec![crate::starmap::semantic::StarMapPathSegment::EnterChild {
                 starmap_id: meta_b.starmap_id.clone(),
@@ -1677,7 +1674,7 @@ mod tests {
         let meta_c = create_starmap(dir.path(), "Map C", "", None).unwrap();
 
         let mut graph_a = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
-        let mut graph_b = get_starmap_graph(dir.path(), &meta_b.starmap_id).unwrap();
+        let _graph_b = get_starmap_graph(dir.path(), &meta_b.starmap_id).unwrap();
         let mut graph_c = get_starmap_graph(dir.path(), &meta_c.starmap_id).unwrap();
 
         // B 是空 StarMap，也可以被 embed
@@ -1796,7 +1793,7 @@ mod tests {
         save_starmap_graph(dir.path(), &meta_a.starmap_id, &graph_a).unwrap();
 
         // add edge
-        let edge = add_starmap_edge(
+        let _edge = add_starmap_edge(
             dir.path(),
             &meta_a.starmap_id,
             StarMapEdge {

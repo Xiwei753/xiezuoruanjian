@@ -2261,7 +2261,7 @@ mod tests {
         std::fs::write(&chapter_abs, local_content).unwrap();
 
         let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
-        let local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
+        let _local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
 
         let mut state = SyncState::default();
         state.device_id = "device_local".to_string();
