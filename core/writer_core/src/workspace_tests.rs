@@ -68,6 +68,8 @@ mod tests {
 
         // Populate in-memory cache and write to disk
         record_recent_edit(workspace_path, "proj_1", "vol_1", "ch_1").unwrap();
+        // Force flush to bypass 5-second debounce from other tests
+        flush_recent_edits(workspace_path).unwrap();
 
         let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
 
