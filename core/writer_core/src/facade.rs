@@ -992,7 +992,20 @@ impl WriterCore {
         let content = serde_json::to_string_pretty(secrets)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let tmp_path = secrets_path.with_extension("tmp");
-        std::fs::write(&tmp_path, content)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp_path)?;
+        use std::io::Write;
+        file.write_all(content.as_bytes())?;
+
+        // Ensure the file handle is dropped before renaming, to prevent sharing violations on Windows
+        drop(file);
+
         std::fs::rename(tmp_path, secrets_path)?;
         Ok(())
     }
