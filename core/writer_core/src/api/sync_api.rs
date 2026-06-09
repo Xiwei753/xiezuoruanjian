@@ -186,3 +186,25 @@ impl WriterCoreApi {
         Self::sync_diagnostics_envelope(self.perform_sync_diagnostics(config)).to_json_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::service::WriterCoreApi;
+    use tempfile::tempdir;
+    use std::fs;
+
+    #[test]
+    fn test_load_sync_state_error() {
+        let dir = tempdir().unwrap();
+        let api = WriterCoreApi::new(dir.path());
+
+        // Create a directory where a file is expected to trigger an IO error
+        let sync_dir = dir.path().join("app-meta").join("sync");
+        fs::create_dir_all(&sync_dir).unwrap();
+        fs::create_dir(sync_dir.join("state.local.json")).unwrap();
+
+        let result = api.load_sync_state();
+        assert!(matches!(result, Err(crate::api::error::WriterError::Io(_))));
+    }
+}
