@@ -133,4 +133,33 @@ mod tests {
         assert!(json.contains("\"rawError\":"));
         assert!(json.contains("\"warnings\":[]"));
     }
+
+    #[test]
+    fn from_api_result_maps_ok_to_success() {
+        let result: Result<String, WriterError> = Ok("test_data".to_string());
+        let envelope = ResultEnvelope::from_api_result(result);
+
+        assert!(envelope.success);
+        assert_eq!(envelope.data, Some("test_data".to_string()));
+        assert_eq!(envelope.error_code, None);
+        assert_eq!(envelope.user_message, None);
+        assert_eq!(envelope.raw_error, None);
+    }
+
+    #[test]
+    fn from_api_result_maps_err_to_error() {
+        let error = WriterError::ProjectNotFound;
+        let expected_error_code = error.code().to_string();
+        let expected_user_message = error.user_message().to_string();
+        let expected_raw_error = error.to_string();
+
+        let result: Result<String, WriterError> = Err(error);
+        let envelope = ResultEnvelope::from_api_result(result);
+
+        assert!(!envelope.success);
+        assert_eq!(envelope.data, None);
+        assert_eq!(envelope.error_code, Some(expected_error_code));
+        assert_eq!(envelope.user_message, Some(expected_user_message));
+        assert_eq!(envelope.raw_error, Some(expected_raw_error));
+    }
 }
