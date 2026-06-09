@@ -100,12 +100,15 @@ cpp! {{
             }
             case QEvent::InputMethodQuery: {
                 auto* qe = static_cast<QInputMethodQueryEvent*>(event);
-                if (qe->queries() & Qt::ImCursorRectangle) {
+                auto get_cursor_rect = [&]() {
                     double cx = obj->property("cursor_rect_x").toDouble();
                     double cy = obj->property("cursor_rect_y").toDouble();
                     double cw = obj->property("cursor_rect_width").toDouble();
                     double ch = obj->property("cursor_rect_height").toDouble();
-                    qe->setValue(Qt::ImCursorRectangle, QRectF(cx, cy, cw, ch));
+                    return QRectF(cx, cy, cw, ch);
+                };
+                if (qe->queries() & Qt::ImCursorRectangle) {
+                    qe->setValue(Qt::ImCursorRectangle, get_cursor_rect());
                 }
                 if (qe->queries() & Qt::ImEnabled) {
                     qe->setValue(Qt::ImEnabled, true);
@@ -114,11 +117,7 @@ cpp! {{
                     qe->setValue(Qt::ImHints, static_cast<int>(Qt::ImhNoPredictiveText));
                 }
                 if (qe->queries() & Qt::ImAnchorRectangle) {
-                    double cx = obj->property("cursor_rect_x").toDouble();
-                    double cy = obj->property("cursor_rect_y").toDouble();
-                    double cw = obj->property("cursor_rect_width").toDouble();
-                    double ch = obj->property("cursor_rect_height").toDouble();
-                    qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy, cw, ch));
+                    qe->setValue(Qt::ImAnchorRectangle, get_cursor_rect());
                 }
                 event->accept();
                 return true;
