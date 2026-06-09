@@ -1884,4 +1884,34 @@ mod tests {
         assert_eq!(value["changedEntities"][0]["entityType"], "VolumeDeleted");
         assert_eq!(value["changedEntities"][0]["entityId"], volume.id);
     }
+
+    #[test]
+    fn test_reorder_chapters_returns_true_on_success() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let project = api.create_project("Test Project").unwrap();
+        let volume = api.create_volume(&project.id, "Volume 1").unwrap();
+
+        let chapter1 = api.create_chapter(&project.id, &volume.id, "Chapter 1").unwrap();
+        let chapter2 = api.create_chapter(&project.id, &volume.id, "Chapter 2").unwrap();
+        let chapter3 = api.create_chapter(&project.id, &volume.id, "Chapter 3").unwrap();
+
+        let new_order = vec![
+            chapter3.id.clone(),
+            chapter1.id.clone(),
+            chapter2.id.clone(),
+        ];
+
+        let result = api.reorder_chapters(&project.id, &volume.id, &new_order);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+
+        // Let's verify the order actually changed
+        let chapters = api.core().list_chapters(&project.id, &volume.id).unwrap();
+        let actual_order: Vec<String> = chapters.into_iter().map(|c| c.id).collect();
+        assert_eq!(actual_order, new_order);
+    }
 }
