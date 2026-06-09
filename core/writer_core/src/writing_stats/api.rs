@@ -36,8 +36,47 @@
 use crate::error::Result;
 use crate::writing_stats::aggregate::StatsAggregator;
 use crate::writing_stats::{DateRange, WritingInputEvent};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectStatsAgg {
+    project_id: String,
+    human_typed_chars: u64,
+    pasted_chars: u64,
+    deleted_chars: u64,
+    ai_inserted_chars: u64,
+    net_delta_chars: i64,
+    active_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChapterStatsAgg {
+    chapter_id: String,
+    human_typed_chars: u64,
+    pasted_chars: u64,
+    deleted_chars: u64,
+    ai_inserted_chars: u64,
+    net_delta_chars: i64,
+    active_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceStatsAgg {
+    device_id: String,
+    platform: String,
+    human_typed_chars: u64,
+    pasted_chars: u64,
+    deleted_chars: u64,
+    ai_inserted_chars: u64,
+    net_delta_chars: i64,
+    active_seconds: u64,
+    sessions_count: u32,
+}
 
 pub struct StatsApi {
     aggregator: StatsAggregator,
@@ -100,53 +139,35 @@ impl StatsApi {
             .store()
             .load_daily_stats_range(&range.start_date, &range.end_date)?;
 
-        let mut by_project: std::collections::HashMap<String, serde_json::Value> =
+        let mut by_project: std::collections::HashMap<&str, ProjectStatsAgg> =
             std::collections::HashMap::new();
 
         for stats in &daily_stats {
             for (project_id, proj_stats) in &stats.per_project {
-                let entry = by_project.entry(project_id.clone()).or_insert_with(|| {
-                    serde_json::json!({
-                        "projectId": project_id,
-                        "humanTypedChars": 0u64,
-                        "pastedChars": 0u64,
-                        "deletedChars": 0u64,
-                        "aiInsertedChars": 0u64,
-                        "netDeltaChars": 0i64,
-                        "activeSeconds": 0u64,
-                    })
+                let entry = by_project.entry(project_id.as_str()).or_insert_with(|| ProjectStatsAgg {
+                    project_id: project_id.clone(),
+                    human_typed_chars: 0,
+                    pasted_chars: 0,
+                    deleted_chars: 0,
+                    ai_inserted_chars: 0,
+                    net_delta_chars: 0,
+                    active_seconds: 0,
                 });
 
-                if let Some(obj) = entry.as_object_mut() {
-                    *obj.get_mut("humanTypedChars").unwrap() = serde_json::json!(
-                        obj.get("humanTypedChars").unwrap().as_u64().unwrap_or(0)
-                            + proj_stats.human_typed_chars
-                    );
-                    *obj.get_mut("pastedChars").unwrap() = serde_json::json!(
-                        obj.get("pastedChars").unwrap().as_u64().unwrap_or(0)
-                            + proj_stats.pasted_chars
-                    );
-                    *obj.get_mut("deletedChars").unwrap() = serde_json::json!(
-                        obj.get("deletedChars").unwrap().as_u64().unwrap_or(0)
-                            + proj_stats.deleted_chars
-                    );
-                    *obj.get_mut("aiInsertedChars").unwrap() = serde_json::json!(
-                        obj.get("aiInsertedChars").unwrap().as_u64().unwrap_or(0)
-                            + proj_stats.ai_inserted_chars
-                    );
-                    *obj.get_mut("netDeltaChars").unwrap() = serde_json::json!(
-                        obj.get("netDeltaChars").unwrap().as_i64().unwrap_or(0)
-                            + proj_stats.net_delta_chars
-                    );
-                    *obj.get_mut("activeSeconds").unwrap() = serde_json::json!(
-                        obj.get("activeSeconds").unwrap().as_u64().unwrap_or(0)
-                            + proj_stats.active_seconds
-                    );
-                }
+                entry.human_typed_chars += proj_stats.human_typed_chars;
+                entry.pasted_chars += proj_stats.pasted_chars;
+                entry.deleted_chars += proj_stats.deleted_chars;
+                entry.ai_inserted_chars += proj_stats.ai_inserted_chars;
+                entry.net_delta_chars += proj_stats.net_delta_chars;
+                entry.active_seconds += proj_stats.active_seconds;
             }
         }
 
-        let projects: Vec<Value> = by_project.into_values().collect();
+        let projects: Vec<Value> = by_project
+            .into_values()
+            .map(|agg| serde_json::to_value(agg).unwrap_or(Value::Null))
+            .collect();
+
         Ok(serde_json::json!({
             "range": {
                 "startDate": range.start_date,
@@ -162,53 +183,35 @@ impl StatsApi {
             .store()
             .load_daily_stats_range(&range.start_date, &range.end_date)?;
 
-        let mut by_chapter: std::collections::HashMap<String, serde_json::Value> =
+        let mut by_chapter: std::collections::HashMap<&str, ChapterStatsAgg> =
             std::collections::HashMap::new();
 
         for stats in &daily_stats {
             for (chapter_id, chap_stats) in &stats.per_chapter {
-                let entry = by_chapter.entry(chapter_id.clone()).or_insert_with(|| {
-                    serde_json::json!({
-                        "chapterId": chapter_id,
-                        "humanTypedChars": 0u64,
-                        "pastedChars": 0u64,
-                        "deletedChars": 0u64,
-                        "aiInsertedChars": 0u64,
-                        "netDeltaChars": 0i64,
-                        "activeSeconds": 0u64,
-                    })
+                let entry = by_chapter.entry(chapter_id.as_str()).or_insert_with(|| ChapterStatsAgg {
+                    chapter_id: chapter_id.clone(),
+                    human_typed_chars: 0,
+                    pasted_chars: 0,
+                    deleted_chars: 0,
+                    ai_inserted_chars: 0,
+                    net_delta_chars: 0,
+                    active_seconds: 0,
                 });
 
-                if let Some(obj) = entry.as_object_mut() {
-                    *obj.get_mut("humanTypedChars").unwrap() = serde_json::json!(
-                        obj.get("humanTypedChars").unwrap().as_u64().unwrap_or(0)
-                            + chap_stats.human_typed_chars
-                    );
-                    *obj.get_mut("pastedChars").unwrap() = serde_json::json!(
-                        obj.get("pastedChars").unwrap().as_u64().unwrap_or(0)
-                            + chap_stats.pasted_chars
-                    );
-                    *obj.get_mut("deletedChars").unwrap() = serde_json::json!(
-                        obj.get("deletedChars").unwrap().as_u64().unwrap_or(0)
-                            + chap_stats.deleted_chars
-                    );
-                    *obj.get_mut("aiInsertedChars").unwrap() = serde_json::json!(
-                        obj.get("aiInsertedChars").unwrap().as_u64().unwrap_or(0)
-                            + chap_stats.ai_inserted_chars
-                    );
-                    *obj.get_mut("netDeltaChars").unwrap() = serde_json::json!(
-                        obj.get("netDeltaChars").unwrap().as_i64().unwrap_or(0)
-                            + chap_stats.net_delta_chars
-                    );
-                    *obj.get_mut("activeSeconds").unwrap() = serde_json::json!(
-                        obj.get("activeSeconds").unwrap().as_u64().unwrap_or(0)
-                            + chap_stats.active_seconds
-                    );
-                }
+                entry.human_typed_chars += chap_stats.human_typed_chars;
+                entry.pasted_chars += chap_stats.pasted_chars;
+                entry.deleted_chars += chap_stats.deleted_chars;
+                entry.ai_inserted_chars += chap_stats.ai_inserted_chars;
+                entry.net_delta_chars += chap_stats.net_delta_chars;
+                entry.active_seconds += chap_stats.active_seconds;
             }
         }
 
-        let chapters: Vec<Value> = by_chapter.into_values().collect();
+        let chapters: Vec<Value> = by_chapter
+            .into_values()
+            .map(|agg| serde_json::to_value(agg).unwrap_or(Value::Null))
+            .collect();
+
         Ok(serde_json::json!({
             "range": {
                 "startDate": range.start_date,
@@ -224,56 +227,36 @@ impl StatsApi {
             .store()
             .load_daily_stats_range(&range.start_date, &range.end_date)?;
 
-        let mut by_device: std::collections::HashMap<String, serde_json::Value> =
+        let mut by_device: std::collections::HashMap<&str, DeviceStatsAgg> =
             std::collections::HashMap::new();
 
         for stats in &daily_stats {
-            let entry = by_device.entry(stats.device_id.clone()).or_insert_with(|| {
-                serde_json::json!({
-                    "deviceId": stats.device_id,
-                    "platform": stats.platform,
-                    "humanTypedChars": 0u64,
-                    "pastedChars": 0u64,
-                    "deletedChars": 0u64,
-                    "aiInsertedChars": 0u64,
-                    "netDeltaChars": 0i64,
-                    "activeSeconds": 0u64,
-                    "sessionsCount": 0u32,
-                })
+            let entry = by_device.entry(stats.device_id.as_str()).or_insert_with(|| DeviceStatsAgg {
+                device_id: stats.device_id.clone(),
+                platform: stats.platform.clone(),
+                human_typed_chars: 0,
+                pasted_chars: 0,
+                deleted_chars: 0,
+                ai_inserted_chars: 0,
+                net_delta_chars: 0,
+                active_seconds: 0,
+                sessions_count: 0,
             });
 
-            if let Some(obj) = entry.as_object_mut() {
-                *obj.get_mut("humanTypedChars").unwrap() = serde_json::json!(
-                    obj.get("humanTypedChars").unwrap().as_u64().unwrap_or(0)
-                        + stats.total_human_typed_chars
-                );
-                *obj.get_mut("pastedChars").unwrap() = serde_json::json!(
-                    obj.get("pastedChars").unwrap().as_u64().unwrap_or(0)
-                        + stats.total_pasted_chars
-                );
-                *obj.get_mut("deletedChars").unwrap() = serde_json::json!(
-                    obj.get("deletedChars").unwrap().as_u64().unwrap_or(0)
-                        + stats.total_deleted_chars
-                );
-                *obj.get_mut("aiInsertedChars").unwrap() = serde_json::json!(
-                    obj.get("aiInsertedChars").unwrap().as_u64().unwrap_or(0)
-                        + stats.total_ai_inserted_chars
-                );
-                *obj.get_mut("netDeltaChars").unwrap() = serde_json::json!(
-                    obj.get("netDeltaChars").unwrap().as_i64().unwrap_or(0)
-                        + stats.total_net_delta_chars
-                );
-                *obj.get_mut("activeSeconds").unwrap() = serde_json::json!(
-                    obj.get("activeSeconds").unwrap().as_u64().unwrap_or(0) + stats.active_seconds
-                );
-                *obj.get_mut("sessionsCount").unwrap() = serde_json::json!(
-                    obj.get("sessionsCount").unwrap().as_u64().unwrap_or(0)
-                        + stats.sessions_count as u64
-                );
-            }
+            entry.human_typed_chars += stats.total_human_typed_chars;
+            entry.pasted_chars += stats.total_pasted_chars;
+            entry.deleted_chars += stats.total_deleted_chars;
+            entry.ai_inserted_chars += stats.total_ai_inserted_chars;
+            entry.net_delta_chars += stats.total_net_delta_chars;
+            entry.active_seconds += stats.active_seconds;
+            entry.sessions_count += stats.sessions_count;
         }
 
-        let devices: Vec<Value> = by_device.into_values().collect();
+        let devices: Vec<Value> = by_device
+            .into_values()
+            .map(|agg| serde_json::to_value(agg).unwrap_or(Value::Null))
+            .collect();
+
         Ok(serde_json::json!({
             "range": {
                 "startDate": range.start_date,
