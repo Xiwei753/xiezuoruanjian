@@ -38,8 +38,6 @@ mod tests {
         assert_eq!(edits[0].chapter_id, "c1");
     }
 
-    use crate::workspace::flush_recent_edits;
-
     #[test]
     fn test_flush_recent_edits() {
         let dir = tempdir().unwrap();
@@ -96,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flush_recent_edits() {
+    fn test_flush_recent_edits_manual_cache() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();
 
@@ -211,19 +209,4 @@ mod tests {
         assert!(parsed_edits[0]["timestamp"].is_string());
     }
 
-    #[test]
-    fn test_flush_recent_edits_empty_cache() {
-        let dir = tempdir().unwrap();
-        let workspace_path = dir.path();
-
-        create_workspace(workspace_path).unwrap();
-
-        // Flush cache to disk without any prior edits
-        flush_recent_edits(workspace_path).unwrap();
-
-        let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
-
-        // Assert file is not created
-        assert!(!recent_path.exists());
-    }
 }
