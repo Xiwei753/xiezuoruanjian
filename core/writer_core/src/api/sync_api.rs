@@ -186,3 +186,36 @@ impl WriterCoreApi {
         Self::sync_diagnostics_envelope(self.perform_sync_diagnostics(config)).to_json_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn save_sync_config_returns_true_on_success() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let config = SyncConfigDto {
+            enabled: true,
+            backend_type: "github_api".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            transport: "https_token".to_string(),
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            proxy_enabled: false,
+            proxy_type: "auto".to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: 7890,
+            username: "".to_string(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let result = api.save_sync_config(config);
+        assert_eq!(result.unwrap(), true);
+    }
+}
