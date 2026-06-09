@@ -121,6 +121,7 @@ fn qt_runtime_version() -> String {
     let version_ptr = cpp!(unsafe [] -> *const c_char as "const char *" {
         return qVersion();
     });
+    // Security Fix: Ensure version_ptr is not null before dereferencing with CStr::from_ptr
     if version_ptr.is_null() {
         return "unknown".to_string();
     }
