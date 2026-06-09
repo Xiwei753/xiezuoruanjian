@@ -997,7 +997,25 @@ impl WriterCore {
         let content = serde_json::to_string_pretty(secrets)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         let tmp_path = secrets_path.with_extension("tmp");
-        std::fs::write(&tmp_path, content)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp_path)?;
+            file.write_all(content.as_bytes())?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp_path, content)?;
+        }
+
         std::fs::rename(tmp_path, secrets_path)?;
         Ok(())
     }
