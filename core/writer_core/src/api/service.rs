@@ -1717,6 +1717,63 @@ mod tests {
     }
 
     #[test]
+    fn api_save_chapter_content_with_options_allow_empty_true() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("E2E Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+
+        // Write initial content
+        let initial_content = "Some initial content";
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, initial_content)
+            .unwrap();
+
+        // Overwrite with empty content, allow_empty_overwrite = true
+        let receipt = api
+            .save_chapter_content_with_options(&project.id, &volume.id, &chapter.id, "", true)
+            .unwrap();
+
+        assert_eq!(receipt.content_len, 0);
+        assert_eq!(receipt.word_count, 0);
+
+        let reopened = api
+            .open_chapter(&project.id, &volume.id, &chapter.id)
+            .unwrap();
+        assert_eq!(reopened.content, "");
+    }
+
+    #[test]
+    fn api_save_chapter_content_with_options_allow_empty_false() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("E2E Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+
+        // Write initial content
+        let initial_content = "Some initial content";
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, initial_content)
+            .unwrap();
+
+        // Attempt to overwrite with empty content, allow_empty_overwrite = false
+        let result = api.save_chapter_content_with_options(&project.id, &volume.id, &chapter.id, "", false);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::api::error::WriterError::EmptyOverwriteBlocked { .. } => {}
+            e => panic!("Expected EmptyOverwriteBlocked, got {:?}", e),
+        }
+
+        let reopened = api
+            .open_chapter(&project.id, &volume.id, &chapter.id)
+            .unwrap();
+        assert_eq!(reopened.content, initial_content); // Verify it wasn't overwritten
+    }
+
+    #[test]
     fn perform_sync_envelope_json_returns_envelope_with_sync_result() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
