@@ -658,6 +658,78 @@ struct ScrollBuffer {
     dpr: f64,
 }
 
+impl ScrollBuffer {
+    fn contains_viewport(&self, scroll_y: f64, vp_h: f64) -> bool {
+        // Low watermark threshold: if the viewport is within 0.5 * vp_h of the buffer edges,
+        // we consider it as not containing the viewport (triggering pre-render).
+        // However, we must also consider the document boundaries. If the buffer already covers
+        // the top of the document (buffer_scroll_y == 0.0) or the bottom of the document
+        // (buffer_scroll_y + buffer_logical_h >= buffer_content_h), then we shouldn't trigger rebuild
+        // just because we are close to those boundaries, since we cannot scroll further anyway.
+        let threshold = vp_h * 0.5;
+        
+        let near_top = scroll_y < self.buffer_scroll_y + threshold;
+        let near_bottom = scroll_y + vp_h > self.buffer_scroll_y + self.buffer_logical_h - threshold;
+        
+        if near_top && self.buffer_scroll_y > 0.1 {
+            return false;
+        }
+        if near_bottom && (self.buffer_scroll_y + self.buffer_logical_h) < self.buffer_content_h - 0.1 {
+            return false;
+        }
+        
+        // Strict boundary check (outside buffer entirely)
+        if scroll_y < self.buffer_scroll_y || scroll_y + vp_h > self.buffer_scroll_y + self.buffer_logical_h {
+            return false;
+        }
+        
+        true
+    }
+
+    fn clamp_source_rect(&self, scroll_y: f64, vp_h: f64) -> (f64, f64) {
+        let mut src_y = scroll_y - self.buffer_scroll_y;
+        let mut src_h = vp_h;
+
+        if src_y < 0.0 {
+            src_y = 0.0;
+        }
+        
+        if src_y + src_h > self.buffer_logical_h {
+            if src_h > self.buffer_logical_h {
+                src_h = self.buffer_logical_h;
+            }
+            if src_y + src_h > self.buffer_logical_h {
+                src_y = self.buffer_logical_h - src_h;
+            }
+        }
+        
+        // DPR check to make sure physical coordinates do not exceed QImage physical size
+        let phys_h = (self.image.size().height as f64).max(1.0);
+        let dpr = self.dpr;
+        
+        let mut phys_src_y = src_y * dpr;
+        let mut phys_src_h = src_h * dpr;
+        
+        if phys_src_y < 0.0 {
+            phys_src_y = 0.0;
+        }
+        if phys_src_y + phys_src_h > phys_h {
+            if phys_src_h > phys_h {
+                phys_src_h = phys_h;
+            }
+            if phys_src_y + phys_src_h > phys_h {
+                phys_src_y = phys_h - phys_src_h;
+            }
+        }
+        
+        // Convert back to logical
+        src_y = phys_src_y / dpr;
+        src_h = phys_src_h / dpr;
+
+        (src_y, src_h)
+    }
+}
+
 /// 光标动画状态 — 固定时长 tween，不再用指数追赶
 #[derive(Clone, Debug)]
 struct CursorAnimationState {
@@ -2182,25 +2254,50 @@ impl QQuickItem for SujianEditorItem {
 
     fn update_paint_node(
         &mut self,
-        mut node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
+        node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
     ) -> qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode> {
         use qmetaobject::scenegraph::SGNode;
 
         let frame_start = Instant::now();
-
-        // 光标动画进行中也算"需要更新"，否则 render_dirty 路径清完 cursor_dirty 后动画会被掐断
-        let cursor_anim_active = self.cursor_animation.as_ref()
-            .is_some_and(|a| !a.is_finished(Instant::now()));
-
-        if !self.render_dirty && !self.cursor_dirty && !cursor_anim_active {
-            return node;
-        }
 
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() { sujian_item_dpr(item_ptr) } else { 1.0 };
         let old_raw = node.into_raw();
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let scroll_y = self.current_scroll_y as f64;
+        let content_h = self.current_content_height as f64;
+
+        let mut force_rebuild = false;
+        if let Some(ref buf) = self.scroll_buffer {
+            // Check debug invariant first
+            let relative_src_y = scroll_y - buf.buffer_scroll_y;
+            if relative_src_y < -0.1 || relative_src_y + vp_h > buf.buffer_logical_h + 0.1 {
+                eprintln!(
+                    "DEBUG INVARIANT VIOLATION: relative_src_y={:.2}, vp_h={:.2}, buffer_logical_h={:.2}. Rebuilding buffer.",
+                    relative_src_y, vp_h, buf.buffer_logical_h
+                );
+                force_rebuild = true;
+            } else {
+                // Low-watermark or other conditions
+                let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
+                let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
+                if content_changed || dpr_changed || !buf.contains_viewport(scroll_y, vp_h) {
+                    force_rebuild = true;
+                }
+            }
+        }
+        
+        if force_rebuild {
+            self.render_dirty = true;
+        }
+
+        // 光标动画进行中也算"需要更新"，否则 render_dirty 路径清完 cursor_dirty 后动画会被掐断
+        let cursor_anim_active = self.cursor_animation.as_ref()
+            .is_some_and(|a| !a.is_finished(Instant::now()));
+
+        if !self.render_dirty && !self.cursor_dirty && !cursor_anim_active {
+            return unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) };
+        }
 
         let cursor_rgba = color_hex_to_rgba(&self.current_cursor_color);
 
@@ -2208,11 +2305,15 @@ impl QQuickItem for SujianEditorItem {
         if self.render_dirty {
             match self.render_to_image() {
                 Some((image, buf_scroll_y, _buf_h)) => {
-                    let src_y = scroll_y - buf_scroll_y;
+                    let (src_y, src_h) = if let Some(ref buf) = self.scroll_buffer {
+                        buf.clamp_source_rect(scroll_y, vp_h)
+                    } else {
+                        (scroll_y - buf_scroll_y, vp_h)
+                    };
                     let logical_img_w = image.size().width as f64 / dpr;
                     // Viewport model: image rect at (0, 0), sourceRect scrolls
                     let new_raw = sujian_update_texture_node(
-                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, vp_h, 0.0, vp_h, dpr,
+                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
                     );
                     sujian_update_cursor_rect(
                         new_raw, item_ptr,
@@ -2244,10 +2345,10 @@ impl QQuickItem for SujianEditorItem {
 
                     if !old_raw.is_null() {
                         if let Some(ref buf) = self.scroll_buffer {
-                            let src_y = scroll_y - buf.buffer_scroll_y;
+                            let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
                             let logical_img_w = buf.image.size().width as f64 / dpr;
                             // Viewport model: image rect at (0, 0), sourceRect scrolls
-                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, 0.0, vp_h, dpr);
+                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
                         }
                         sujian_update_cursor_rect(
                             old_raw, item_ptr,
@@ -2288,10 +2389,10 @@ impl QQuickItem for SujianEditorItem {
             }
 
             if let Some(ref buf) = self.scroll_buffer {
-                let src_y = scroll_y - buf.buffer_scroll_y;
+                let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
                 let logical_img_w = buf.image.size().width as f64 / dpr;
                 // Viewport model: image rect at (0, 0), sourceRect scrolls
-                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, vp_h, 0.0, vp_h, dpr);
+                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
             }
             sujian_update_cursor_rect(
                 old_raw, item_ptr,
@@ -2752,8 +2853,8 @@ impl SujianEditorItem {
         let scroll_y = self.current_scroll_y as f64;
         let content_h = self.current_content_height as f64;
 
-        // Overscan: Cap the overscan padding to keep texture sizes small on maximized screens
-        let overscan = (vp_h * 0.8).min(600.0);
+        // Overscan: Use 2.5 * viewport_height as padding (at least viewport*2 or viewport*3)
+        let overscan = vp_h * 2.5;
         let min_y = (scroll_y - overscan).max(0.0);
         let max_y = (scroll_y + vp_h + overscan).min(content_h.max(vp_h));
         let buffer_h = max_y - min_y;
@@ -2776,8 +2877,7 @@ impl SujianEditorItem {
                 if dpr_changed {
                     miss_reason = "dpr_changed";
                 } else {
-                    let inside_buffer = scroll_y >= buf.buffer_scroll_y - 1.0
-                        && scroll_y + vp_h <= buf.buffer_scroll_y + buf.buffer_logical_h + 1.0;
+                    let inside_buffer = buf.contains_viewport(scroll_y, vp_h);
                     if !inside_buffer {
                         miss_reason = "outside_buffer";
                     } else {
@@ -3384,7 +3484,39 @@ fn sujian_update_source_rect(
         auto *imgNode = static_cast<QSGImageNode*>(root->firstChild());
         if (!imgNode) return;
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
-        imgNode->setSourceRect(src_x * dpr, src_y * dpr, src_w * dpr, src_h * dpr);
+        
+        double final_src_x = src_x * dpr;
+        double final_src_y = src_y * dpr;
+        double final_src_w = src_w * dpr;
+        double final_src_h = src_h * dpr;
+        
+        if (imgNode->texture()) {
+            QSize texSize = imgNode->texture()->textureSize();
+            double tex_w = texSize.width();
+            double tex_h = texSize.height();
+            
+            if (final_src_y < 0.0) final_src_y = 0.0;
+            if (final_src_y + final_src_h > tex_h) {
+                if (final_src_h > tex_h) {
+                    final_src_h = tex_h;
+                }
+                if (final_src_y + final_src_h > tex_h) {
+                    final_src_y = tex_h - final_src_h;
+                }
+            }
+            if (final_src_x < 0.0) final_src_x = 0.0;
+            if (final_src_x + final_src_w > tex_w) {
+                if (final_src_w > tex_w) {
+                    final_src_w = tex_w;
+                }
+                if (final_src_x + final_src_w > tex_w) {
+                    final_src_x = tex_w - final_src_w;
+                }
+            }
+        }
+        
+        imgNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
+        imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
     })
 }
 
@@ -3421,8 +3553,36 @@ fn sujian_update_texture_node(
             root->appendChildNode(imgNode);
         }
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
-        imgNode->setSourceRect(src_x * dpr, src_y * dpr, src_w * dpr, src_h * dpr);
+        
+        double tex_w = img_ptr->width();
+        double tex_h = img_ptr->height();
+        double final_src_x = src_x * dpr;
+        double final_src_y = src_y * dpr;
+        double final_src_w = src_w * dpr;
+        double final_src_h = src_h * dpr;
+        
+        if (final_src_y < 0.0) final_src_y = 0.0;
+        if (final_src_y + final_src_h > tex_h) {
+            if (final_src_h > tex_h) {
+                final_src_h = tex_h;
+            }
+            if (final_src_y + final_src_h > tex_h) {
+                final_src_y = tex_h - final_src_h;
+            }
+        }
+        if (final_src_x < 0.0) final_src_x = 0.0;
+        if (final_src_x + final_src_w > tex_w) {
+            if (final_src_w > tex_w) {
+                final_src_w = tex_w;
+            }
+            if (final_src_x + final_src_w > tex_w) {
+                final_src_x = tex_w - final_src_w;
+            }
+        }
+        
+        imgNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
         imgNode->setTexture(item_ptr->window()->createTextureFromImage(*img_ptr));
+        imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
         return root;
     })
 }
@@ -3715,28 +3875,55 @@ mod tests {
         // In sujian_editor_item.rs, layout_cache is only invalidated/refreshed when text, width, font, padding etc change.
         // Changing scroll_y does not touch ensure_layout_cached criteria.
         
-        // 2. Validate scroll_buffer hit bounds math.
+        // 2. Validate ScrollBuffer helper functions: contains_viewport and clamp_source_rect.
         let vp_h: f64 = 1000.0;
         let content_h: f64 = 5000.0;
-        let overscan: f64 = (vp_h * 0.8).min(600.0); // Capped at 600.0
         
-        let scroll_y: f64 = 100.0;
-        let min_y: f64 = (scroll_y - overscan).max(0.0); // 0.0
-        let max_y: f64 = (scroll_y + vp_h + overscan).min(content_h.max(vp_h)); // 100 + 1000 + 600 = 1700.0
-        let buffer_scroll_y: f64 = min_y; // 0.0
-        let buffer_logical_h: f64 = max_y - min_y; // 1700.0
-        
-        // Test scroll step inside buffer
-        let new_scroll_y: f64 = 200.0;
-        let inside_buffer = new_scroll_y >= buffer_scroll_y - 1.0
-            && new_scroll_y + vp_h <= buffer_scroll_y + buffer_logical_h + 1.0;
-        assert!(inside_buffer, "scroll_y=200 should hit the buffer [0..1700]");
+        let scroll_buffer = ScrollBuffer {
+            image: qmetaobject::QImage::new(
+                qmetaobject::QSize { width: 10, height: 3500 },
+                qmetaobject::ImageFormat::ARGB32_Premultiplied,
+            ),
+            buffer_scroll_y: 0.0,
+            buffer_content_h: content_h,
+            buffer_logical_h: 3500.0,
+            dpr: 1.0,
+        };
 
-        // Test scroll step outside buffer
-        let far_scroll_y: f64 = 800.0;
-        let inside_buffer_far = far_scroll_y >= buffer_scroll_y - 1.0
-            && far_scroll_y + vp_h <= buffer_scroll_y + buffer_logical_h + 1.0;
-        assert!(!inside_buffer_far, "scroll_y=800 should miss the buffer [0..1700] since viewport bottom 1800 > 1700");
+        // Strict boundary check and watermark check:
+        // Threshold is 0.5 * vp_h = 500.0.
+        // At scroll_y = 100.0, it is near the top, but since buffer_scroll_y is 0.0 (top of document),
+        // contains_viewport should return true because we can't scroll up anyway.
+        assert!(scroll_buffer.contains_viewport(100.0, vp_h), "Should contain viewport at document top");
+
+        // Scroll to 2000.0 (viewport is [2000, 3000]).
+        // This is within the buffer [0, 3500].
+        // Watermark check:
+        // near_top = 2000 < 500 (false)
+        // near_bottom = 3000 > 3500 - 500 (false, equal, but not strictly greater)
+        // So contains_viewport should return true.
+        assert!(scroll_buffer.contains_viewport(2000.0, vp_h), "Should contain viewport in the middle of buffer");
+
+        // Scroll to 3100.0 (viewport is [3100, 4100]).
+        // This is strictly outside the buffer [0, 3500], so contains_viewport must return false.
+        assert!(!scroll_buffer.contains_viewport(3100.0, vp_h), "Should not contain viewport if outside buffer");
+
+        // Test clamp_source_rect.
+        // At scroll_y = 2000.0, src_y = 2000.0, src_h = 1000.0.
+        let (src_y, src_h) = scroll_buffer.clamp_source_rect(2000.0, vp_h);
+        assert_eq!(src_y, 2000.0);
+        assert_eq!(src_h, 1000.0);
+
+        // At scroll_y = -100.0, src_y should clamp to 0.0.
+        let (src_y_neg, src_h_neg) = scroll_buffer.clamp_source_rect(-100.0, vp_h);
+        assert_eq!(src_y_neg, 0.0);
+        assert!(src_h_neg > 0.0);
+
+        // At scroll_y = 3000.0 (viewport [3000, 4000]), src_y + src_h = 3000 + 1000 = 4000,
+        // which exceeds buffer_logical_h (3500).
+        // It should clamp so that src_y + src_h <= 3500.
+        let (src_y_clamp, src_h_clamp) = scroll_buffer.clamp_source_rect(3000.0, vp_h);
+        assert!(src_y_clamp + src_h_clamp <= 3500.0);
     }
 
     #[test]
