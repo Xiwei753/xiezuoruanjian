@@ -447,7 +447,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_create_project_success() {
+    fn test_create_project_success() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempdir().unwrap();
         let ws_path = dir.path().to_str().unwrap().to_string();
 
@@ -463,18 +463,20 @@ mod tests {
         for i in 1..=3 {
             let res_json =
                 backend.create_project_json(format!("Test Project {}", i).into(), "".into());
-            let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
+            let res: serde_json::Value = serde_json::from_str(&res_json.to_string())?;
             assert_eq!(res["success"], true);
         }
 
         // Check if tree size increased
         let tree_len_after = backend.cached_tree.len();
         assert!(tree_len_after >= 3);
+
+        Ok(())
     }
 
     #[test]
     #[cfg(not(windows))]
-    fn test_create_project_failure() {
+    fn test_create_project_failure() -> Result<(), Box<dyn std::error::Error>> {
         let mut backend = AppBackend::default();
         backend.current_workspace = "/invalid/path/that/does/not/exist".to_string();
         backend.current_has_workspace = true;
@@ -489,25 +491,29 @@ mod tests {
         backend.cached_tree = QJsonArray::from(items);
 
         let res_json = backend.create_project_json("Test Project".into(), "".into());
-        let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
+        let res: serde_json::Value = serde_json::from_str(&res_json.to_string())?;
 
         assert_eq!(res["success"], false);
         // Ensure tree didn't wipe or change unexpectedly
         assert_eq!(backend.cached_tree.len(), 1);
+
+        Ok(())
     }
 
     #[test]
-    fn test_create_project_empty_title() {
+    fn test_create_project_empty_title() -> Result<(), Box<dyn std::error::Error>> {
         let mut backend = AppBackend::default();
         backend.current_workspace = "/tmp".to_string();
         backend.current_has_workspace = true;
 
         let res_json = backend.create_project_json("   ".into(), "".into());
-        let res: serde_json::Value = serde_json::from_str(&res_json.to_string()).unwrap();
+        let res: serde_json::Value = serde_json::from_str(&res_json.to_string())?;
 
         assert_eq!(res["success"], false);
         assert_eq!(res["errorCode"], "CORE_ERROR");
         assert!(res["userMessage"].as_str().unwrap().contains("不能为空"));
+
+        Ok(())
     }
 
     #[test]
