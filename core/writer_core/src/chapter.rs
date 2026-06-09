@@ -83,6 +83,40 @@ fn touch_json_updated_at(path: &Path) -> Result<()> {
     crate::storage::atomic_write_string(path, &serde_json::to_string_pretty(&val)?)
 }
 
+pub fn list_valid_chapter_ids(workspace_path: &Path, project_id: &str) -> Result<std::collections::HashSet<String>> {
+    let mut chapter_ids = std::collections::HashSet::new();
+    let volumes_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes");
+
+    if !volumes_dir.exists() {
+        return Ok(chapter_ids);
+    }
+
+    // Iterate over volume directories
+    if let Ok(entries) = fs::read_dir(volumes_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let chapters_dir = entry.path().join("chapters");
+                // Iterate over chapter directories within each volume
+                if let Ok(chapter_entries) = fs::read_dir(chapters_dir) {
+                    for chapter_entry in chapter_entries.flatten() {
+                        let path = chapter_entry.path();
+                        if path.is_dir() {
+                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                                chapter_ids.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(chapter_ids)
+}
+
 pub fn list_chapters(
     workspace_path: &Path,
     project_id: &str,

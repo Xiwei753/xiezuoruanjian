@@ -152,16 +152,7 @@ pub fn validate_graph(
     }
 
     // Pre-build the set of valid chapter ids for this project
-    let mut valid_chapter_ids = HashSet::new();
-    if let Ok(vols) = core.list_volumes(&graph.project_id) {
-        for vol in vols {
-            if let Ok(chapters) = core.list_chapters(&graph.project_id, &vol.id) {
-                for c in chapters {
-                    valid_chapter_ids.insert(c.id);
-                }
-            }
-        }
-    }
+    let valid_chapter_ids = core.list_valid_chapter_ids(&graph.project_id).unwrap_or_default();
 
     // Validate anchors
     let mut anchor_ids = HashSet::new();
