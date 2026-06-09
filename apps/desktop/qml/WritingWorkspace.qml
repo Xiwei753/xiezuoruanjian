@@ -705,37 +705,10 @@ Rectangle {
                                     ? Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
                                     : Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight)
 
-                            SujianEditorItem {
-                                id: sujianEditor
-                                width: parent.width
-                                height: editorScroll.availableHeight
-                                y: 0
-                                
-                                onWidthChanged: {
-                                    Qt.callLater(sujianEditor.flush_content_height)
-                                }
-                                
-                                visible: root.useSujianEditorItem
-                                focus: root.useSujianEditorItem
-                                editor_enabled: editorController.chapterId !== ""
-                                font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
-                                font_family: "serif"
-                                line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-                                text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
-                                padding: dt ? dt.sp16 : 16
-                                text_color: editorController.colorToHex(dt ? dt.editorText : "#E2E2E5", "#E2E2E5")
-                                selection_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
-                                selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
-                                cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
-                                smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                                cursor_animation_duration_ms: settingsBackend ? Math.min(settingsBackend.setting_smooth_cursor_duration_ms, 90) : 80
-                                typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : false
-                                scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
-                                viewport_height: editorScroll.availableHeight
-                                is_scrolling: editorScroll.editorAnimationSuppressed
-
-                                onExplicit_clear_requested: editorController.markPotentialExplicitClear()
-                            }
+                            // NOTE: SujianEditorItem is a "viewport renderer" — it must be
+                            // a FIXED overlay on paperBg, NOT inside the Flickable contentItem.
+                            // The Flickable only holds a transparent spacer for scrollbar / contentHeight.
+                            // scroll_y is passed to the Rust renderer for viewport clipping.
 
                             TextArea {
                                 id: editorArea
@@ -789,6 +762,39 @@ Rectangle {
                                 }
                             }
                         }
+                    }
+
+                    // SujianEditorItem: viewport renderer — fixed overlay on paperBg,
+                    // NOT inside Flickable. scroll_y passes contentY to Rust renderer
+                    // for viewport clipping. Flickable only holds a transparent spacer
+                    // for scrollbar / contentHeight.
+                    SujianEditorItem {
+                        id: sujianEditor
+                        anchors.fill: editorScroll
+                        visible: root.useSujianEditorItem
+                        focus: root.useSujianEditorItem
+                        editor_enabled: editorController.chapterId !== ""
+                        font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
+                        font_family: "serif"
+                        line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
+                        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
+                        padding: dt ? dt.sp16 : 16
+                        text_color: editorController.colorToHex(dt ? dt.editorText : "#E2E2E5", "#E2E2E5")
+                        selection_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
+                        selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
+                        cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
+                        smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
+                        cursor_animation_duration_ms: settingsBackend ? Math.min(settingsBackend.setting_smooth_cursor_duration_ms, 90) : 80
+                        typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : false
+                        scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
+                        viewport_height: editorScroll.availableHeight
+                        is_scrolling: editorScroll.editorAnimationSuppressed
+
+                        onWidthChanged: {
+                            Qt.callLater(sujianEditor.flush_content_height)
+                        }
+
+                        onExplicit_clear_requested: editorController.markPotentialExplicitClear()
                     }
 
                     EditorWheelScroller {

@@ -61,12 +61,12 @@ ldd target/debug/sujian-desktop | grep -Ei 'Qt5|Qt6|qml|quick'
 
 结果应出现 `libQt6Core`、`libQt6Qml`、`libQt6Quick`，不应出现 `libQt5Core`、`libQt5Qml`、`libQt5Quick`。
 
-自研写作区（`SujianEditorItem`）已默认启用。如需回退到旧的 `TextArea` 编辑器，可以用环境变量关闭：
+自研写作区（`SujianEditorItem`）为实验性功能，默认关闭。可通过环境变量开启：
 
 ```bash
-SUJIAN_DESKTOP_USE_SUJIAN_EDITOR=0 cargo run -p sujian-desktop
+SUJIAN_DESKTOP_USE_SUJIAN_EDITOR=1 cargo run -p sujian-desktop
 ```
 
-自研写作区使用 Rust 自绘渲染，替代了传统的 QML `TextArea`，提供更可控的编辑体验。如有任何问题，可通过设置 `SUJIAN_DESKTOP_USE_SUJIAN_EDITOR=0` 临时回退。
+自研写作区使用 Rust 自绘渲染，替代了传统的 QML `TextArea`，提供更可控的编辑体验。当前默认使用 `TextArea` 编辑器。
 
 吐字动画继续保持关闭；必须等 Core transaction 与 `SujianEditorItem` 的插入/删除事务稳定后，才能由事务驱动动画。

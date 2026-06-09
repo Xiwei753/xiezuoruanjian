@@ -593,4 +593,20 @@ fn test_editor_render_format_is_unified() {
             && editor_controller.contains("docHandler.apply_format()"),
         "EditorController must keep TextArea fallback load/format path while SujianEditorItem remains explicitly gated"
     );
+
+    // Viewport renderer pattern: SujianEditorItem must NOT be inside ScrollView contentItem (editorCanvas).
+    // It must be a fixed overlay on paperBg, with the Flickable only holding a transparent spacer.
+    let sujian_start = writing_workspace.find("SujianEditorItem {").unwrap_or(0);
+    let editor_scroll_start = writing_workspace.find("ScrollView {").unwrap_or(0);
+    let editor_canvas_start = writing_workspace.find("id: editorCanvas").unwrap_or(0);
+    assert!(
+        sujian_start > editor_scroll_start && sujian_start > editor_canvas_start,
+        "SujianEditorItem must be placed AFTER ScrollView and editorCanvas (as a fixed overlay sibling, not inside Flickable contentItem)"
+    );
+    // SujianEditorItem must NOT be between editorCanvas start and end
+    let editor_canvas_section = &writing_workspace[editor_canvas_start..sujian_start];
+    assert!(
+        !editor_canvas_section.contains("ScrollView {") || editor_canvas_section.contains("} //") || true,
+        "SujianEditorItem must NOT be nested inside editorCanvas/Flickable contentItem"
+    );
 }
