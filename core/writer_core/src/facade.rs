@@ -593,6 +593,11 @@ impl WriterCore {
         volume::create_volume(&self.workspace_path, project_id, title)
     }
 
+    /// List valid chapter IDs for a project.
+    pub fn list_valid_chapter_ids(&self, project_id: &str) -> Result<std::collections::HashSet<String>> {
+        chapter::list_valid_chapter_ids(&self.workspace_path, project_id)
+    }
+
     /// List chapters in a volume.
     pub fn list_chapters(&self, project_id: &str, volume_id: &str) -> Result<Vec<Chapter>> {
         chapter::list_chapters(&self.workspace_path, project_id, volume_id)
