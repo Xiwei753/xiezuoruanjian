@@ -1717,6 +1717,33 @@ mod tests {
     }
 
     #[test]
+    fn end_to_end_api_chapter_clear_verify() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+        let project = api.create_project("E2E Test").unwrap();
+        let volume = api.create_volume(&project.id, "Vol 1").unwrap();
+        let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
+
+        let content = "端到端测试内容。\n第二行文本。\n第三行。";
+        api.save_chapter_content(&project.id, &volume.id, &chapter.id, content)
+            .unwrap();
+
+        let clear_receipt = api
+            .clear_chapter_content(&project.id, &volume.id, &chapter.id)
+            .unwrap();
+
+        assert_eq!(clear_receipt.content_len, 0);
+        assert_eq!(clear_receipt.word_count, 0);
+
+        let reopened = api
+            .open_chapter(&project.id, &volume.id, &chapter.id)
+            .unwrap();
+        assert_eq!(reopened.content, "");
+        assert_eq!(reopened.meta.word_count, 0);
+    }
+
+    #[test]
     fn perform_sync_envelope_json_returns_envelope_with_sync_result() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
