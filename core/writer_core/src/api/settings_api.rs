@@ -58,3 +58,42 @@ impl WriterCoreApi {
         .to_json_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_load_local_settings() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let result = api.load_local_settings();
+        assert!(result.is_ok());
+
+        let settings = result.unwrap();
+        // Since no settings file exists yet, it should return default values
+        assert_eq!(settings.theme_mode.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn test_save_and_load_local_settings() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let mut settings = api.load_local_settings().unwrap();
+        settings.theme_mode = Some("dark".to_string());
+        settings.editor_font_size = 20.0;
+
+        let save_result = api.save_local_settings(settings.clone());
+        assert!(save_result.is_ok());
+        assert!(save_result.unwrap());
+
+        let loaded_settings = api.load_local_settings().unwrap();
+        assert_eq!(loaded_settings.theme_mode.as_deref(), Some("dark"));
+        assert_eq!(loaded_settings.editor_font_size, 20.0);
+    }
+}
