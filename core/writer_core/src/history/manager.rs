@@ -193,4 +193,15 @@ mod tests {
         mgr.push(TextEditCommand::new(vec![], 0, 0));
         assert_eq!(mgr.undo_count(), 0);
     }
+
+    #[test]
+    fn undo_empty_stack_returns_false() {
+        let mut mgr = HistoryManager::new();
+        let mut text = "initial".to_string();
+        let mut cursor = 0usize;
+
+        assert!(!mgr.undo(&mut text, &mut cursor));
+        assert_eq!(text, "initial");
+        assert_eq!(cursor, 0);
+    }
 }
