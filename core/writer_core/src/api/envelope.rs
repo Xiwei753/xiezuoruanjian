@@ -176,4 +176,18 @@ mod tests {
         assert_eq!(envelope.user_message, Some(expected_user_message));
         assert_eq!(envelope.raw_error, Some(expected_raw_error));
     }
+
+    #[test]
+    fn error_envelope_extracts_fields_correctly() {
+        let error = WriterError::ProjectNotFound;
+        let envelope = ResultEnvelope::<()>::error(error);
+
+        assert!(!envelope.success);
+        assert_eq!(envelope.error_code.as_deref(), Some("PROJECT_NOT_FOUND"));
+        assert_eq!(envelope.user_message.as_deref(), Some("作品不存在或已被删除"));
+        assert_eq!(envelope.raw_error.as_deref(), Some("Project not found"));
+        assert!(envelope.warnings.is_empty());
+        assert!(envelope.changed_paths.is_empty());
+        assert!(envelope.changed_entities.is_empty());
+    }
 }
