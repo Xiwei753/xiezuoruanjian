@@ -142,4 +142,42 @@ mod tests {
         cmd.apply_inverse(&mut text, &mut cursor);
         assert_eq!(text, "abcd");
     }
+
+    #[test]
+    fn apply_forward_clamps_cursor_out_of_bounds() {
+        let cmd = TextEditCommand::new(
+            vec![EditorChange::Insert {
+                index: 1,
+                text: "X".to_string(),
+            }],
+            0,
+            100, // Way out of bounds
+        );
+
+        let mut text = "a".to_string();
+        let mut cursor = 0;
+
+        cmd.apply_forward(&mut text, &mut cursor);
+        assert_eq!(text, "aX");
+        assert_eq!(cursor, 2); // Clamped to text.len()
+    }
+
+    #[test]
+    fn apply_inverse_clamps_cursor_out_of_bounds() {
+        let cmd = TextEditCommand::new(
+            vec![EditorChange::Insert {
+                index: 1,
+                text: "X".to_string(),
+            }],
+            100, // Way out of bounds
+            2,
+        );
+
+        let mut text = "aX".to_string();
+        let mut cursor = 2;
+
+        cmd.apply_inverse(&mut text, &mut cursor);
+        assert_eq!(text, "a");
+        assert_eq!(cursor, 1); // Clamped to text.len()
+    }
 }
