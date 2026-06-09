@@ -193,4 +193,51 @@ mod tests {
         mgr.push(TextEditCommand::new(vec![], 0, 0));
         assert_eq!(mgr.undo_count(), 0);
     }
+
+    #[test]
+    fn getters_reflect_state() {
+        let mut mgr = HistoryManager::new();
+        let mut text = "test".to_string();
+        let mut cursor = 0usize;
+
+        // Initial state
+        assert!(!mgr.can_undo());
+        assert!(!mgr.can_redo());
+        assert_eq!(mgr.undo_count(), 0);
+        assert_eq!(mgr.redo_count(), 0);
+
+        // After push
+        let cmd = insert_cmd(4, "ing", 4, 7);
+        cmd.apply_forward(&mut text, &mut cursor);
+        mgr.push(cmd);
+
+        assert!(mgr.can_undo());
+        assert!(!mgr.can_redo());
+        assert_eq!(mgr.undo_count(), 1);
+        assert_eq!(mgr.redo_count(), 0);
+
+        // After undo
+        assert!(mgr.undo(&mut text, &mut cursor));
+
+        assert!(!mgr.can_undo());
+        assert!(mgr.can_redo());
+        assert_eq!(mgr.undo_count(), 0);
+        assert_eq!(mgr.redo_count(), 1);
+
+        // After redo
+        assert!(mgr.redo(&mut text, &mut cursor));
+
+        assert!(mgr.can_undo());
+        assert!(!mgr.can_redo());
+        assert_eq!(mgr.undo_count(), 1);
+        assert_eq!(mgr.redo_count(), 0);
+
+        // After clear
+        mgr.clear();
+
+        assert!(!mgr.can_undo());
+        assert!(!mgr.can_redo());
+        assert_eq!(mgr.undo_count(), 0);
+        assert_eq!(mgr.redo_count(), 0);
+    }
 }
