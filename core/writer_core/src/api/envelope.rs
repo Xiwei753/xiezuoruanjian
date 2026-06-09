@@ -104,6 +104,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn success_creates_envelope_with_correct_defaults() {
+        let envelope = ResultEnvelope::success("test_data".to_string());
+
+        assert!(envelope.success);
+        assert_eq!(envelope.data, Some("test_data".to_string()));
+        assert_eq!(envelope.error_code, None);
+        assert_eq!(envelope.user_message, None);
+        assert_eq!(envelope.raw_error, None);
+        assert!(envelope.warnings.is_empty());
+        assert!(envelope.changed_paths.is_empty());
+        assert!(envelope.changed_entities.is_empty());
+    }
+
+    #[test]
     fn success_envelope_uses_standard_field_names() {
         let json = ResultEnvelope::success_with_changes(
             true,
