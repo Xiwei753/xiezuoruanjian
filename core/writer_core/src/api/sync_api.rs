@@ -186,3 +186,30 @@ impl WriterCoreApi {
         Self::sync_diagnostics_envelope(self.perform_sync_diagnostics(config)).to_json_string()
     }
 }
+#[cfg(test)]
+mod tests {
+    use crate::api::service::WriterCoreApi;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_load_sync_config() {
+        let temp_dir = tempdir().unwrap();
+        crate::workspace::create_workspace(temp_dir.path()).unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        let config = api.load_sync_config().unwrap();
+
+        assert_eq!(config.enabled, false);
+        assert_eq!(config.backend_type, "github_api");
+        assert_eq!(config.remote_url, "");
+        assert_eq!(config.transport, "https_token");
+        assert_eq!(config.branch, "main");
+        assert_eq!(config.auto_sync, false);
+        assert_eq!(config.sync_interval_seconds, 300);
+        assert_eq!(config.proxy_enabled, false);
+        assert_eq!(config.proxy_type, "auto");
+        assert_eq!(config.proxy_host, "127.0.0.1");
+        assert_eq!(config.proxy_port, 7890);
+        assert_eq!(config.username, "");
+    }
+}
