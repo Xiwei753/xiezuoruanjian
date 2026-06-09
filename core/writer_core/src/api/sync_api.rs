@@ -186,3 +186,29 @@ impl WriterCoreApi {
         Self::sync_diagnostics_envelope(self.perform_sync_diagnostics(config)).to_json_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_load_sync_secrets() {
+        let temp_dir = tempdir().unwrap();
+        let api = WriterCoreApi::new(temp_dir.path());
+
+        // Test loading when no secrets exist (should return default/empty struct)
+        let loaded_empty = api.load_sync_secrets().unwrap();
+        assert_eq!(loaded_empty.token, None);
+
+        // Save some dummy secrets
+        let dummy_secrets = SyncSecretsDto {
+            token: Some("ghp_dummy123".to_string()),
+        };
+        api.save_sync_secrets(dummy_secrets.clone()).unwrap();
+
+        // Test loading the saved secrets
+        let loaded_secrets = api.load_sync_secrets().unwrap();
+        assert_eq!(loaded_secrets.token, dummy_secrets.token);
+    }
+}
