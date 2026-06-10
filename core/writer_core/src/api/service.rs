@@ -31,6 +31,7 @@ impl WriterCoreApi {
         serde_json::to_string(value).map_err(Into::into)
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. envelope_json is legacy and will be removed.")]
     pub fn envelope_json<T: Serialize>(result: ApiResult<T>) -> String {
         ResultEnvelope::from_api_result(result).to_json_string()
     }

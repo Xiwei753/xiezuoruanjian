@@ -9,7 +9,19 @@ class WorkspaceRepository(private val context: Context) {
     private val statsBridge = BridgeProvider.getStatsBridge(context)
 
     init {
-        workspaceBridge.createWorkspaceIfNeeded()
+        when (val result = workspaceBridge.createWorkspaceIfNeeded()) {
+            is BridgeResult.Error -> {
+                android.util.Log.e("WorkspaceRepository", "工作区初始化失败: ${result.message}")
+                throw RepositoryException("工作区初始化失败: ${result.message}")
+            }
+            BridgeResult.NotLoaded -> {
+                android.util.Log.e("WorkspaceRepository", "Native库未加载，无法初始化工作区")
+                throw RepositoryException("Native库未加载")
+            }
+            is BridgeResult.Success -> {
+                android.util.Log.d("WorkspaceRepository", "工作区初始化成功")
+            }
+        }
     }
 
     fun getProjects(): List<Project> {

@@ -592,7 +592,7 @@ impl AppBackend {
                 });
 
             let raw_url = self.current_sync_remote_url.clone();
-            let parsed = writer_core::sync_service::sanitize_remote_url(&raw_url);
+            let parsed = writer_core::sync::sanitize_remote_url(&raw_url);
 
             c.enabled = self.current_sync_enabled;
             c.backend_type = match self.current_sync_backend_type.as_str() {

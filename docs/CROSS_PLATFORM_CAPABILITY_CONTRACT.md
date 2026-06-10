@@ -6,7 +6,7 @@
 > [!IMPORTANT]
 > **最高优先级规则**
 > - 本文档约束所有跨平台业务能力。
-> - 后续任何功能，如果涉及 Workspace / Project / Volume / Chapter / Settings / Sync / Mind Map / Editor Model / Export / AI Context / Search / Trash / Delete Guard / Conflict Handling，都必须先检查本文档。
+> - 后续任何功能，如果涉及 Workspace / Project / Volume / Chapter / Settings / Sync / StarMap / Editor Model / Export / AI Context / Search / Trash / Delete Guard / Conflict Handling，都必须先检查本文档。Mind Map 已废弃（仅迁移兼容），新功能禁止使用。
 > - 如果提示词、AI 任务、人工 PR 与本文档冲突，以本文档为准。
 > - 如需改变本文档，必须单独提交文档变更并说明原因，不能在功能代码里绕开。
 
@@ -199,7 +199,11 @@ graph TD
 - **映射规则**：底层调用如 `libgit2` 产生的错误，必须在 Core 中全部映射为 `SyncStatus`，严禁直接把 libgit2 裸字符串传递给平台层展示。
 - **冲突处理**：当发生 Merge 冲突时，冲突判定、备选方案选择（保留本地/覆盖云端/人工合并）必须由 Core 定义的冲突处理算法进行，平台只提供选择 UI。
 
-### 6. MindMapCapability
+### 6. MindMapCapability (LEGACY - 已废弃)
+
+> **⚠️ 本 Capability 已废弃，仅保留用于旧数据迁移兼容。**
+> 正式图谱路线为 `starmap`（星图）。所有新增图谱能力必须走 StarMapCapability，禁止继续在 MindMapCapability 中开发新功能。
+
 - `createGraph(workspacePath: String, projectId: String, graphName: String) -> ResultEnvelope<GraphId>`
 - `listGraphs(workspacePath: String, projectId: String) -> ResultEnvelope<List<GraphMeta>>`
 - `setDefaultGraph(workspacePath: String, projectId: String, graphId: String) -> ResultEnvelope`
@@ -214,6 +218,10 @@ graph TD
 - `bindAnchor(workspacePath: String, projectId: String, graphId: String, anchorId: String, nodeId: String) -> ResultEnvelope`
 - `saveLayout(workspacePath: String, projectId: String, graphId: String, layoutData: LayoutData) -> ResultEnvelope`
 - `getSnapshot(workspacePath: String, projectId: String, graphId: String) -> ResultEnvelope<MindMapSnapshot>` (只读渲染视图快照)
+
+### 6b. StarMapCapability (正式图谱路线)
+- StarMap 是唯一推荐的图谱能力入口，详见 `starmap` 模块和 `starmap_semantics.md`。
+- 提供星图元数据管理、图数据 CRUD、布局持久化、viewport 状态、embed/link 语义边、连线渲染和命中测试等能力。
 
 ### 7. EditorModelCapability
 - `loadChapterText(workspacePath: String, projectId: String, chapterId: String) -> ResultEnvelope<EditorTextState>`

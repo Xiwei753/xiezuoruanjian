@@ -5,7 +5,7 @@
 // 引用了什么：
 // - writer_core::api::types::SyncDiagnosticsResultDto：核心库提供的强类型同步诊断 DTO。
 // - writer_core::api::WriterCoreApi：核心库对外的统一 API 入口。
-// - writer_core::sync_service：核心底层的 Git 与 RESTful 同步控制服务。
+// - writer_core::sync：核心底层的 Git 与 RESTful 同步控制服务（唯一正式同步模块）。
 //
 // 干什么的：
 // - 封装多线程异步同步/诊断任务结果传输结构体（SyncTaskOutcome），提供 operation_id 和 operation_kind。
@@ -19,7 +19,7 @@
 
 use writer_core::api::types::SyncDiagnosticsResultDto;
 use writer_core::api::WriterCoreApi;
-use writer_core::sync_service::{SyncConfig, SyncSecrets};
+use writer_core::sync::{SyncConfig, SyncSecrets};
 
 /// 同步任务结果封装。
 pub struct SyncTaskOutcome {
@@ -31,7 +31,7 @@ pub struct SyncTaskOutcome {
 
 /// 对错误消息进行脱敏处理（移除 Token、密钥等敏感信息）。
 pub fn mask_sync_error(msg: &str) -> String {
-    writer_core::sync_service::redact_secrets_from_message(msg, None, None)
+    writer_core::sync::redact_secrets_from_message(msg, None, None)
 }
 
 /// 将 core 返回的强类型错误分类映射为 UI 状态码。

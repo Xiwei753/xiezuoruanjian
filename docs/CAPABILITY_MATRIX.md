@@ -78,7 +78,9 @@
 - Core 在同步 envelope 中统一映射 `SYNC_CONFLICT`、`SYNC_AUTH_REQUIRED`、`SYNC_NETWORK_ERROR`、`SYNC_REMOTE_ERROR`、`SYNC_CONFIG_ERROR`、`SYNC_NOT_CONFIGURED`、`SYNC_FAILED` 等错误码。
 - 当前 Android `BridgeResult.Error` 会保留 envelope 的 `errorCode` / `userMessage` / `changedEntities`，但不会把失败 envelope 中的 `data` 作为成功数据分发；冲突详情 UI 如需结构化数据，需要单独扩展错误分支数据承载。
 
-## 7. MindMapCapability
+## 7. MindMapCapability (LEGACY - 已废弃)
+
+> **⚠️ 正式图谱路线为 StarMap。** MindMap 仅保留用于旧数据迁移兼容，禁止新增功能。
 
 | Capability | Core domain / facade | Core API | Android current 入口 | Android legacy 残留 | Linux current 入口 | Linux legacy 残留 | 是否对齐 | 风险级别 | 下一步 |
 |---|---|---|---|---|---|---|---|---|---|

@@ -87,7 +87,7 @@ impl AppBackend {
         proxy_host: &str,
         proxy_port: u16,
     ) -> SyncTaskOutcome {
-        use writer_core::sync_service::{
+        use writer_core::sync::{
             sanitize_remote_url, BackendType, SyncConfig, SyncSecrets,
         };
 
@@ -122,7 +122,7 @@ impl AppBackend {
             enabled: true,
             backend_type: BackendType::GithubApi,
             remote_url: sanitized_url.clone(),
-            transport: writer_core::sync_service::SyncTransport::HttpsToken,
+            transport: writer_core::sync::SyncTransport::HttpsToken,
             branch: branch.to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
@@ -147,10 +147,10 @@ impl AppBackend {
         let sec_ref = &secrets;
 
         if !has_content() {
-            let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
+            let backend = writer_core::sync::create_sync_backend(&config.backend_type);
             match backend.sync(path_obj, &config, &secrets) {
                 Ok(result) => {
-                    if result.status == writer_core::sync_service::SyncStatus::Success {
+                    if result.status == writer_core::sync::SyncStatus::Success {
                         let api = WriterCoreApi::new(path);
                         if !api.validate_workspace().unwrap_or(false) {
                             if let Err(e) = api.create_workspace_if_needed() {
@@ -161,14 +161,14 @@ impl AppBackend {
                                     action_result: format!("克隆成功但工作区初始化失败: {}", e),
                                 };
                             }
-                            let push_backend = writer_core::sync_service::create_sync_backend(
+                            let push_backend = writer_core::sync::create_sync_backend(
                                 &config.backend_type,
                             );
                             let push_result = push_backend.sync(path_obj, &config, &secrets);
                             let save_first = match &push_result {
                                 Ok(r)
                                     if r.status
-                                        != writer_core::sync_service::SyncStatus::Success =>
+                                        != writer_core::sync::SyncStatus::Success =>
                                 {
                                     true
                                 }
@@ -241,10 +241,10 @@ impl AppBackend {
                 },
             }
         } else if has_workspace() {
-            let backend = writer_core::sync_service::create_sync_backend(&config.backend_type);
+            let backend = writer_core::sync::create_sync_backend(&config.backend_type);
             match backend.sync(path_obj, &config, &secrets) {
                 Ok(result) => {
-                    if result.status == writer_core::sync_service::SyncStatus::Success {
+                    if result.status == writer_core::sync::SyncStatus::Success {
                         match save_sync_configs(path, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(),
@@ -262,7 +262,7 @@ impl AppBackend {
                                 ),
                             },
                         }
-                    } else if result.status == writer_core::sync_service::SyncStatus::Conflict {
+                    } else if result.status == writer_core::sync::SyncStatus::Conflict {
                         let mut files = result
                             .conflicts
                             .iter()
