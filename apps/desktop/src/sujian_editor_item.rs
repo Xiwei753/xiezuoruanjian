@@ -139,6 +139,16 @@ cpp! {{
         item->setAcceptedMouseButtons(Qt::AllButtons);
     }
 
+    void sujian_clean_cursor_nodes(QSGNode *root) {
+        if (!root) return;
+        auto *transformNode = static_cast<QSGTransformNode*>(root);
+        while (transformNode->childCount() > 1) {
+            QSGNode *child = transformNode->lastChild();
+            transformNode->removeChildNode(child);
+            delete child;
+        }
+    }
+
     void sujian_update_cursor_rect(QSGTransformNode *root, QQuickItem *item,
         double cx, double cy, double cw, double ch, bool visible, unsigned int color_rgba) {
         if (!root) return;
@@ -2252,9 +2262,20 @@ impl QQuickItem for SujianEditorItem {
 
         let frame_start = Instant::now();
 
+        // 1. 在 update_paint_node() 开头统一调用一次 update_cursor_visual_position()
+        self.update_cursor_visual_position();
+
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() { sujian_item_dpr(item_ptr) } else { 1.0 };
         let old_raw = node.into_raw();
+
+        // 2. 清理旧的 cursor overlay 节点，确保 root 只保留 image node
+        if !old_raw.is_null() {
+            cpp!(unsafe [old_raw as "QSGNode*"] {
+                sujian_clean_cursor_nodes(old_raw);
+            });
+        }
+
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let scroll_y = self.current_scroll_y as f64;
         let content_h = self.current_content_height as f64;
@@ -2283,85 +2304,21 @@ impl QQuickItem for SujianEditorItem {
             self.render_dirty = true;
         }
 
-        // 光标动画进行中也算"需要更新"，否则 render_dirty 路径清完 cursor_dirty 后动画会被掐断
+        // 光标动画进行中也算"需要更新"
         let cursor_anim_active = self.cursor_animation.as_ref()
             .is_some_and(|a| !a.is_finished(Instant::now()));
 
-        if !self.render_dirty && !self.cursor_dirty && !cursor_anim_active {
+        // 如果光标位置有变或动画进行中，强制重绘文字+光标
+        if self.cursor_dirty || cursor_anim_active {
+            self.render_dirty = true;
+        }
+
+        if !self.render_dirty {
             return unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) };
         }
 
-        let cursor_rgba = color_hex_to_rgba(&self.current_cursor_color);
-
         // 路径 1: 文字需要重绘
         if self.render_dirty {
-            match self.render_to_image() {
-                Some((image, buf_scroll_y, _buf_h)) => {
-                    let (src_y, src_h) = if let Some(ref buf) = self.scroll_buffer {
-                        buf.clamp_source_rect(scroll_y, vp_h)
-                    } else {
-                        (scroll_y - buf_scroll_y, vp_h)
-                    };
-                    let logical_img_w = image.size().width as f64 / dpr;
-                    // Viewport model: image rect at (0, 0), sourceRect scrolls
-                    let new_raw = sujian_update_texture_node(
-                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
-                    );
-                    sujian_update_cursor_rect(
-                        new_raw, item_ptr,
-                        self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
-                        self.cursor_visible, cursor_rgba,
-                    );
-                    // 光标动画仍 active 时保持 cursor_dirty，让下一帧进 cursor-only 路径推进动画
-                    let still_animating = self.cursor_animation.as_ref()
-                        .is_some_and(|a| !a.is_finished(Instant::now()));
-                    if still_animating {
-                        self.cursor_dirty = true;
-                        let item = self as &dyn QQuickItem;
-                        item.update();
-                    } else {
-                        self.cursor_dirty = false;
-                    }
-                    let total_elapsed = frame_start.elapsed();
-                    if total_elapsed.as_millis() > 4 {
-                        eprintln!(
-                            "sujian_update_paint_node: total_ms={}, new_texture=true, buf={:.0}..{:.0}",
-                            total_elapsed.as_millis(), buf_scroll_y, buf_scroll_y + _buf_h,
-                        );
-                    }
-                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(new_raw) }
-                }
-                None => {
-                    // 缓冲区命中：只更新 source rect，但先用 helper 重新算光标位置
-                    self.update_cursor_visual_position();
-
-                    if !old_raw.is_null() {
-                        if let Some(ref buf) = self.scroll_buffer {
-                            let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
-                            let logical_img_w = buf.image.size().width as f64 / dpr;
-                            // Viewport model: image rect at (0, 0), sourceRect scrolls
-                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
-                        }
-                        sujian_update_cursor_rect(
-                            old_raw, item_ptr,
-                            self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
-                            self.cursor_visible, cursor_rgba,
-                        );
-                    }
-                    let still_animating = self.cursor_animation.as_ref()
-                        .is_some_and(|a| !a.is_finished(Instant::now()));
-                    if still_animating {
-                        self.cursor_dirty = true;
-                        let item = self as &dyn QQuickItem;
-                        item.update();
-                    } else {
-                        self.cursor_dirty = false;
-                    }
-                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
-                }
-            }
-        } else if self.cursor_dirty && !old_raw.is_null() {
-            // 路径 2: 只有光标变了（动画/滚动），不需要重绘文字
             let now = Instant::now();
             if let Some(ref anim) = self.cursor_animation {
                 if anim.is_finished(now) {
@@ -2380,42 +2337,40 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_dirty = false;
             }
 
-            if let Some(ref buf) = self.scroll_buffer {
-                let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
-                let logical_img_w = buf.image.size().width as f64 / dpr;
-                // Viewport model: image rect at (0, 0), sourceRect scrolls
-                sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
-            }
-            sujian_update_cursor_rect(
-                old_raw, item_ptr,
-                self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
-                self.cursor_visible, cursor_rgba,
-            );
-            unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
-        } else {
-            // 路径 3: 无变化（或只有 anim_active 但 cursor_dirty 已被清，补一次推进）
-            if cursor_anim_active && !old_raw.is_null() {
-                let now = Instant::now();
-                if let Some(ref anim) = self.cursor_animation {
-                    if anim.is_finished(now) {
-                        self.cursor_visual_x = anim.target_x;
-                        self.cursor_visual_y = anim.target_y;
-                        self.cursor_animation = None;
-                        self.cursor_dirty = false;
+            match self.render_to_image() {
+                Some((image, buf_scroll_y, _buf_h)) => {
+                    let (src_y, src_h) = if let Some(ref buf) = self.scroll_buffer {
+                        buf.clamp_source_rect(scroll_y, vp_h)
                     } else {
-                        let (cx, cy) = anim.current_position(now);
-                        self.cursor_visual_x = cx;
-                        self.cursor_visual_y = cy;
-                        sujian_update_cursor_rect(
-                            old_raw, item_ptr,
-                            self.cursor_visual_x, self.cursor_visual_y, 2.0, self.cursor_visual_h,
-                            self.cursor_visible, cursor_rgba,
+                        (scroll_y - buf_scroll_y, vp_h)
+                    };
+                    let logical_img_w = image.size().width as f64 / dpr;
+                    // Viewport model: image rect at (0, 0), sourceRect scrolls
+                    let new_raw = sujian_update_texture_node(
+                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
+                    );
+                    let total_elapsed = frame_start.elapsed();
+                    if total_elapsed.as_millis() > 4 {
+                        eprintln!(
+                            "sujian_update_paint_node: total_ms={}, new_texture=true, buf={:.0}..{:.0}",
+                            total_elapsed.as_millis(), buf_scroll_y, buf_scroll_y + _buf_h,
                         );
-                        let item = self as &dyn QQuickItem;
-                        item.update();
                     }
+                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(new_raw) }
+                }
+                None => {
+                    if !old_raw.is_null() {
+                        if let Some(ref buf) = self.scroll_buffer {
+                            let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
+                            let logical_img_w = buf.image.size().width as f64 / dpr;
+                            // Viewport model: image rect at (0, 0), sourceRect scrolls
+                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
+                        }
+                    }
+                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
                 }
             }
+        } else {
             unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
         }
     }
@@ -2776,7 +2731,14 @@ impl SujianEditorItem {
         }
 
         // ── Layer 4: Cursor ──
-        self.update_cursor_visual_position();
+        if self.cursor_visible && !self.current_is_scrolling && !self.buffer.has_selection() {
+            let cursor_x = self.cursor_visual_x;
+            let scroll_y = self.current_scroll_y as f64;
+            let cursor_y_doc = self.cursor_visual_y + scroll_y;
+            let cursor_h = self.cursor_visual_h;
+            let cursor_color = self.current_cursor_color.clone();
+            draw_rect(painter, cursor_x, cursor_y_doc + paint_offset_y, 2.0, cursor_h, cursor_color);
+        }
         
         // 清理已完成的吐字/吞字动画
         let now_cleanup = Instant::now();
