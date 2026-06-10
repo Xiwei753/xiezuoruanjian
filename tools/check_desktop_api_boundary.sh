@@ -14,19 +14,19 @@ search() {
 }
 
 if search 'writer_core::facade::WriterCore'; then
-  echo "Linux code must not import writer_core::facade::WriterCore" >&2
+  echo "Desktop code must not import writer_core::facade::WriterCore" >&2
   exit 1
 fi
 
 if search 'WriterCore::new\(';
 then
-  echo "Linux code must not construct WriterCore directly" >&2
+  echo "Desktop code must not construct WriterCore directly" >&2
   exit 1
 fi
 
 if search 'core_facade'; then
-  echo "Linux code must not use core_facade" >&2
+  echo "Desktop code must not use core_facade" >&2
   exit 1
 fi
 
-echo "Linux API boundary check passed"
+echo "Desktop API boundary check passed"

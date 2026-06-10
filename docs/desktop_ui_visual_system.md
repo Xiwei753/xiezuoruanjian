@@ -1,6 +1,6 @@
-# Linux UI 视觉系统
+# Desktop UI 视觉系统
 
-Linux 客户端采用 Qt6/QML 实现，视觉底座对齐 Android Material 3。`apps/desktop/qml/DesignTokens.qml` 是 Linux UI 的唯一设计令牌来源，页面和组件应优先绑定令牌，不在业务页面中重复定义颜色、圆角、字号和状态样式。
+Desktop 客户端采用 Qt6/QML 实现，视觉底座对齐 Android Material 3。`apps/desktop/qml/DesignTokens.qml` 是 Desktop UI 的唯一设计令牌来源，页面和组件应优先绑定令牌，不在业务页面中重复定义颜色、圆角、字号和状态样式。
 
 ## 色彩
 

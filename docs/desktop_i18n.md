@@ -1,8 +1,8 @@
-# Linux Client i18n Guide
+# Desktop Client i18n Guide
 
 ## 1. 原则
 
-- 所有 Linux 客户端 QML 用户可见文本必须使用 `qsTr("文本")` 包裹。
+- 所有 Desktop 客户端 QML 用户可见文本必须使用 `qsTr("文本")` 包裹。
 - 不要在 QML 中使用硬编码的中文拼接，使用 `.arg()` 机制：`qsTr("删除「%1」吗？").arg(title)`。
 - i18n 机制采用 Qt 官方的 `.ts` 翻译文件系统。
 

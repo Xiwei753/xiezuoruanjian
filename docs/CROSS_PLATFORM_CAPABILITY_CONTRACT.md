@@ -1,7 +1,7 @@
 # 《跨平台能力契约与 Core-first 架构约束》
 
 > [!NOTE]
-> **进度追踪**：请查看 [跨平台能力矩阵 (CAPABILITY MATRIX)](CAPABILITY_MATRIX.md) 了解当前各能力在 Core / Android / Linux 三边的分叉状态及下一步重构顺序。
+> **进度追踪**：请查看 [跨平台能力矩阵 (CAPABILITY MATRIX)](CAPABILITY_MATRIX.md) 了解当前各能力在 Core / Android / Desktop 三边的分叉状态及下一步重构顺序。
 
 > [!IMPORTANT]
 > **最高优先级规则**
@@ -16,14 +16,14 @@
 
 ### 1. Core-first (核心优先)
 - **业务真相在 Core**：所有业务能力、业务状态转移、规则校验必须先在 Rust Core (`core/writer_core`) 中定义语义和实现。
-- **平台层只读/委托**：平台端（Android / Linux 及未来的其他端）只能调用 Core capability，禁止在平台端自行编写、复制或发明长期业务规则或数据校验。
+- **平台层只读/委托**：平台端（Android / Desktop 及未来的其他端）只能调用 Core capability，禁止在平台端自行编写、复制或发明长期业务规则或数据校验。
 - **职责边界**：平台端可以负责 UI 呈现、输入交互、系统权限申请、底层渲染、原生生命周期生命线和系统通知，但绝对不能成为任何业务数据的“真相来源”。
 
 ### 2. One Capability, Many Bindings (单一能力，多端绑定)
 - **语义归一**：一个业务能力（例如：创建作品、修改设置）在 Core 中必须有且仅有一个业务语义定义。
-- **无歧义绑定**：Android UniFFI 主绑定、legacy JNI fallback、Linux backend 适配器、以及未来的 Windows/macOS/iOS/Web 绑定层，都只能作为该 Capability 的 Binding。
-- **传输层格式隔离**：Binding 可以为了平台特性使用不同的传输格式（如 Android UniFFI typed DTO、legacy JSON 字符串/DirectByteBuffer，Linux qmetaobject 传输 C++ 结构体/JSON），但传输格式绝不能修改、扩展或削弱 Core API 的原始业务语义。
-- **反例**：Android 端实现 `createProject` 包含自动初始化空卷的业务语义 A，而 Linux 端实现的 `createProject` 只是创建空文件夹的业务语义 B。这种情况被绝对禁止。
+- **无歧义绑定**：Android UniFFI 主绑定、legacy JNI fallback、Desktop backend 适配器、以及未来的 Windows/macOS/iOS/Web 绑定层，都只能作为该 Capability 的 Binding。
+- **传输层格式隔离**：Binding 可以为了平台特性使用不同的传输格式（如 Android UniFFI typed DTO、legacy JSON 字符串/DirectByteBuffer，Desktop qmetaobject 传输 C++ 结构体/JSON），但传输格式绝不能修改、扩展或削弱 Core API 的原始业务语义。
+- **反例**：Android 端实现 `createProject` 包含自动初始化空卷的业务语义 A，而 Desktop 端实现的 `createProject` 只是创建空文件夹的业务语义 B。这种情况被绝对禁止。
 
 ### 3. Shared Result Envelope (统一结果信封)
 - **标准响应结构**：所有跨平台 Capability 调用必须统一返回结果包裹格式。禁止直接返回裸状态值或各平台自定义的响应体。
@@ -78,7 +78,7 @@
 - **消费规则**：平台端仅能作为 Event 的消费者。平台端可以把事件转换为特定平台的 UI State 或 LiveData/StateFlow 信号，但禁止自己在平台层发明和分发长周期的业务事件。
 
 ### 7. Platform Adapter Only (平台绑定层纯适配器化)
-- Android 中的 `AppServiceBridge + UniFFI` 主链路、`NativeCoreBridge`/`writer_core_jni` legacy fallback，以及 Linux 中的 `qmetaobject/backend` 只是**适配器（Adapter）**，不是业务逻辑实现层。
+- Android 中的 `AppServiceBridge + UniFFI` 主链路、`NativeCoreBridge`/`writer_core_jni` legacy fallback，以及 Desktop 中的 `qmetaobject/backend` 只是**适配器（Adapter）**，不是业务逻辑实现层。
 - **适配器允许且只允许做以下事情**：
   1. 数据格式的物理转换（如：Rust RustString -> C++ QString，Rust Vector -> Kotlin List）。
   2. 调度执行：将同步、写操作派发到非 UI 线程，或接收 Core 异步回调并派发到平台主线程。
@@ -89,7 +89,7 @@
   2. 禁止自行修改 workspace 里的任何长期文件。
   3. 禁止静默吞掉 Core 传出的错误。
   4. 禁止在 Core 返回失败时制造虚假成功状态以试图“平滑体验”。
-  5. 禁止针对 Android 和 Linux 实现两套截然不同的业务规则。
+  5. 禁止针对 Android 和 Desktop 实现两套截然不同的业务规则。
 
 ---
 
@@ -117,7 +117,7 @@ graph TD
         AVM -. legacy status/action .-> NCBridge[NativeCoreBridge]
     end
 
-    subgraph LinuxApp ["apps/desktop (Linux 壳应用)"]
+    subgraph DesktopApp ["apps/desktop (Desktop 壳应用)"]
         LBACK[Backend Adapter C++] --> LUI[QML UI]
     end
 
@@ -148,8 +148,8 @@ graph TD
   - 不做本地业务缓存。在设置界面编辑时，只允许在内存中修改 Draft，直到点击“保存”通过 SettingsCapability 写入，以 Core 返回的 `SettingsSaved` 事件为刷新 UI 的唯一依据。
   - 导图的拖拽缩放、手势事件、惯性计算是 UI 逻辑，但节点布局、数据和锚点更新全量来自 Core。
 
-- **`apps/desktop` (Linux 客户端壳层)**
-  - 基于 Qt/QML 的 UI 部分和 C++ 编写的 Linux backend 适配层。
+- **`apps/desktop` (Desktop 桌面客户端壳层)**
+  - 基于 Qt/QML 的 UI 部分和 C++ 编写的 Desktop backend 适配层。
   - QML 只绑定 AppState 里的只读变量，并向后端发送用户指令动作。
   - 禁止在 QML 里使用 `Timer` 去间接轮询判断某项后台业务是否成功。
   - 禁止在 QML 里编写任何修改业务状态的状态机逻辑。
@@ -233,7 +233,7 @@ graph TD
 
 ### 实例 1：创建项目 (createProject)
 - ❌ **错误做法**：
-  Android 通过 JNI 调起 `createFolder`，然后在 Android 侧向文件夹里写入 `.nomedia`，接着更新 SharedPreferences 中记录的“最近项目”；同时 Linux 侧由 backend 创建文件夹后，直接生成了一个默认的 `settings.json` 并调用 QML 发送状态刷新。
+  Android 通过 JNI 调起 `createFolder`，然后在 Android 侧向文件夹里写入 `.nomedia`，接着更新 SharedPreferences 中记录的“最近项目”；同时 Desktop 侧由 backend 创建文件夹后，直接生成了一个默认的 `settings.json` 并调用 QML 发送状态刷新。
   *后果：双端项目初始化结构不同，最近项目无法通过工作区同步，行为分叉。*
 -  **正确做法**：
   平台层只发送 `ProjectCapability.createProject(workspacePath, "新项目")`。
@@ -246,7 +246,7 @@ graph TD
 
 ### 实例 2：设置变更 (Settings)
 - ❌ **错误做法**：
-  在 Android 的 `SettingsActivity` 点击保存时，直接使用 Android 的 `SharedPreferences` 保存排版大小，然后再调用 JNI 同步到 Core；而 Linux 则直接使用 Qt 的 `QSettings` 写文件。
+  在 Android 的 `SettingsActivity` 点击保存时，直接使用 Android 的 `SharedPreferences` 保存排版大小，然后再调用 JNI 同步到 Core；而 Desktop 则直接使用 Qt 的 `QSettings` 写文件。
   *后果：同步机制完全无法触及这些偏好设置，用户换机或多端切换时设置直接丢失。*
 -  **正确做法**：
   平台层在 Settings UI 界面进行操作时只在本地维护一个内存 draft。当点击保存时，调用 `SettingsCapability.saveLocalSettings(workspacePath, newSettings)`。
@@ -254,7 +254,7 @@ graph TD
 
 ### 实例 3：同步冲突 (Sync Conflict)
 - ❌ **错误做法**：
-  在执行同步操作时，发生了 Git 冲突。Linux backend 抓到 `libgit2` 抛出的 `Merge conflict on chapter_1.txt` 异常字符串，直接在 UI 弹窗打印原始堆栈；Android 抓到后由于解析不出字符串，认为同步超时，提示用户“网络连接失败”。
+  在执行同步操作时，发生了 Git 冲突。Desktop backend 抓到 `libgit2` 抛出的 `Merge conflict on chapter_1.txt` 异常字符串，直接在 UI 弹窗打印原始堆栈；Android 抓到后由于解析不出字符串，认为同步超时，提示用户“网络连接失败”。
   *后果：同步状态在双端完全不可理解，Android 侧逻辑吞错且欺骗用户，极易导致二次覆盖写。*
 -  **正确做法**：
   Core `SyncCapability.sync()` 底层捕获 `libgit2` 冲突，在 Core 内部计算出冲突路径和差异，返回 Result Envelope：
@@ -264,7 +264,7 @@ graph TD
 ### 实例 4：思维导图操作 (MindMap)
 - ❌ **错误做法**：
   Android 侧拖动并修改了思维导图节点名字，直接将修改后的 JSON 用文件操作写回 `mind_map.json`，然后重新读取 JSON 并强刷 Canvas。
-  *后果：Linux 端正开着同样的文件但全然不知，没有文件完整性校验，可能随时覆盖或者覆盖掉 Core 的自动布局。*
+  *后果：Desktop 端正开着同样的文件但全然不知，没有文件完整性校验，可能随时覆盖或者覆盖掉 Core 的自动布局。*
 -  **正确做法**：
   Android 侧修改节点名称，发送 `MindMapCapability.updateNode(workspacePath, projectId, graphId, nodeId, "新节点名称")` 命令。
   Core 在内部图数据结构中修改节点并校验，写回统一的 workspace 并触发 `MindMapGraphUpdated` 事件，双端在收到该事件后高效率更新快照并重新进行裁剪区重绘。
@@ -275,12 +275,12 @@ graph TD
 
 为保证项目长远的可维护性，严禁出现任何形式的技术方案或业务方案分叉。以下规则是刚性约束，必须由 CI 静态检查、CR 评审和架构巡检共同卡点：
 
-1. **能力对等原则**：禁止任何 Android 侧独占的业务功能在 Linux 侧无对应 Core API 支持。同样地，禁止 Linux backend 自己实现一套和 Android 不同的底层业务规则。
+1. **能力对等原则**：禁止任何 Android 侧独占的业务功能在 Desktop 侧无对应 Core API 支持。同样地，禁止 Desktop backend 自己实现一套和 Android 不同的底层业务规则。
 2. **禁止平台级业务状态修复**：禁止在 QML 代码或 Android Activity/ViewModel 内部通过硬编码去“修补”、“绕过”或“拼装”业务状态机。
 3. **禁止 JNI 编写业务算法**：JNI 和 C++ backend 绑定层严禁包含数据排序、搜索过滤、字符排版计算等算法。此类逻辑必须移入 Core。
 4. **禁止多义错误表达**：禁止双端使用不同的自定义字符串去表达同一个状态。必须使用统一的 `errorCode` 和 `SharedStatus`。
 5. **禁止 UI 决策业务结果**：禁止通过判断 UI 控件状态、页面是否加载完毕来在本地判断某项业务是成功还是失败。业务最终成功/失败必须有 Core 返回值背书。
-6. **禁止长期数据本地分叉**：禁止为了赶进度将任何需要多端同步的长期业务数据只存在某一个平台本地（例如 Android SharedPreferences 或 Linux `.config`），必须无条件沉淀到 `writer_core` 的工作区定义文件中。
+6. **禁止长期数据本地分叉**：禁止为了赶进度将任何需要多端同步的长期业务数据只存在某一个平台本地（例如 Android SharedPreferences 或 Desktop `.config`），必须无条件沉淀到 `writer_core` 的工作区定义文件中。
 7. **禁止为 demo 绕道**：禁止在赶进度时，通过平台端拼凑假 JSON 或绕过 Core 的 Command 锁机制去直接修改 workspace 底层文件。
 8. **同步冲突标准化**：禁止把同步冲突（Git Merge Conflict）仅仅当成 raw 报错字符串打印或吞掉。必须统一映射为 `SharedStatus.conflict`，由 Core 返回受影响实体，平台提供图形化选择逻辑。
 
@@ -294,22 +294,22 @@ graph TD
 * [ ] **错误码对齐**：所有可能的异常分支是否都映射到了标准 `errorCode`，并且双端对其处理逻辑一致？
 * [ ] **Core 测试覆盖**：该功能的 Core Command / Capability 是否在 Rust 层拥有 100% 跑通的单元测试或集成测试？
 * [ ] **Android 桥薄化**：Android 绑定层（`bindings/android`）是否只有少于 50 行的无状态物理桥接代码，且不包含任何业务变量？
-* [ ] **Linux 适配器对齐**：Linux backend 是否调用了同一个 Core API，返回的结构语义是否与 Android 一致？
+* [ ] **Desktop 适配器对齐**：Desktop backend 是否调用了同一个 Core API，返回的结构语义是否与 Android 一致？
 * [ ] **状态机归一**：两端使用的 UI 状态机（如同步中、冲突、就绪）是否全量采用 `SharedStatus` 的状态定义？
 * [ ] **文件写入安全**：该功能是否完全杜绝了平台端直接向 workspace 写入文件的行为？
 * [ ] **同步白名单同步更新**：如果有新增的持久化文件，是否已经将其路径添加到 `core/writer_core` 的同步忽略/包含白名单中？
 * [ ] **技术路线同步更新**：是否已根据需要修改了对应平台的 `TECHNICAL_ROUTE.md` 文档？
-* [ ] **双端交叉验证**：该修改是否已经在 Android 模拟器（或真机）和 Linux 桌面端同时进行过同等功能的正反向验收？
+* [ ] **双端交叉验证**：该修改是否已经在 Android 模拟器（或真机）和 Desktop 桌面端同时进行过同等功能的正反向验收？
 
 ---
 
 ## 七、 迁移路线 (Migration Roadmap)
 
-针对目前项目已出现的“Android 和 Linux 分离割裂”的严重架构风险，必须在后续阶段逐步按以下迁移路线将项目拉回正轨：
+针对目前项目已出现的“Android 和 Desktop 分离割裂”的严重架构风险，必须在后续阶段逐步按以下迁移路线将项目拉回正轨：
 
 ### 阶段 1：盘点能力 (Capability Auditing)
 - **输入**：对现有 `bindings/android`、`apps/android/NativeCoreBridge` 以及 `apps/desktop/backend` 中所有的公开方法进行全量盘点。
-- **输出**：建立 `Capability Matrix`。对比并找出哪些方法在 Android 有而在 Linux 没有，或者两者在返回结构和错误码上存在分歧。
+- **输出**：建立 `Capability Matrix`。对比并找出哪些方法在 Android 有而在 Desktop 没有，或者两者在返回结构和错误码上存在分歧。
 
 ### 阶段 2：Core Capability Facade (建立核心能力门面)
 - **重构**：在 Rust Core 中，统一对外暴露 `facade` 模块。
@@ -317,7 +317,7 @@ graph TD
 - **信封化**：确保所有的 API 调用都使用标准 `ResultEnvelope` 对外通信。
 
 ### 3. 阶段 3：绑定层变薄 (Binding Thinning)
-- **拆除**：逐步拆除 JNI 和 Linux backend 中的逻辑校验和临时垫片代码。
+- **拆除**：逐步拆除 JNI 和 Desktop backend 中的逻辑校验和临时垫片代码。
 - **无状态化**：把绑定层彻底改造成无状态的数据转发层，确保两端行为完全通过 Core 返回的 Payload 决定。
 
 ### 4. 阶段 4：双端对齐测试 (Cross-platform Integration Testing)

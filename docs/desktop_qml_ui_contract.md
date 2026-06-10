@@ -1,10 +1,10 @@
-# Linux QML UI 组件契约
+# Desktop QML UI 组件契约
 
-本文档约束 Linux/QML 页面和可复用组件的尺寸、布局和后端调用边界，避免设置页、同步页等弹窗反复出现控件重叠、indicator 裁切和递归布局问题。
+本文档约束 Desktop/QML 页面和可复用组件的尺寸、布局和后端调用边界，避免设置页、同步页等弹窗反复出现控件重叠、indicator 裁切和递归布局问题。
 
 ## 后端调用边界
 
-- QML 页面只调用 Linux backend 暴露的 view model / command，不直接实现工作区、项目、章节、同步或设置业务分支。
+- QML 页面只调用 Desktop backend 暴露的 view model / command，不直接实现工作区、项目、章节、同步或设置业务分支。
 - 新功能优先按领域使用后端边界：workspace、project、editor、settings、sync、starmap。旧的 `backend.xxx` 调用可作为兼容转发保留，但不应继续扩张。
 - `*_json` 返回值 schema 由后端适配层维护，QML 不新增分散的错误包装逻辑。
 

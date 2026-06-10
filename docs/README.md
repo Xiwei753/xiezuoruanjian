@@ -15,7 +15,7 @@
 | `ai_development_guide.md` | AI 开发指南 |
 | `ai_tool_calling.md` | AI 工具调用说明 |
 | `input_animation_design.md` | 输入动画设计 |
-| `linux_ime_notes.md` | Linux 输入法注意事项 |
+| `desktop_ime_notes.md` | Desktop (Linux) 输入法注意事项 |
 | `CAPABILITY_MATRIX.md` | 功能矩阵 |
 | `CROSS_PLATFORM_CAPABILITY_CONTRACT.md` | 跨平台能力契约 |
 | `TECHNICAL_ROUTE.md` | 技术路线图 |

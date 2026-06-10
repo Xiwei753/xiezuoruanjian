@@ -1,6 +1,6 @@
-﻿# Linux Backend Contract
+# Desktop Backend Contract
 
-`AppBackend` 是 Linux QML 层的共享状态入口，不是新的业务上帝类。Linux 启动入口的 composition root 是 `BackendRuntime`：它负责创建、持有并注册暴露给 QML 的所有 QObject。
+`AppBackend` 是 Desktop QML 层的共享状态入口，不是新的业务上帝类。Desktop 启动入口的 composition root 是 `BackendRuntime`：它负责创建、持有并注册暴露给 QML 的所有 QObject。
 
 新页面必须按领域使用稳定 backend 名称：`workspaceBackend`、`projectBackend`、`editorBackend`、`settingsBackend`、`syncBackend`、`starmapBackend`。旧 `appBackend.xxx` / `backend.xxx` 调用只允许用于应用级调试、系统主题检测、全局状态兼容；不得把领域 API 重新挂回 `AppBackend`。
 
