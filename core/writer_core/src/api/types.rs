@@ -151,6 +151,14 @@ impl From<crate::workspace::RecentEdit> for RecentEditDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct WorkspaceSummaryDto {
+    pub path: String,
+    pub is_valid: bool,
+    pub projects: Vec<ProjectDto>,
+    pub recent_edits: Vec<RecentEditDto>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceDiagnosticsDto {
     pub has_workspace: bool,

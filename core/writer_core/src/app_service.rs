@@ -168,6 +168,14 @@ impl WriterAppService {
             .create_chapter_envelope_json(&project_id, &volume_id, &title)
     }
 
+    pub fn create_chapter_in_project(
+        &self,
+        project_id: String,
+        title: String,
+    ) -> Result<ChapterMetaDto, WriterError> {
+        self.api.create_chapter_in_project(&project_id, &title)
+    }
+
     pub fn rename_chapter(
         &self,
         project_id: String,

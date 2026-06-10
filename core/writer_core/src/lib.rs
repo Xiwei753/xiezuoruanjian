@@ -93,6 +93,85 @@ pub fn perform_dummy_action() -> String {
     "hello from uniffi".to_string()
 }
 
+use std::path::Path;
+
+pub fn init_workspace(path: String) -> std::result::Result<bool, WriterError> {
+    let p = Path::new(&path);
+    crate::workspace::create_workspace(p).map_err(WriterError::from)?;
+    
+    // Check if we need to create a default project
+    let projects = crate::project::list_projects(p).map_err(WriterError::from)?;
+    if projects.is_empty() {
+        let project = crate::project::create_project(p, "示例作品").map_err(WriterError::from)?;
+        let volumes = crate::volume::list_volumes(p, &project.id).map_err(WriterError::from)?;
+        if let Some(vol) = volumes.first() {
+            let chapter = crate::chapter::create_chapter(p, &project.id, &vol.id, "第一章：新的起点")
+                .map_err(WriterError::from)?;
+            let _ = crate::chapter::save_chapter(
+                p,
+                &project.id,
+                &vol.id,
+                &chapter.id,
+                "这是您的第一部作品。在这里开始您的写作之旅吧！",
+            )
+            .map_err(WriterError::from)?;
+        }
+    }
+    
+    Ok(true)
+}
+
+pub fn open_workspace(path: String) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
+    let p = Path::new(&path);
+    if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
+        return Err(WriterError::InvalidWorkspace);
+    }
+    Ok(std::sync::Arc::new(WriterAppService::new(path)))
+}
+
+pub fn repair_workspace(path: String) -> std::result::Result<bool, WriterError> {
+    let p = Path::new(&path);
+    crate::workspace::create_workspace(p).map_err(WriterError::from)?;
+    Ok(true)
+}
+
+pub fn create_project_in_workspace(
+    workspace: String,
+    title: String,
+) -> std::result::Result<ProjectDto, WriterError> {
+    let p = Path::new(&workspace);
+    let project = crate::project::create_project(p, &title).map_err(WriterError::from)?;
+    Ok(project.into())
+}
+
+pub fn load_workspace_summary(path: String) -> std::result::Result<WorkspaceSummaryDto, WriterError> {
+    let p = Path::new(&path);
+    let is_valid = crate::workspace::validate_workspace(p).unwrap_or(false);
+    
+    let projects = if is_valid {
+        crate::project::list_projects(p)
+            .map(|v| v.into_iter().map(Into::into).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    
+    let recent_edits = if is_valid {
+        crate::workspace::get_recent_edits(p)
+            .map(|v| v.into_iter().map(Into::into).collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    
+    Ok(WorkspaceSummaryDto {
+        path,
+        is_valid,
+        projects,
+        recent_edits,
+    })
+}
+
 uniffi::include_scaffolding!("api");
 pub mod app_service;
 pub use app_service::WriterAppService;

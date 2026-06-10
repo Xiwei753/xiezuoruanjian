@@ -26,6 +26,21 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn create_chapter_in_project(
+        &self,
+        project_id: &str,
+        title: &str,
+    ) -> ApiResult<ChapterMetaDto> {
+        let volumes = self.list_volumes(project_id)?;
+        let volume_id = if let Some(vol) = volumes.first() {
+            vol.id.clone()
+        } else {
+            let new_vol = self.create_volume(project_id, "第一卷")?;
+            new_vol.id
+        };
+        self.create_chapter(project_id, &volume_id, title)
+    }
+
     pub fn rename_chapter(
         &self,
         project_id: &str,

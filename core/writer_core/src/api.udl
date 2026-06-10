@@ -1,5 +1,20 @@
 namespace writer_core {
     string perform_dummy_action();
+
+    [Throws=WriterError]
+    boolean init_workspace(string path);
+
+    [Throws=WriterError]
+    WriterAppService open_workspace(string path);
+
+    [Throws=WriterError]
+    boolean repair_workspace(string path);
+
+    [Throws=WriterError]
+    ProjectDto create_project_in_workspace(string workspace, string title);
+
+    [Throws=WriterError]
+    WorkspaceSummaryDto load_workspace_summary(string path);
 };
 
 dictionary AiActionResponse {
@@ -229,6 +244,13 @@ enum WriterError {
 enum PlatformDto {
     "Linux",
     "Android",
+};
+
+dictionary WorkspaceSummaryDto {
+    string path;
+    boolean is_valid;
+    sequence<ProjectDto> projects;
+    sequence<RecentEditDto> recent_edits;
 };
 
 dictionary DateRangeDto {
@@ -959,6 +981,9 @@ interface WriterAppService {
     ChapterMetaDto create_chapter(string project_id, string volume_id, string title);
 
     string create_chapter_envelope_json(string project_id, string volume_id, string title);
+
+    [Throws=WriterError]
+    ChapterMetaDto create_chapter_in_project(string project_id, string title);
 
     [Throws=WriterError]
     boolean rename_chapter(string project_id, string volume_id, string chapter_id, string new_title);
