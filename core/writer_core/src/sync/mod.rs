@@ -1,33 +1,47 @@
-//! # 同步模块
+//! # 同步服务模块 (Sync Service)
 //!
-//! 本模块提供了工作区同步功能的入口点，负责协调文件和项目数据在不同设备间的同步。
+//! 本模块是写作软件的核心同步服务实现，负责处理工作区与远程仓库之间的数据同步。
 //!
 //! ## 主要功能
 //!
-//! - **工作区同步**: 提供 `sync_workspace` 函数作为同步操作的统一入口
-//! - **引擎接口**: 通过 `engine` 子模块定义同步引擎的抽象接口
-//!
-//! ## 模块结构
-//!
-//! - `engine`: 定义同步引擎的 trait 接口和相关数据结构
+//! - **同步后端**: 当前仅暴露 Git 和 GitHub API；其它后端不在运行期配置枚举中
+//! - **Git 操作封装**: 基于 git2 库实现完整的 Git 操作，包括 clone、pull、push、commit 等
+//! - **同步配置管理**: 管理远程 URL、认证信息、代理设置、分支等配置
+//! - **冲突检测与解决**: 提供文件冲突检测、设置冲突语义合并等功能
+//! - **同步诊断**: 提供网络探测、认证检查、仓库状态检查等诊断功能
+//! - **安全处理**: URL 凭证脱敏、敏感信息保护
 //!
 //! ## 依赖关系
 //!
-//! - `crate::error`: 错误处理模块，提供统一的错误类型
+//! - `git2`: Git 操作核心库
+//! - `serde` / `serde_json`: 序列化/反序列化
+//! - `base64`: URL 编码解码
 //!
 //! ## 使用场景
 //!
-//! - 多设备间的工作区数据同步
-//! - 云端备份和恢复
-//! - 协作编辑时的数据一致性保证
-//!
-//! ## 注意事项
-//!
-//! 当前同步功能尚未完全实现，`sync_workspace` 函数返回 `NotImplemented` 错误。
+//! - 工作区数据备份与恢复
+//! - 多设备间数据同步
+//! - 团队协作时的数据共享
+//! - 版本控制与历史追踪
 
-pub mod engine;
-use crate::error::{Error, Result};
+pub mod backends;
+pub mod config_store;
+pub mod conflict;
+pub mod diagnostics;
+pub mod git_backend;
+pub mod github_api_client;
+pub mod github_backend;
+pub mod lww;
+pub mod scanner;
+pub mod service;
+pub mod tests;
+pub mod types;
+pub mod url;
+pub mod utils;
 
-pub fn sync_workspace() -> Result<()> {
-    Err(Error::NotImplemented)
-}
+pub use backends::*;
+pub use git_backend::*;
+pub use github_backend::*;
+pub use service::*;
+pub use types::*;
+pub use url::*;

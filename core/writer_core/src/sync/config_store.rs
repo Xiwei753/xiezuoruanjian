@@ -1,7 +1,7 @@
-use crate::sync_service::types::SyncState;
+use crate::sync::types::SyncState;
 use std::path::Path;
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub fn is_blacklisted_path(rel_path: &str) -> bool {
         let ignored_patterns = [
             "app-meta/settings/settings.local.json",
@@ -47,7 +47,7 @@ impl crate::sync_service::SyncService {
     }
 }
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub fn is_whitelisted_path(rel_path: &str) -> bool {
         if Self::is_blacklisted_path(rel_path) {
             return false;
@@ -119,7 +119,7 @@ impl crate::sync_service::SyncService {
     }
 }
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub fn load_sync_state(workspace_path: &Path) -> crate::Result<SyncState> {
         let state_path = workspace_path.join("app-meta/sync/state.local.json");
         if !state_path.exists() {
@@ -153,7 +153,7 @@ impl crate::sync_service::SyncService {
     }
 }
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub fn save_sync_state(workspace_path: &Path, state: &SyncState) -> crate::Result<()> {
         let state_path = workspace_path.join("app-meta/sync/state.local.json");
         if let Some(parent) = state_path.parent() {
@@ -171,7 +171,7 @@ impl crate::sync_service::SyncService {
     }
 }
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub fn get_sync_ignored_paths(workspace_path: &Path) -> crate::Result<Vec<String>> {
         let plan = Self::build_sync_plan_from_workspace(workspace_path)?;
         Ok(plan.ignored_files)

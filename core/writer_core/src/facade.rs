@@ -369,8 +369,8 @@ impl WriterCore {
                 let token = secrets.token.clone().unwrap_or_default();
                 let mut secrets_for_diag = secrets.clone();
                 secrets_for_diag.token = Some(token);
-                let backend = crate::sync_service::Git2Backend;
-                let result = crate::sync_service::SyncService::perform_sync_diagnostics(
+                let backend = crate::sync::Git2Backend;
+                let result = crate::sync::SyncService::perform_sync_diagnostics(
                     &diagnostics_config,
                     &secrets_for_diag,
                     &backend,
@@ -844,10 +844,6 @@ impl WriterCore {
         index::update_index()
     }
 
-    /// Sync workspace
-    pub fn sync_workspace(&self) -> Result<()> {
-        sync::sync_workspace()
-    }
 
     // --- Settings Registry ---
     pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {
@@ -907,33 +903,33 @@ impl WriterCore {
     }
 
     // --- Sync Service ---
-    pub fn scan_sync_files(&self) -> crate::error::Result<Vec<crate::sync_service::SyncFileEntry>> {
-        crate::sync_service::SyncService::scan_workspace_for_sync(&self.workspace_path)
+    pub fn scan_sync_files(&self) -> crate::error::Result<Vec<crate::sync::SyncFileEntry>> {
+        crate::sync::SyncService::scan_workspace_for_sync(&self.workspace_path)
     }
 
     pub fn build_sync_plan_from_workspace(
         &self,
-    ) -> crate::error::Result<crate::sync_service::SyncPlan> {
-        crate::sync_service::SyncService::build_sync_plan_from_workspace(&self.workspace_path)
+    ) -> crate::error::Result<crate::sync::SyncPlan> {
+        crate::sync::SyncService::build_sync_plan_from_workspace(&self.workspace_path)
     }
 
-    pub fn load_sync_state(&self) -> crate::error::Result<crate::sync_service::SyncState> {
-        crate::sync_service::SyncService::load_sync_state(&self.workspace_path)
+    pub fn load_sync_state(&self) -> crate::error::Result<crate::sync::SyncState> {
+        crate::sync::SyncService::load_sync_state(&self.workspace_path)
     }
 
     pub fn save_sync_state(
         &self,
-        state: &crate::sync_service::SyncState,
+        state: &crate::sync::SyncState,
     ) -> crate::error::Result<()> {
-        crate::sync_service::SyncService::save_sync_state(&self.workspace_path, state)
+        crate::sync::SyncService::save_sync_state(&self.workspace_path, state)
     }
 
     pub fn record_sync_conflict(
         &self,
-        conflict: crate::sync_service::SyncConflict,
+        conflict: crate::sync::SyncConflict,
         local_content: Option<&str>,
     ) -> crate::error::Result<()> {
-        crate::sync_service::SyncService::record_sync_conflict(
+        crate::sync::SyncService::record_sync_conflict(
             &self.workspace_path,
             conflict,
             local_content,
@@ -941,52 +937,52 @@ impl WriterCore {
     }
 
     pub fn get_sync_ignored_paths(&self) -> crate::error::Result<Vec<String>> {
-        crate::sync_service::SyncService::get_sync_ignored_paths(&self.workspace_path)
+        crate::sync::SyncService::get_sync_ignored_paths(&self.workspace_path)
     }
 
     pub fn perform_sync_diagnostics(
         &self,
-        config: &crate::sync_service::SyncConfig,
-    ) -> crate::error::Result<crate::sync_service::SyncDiagnosticsResult> {
+        config: &crate::sync::SyncConfig,
+    ) -> crate::error::Result<crate::sync::SyncDiagnosticsResult> {
         let secrets = self.load_sync_secrets().unwrap_or_default();
-        let backend_type = crate::sync_service::resolved_backend_type(config);
-        let backend = crate::sync_service::create_sync_backend(&backend_type);
+        let backend_type = crate::sync::resolved_backend_type(config);
+        let backend = crate::sync::create_sync_backend(&backend_type);
         backend.diagnose(config, &secrets)
     }
 
     pub fn perform_sync_dry_run(
         &self,
-        config: &crate::sync_service::SyncConfig,
-    ) -> crate::error::Result<crate::sync_service::SyncPlan> {
-        crate::sync_service::SyncService::perform_sync_dry_run(&self.workspace_path, config)
+        config: &crate::sync::SyncConfig,
+    ) -> crate::error::Result<crate::sync::SyncPlan> {
+        crate::sync::SyncService::perform_sync_dry_run(&self.workspace_path, config)
     }
 
     pub fn perform_sync(
         &self,
-        config: &crate::sync_service::SyncConfig,
-    ) -> crate::error::Result<crate::sync_service::SyncResult> {
+        config: &crate::sync::SyncConfig,
+    ) -> crate::error::Result<crate::sync::SyncResult> {
         let secrets = self.load_sync_secrets().unwrap_or_default();
-        let backend_type = crate::sync_service::resolved_backend_type(config);
-        let backend = crate::sync_service::create_sync_backend(&backend_type);
+        let backend_type = crate::sync::resolved_backend_type(config);
+        let backend = crate::sync::create_sync_backend(&backend_type);
         backend.sync(&self.workspace_path, config, &secrets)
     }
 
-    pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync_service::SyncSecrets> {
+    pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
         let secrets_path = self
             .workspace_path
             .join("app-meta/sync/sync_secrets.local.json");
         if !secrets_path.exists() {
-            return Ok(crate::sync_service::SyncSecrets::default());
+            return Ok(crate::sync::SyncSecrets::default());
         }
         let content = std::fs::read_to_string(&secrets_path)?;
-        let secrets: crate::sync_service::SyncSecrets = serde_json::from_str(&content)
+        let secrets: crate::sync::SyncSecrets = serde_json::from_str(&content)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
         Ok(secrets)
     }
 
     pub fn save_sync_secrets(
         &self,
-        secrets: &crate::sync_service::SyncSecrets,
+        secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<()> {
         let secrets_path = self
             .workspace_path
@@ -1020,14 +1016,14 @@ impl WriterCore {
         Ok(())
     }
 
-    pub fn load_sync_config(&self) -> crate::error::Result<crate::sync_service::SyncConfig> {
+    pub fn load_sync_config(&self) -> crate::error::Result<crate::sync::SyncConfig> {
         let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
         if !config_path.exists() {
-            return Ok(crate::sync_service::SyncConfig {
+            return Ok(crate::sync::SyncConfig {
                 enabled: false,
-                backend_type: crate::sync_service::BackendType::GithubApi,
+                backend_type: crate::sync::BackendType::GithubApi,
                 remote_url: String::new(),
-                transport: crate::sync_service::SyncTransport::HttpsToken,
+                transport: crate::sync::SyncTransport::HttpsToken,
                 branch: "main".to_string(),
                 auto_sync: false,
                 sync_interval_seconds: 300,
@@ -1043,17 +1039,17 @@ impl WriterCore {
         let content = std::fs::read_to_string(&config_path)?;
         let raw: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-        let mut config: crate::sync_service::SyncConfig = serde_json::from_str(&content)
+        let mut config: crate::sync::SyncConfig = serde_json::from_str(&content)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let backend_missing = raw
             .as_object()
             .map(|obj| !obj.contains_key("backend_type"))
             .unwrap_or(false);
-        let should_migrate = crate::sync_service::is_github_https_remote(&config.remote_url)
-            && (backend_missing || config.backend_type == crate::sync_service::BackendType::Git);
+        let should_migrate = crate::sync::is_github_https_remote(&config.remote_url)
+            && (backend_missing || config.backend_type == crate::sync::BackendType::Git);
         if should_migrate {
-            config.backend_type = crate::sync_service::BackendType::GithubApi;
+            config.backend_type = crate::sync::BackendType::GithubApi;
             self.save_sync_config(&config)?;
         }
         Ok(config)
@@ -1061,7 +1057,7 @@ impl WriterCore {
 
     pub fn save_sync_config(
         &self,
-        config: &crate::sync_service::SyncConfig,
+        config: &crate::sync::SyncConfig,
     ) -> crate::error::Result<()> {
         let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
         if let Some(parent) = config_path.parent() {
@@ -1077,7 +1073,7 @@ impl WriterCore {
 
     pub fn validate_sync_config(
         &self,
-        config: &crate::sync_service::SyncConfig,
+        config: &crate::sync::SyncConfig,
     ) -> crate::error::Result<bool> {
         if config.enabled && config.remote_url.is_empty() {
             return Ok(false);
@@ -1612,7 +1608,6 @@ mod tests {
 
         assert!(core.backup_project("p1").is_err());
         assert!(core.move_chapter_to_trash("c1").is_err());
-        assert!(core.sync_workspace().is_err());
     }
 
     #[test]
@@ -1626,7 +1621,7 @@ mod tests {
         assert!(!config.enabled);
         assert_eq!(
             config.backend_type,
-            crate::sync_service::BackendType::GithubApi
+            crate::sync::BackendType::GithubApi
         );
 
         // Save new config
@@ -1686,13 +1681,13 @@ mod tests {
         let loaded = core.load_sync_config().unwrap();
         assert_eq!(
             loaded.backend_type,
-            crate::sync_service::BackendType::GithubApi
+            crate::sync::BackendType::GithubApi
         );
 
         let persisted = core.load_sync_config().unwrap();
         assert_eq!(
             persisted.backend_type,
-            crate::sync_service::BackendType::GithubApi
+            crate::sync::BackendType::GithubApi
         );
     }
 

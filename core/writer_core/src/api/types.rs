@@ -296,18 +296,18 @@ pub struct SyncConfigDto {
     pub android_has_access_network_state_permission: bool,
 }
 
-impl From<crate::sync_service::SyncConfig> for SyncConfigDto {
-    fn from(c: crate::sync_service::SyncConfig) -> Self {
+impl From<crate::sync::SyncConfig> for SyncConfigDto {
+    fn from(c: crate::sync::SyncConfig) -> Self {
         Self {
             enabled: c.enabled,
             backend_type: match c.backend_type {
-                crate::sync_service::BackendType::Git => "git".to_string(),
-                crate::sync_service::BackendType::GithubApi => "github_api".to_string(),
+                crate::sync::BackendType::Git => "git".to_string(),
+                crate::sync::BackendType::GithubApi => "github_api".to_string(),
             },
             remote_url: c.remote_url,
             transport: match c.transport {
-                crate::sync_service::SyncTransport::HttpsToken => "https_token".to_string(),
-                crate::sync_service::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
+                crate::sync::SyncTransport::HttpsToken => "https_token".to_string(),
+                crate::sync::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
             },
             branch: c.branch,
             auto_sync: c.auto_sync,
@@ -324,20 +324,20 @@ impl From<crate::sync_service::SyncConfig> for SyncConfigDto {
     }
 }
 
-impl From<SyncConfigDto> for crate::sync_service::SyncConfig {
+impl From<SyncConfigDto> for crate::sync::SyncConfig {
     fn from(c: SyncConfigDto) -> Self {
-        crate::sync_service::SyncConfig {
+        crate::sync::SyncConfig {
             enabled: c.enabled,
             backend_type: match c.backend_type.as_str() {
-                "git" => crate::sync_service::BackendType::Git,
-                "github_api" => crate::sync_service::BackendType::GithubApi,
-                _ => crate::sync_service::BackendType::GithubApi,
+                "git" => crate::sync::BackendType::Git,
+                "github_api" => crate::sync::BackendType::GithubApi,
+                _ => crate::sync::BackendType::GithubApi,
             },
             remote_url: c.remote_url,
             transport: match c.transport.as_str() {
-                "https_token" => crate::sync_service::SyncTransport::HttpsToken,
-                "ssh" | "ssh_deploy_key" => crate::sync_service::SyncTransport::SshDeployKey,
-                _ => crate::sync_service::SyncTransport::HttpsToken,
+                "https_token" => crate::sync::SyncTransport::HttpsToken,
+                "ssh" | "ssh_deploy_key" => crate::sync::SyncTransport::SshDeployKey,
+                _ => crate::sync::SyncTransport::HttpsToken,
             },
             branch: c.branch,
             auto_sync: c.auto_sync,
@@ -359,15 +359,15 @@ pub struct SyncSecretsDto {
     pub token: Option<String>,
 }
 
-impl From<crate::sync_service::SyncSecrets> for SyncSecretsDto {
-    fn from(s: crate::sync_service::SyncSecrets) -> Self {
+impl From<crate::sync::SyncSecrets> for SyncSecretsDto {
+    fn from(s: crate::sync::SyncSecrets) -> Self {
         Self { token: s.token }
     }
 }
 
-impl From<SyncSecretsDto> for crate::sync_service::SyncSecrets {
+impl From<SyncSecretsDto> for crate::sync::SyncSecrets {
     fn from(s: SyncSecretsDto) -> Self {
-        crate::sync_service::SyncSecrets {
+        crate::sync::SyncSecrets {
             token: s.token,
             ssh_private_key: None,
         }
@@ -398,8 +398,8 @@ pub struct SyncConflictDto {
     pub description: String,
 }
 
-impl From<crate::sync_service::SyncConflict> for SyncConflictDto {
-    fn from(c: crate::sync_service::SyncConflict) -> Self {
+impl From<crate::sync::SyncConflict> for SyncConflictDto {
+    fn from(c: crate::sync::SyncConflict) -> Self {
         Self {
             local_path: c.local_path,
             remote_path: c.remote_path,
@@ -412,8 +412,8 @@ impl From<crate::sync_service::SyncConflict> for SyncConflictDto {
     }
 }
 
-impl From<crate::sync_service::SyncState> for SyncStateDto {
-    fn from(s: crate::sync_service::SyncState) -> Self {
+impl From<crate::sync::SyncState> for SyncStateDto {
+    fn from(s: crate::sync::SyncState) -> Self {
         Self {
             status: "idle".to_string(),
             remote_url: s.remote_url,
@@ -437,8 +437,8 @@ pub struct NetworkProbeResultDto {
     pub raw_error: Option<String>,
 }
 
-impl From<crate::sync_service::NetworkProbeResult> for NetworkProbeResultDto {
-    fn from(p: crate::sync_service::NetworkProbeResult) -> Self {
+impl From<crate::sync::NetworkProbeResult> for NetworkProbeResultDto {
+    fn from(p: crate::sync::NetworkProbeResult) -> Self {
         Self {
             mode: p.mode,
             success: p.success,
@@ -479,8 +479,8 @@ pub struct SyncDiagnosticsResultDto {
     pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
 }
 
-impl From<crate::sync_service::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
-    fn from(d: crate::sync_service::SyncDiagnosticsResult) -> Self {
+impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
+    fn from(d: crate::sync::SyncDiagnosticsResult) -> Self {
         Self {
             success: d.success,
             backend_type: d.backend_type,
@@ -528,8 +528,8 @@ pub struct SyncPlanDto {
     pub conflicts: Vec<String>,
 }
 
-impl From<crate::sync_service::SyncPlan> for SyncPlanDto {
-    fn from(p: crate::sync_service::SyncPlan) -> Self {
+impl From<crate::sync::SyncPlan> for SyncPlanDto {
+    fn from(p: crate::sync::SyncPlan) -> Self {
         Self {
             files_to_upload: p.files_to_upload,
             files_to_download: p.files_to_download,
@@ -560,8 +560,8 @@ pub struct SyncResultDto {
     pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
 }
 
-impl From<crate::sync_service::SyncResult> for SyncResultDto {
-    fn from(r: crate::sync_service::SyncResult) -> Self {
+impl From<crate::sync::SyncResult> for SyncResultDto {
+    fn from(r: crate::sync::SyncResult) -> Self {
         Self {
             status: sync_status_to_wire(&r.status),
             uploaded_files: r.uploaded_files,
@@ -587,40 +587,40 @@ impl From<crate::sync_service::SyncResult> for SyncResultDto {
     }
 }
 
-fn sync_transport_to_wire(transport: crate::sync_service::SyncTransport) -> String {
+fn sync_transport_to_wire(transport: crate::sync::SyncTransport) -> String {
     match transport {
-        crate::sync_service::SyncTransport::HttpsToken => "https_token".to_string(),
-        crate::sync_service::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
+        crate::sync::SyncTransport::HttpsToken => "https_token".to_string(),
+        crate::sync::SyncTransport::SshDeployKey => "ssh_deploy_key".to_string(),
     }
 }
 
-fn sync_status_to_wire(status: &crate::sync_service::SyncStatus) -> String {
+fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
     match status {
-        crate::sync_service::SyncStatus::Idle => "idle",
-        crate::sync_service::SyncStatus::Syncing => "syncing",
-        crate::sync_service::SyncStatus::Success => "success",
-        crate::sync_service::SyncStatus::ConfiguredUntested => "configured_untested",
-        crate::sync_service::SyncStatus::Conflict => "conflict",
-        crate::sync_service::SyncStatus::PartialConflict => "partial_conflict",
-        crate::sync_service::SyncStatus::RecoverableError(_) => "recoverable_error",
-        crate::sync_service::SyncStatus::FatalError(_) => "fatal_error",
-        crate::sync_service::SyncStatus::DirtyRepoBlocked => "dirty_repo_blocked",
-        crate::sync_service::SyncStatus::BranchMissingRecovered => "branch_missing_recovered",
-        crate::sync_service::SyncStatus::Error(_) => "error",
-        crate::sync_service::SyncStatus::NoChanges => "no_changes",
-        crate::sync_service::SyncStatus::LatestWinsApplied => "latest_wins_applied",
+        crate::sync::SyncStatus::Idle => "idle",
+        crate::sync::SyncStatus::Syncing => "syncing",
+        crate::sync::SyncStatus::Success => "success",
+        crate::sync::SyncStatus::ConfiguredUntested => "configured_untested",
+        crate::sync::SyncStatus::Conflict => "conflict",
+        crate::sync::SyncStatus::PartialConflict => "partial_conflict",
+        crate::sync::SyncStatus::RecoverableError(_) => "recoverable_error",
+        crate::sync::SyncStatus::FatalError(_) => "fatal_error",
+        crate::sync::SyncStatus::DirtyRepoBlocked => "dirty_repo_blocked",
+        crate::sync::SyncStatus::BranchMissingRecovered => "branch_missing_recovered",
+        crate::sync::SyncStatus::Error(_) => "error",
+        crate::sync::SyncStatus::NoChanges => "no_changes",
+        crate::sync::SyncStatus::LatestWinsApplied => "latest_wins_applied",
     }
     .to_string()
 }
 
-fn first_sync_mode_to_wire(mode: &crate::sync_service::FirstSyncMode) -> String {
+fn first_sync_mode_to_wire(mode: &crate::sync::FirstSyncMode) -> String {
     match mode {
-        crate::sync_service::FirstSyncMode::NotAttempted => "not_attempted",
-        crate::sync_service::FirstSyncMode::CloneIntoEmptyWorkspace => "clone_into_empty_workspace",
-        crate::sync_service::FirstSyncMode::InitExistingWorkspace => "init_existing_workspace",
-        crate::sync_service::FirstSyncMode::AlreadyGitRepo => "already_git_repo",
-        crate::sync_service::FirstSyncMode::BlockedNonEmptyRemote => "blocked_non_empty_remote",
-        crate::sync_service::FirstSyncMode::UnrelatedHistories => "unrelated_histories",
+        crate::sync::FirstSyncMode::NotAttempted => "not_attempted",
+        crate::sync::FirstSyncMode::CloneIntoEmptyWorkspace => "clone_into_empty_workspace",
+        crate::sync::FirstSyncMode::InitExistingWorkspace => "init_existing_workspace",
+        crate::sync::FirstSyncMode::AlreadyGitRepo => "already_git_repo",
+        crate::sync::FirstSyncMode::BlockedNonEmptyRemote => "blocked_non_empty_remote",
+        crate::sync::FirstSyncMode::UnrelatedHistories => "unrelated_histories",
     }
     .to_string()
 }

@@ -1,11 +1,11 @@
-use crate::sync_service::git_backend::GitBackend;
-use crate::sync_service::types::BackendType;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::types::SyncDiagnosticsResult;
-use crate::sync_service::types::SyncSecrets;
-use crate::sync_service::types::SyncTransport;
-use crate::sync_service::url::detect_transport;
-use crate::sync_service::url::sanitize_remote_url;
+use crate::sync::git_backend::GitBackend;
+use crate::sync::types::BackendType;
+use crate::sync::types::SyncConfig;
+use crate::sync::types::SyncDiagnosticsResult;
+use crate::sync::types::SyncSecrets;
+use crate::sync::types::SyncTransport;
+use crate::sync::url::detect_transport;
+use crate::sync::url::sanitize_remote_url;
 
 pub(crate) fn get_user_friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
@@ -46,7 +46,7 @@ pub(crate) fn get_user_friendly_error(err: &str) -> String {
     format!("同步失败，请检查网络重试。({})", err)
 }
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub fn perform_sync_diagnostics(
         config: &SyncConfig,
         secrets: &SyncSecrets,

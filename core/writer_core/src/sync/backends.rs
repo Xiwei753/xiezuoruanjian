@@ -1,11 +1,11 @@
-use crate::sync_service::git_backend::Git2Backend;
-use crate::sync_service::github_backend::GitHubApiBackend;
-use crate::sync_service::service::SyncService;
-use crate::sync_service::types::BackendType;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::types::SyncDiagnosticsResult;
-use crate::sync_service::types::SyncResult;
-use crate::sync_service::types::SyncSecrets;
+use crate::sync::git_backend::Git2Backend;
+use crate::sync::github_backend::GitHubApiBackend;
+use crate::sync::service::SyncService;
+use crate::sync::types::BackendType;
+use crate::sync::types::SyncConfig;
+use crate::sync::types::SyncDiagnosticsResult;
+use crate::sync::types::SyncResult;
+use crate::sync::types::SyncSecrets;
 use std::path::Path;
 
 pub trait SyncBackend {

@@ -1,6 +1,6 @@
-use crate::sync_service::types::BackendType;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::types::SyncTransport;
+use crate::sync::types::BackendType;
+use crate::sync::types::SyncConfig;
+use crate::sync::types::SyncTransport;
 
 pub struct ParsedRemoteUrl {
     pub sanitized_url: String,

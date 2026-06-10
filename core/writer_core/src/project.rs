@@ -200,7 +200,7 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
     fs::rename(&target_canon, &trash_path)?;
 
     // Also update tombstone
-    if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
+    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(workspace_path) {
         let rel_project_dir = project_dir
             .strip_prefix(workspace_path)
             .unwrap_or(&project_dir)
@@ -226,7 +226,7 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
             let original_file_path = format!("{}/{}", rel_project_dir, rel_file_path);
             let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
 
-            let tombstone = crate::sync_service::Tombstone {
+            let tombstone = crate::sync::Tombstone {
                 original_path: original_file_path.clone(),
                 trash_path: new_trash_path,
                 deleted_at: chrono::Utc::now().timestamp(),
@@ -241,7 +241,7 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
             };
             state.tombstones.push(tombstone);
         }
-        let _ = crate::sync_service::SyncService::save_sync_state(workspace_path, &state);
+        let _ = crate::sync::SyncService::save_sync_state(workspace_path, &state);
     }
     Ok(())
 }

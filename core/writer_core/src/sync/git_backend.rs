@@ -1,8 +1,8 @@
-use crate::sync_service::conflict::build_conflict_summary;
-use crate::sync_service::conflict::collect_index_conflicts;
-use crate::sync_service::service::SyncService;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::types::SyncConflictSummary;
+use crate::sync::conflict::build_conflict_summary;
+use crate::sync::conflict::collect_index_conflicts;
+use crate::sync::service::SyncService;
+use crate::sync::types::SyncConfig;
+use crate::sync::types::SyncConflictSummary;
 use std::path::Path;
 
 pub enum GitAuth {
@@ -384,7 +384,7 @@ impl GitBackend for Git2Backend {
                 let err_msg = e.to_string();
                 if err_msg.contains("conflict") || err_msg.contains("Conflict") {
                     let paths = conflicted_paths.borrow().clone();
-                    let summary = crate::sync_service::SyncConflictSummary {
+                    let summary = crate::sync::SyncConflictSummary {
                         status: "conflict".to_string(),
                         local_dirty: true,
                         remote_changed: true,

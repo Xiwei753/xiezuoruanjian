@@ -579,21 +579,21 @@ fn test_facade_record_writing_event() {
 
 #[test]
 fn test_sync_blacklist_events_local() {
-    assert!(crate::sync_service::SyncService::is_blacklisted_path(
+    assert!(crate::sync::SyncService::is_blacklisted_path(
         "app-meta/stats/events.local/2025-01-15.events.jsonl"
     ));
 }
 
 #[test]
 fn test_sync_blacklist_stats_cache() {
-    assert!(crate::sync_service::SyncService::is_blacklisted_path(
+    assert!(crate::sync::SyncService::is_blacklisted_path(
         "app-meta/stats/cache/something.json"
     ));
 }
 
 #[test]
 fn test_sync_whitelist_daily_stats() {
-    assert!(crate::sync_service::SyncService::is_whitelisted_path(
+    assert!(crate::sync::SyncService::is_whitelisted_path(
         "app-meta/stats/daily/2025-01-15.stats.json"
     ));
 }

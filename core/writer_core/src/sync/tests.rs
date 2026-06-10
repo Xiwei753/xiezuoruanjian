@@ -1,21 +1,21 @@
 #[cfg(test)]
 mod tests {
-    use crate::sync_service::backends::SyncBackend;
-    use crate::sync_service::git_backend::Git2Backend;
-    use crate::sync_service::git_backend::GitAuth;
-    use crate::sync_service::git_backend::GitBackend;
-    use crate::sync_service::github_backend::GitHubApiBackend;
-    use crate::sync_service::service::SyncService;
-    use crate::sync_service::types::BackendType;
-    use crate::sync_service::types::FirstSyncMode;
-    use crate::sync_service::types::ManifestFileRecord;
-    use crate::sync_service::types::SyncConfig;
-    use crate::sync_service::types::SyncConflict;
-    use crate::sync_service::types::SyncManifest;
-    use crate::sync_service::types::SyncSecrets;
-    use crate::sync_service::types::SyncState;
-    use crate::sync_service::types::SyncStatus;
-    use crate::sync_service::types::SyncTransport;
+    use crate::sync::backends::SyncBackend;
+    use crate::sync::git_backend::Git2Backend;
+    use crate::sync::git_backend::GitAuth;
+    use crate::sync::git_backend::GitBackend;
+    use crate::sync::github_backend::GitHubApiBackend;
+    use crate::sync::service::SyncService;
+    use crate::sync::types::BackendType;
+    use crate::sync::types::FirstSyncMode;
+    use crate::sync::types::ManifestFileRecord;
+    use crate::sync::types::SyncConfig;
+    use crate::sync::types::SyncConflict;
+    use crate::sync::types::SyncManifest;
+    use crate::sync::types::SyncSecrets;
+    use crate::sync::types::SyncState;
+    use crate::sync::types::SyncStatus;
+    use crate::sync::types::SyncTransport;
     use base64::Engine;
     use std::path::Path;
     use tempfile::tempdir;
@@ -2020,7 +2020,7 @@ mod tests {
 
     #[test]
     fn test_is_document_content_path() {
-        use crate::sync_service::lww::is_document_content_path;
+        use crate::sync::lww::is_document_content_path;
         assert!(is_document_content_path(
             "projects/p1/volumes/v1/chapters/c1/chapter.md"
         ));

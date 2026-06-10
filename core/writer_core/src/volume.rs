@@ -155,7 +155,7 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
     fs::rename(&target_canon, &trash_path)?;
 
     // Also update tombstone
-    if let Ok(mut state) = crate::sync_service::SyncService::load_sync_state(workspace_path) {
+    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(workspace_path) {
         let rel_volume_dir = normalize_rel_path(&volume_dir, workspace_path);
         let rel_trash_path = normalize_rel_path(&trash_path, workspace_path);
 
@@ -168,7 +168,7 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
             let original_file_path = format!("{}/{}", rel_volume_dir, rel_file_path);
             let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
 
-            let tombstone = crate::sync_service::Tombstone {
+            let tombstone = crate::sync::Tombstone {
                 original_path: original_file_path.clone(),
                 trash_path: new_trash_path,
                 deleted_at: chrono::Utc::now().timestamp(),
@@ -183,7 +183,7 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
             };
             state.tombstones.push(tombstone);
         }
-        let _ = crate::sync_service::SyncService::save_sync_state(workspace_path, &state);
+        let _ = crate::sync::SyncService::save_sync_state(workspace_path, &state);
     }
     Ok(())
 }

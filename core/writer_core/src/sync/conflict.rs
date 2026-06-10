@@ -1,7 +1,7 @@
-use crate::sync_service::service::SyncService;
-use crate::sync_service::types::SettingConflictDetail;
-use crate::sync_service::types::SyncConflict;
-use crate::sync_service::types::SyncConflictSummary;
+use crate::sync::service::SyncService;
+use crate::sync::types::SettingConflictDetail;
+use crate::sync::types::SyncConflict;
+use crate::sync::types::SyncConflictSummary;
 use std::path::Path;
 
 pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
@@ -133,7 +133,7 @@ pub(crate) fn build_conflict_summary(
     }
 }
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub(crate) fn semantic_merge_json(
         base: &serde_json::Map<String, serde_json::Value>,
         local: &serde_json::Map<String, serde_json::Value>,
@@ -214,7 +214,7 @@ impl crate::sync_service::SyncService {
     }
 }
 
-impl crate::sync_service::SyncService {
+impl crate::sync::SyncService {
     pub fn record_sync_conflict(
         workspace_path: &Path,
         conflict: SyncConflict,

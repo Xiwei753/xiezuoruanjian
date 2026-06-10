@@ -1,5 +1,5 @@
-use crate::sync_service::types::{SyncFileEntry, SyncKind, SyncPlan};
-use crate::sync_service::SyncService;
+use crate::sync::types::{SyncFileEntry, SyncKind, SyncPlan};
+use crate::sync::SyncService;
 use std::path::Path;
 
 pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Vec<SyncFileEntry>> {

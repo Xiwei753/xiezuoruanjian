@@ -1,13 +1,13 @@
-use crate::sync_service::github_api_client::{
+use crate::sync::github_api_client::{
     github_delete_content_serial, github_get_content, github_put_content_serial,
 };
-use crate::sync_service::github_backend::GitHubApiBackend;
-use crate::sync_service::scanner::scan_workspace_for_sync;
-use crate::sync_service::types::{
+use crate::sync::github_backend::GitHubApiBackend;
+use crate::sync::scanner::scan_workspace_for_sync;
+use crate::sync::types::{
     FirstSyncMode, ManifestFileRecord, SyncConfig, SyncConflict, SyncKind, SyncManifest,
     SyncResult, SyncSecrets, SyncState, SyncStatus,
 };
-use crate::sync_service::SyncService;
+use crate::sync::SyncService;
 use std::path::Path;
 
 const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
@@ -146,10 +146,10 @@ pub(crate) fn perform_lww_sync(
         ));
     }
 
-    let mut state = crate::sync_service::SyncService::load_sync_state(workspace_path)?;
+    let mut state = crate::sync::SyncService::load_sync_state(workspace_path)?;
     if state.device_id.is_empty() {
         state.device_id = uuid::Uuid::new_v4().to_string();
-        crate::sync_service::SyncService::save_sync_state(workspace_path, &state)?;
+        crate::sync::SyncService::save_sync_state(workspace_path, &state)?;
     }
 
     // P1-4: Core-level debounce. Even if clients call sync too often,
@@ -269,7 +269,7 @@ fn execute_lww_sync_attempt(
             }
         }
     } else if tree_status.as_u16() != 404 {
-        return Err(crate::sync_service::github_api_client::github_api_error(
+        return Err(crate::sync::github_api_client::github_api_error(
             "get recursive tree",
             tree_status,
             tree_body,
@@ -757,7 +757,7 @@ fn execute_lww_sync_attempt(
         .tombstones
         .retain(|t| t.purge_after > chrono::Utc::now().timestamp());
 
-    crate::sync_service::SyncService::save_sync_state(workspace_path, state)?;
+    crate::sync::SyncService::save_sync_state(workspace_path, state)?;
 
     let has_doc_conflicts = !doc_conflicts.is_empty();
     let has_changes = !to_upload.is_empty()

@@ -20,9 +20,9 @@
 //! | `volume` | 卷 CRUD、排序、删除 | 删除走 `delete_guard` |
 //! | `chapter` | 章节 CRUD、内容读写、备份、验证保存 | 正文永远是纯文本 |
 //! | `settings` | 本地设置 & 可同步设置 | 分为 LocalSettings / SyncableSettings |
-//! | `sync_service` | 同步配置、密钥、状态、诊断、实际同步 | 当前仅暴露 Git 和 GitHub API 后端 |
-//! | `mind_map` | 思维导图（图数据、布局、快照） | 独立于星图模块 |
-//! | `starmap` | 星图（元数据、图、布局） | 独立于思维导图模块 |
+//! | `sync` | 同步配置、密钥、状态、诊断、实际同步（合并了 sync） | 唯一同步模块 |
+//! | `mind_map` | LEGACY: 思维导图（图数据、布局、快照）- 已废弃，仅做迁移兼容 | 独立于星图模块 |
+//! | `starmap` | 星图（元数据、图、布局）- 正式图谱路线 | 唯一推荐图谱接口 |
 //! | `writing_stats` | 写作统计（事件记录、聚合、查询） | 按设备/项目/章节统计 |
 //! | `error` | 统一错误类型 | 所有模块共享 |
 //! | `storage` | 原子替换文件写入（写临时文件 + fsync 临时文件 + rename） | 防止半写入；耐久性受文件系统语义影响 |
@@ -46,7 +46,6 @@ pub mod app_config;
 pub mod graph_service;
 pub mod proofreading_service;
 pub mod settings_registry;
-pub mod sync_service;
 
 pub mod backup;
 pub mod chapter;
@@ -54,6 +53,7 @@ pub mod editor;
 pub mod error;
 pub mod history;
 pub mod index;
+#[deprecated(since = "0.1.1", note = "Please use starmap instead")]
 pub mod mind_map;
 pub mod project;
 pub mod settings;

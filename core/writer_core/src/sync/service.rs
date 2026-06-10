@@ -1,21 +1,21 @@
-use crate::sync_service::conflict::build_conflict_summary;
-use crate::sync_service::conflict::collect_git_status_summary;
-use crate::sync_service::diagnostics::get_user_friendly_error;
-use crate::sync_service::git_backend::GitAuth;
-use crate::sync_service::git_backend::GitBackend;
-use crate::sync_service::lww;
-use crate::sync_service::scanner;
-use crate::sync_service::types::FirstSyncMode;
-use crate::sync_service::types::SettingConflictDetail;
-use crate::sync_service::types::SyncConfig;
-use crate::sync_service::types::SyncConflict;
-use crate::sync_service::types::SyncConflictSummary;
-use crate::sync_service::types::SyncPlan;
-use crate::sync_service::types::SyncResult;
-use crate::sync_service::types::SyncSecrets;
-use crate::sync_service::types::SyncStatus;
-use crate::sync_service::types::SyncTransport;
-use crate::sync_service::url::sanitize_remote_url;
+use crate::sync::conflict::build_conflict_summary;
+use crate::sync::conflict::collect_git_status_summary;
+use crate::sync::diagnostics::get_user_friendly_error;
+use crate::sync::git_backend::GitAuth;
+use crate::sync::git_backend::GitBackend;
+use crate::sync::lww;
+use crate::sync::scanner;
+use crate::sync::types::FirstSyncMode;
+use crate::sync::types::SettingConflictDetail;
+use crate::sync::types::SyncConfig;
+use crate::sync::types::SyncConflict;
+use crate::sync::types::SyncConflictSummary;
+use crate::sync::types::SyncPlan;
+use crate::sync::types::SyncResult;
+use crate::sync::types::SyncSecrets;
+use crate::sync::types::SyncStatus;
+use crate::sync::types::SyncTransport;
+use crate::sync::url::sanitize_remote_url;
 use std::path::Path;
 
 fn map_git_error(e: crate::Error) -> crate::Error {
@@ -745,7 +745,7 @@ impl SyncService {
 
     pub fn scan_workspace_for_sync(
         workspace_path: &Path,
-    ) -> crate::Result<Vec<crate::sync_service::types::SyncFileEntry>> {
+    ) -> crate::Result<Vec<crate::sync::types::SyncFileEntry>> {
         scanner::scan_workspace_for_sync(workspace_path)
     }
 
