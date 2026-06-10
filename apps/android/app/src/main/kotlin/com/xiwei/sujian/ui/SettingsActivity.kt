@@ -188,7 +188,7 @@ class SettingsActivity : AppCompatActivity() {
             tvAutoSaveDelayValue.text = "${value.toInt()}秒"
         }
         sbSyncInterval.addOnChangeListener { _, value, _ ->
-            tvSyncIntervalValue.text = "${value.toInt()}秒"
+            tvSyncIntervalValue.text = formatSyncIntervalText(value.toInt())
         }
         sbAutoIndentWidth.addOnChangeListener { _, value, _ ->
             tvAutoIndentWidthValue.text = "${value}字符"
@@ -348,7 +348,7 @@ class SettingsActivity : AppCompatActivity() {
         etBranch.setText(currentSyncConfig.branch ?: "main")
         switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
-        tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds ?: 300}秒"
+        tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
 
 
 
@@ -681,6 +681,15 @@ class SettingsActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun formatSyncIntervalText(seconds: Int): String {
+        val minutes = seconds / 60
+        return if (minutes < 15) {
+            "${minutes}分钟 (有效后台间隔: 15分钟)"
+        } else {
+            "${minutes}分钟"
+        }
+    }
+
     private fun updateTokenStatusUI() {
         val input = etHttpsToken.text?.toString() ?: ""
         if (input.isNotEmpty()) {
@@ -757,7 +766,7 @@ class SettingsActivity : AppCompatActivity() {
         etBranch.setText(currentSyncConfig.branch ?: "main")
         switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
-        tvSyncIntervalValue.text = "${currentSyncConfig.syncIntervalSeconds ?: 300}秒"
+        tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
         updateTokenStatusUI()
     }
 
