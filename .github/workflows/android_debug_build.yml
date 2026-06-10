@@ -47,9 +47,6 @@ jobs:
       - name: Test Rust core
         run: cargo test -p writer_core
 
-      - name: Security audit Rust dependencies
-        run: cargo install cargo-audit --locked && cargo audit
-
       - name: Test Android no-ai Debug unit tests
         working-directory: apps/android
         run: ./gradlew testNoAiDebugUnitTest

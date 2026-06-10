@@ -123,10 +123,6 @@ jobs:
       - name: Test Rust core
         run: cargo test -p writer_core ${{ matrix.features }}
 
-      - name: Security audit Rust dependencies
-        if: matrix.flavor == 'no-ai'
-        run: cargo install cargo-audit --locked && cargo audit
-
       - name: Test Linux contracts
         run: cargo test -p sujian-desktop ${{ matrix.features }}
 
