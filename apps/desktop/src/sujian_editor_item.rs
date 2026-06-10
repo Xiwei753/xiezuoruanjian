@@ -206,7 +206,7 @@ cpp! {{
     // Does NOT add indent to the returned x — caller adds line.x which already has indent.
     double sujian_cursor_to_x_on_line(
         const QString& paraText, int cursor_qchar, double fs, const QString& ff,
-        double paragraph_wrap_w, double indent_w, int qtextline_idx
+        double paragraph_wrap_w, double indent_w, int qtextline_idx, bool use_trailing
     ) {
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
@@ -226,7 +226,7 @@ cpp! {{
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
                 int local_qchar = cursor_qchar - line.textStart();
-                x = line.cursorToX(local_qchar);
+                x = line.cursorToX(local_qchar, use_trailing ? QTextLine::Trailing : QTextLine::Leading);
                 break;
             }
             first = false;
@@ -413,6 +413,7 @@ fn qtextlayout_cursor_to_x_on_line(
     para_text: &str, cursor_abs_byte: usize, para_start: usize,
     font_size: f64, font_family: &str,
     paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
+    use_trailing: bool,
 ) -> f64 {
     let cursor_in_para = cursor_abs_byte.saturating_sub(para_start);
     let cursor_qchar = byte_offset_to_qchar_offset(para_text, cursor_in_para) as i32;
@@ -422,9 +423,10 @@ fn qtextlayout_cursor_to_x_on_line(
     cpp!(unsafe [
         para as "QString", cursor_qchar as "int",
         fs as "float", ff as "QString",
-        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int"
+        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int",
+        use_trailing as "bool"
     ] -> f64 as "double" {
-        return sujian_cursor_to_x_on_line(para, cursor_qchar, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
+        return sujian_cursor_to_x_on_line(para, cursor_qchar, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx, use_trailing);
     })
 }
 
@@ -2050,12 +2052,12 @@ impl SujianEditorItem {
         let font_family = self.current_font_family.to_string();
         for (idx, line) in lines.iter().enumerate() {
             if line_contains_cursor_with_affinity(lines, idx, self.buffer.cursor, self.current_cursor_affinity) {
-                let cursor_x = calculate_cursor_x_for_line(line, self.buffer.cursor, font_size, &font_family);
+                let cursor_x = calculate_cursor_x_for_line(line, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
                 return Some((idx, cursor_x));
             }
         }
         lines.last().map(|line| {
-            let cursor_x = calculate_cursor_x_for_line(line, self.buffer.cursor, font_size, &font_family);
+            let cursor_x = calculate_cursor_x_for_line(line, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
             (lines.len() - 1, cursor_x)
         })
     }
@@ -2472,7 +2474,8 @@ impl SujianEditorItem {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < vp_h;
         let new_visible = self.current_editor_enabled
             && !self.buffer.has_selection()
-            && in_viewport;
+            && in_viewport
+            && !self.current_is_scrolling;
         self.cursor_visible = new_visible;
 
         if !new_visible {
@@ -2624,8 +2627,8 @@ impl SujianEditorItem {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
                 let sel_end = selection.1.min(line.end);
-                let x_start = calculate_cursor_x_for_line(line, sel_start, font_size, &font_family);
-                let x_end = calculate_cursor_x_for_line(line, sel_end, font_size, &font_family);
+                let x_start = calculate_cursor_x_for_line(line, sel_start, CaretAffinity::Downstream, font_size, &font_family);
+                let x_end = calculate_cursor_x_for_line(line, sel_end, CaretAffinity::Upstream, font_size, &font_family);
                 draw_rect(
                     painter,
                     x_start,
@@ -2751,7 +2754,7 @@ impl SujianEditorItem {
                     continue;
                 }
                 if line_contains_cursor_with_affinity(lines, idx, pc, self.current_cursor_affinity) {
-                    let x = calculate_cursor_x_for_line(line, pc, font_size, &font_family);
+                    let x = calculate_cursor_x_for_line(line, pc, self.current_cursor_affinity, font_size, &font_family);
                     let baseline = text_baseline_y(line, font_size, &font_family) + paint_offset_y;
                     draw_text(
                         painter,
@@ -3237,6 +3240,7 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
 fn calculate_cursor_x_for_line(
     line: &VisualLine,
     cursor: usize,
+    affinity: CaretAffinity,
     font_size: f64,
     font_family: &str,
 ) -> f64 {
@@ -3248,6 +3252,7 @@ fn calculate_cursor_x_for_line(
             line.x
         }
     } else {
+        let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.end;
         let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
         line.x + qtextlayout_cursor_to_x_on_line(
             &line.para_text,
@@ -3258,6 +3263,7 @@ fn calculate_cursor_x_for_line(
             paragraph_wrap_w,
             line.line_indent_x,
             line.qtextline_idx,
+            use_trailing,
         )
     }
 }
@@ -3272,7 +3278,7 @@ fn cursor_geometry_with_font(
 ) -> (f64, f64, usize) {
     for (idx, line) in lines.iter().enumerate() {
         if line_contains_cursor_with_affinity(lines, idx, cursor, affinity) {
-            let cursor_x = calculate_cursor_x_for_line(line, cursor, font_size, font_family);
+            let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, font_size, font_family);
             let cursor_y = cursor_rect_for_line(line, font_size, font_family).0;
             return (cursor_x, cursor_y, line.id);
         }
@@ -3280,7 +3286,7 @@ fn cursor_geometry_with_font(
     lines
         .last()
         .map(|line| {
-            let cursor_x = calculate_cursor_x_for_line(line, cursor, font_size, font_family);
+            let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, font_size, font_family);
             let cursor_y = cursor_rect_for_line(line, font_size, font_family).0;
             (cursor_x, cursor_y, line.id)
         })
