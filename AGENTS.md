@@ -11,7 +11,7 @@ core/writer_core/          Rust 核心库（唯一业务逻辑层）
 bindings/android/          Android JNI 桥接
 bindings/shared/           跨平台共享绑定
 apps/android/              Kotlin Android 客户端（薄客户端）
-apps/desktop/                Qt/QML Desktop 桌面客户端（薄客户端）
+apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 ```
 
 **核心原则：Rust Core 是唯一事实来源。**
@@ -50,7 +50,7 @@ apps/desktop/                Qt/QML Desktop 桌面客户端（薄客户端）
 
 ---
 
-## 3. Desktop/QML 开发规则
+## 3. Linux/QML 开发规则
 
 ### 3.1 目录结构
 
@@ -155,7 +155,7 @@ core/writer_core/
 # Rust 核心
 cd core/writer_core && cargo test
 
-# Desktop 桌面客户端
+# Linux 客户端
 cd apps/desktop && cargo check && cargo test
 
 # Android

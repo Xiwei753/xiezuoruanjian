@@ -308,7 +308,7 @@ graph TD
 针对目前项目已出现的“Android 和 Desktop 分离割裂”的严重架构风险，必须在后续阶段逐步按以下迁移路线将项目拉回正轨：
 
 ### 阶段 1：盘点能力 (Capability Auditing)
-- **输入**：对现有 `bindings/android`、`apps/android/NativeCoreBridge` 以及 `apps/desktop/backend` 中所有的公开方法进行全量盘点。
+- **输入**：对现有 `bindings/android`、`apps/android/NativeCoreBridge` 以及 `apps/desktop/src/backend` 中所有的公开方法进行全量盘点。
 - **输出**：建立 `Capability Matrix`。对比并找出哪些方法在 Android 有而在 Desktop 没有，或者两者在返回结构和错误码上存在分歧。
 
 ### 阶段 2：Core Capability Facade (建立核心能力门面)
