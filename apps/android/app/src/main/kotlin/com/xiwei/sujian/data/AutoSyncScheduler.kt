@@ -23,7 +23,9 @@ class AutoSyncScheduler(context: Context) {
     }
 
     fun stop() {
-        // Periodic WorkManager jobs are intentionally not stopped on background.
+        // Cancel the immediate foreground check when entering background to stop/downgrade sync.
+        val workManager = WorkManager.getInstance(appContext)
+        workManager.cancelUniqueWork(UNIQUE_FOREGROUND_WORK)
     }
 
     companion object {
