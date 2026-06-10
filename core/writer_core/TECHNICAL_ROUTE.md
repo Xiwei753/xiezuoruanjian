@@ -14,6 +14,11 @@
 - `src/api/` 是当前跨平台暴露层底座：`types.rs` 放稳定 DTO，`error.rs` 放平台稳定错误映射，`service.rs` 放 `WriterCoreApi` 服务。
 - `src/app_service.rs` 只作为 UniFFI adapter 保留 `WriterAppService` 兼容入口；不得再作为 DTO、错误映射和业务 API 的混杂事实来源。
 - `src/api.udl` 是 UniFFI 绑定声明，不是业务 API 设计的唯一事实来源。
+- **typed DTO 与 envelope_json API 的演进收口规范**：
+  - **唯一入口原则**：对外面向客户端 UI 与 Repository 只支持 **typed DTO**。禁止同一个功能同时维护 typed DTO 与 `envelope_json` 两套 API，以避免重复的测试、维护和两套不同的错误映射逻辑。
+  - **新功能红线**：新添加的业务功能和 API 绝对禁止定义 `envelope_json` / `_envelope_json` 方法。
+  - **旧接口废弃**：现有的 `envelope_json` 被标记为 legacy，必须只在各端 Bridge 内部低频封闭使用，并在未来迭代中逐步迁移至 typed DTO 并且予以彻底删除。
+
 
 ## Core 职责
 - 数据结构。

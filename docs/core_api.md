@@ -90,10 +90,14 @@
 - `update_starmap_link(starmap_id: &str, link_id: &str, patch: StarMapLinkPatchDto) -> Result<StarMapLinkDto, WriterError>`
 - `delete_starmap_link(...) -> Result<()>`
 - `find_starmap_references(...) -> Result<Vec<StarMapReference>>`
+### ResultEnvelope JSON API (Legacy / 废弃中)
 
-### ResultEnvelope JSON API
+> [!WARNING]
+> 所有 `envelope_json` API（包括下述接口）目前均已被标记为 **Legacy（已废弃）**。
+>
+> 新增功能和接口**绝对禁止**使用此模式。UI 与 Repository 层应完全使用强类型的 **typed DTO API** 进行交互。旧的 `envelope_json` 仅作为遗留兼容封闭在 Bridge 内部使用，并在后续逐步重构清理。
 
-跨端写入、删除、设置保存和同步操作必须使用标准 `ResultEnvelope` JSON 入口。当前稳定 envelope 入口包括：
+旧的稳定 envelope 入口包括：
 
 - Project：`create_project_envelope_json`、`rename_project_envelope_json`、`reorder_projects_envelope_json`、`delete_project_envelope_json`。成功时写入 `ProjectCreated`、`ProjectRenamed`、`ProjectsReordered`、`ProjectDeleted`。
 - Volume：`create_volume_envelope_json`、`rename_volume_envelope_json`、`reorder_volumes_envelope_json`、`delete_volume_envelope_json`。成功时写入 `VolumeCreated`、`VolumeRenamed`、`VolumesReordered`、`VolumeDeleted`。
@@ -101,7 +105,7 @@
 - Settings：`save_local_settings_envelope_json`、`save_syncable_settings_envelope_json`。成功时写入 `SettingsSaved`。
 - Sync：`save_sync_config_envelope_json`、`save_sync_secrets_envelope_json`、`perform_sync_envelope_json`、`perform_sync_dry_run_envelope_json`、`perform_sync_diagnostics_envelope_json`。成功时写入 `SyncConfigSaved`、`SyncSecretsSaved`、`SyncCompleted` 等同步状态标记；失败时写入稳定同步错误码。
 
-只读列表、打开章节和统计类 API 可继续返回 typed DTO，不要求为了 envelope 而放弃强类型返回。
+只读列表、打开章节和统计类 API 均要求直接返回 typed DTO。未来的写入和删除操作也必须统一转换为返回 typed DTO。
 
 ### 文件操作
 所有写操作（`save_chapter`、`save_*_settings`）必须使用 core 的原子替换写入路径：写入临时文件、flush、`fsync` 临时文件，然后 `rename` 替换目标文件。该机制避免目标文件半写入；目录项持久化仍受平台和文件系统语义影响，不宣称跨设备断电的绝对耐久性。

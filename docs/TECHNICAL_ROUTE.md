@@ -74,14 +74,21 @@
   - `core/writer_core/src/app_service.rs` 是薄 UniFFI adapter，只保留 Android 兼容的 `WriterAppService` 对象和方法名，并委托 `api::WriterCoreApi`。
   - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap/MindMap Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
   - 当前路线已经从“FFI 主链路收口”进入“Core API 层收口”：新增平台能力应优先落到 Rust `api/`，再由 UniFFI 或其他平台 adapter 暴露。
+- **typed DTO 与 envelope_json 的演进与收口路线：**
+  - **唯一性原则**：UI 层与 Repository 层只能使用 UniFFI 暴露的 **typed DTO** 进行业务交互，防止出现同一功能双重入口和双套错误映射。
+  - **JSON 边界封闭**：所有基于 `envelope_json` (JSON fallback) 的残留接口必须**严格封闭在各个 Bridge 内部**（并在 Bridge 内转换为强类型 Model 或 `BridgeResult<T>`），禁止泄露至 Repository 或 UI 层。
+  - **新功能红线**：新开发的功能**绝对禁止**继续添加 `envelope_json` 形式的 API，必须完全采用 typed DTO。
+  - **旧接口清理**：现有的 `envelope_json` API 全部标记为 `legacy`（过时），后续迭代中逐步予以重构和删除。
 - **legacy JSON 使用边界：**
   - `NativeCoreBridge` / `writer_core_jni` 仅保留给尚未迁完的 fallback、native 加载状态和少量 legacy 动作路径。
   - 统计、导图、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内并转换为 `BridgeResult<T>`；不得把裸 JSON 扩散到 UI 作为新契约。
   - 当前收口目标不是把所有 Core 接口一次性 API-ification / typed DTO 化，而是先确保残留 JSON 不越过领域 Bridge 边界。
 - **禁止事项：**
+  - 禁止在 UI / Repository 层直接使用/调用任何 `envelope_json` 或 raw JSON 字符串 API。
+  - 禁止在新功能/新模块的接口设计中添加或使用 `envelope_json` / `_envelope_json` 方法。
   - 禁止把 `NativeCoreBridge + JSON over JNI` 写成当前主路线。
   - 禁止用 JSON 字符串伪装 UniFFI typed API。
-  - 禁止把 `api.udl` 当作业务 API 的唯一设计文档或事实来源。
+  - 禁止把 `api.udl`当作业务 API 的唯一设计文档或事实来源。
   - 禁止把 `app_service.rs` 继续扩展成 DTO、错误、业务转发混杂的大文件。
   - 禁止手改 UniFFI 生成文件中的业务逻辑。
   - 禁止继续新增手写 `Java_com_xiwei_...` JNI 主业务函数。
