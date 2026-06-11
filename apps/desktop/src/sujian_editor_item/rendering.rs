@@ -480,28 +480,29 @@ impl SujianEditorItem {
         let mut miss_reason = "none";
         let mut needs_render = true;
 
-        if self.scroll_buffer.is_none() {
-            miss_reason = "no_buffer";
-        } else if self.editor_layout.cache().is_none() {
-            miss_reason = "layout_invalidated";
-        } else {
-            let buf = self.scroll_buffer.as_ref().unwrap();
-            let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
-            if content_changed {
-                miss_reason = "content_changed";
+        if let Some(buf) = &self.scroll_buffer {
+            if self.editor_layout.cache().is_none() {
+                miss_reason = "layout_invalidated";
             } else {
-                let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
-                if dpr_changed {
-                    miss_reason = "dpr_changed";
+                let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
+                if content_changed {
+                    miss_reason = "content_changed";
                 } else {
-                    let inside_buffer = buf.contains_viewport(scroll_y, vp_h);
-                    if !inside_buffer {
-                        miss_reason = "outside_buffer";
+                    let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
+                    if dpr_changed {
+                        miss_reason = "dpr_changed";
                     } else {
-                        needs_render = false;
+                        let inside_buffer = buf.contains_viewport(scroll_y, vp_h);
+                        if !inside_buffer {
+                            miss_reason = "outside_buffer";
+                        } else {
+                            needs_render = false;
+                        }
                     }
                 }
             }
+        } else {
+            miss_reason = "no_buffer";
         }
 
         if !needs_render {
