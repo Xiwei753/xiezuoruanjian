@@ -1251,4 +1251,24 @@ mod tests {
             assert_eq!(rect.visual_line_id, line.id);
         }
     }
+
+    #[test]
+    fn large_font_line_end_roundtrip() {
+        init_qt();
+        let mut layout = EditorLayout::default();
+        let text = "这是一段测试文字，用来验证大字号下换行后的行尾点击定位是否正确。第二行内容继续测试换行效果。";
+        let snapshot = layout.snapshot(
+            text,
+            LayoutParams {
+                width: 820.0,
+                font_size: 45.0,
+                font_family: "serif".to_string(),
+                line_spacing: 1.5,
+                text_indent: 0.0,
+                padding: 16.0,
+            },
+        ).clone();
+        assert!(snapshot.lines.len() > 1, "text must wrap at fontSize=45");
+        assert_line_end_roundtrip(&snapshot);
+    }
 }
