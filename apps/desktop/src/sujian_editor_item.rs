@@ -2,6 +2,7 @@
 // sujian_editor_item.rs — Desktop self-rendered editor item
 // =============================================================================
 
+use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
     CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot, VisualLine,
 };
@@ -19,8 +20,6 @@ cpp! {{
     #include <QtGui/QFont>
     #include <QtGui/QPainter>
     #include <QtGui/QClipboard>
-    #include <QtGui/QInputMethodEvent>
-    #include <QtGui/QKeyEvent>
     #include <QtGui/QMouseEvent>
     #include <QtQuick/QSGSimpleTextureNode>
     #include <QtQuick/QSGTexture>
@@ -28,111 +27,6 @@ cpp! {{
     #include <QtQuick/QSGImageNode>
     #include <QtQuick/QSGRectangleNode>
     #include <QGuiApplication>
-
-    // ---- Rust callbacks for event filter ----
-    extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
-    extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
-    extern "C" void sujian_ime_preedit(void* rust_item, const ushort* text, int text_len, int cursor);
-    extern "C" void sujian_ime_cancel(void* rust_item);
-    extern "C" void sujian_request_repaint(void* rust_item);
-
-    // ---- Event filter: intercepts KeyPress + InputMethod on SujianEditorItem ----
-    class SujianEventFilter : public QObject {
-    public:
-        void* rust_item;
-        SujianEventFilter(QObject* parent, void* item)
-            : QObject(parent), rust_item(item) {}
-
-        bool eventFilter(QObject* obj, QEvent* event) override {
-            if (!rust_item) return false;
-
-            switch (event->type()) {
-            case QEvent::KeyPress: {
-                auto* ke = static_cast<QKeyEvent*>(event);
-                QString text = ke->text();
-                bool accepted = sujian_handle_key_and_text(
-                    rust_item,
-                    ke->key(),
-                    static_cast<int>(ke->modifiers()),
-                    reinterpret_cast<const ushort*>(text.utf16()),
-                    static_cast<int>(text.size())
-                );
-                if (accepted) {
-                    event->accept();
-                    return true;
-                }
-                return false;
-            }
-            case QEvent::InputMethod: {
-                auto* ime = static_cast<QInputMethodEvent*>(event);
-                QString commit = ime->commitString();
-                QString preedit = ime->preeditString();
-                if (!commit.isEmpty()) {
-                    sujian_ime_commit(
-                        rust_item,
-                        reinterpret_cast<const ushort*>(commit.utf16()),
-                        static_cast<int>(commit.size())
-                    );
-                }
-                if (!preedit.isEmpty()) {
-                    int cursor = preedit.length();
-                    if (ime->replacementStart() >= 0) {
-                        cursor = ime->replacementStart() + ime->replacementLength();
-                        if (cursor < 0) cursor = preedit.length();
-                    }
-                    sujian_ime_preedit(
-                        rust_item,
-                        reinterpret_cast<const ushort*>(preedit.utf16()),
-                        static_cast<int>(preedit.size()),
-                        cursor
-                    );
-                } else if (commit.isEmpty()) {
-                    sujian_ime_cancel(rust_item);
-                }
-                sujian_request_repaint(rust_item);
-                event->accept();
-                return true;
-            }
-            case QEvent::InputMethodQuery: {
-                auto* qe = static_cast<QInputMethodQueryEvent*>(event);
-                if (qe->queries() & Qt::ImCursorRectangle) {
-                    double cx = obj->property("cursor_rect_x").toDouble();
-                    double cy = obj->property("cursor_rect_y").toDouble();
-                    double cw = obj->property("cursor_rect_width").toDouble();
-                    double ch = obj->property("cursor_rect_height").toDouble();
-                    qe->setValue(Qt::ImCursorRectangle, QRectF(cx, cy, cw, ch));
-                }
-                if (qe->queries() & Qt::ImEnabled) {
-                    qe->setValue(Qt::ImEnabled, true);
-                }
-                if (qe->queries() & Qt::ImHints) {
-                    qe->setValue(Qt::ImHints, static_cast<int>(Qt::ImhNoPredictiveText));
-                }
-                if (qe->queries() & Qt::ImAnchorRectangle) {
-                    double cx = obj->property("cursor_rect_x").toDouble();
-                    double cy = obj->property("cursor_rect_y").toDouble();
-                    double cw = obj->property("cursor_rect_width").toDouble();
-                    double ch = obj->property("cursor_rect_height").toDouble();
-                    qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy, cw, ch));
-                }
-                event->accept();
-                return true;
-            }
-            default:
-                return false;
-            }
-        }
-    };
-
-    void sujian_install_event_filter(QQuickItem* item, void* rust_item) {
-        if (!item) return;
-        auto* filter = new SujianEventFilter(item, rust_item);
-        item->installEventFilter(filter);
-        item->setFlag(QQuickItem::ItemHasContents, true);
-        item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
-        item->setFlag(QQuickItem::ItemIsFocusScope, true);
-        item->setAcceptedMouseButtons(Qt::AllButtons);
-    }
 
     void sujian_clean_cursor_nodes(QSGNode *root) {
         if (!root) return;
@@ -169,58 +63,6 @@ cpp! {{
         cursorNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
     }
 }}
-
-const KEY_BACKSPACE: i32 = 0x0100_0003;
-const KEY_TAB: i32 = 0x0100_0001;
-const KEY_ENTER: i32 = 0x0100_0005;
-const KEY_INSERT: i32 = 0x0100_0006;
-const KEY_RETURN: i32 = 0x0100_0004;
-const KEY_DELETE: i32 = 0x0100_0007;
-const KEY_LEFT: i32 = 0x0100_0012;
-const KEY_UP: i32 = 0x0100_0013;
-const KEY_RIGHT: i32 = 0x0100_0014;
-const KEY_DOWN: i32 = 0x0100_0015;
-const KEY_HOME: i32 = 0x0100_0010;
-const KEY_END: i32 = 0x0100_0011;
-const KEY_ESCAPE: i32 = 0x0100_0000;
-const KEY_A: i32 = 0x41;
-const KEY_C: i32 = 0x43;
-const KEY_V: i32 = 0x56;
-const KEY_X: i32 = 0x58;
-const KEY_Y: i32 = 0x59;
-const KEY_Z: i32 = 0x5a;
-const CTRL_MODIFIER: i32 = 0x0400_0000;
-const SHIFT_MODIFIER: i32 = 0x0200_0000;
-const ALT_MODIFIER: i32 = 0x0800_0000;
-const META_MODIFIER: i32 = 0x1000_0000;
-
-fn has_ctrl(modifiers: i32) -> bool {
-    modifiers & CTRL_MODIFIER != 0
-}
-
-fn has_shift(modifiers: i32) -> bool {
-    modifiers & SHIFT_MODIFIER != 0
-}
-
-fn has_alt(modifiers: i32) -> bool {
-    modifiers & ALT_MODIFIER != 0
-}
-
-fn has_meta(modifiers: i32) -> bool {
-    modifiers & META_MODIFIER != 0
-}
-
-fn is_copy_shortcut(key: i32, modifiers: i32) -> bool {
-    has_ctrl(modifiers) && (key == KEY_C || key == KEY_INSERT)
-}
-
-fn is_paste_shortcut(key: i32, modifiers: i32) -> bool {
-    (has_ctrl(modifiers) && key == KEY_V) || (has_shift(modifiers) && key == KEY_INSERT)
-}
-
-fn is_redo_shortcut(key: i32, modifiers: i32) -> bool {
-    has_ctrl(modifiers) && (key == KEY_Y || (has_shift(modifiers) && key == KEY_Z))
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EditorSnapshot {
@@ -1254,61 +1096,7 @@ impl SujianEditorItem {
     }
 
     fn handle_key(&mut self, key: i32, modifiers: i32) -> bool {
-        if !self.current_editor_enabled {
-            return false;
-        }
-        let ctrl = has_ctrl(modifiers);
-        let shift = has_shift(modifiers);
-        if is_copy_shortcut(key, modifiers) {
-            self.clipboard_copy();
-            return true;
-        }
-        if is_paste_shortcut(key, modifiers) {
-            self.clipboard_paste();
-            return true;
-        }
-        if is_redo_shortcut(key, modifiers) {
-            self.redo();
-            return true;
-        }
-        if ctrl {
-            match key {
-                KEY_A => {
-                    self.select_all();
-                    return true;
-                }
-                KEY_X => {
-                    self.clipboard_copy();
-                    self.delete_selection();
-                    return true;
-                }
-                KEY_Z => {
-                    self.undo();
-                    return true;
-                }
-                _ => return false,
-            }
-        }
-
-        match key {
-            KEY_ESCAPE => {
-                self.preedit_text.clear();
-                self.preedit_cursor = 0;
-                self.suppress_next_ime_commit = true;
-            }
-            KEY_BACKSPACE => self.delete_backward(),
-            KEY_DELETE => self.delete_forward(),
-            KEY_RETURN | KEY_ENTER => self.insert_text("\n".into()),
-            KEY_TAB => self.insert_text("\t".into()),
-            KEY_LEFT => self.move_cursor_horizontal(false, shift),
-            KEY_RIGHT => self.move_cursor_horizontal(true, shift),
-            KEY_UP => self.move_cursor_vertical(false, shift),
-            KEY_DOWN => self.move_cursor_vertical(true, shift),
-            KEY_HOME => self.move_to_line_edge(false, shift),
-            KEY_END => self.move_to_line_edge(true, shift),
-            _ => return false,
-        }
-        true
+        input::handle_key(self, key, modifiers)
     }
 
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
@@ -1373,30 +1161,15 @@ impl SujianEditorItem {
     }
 
     fn insert_preedit(&mut self, text: QString) {
-        if !self.current_editor_enabled {
-            return;
-        }
-        self.preedit_text = text.to_string();
-        self.preedit_cursor = self.preedit_text.len();
-        self.request_repaint();
+        input::insert_preedit_text(self, text.to_string());
     }
 
     fn commit_preedit(&mut self, text: QString) {
-        if !self.current_editor_enabled {
-            return;
-        }
-        self.preedit_text.clear();
-        self.preedit_cursor = 0;
-        let committed = text.to_string();
-        if !committed.is_empty() {
-            self.insert_text(committed.into());
-        }
+        input::commit_preedit_text(self, text.to_string());
     }
 
     fn cancel_preedit(&mut self) {
-        self.preedit_text.clear();
-        self.preedit_cursor = 0;
-        self.request_repaint();
+        input::cancel_preedit(self);
     }
 
     fn move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
@@ -1781,6 +1554,90 @@ fn is_left_button_pressed(event: &QMouseEvent) -> bool {
     })
 }
 
+impl EditorInputHost for SujianEditorItem {
+    fn input_enabled(&self) -> bool {
+        self.current_editor_enabled
+    }
+
+    fn input_emit_explicit_clear_requested(&mut self) {
+        self.explicit_clear_requested();
+    }
+
+    fn input_clipboard_copy(&mut self) -> bool {
+        self.clipboard_copy()
+    }
+
+    fn input_clipboard_paste(&mut self) {
+        self.clipboard_paste();
+    }
+
+    fn input_undo(&mut self) {
+        self.undo();
+    }
+
+    fn input_redo(&mut self) {
+        self.redo();
+    }
+
+    fn input_select_all(&mut self) {
+        self.select_all();
+    }
+
+    fn input_delete_selection(&mut self) {
+        self.delete_selection();
+    }
+
+    fn input_delete_backward(&mut self) {
+        self.delete_backward();
+    }
+
+    fn input_delete_forward(&mut self) {
+        self.delete_forward();
+    }
+
+    fn input_insert_text(&mut self, text: String) {
+        self.insert_text(text.into());
+    }
+
+    fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
+        self.move_cursor_horizontal(forward, extend);
+    }
+
+    fn input_move_cursor_vertical(&mut self, down: bool, extend: bool) {
+        self.move_cursor_vertical(down, extend);
+    }
+
+    fn input_move_to_line_edge(&mut self, end: bool, extend: bool) {
+        self.move_to_line_edge(end, extend);
+    }
+
+    fn input_clear_preedit(&mut self) {
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+    }
+
+    fn input_set_preedit(&mut self, text: String, cursor: usize) {
+        self.preedit_text = text;
+        self.preedit_cursor = cursor;
+    }
+
+    fn input_set_suppress_next_ime_commit(&mut self, value: bool) {
+        self.suppress_next_ime_commit = value;
+    }
+
+    fn input_take_suppress_next_ime_commit(&mut self) -> bool {
+        let value = self.suppress_next_ime_commit;
+        if value {
+            self.suppress_next_ime_commit = false;
+        }
+        value
+    }
+
+    fn input_request_repaint(&mut self) {
+        self.request_repaint();
+    }
+}
+
 impl QQuickItem for SujianEditorItem {
     fn component_complete(&mut self) {
         let obj_ptr = self.get_cpp_object();
@@ -1788,9 +1645,7 @@ impl QQuickItem for SujianEditorItem {
             return;
         }
         let item_ptr = self as *mut Self as *mut std::ffi::c_void;
-        cpp!(unsafe [obj_ptr as "QQuickItem*", item_ptr as "void*"] {
-            sujian_install_event_filter(obj_ptr, item_ptr);
-        });
+        input::install_event_filter(obj_ptr, item_ptr);
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
@@ -1805,9 +1660,7 @@ impl QQuickItem for SujianEditorItem {
             qmetaobject::QMouseEventType::MouseButtonPress => {
                 self.click_at(pos.x as f32, pos.y as f32, false);
                 let obj_ptr = self.get_cpp_object();
-                cpp!(unsafe [obj_ptr as "QQuickItem*"] {
-                    if (obj_ptr) obj_ptr->setFocus(true);
-                });
+                input::focus_item(obj_ptr);
             }
             qmetaobject::QMouseEventType::MouseMove => {
                 if is_left_button_pressed(&event) {
@@ -2591,117 +2444,6 @@ fn normalize_plain_text(text: &str) -> String {
         .collect()
 }
 
-// =============================================================================
-// C++ event filter callbacks — called from SujianEventFilter::eventFilter
-// =============================================================================
-
-/// Handle key press + text input. Returns true if the event was consumed.
-/// Replicates the QML handleSelfRenderedKey logic.
-#[no_mangle]
-extern "C" fn sujian_handle_key_and_text(
-    rust_item: *mut std::ffi::c_void,
-    key: i32,
-    modifiers: i32,
-    text: *const u16,
-    text_len: i32,
-) -> bool {
-    let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
-    if !item.current_editor_enabled {
-        return false;
-    }
-
-    let ctrl = has_ctrl(modifiers);
-
-    // Emit explicit_clear for destructive operations
-    if key == KEY_BACKSPACE || key == KEY_DELETE || (ctrl && key == KEY_X) {
-        item.explicit_clear_requested();
-    }
-
-    // Try handle_key first (handles Ctrl+C/V/X/Z, arrows, backspace, delete, etc.)
-    if item.handle_key(key, modifiers) {
-        return true;
-    }
-
-    // If not handled by handle_key and there's printable text, insert it
-    if !ctrl && !has_alt(modifiers) && !has_meta(modifiers) && text_len > 0 {
-        let text_str = unsafe {
-            let slice = std::slice::from_raw_parts(text, text_len as usize);
-            String::from_utf16_lossy(slice)
-        };
-        if !text_str.is_empty() {
-            item.insert_text(text_str.into());
-            return true;
-        }
-    }
-
-    false
-}
-
-/// Handle IME committed text
-#[no_mangle]
-extern "C" fn sujian_ime_commit(rust_item: *mut std::ffi::c_void, text: *const u16, text_len: i32) {
-    let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
-    if !item.current_editor_enabled || text_len <= 0 {
-        return;
-    }
-    if item.suppress_next_ime_commit {
-        item.suppress_next_ime_commit = false;
-        item.preedit_text.clear();
-        item.preedit_cursor = 0;
-        return;
-    }
-    let text_str = unsafe {
-        let slice = std::slice::from_raw_parts(text, text_len as usize);
-        String::from_utf16_lossy(slice)
-    };
-    if !text_str.is_empty() {
-        item.preedit_text.clear();
-        item.preedit_cursor = 0;
-        item.insert_text(text_str.into());
-    }
-}
-
-/// Handle IME preedit (composition) text
-#[no_mangle]
-extern "C" fn sujian_ime_preedit(
-    rust_item: *mut std::ffi::c_void,
-    text: *const u16,
-    text_len: i32,
-    cursor: i32,
-) {
-    let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
-    if !item.current_editor_enabled {
-        return;
-    }
-    let text_str = unsafe {
-        let slice = std::slice::from_raw_parts(text, text_len as usize);
-        String::from_utf16_lossy(slice)
-    };
-    if !text_str.is_empty() {
-        item.suppress_next_ime_commit = false;
-    }
-    item.preedit_text = text_str;
-    item.preedit_cursor = cursor.max(0) as usize;
-    if item.preedit_cursor > item.preedit_text.len() {
-        item.preedit_cursor = item.preedit_text.len();
-    }
-}
-
-/// Handle IME composition cancel
-#[no_mangle]
-extern "C" fn sujian_ime_cancel(rust_item: *mut std::ffi::c_void) {
-    let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
-    item.preedit_text.clear();
-    item.preedit_cursor = 0;
-}
-
-/// Request a repaint from C++ context
-#[no_mangle]
-extern "C" fn sujian_request_repaint(rust_item: *mut std::ffi::c_void) {
-    let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
-    item.request_repaint();
-}
-
 fn draw_text(
     painter: &mut QPainter,
     x: f64,
@@ -3037,17 +2779,6 @@ mod tests {
         assert_eq!(redone.text, "第一行\n第二行");
         assert_eq!(buffer.text, "第一行\n第二行");
         assert_eq!(buffer.cursor, buffer.text.len());
-    }
-
-    #[test]
-    fn self_editor_shortcuts_cover_desktop_clipboard_and_redo_keys() {
-        assert!(is_copy_shortcut(KEY_C, CTRL_MODIFIER));
-        assert!(is_copy_shortcut(KEY_INSERT, CTRL_MODIFIER));
-        assert!(is_paste_shortcut(KEY_V, CTRL_MODIFIER));
-        assert!(is_paste_shortcut(KEY_INSERT, SHIFT_MODIFIER));
-        assert!(is_redo_shortcut(KEY_Y, CTRL_MODIFIER));
-        assert!(is_redo_shortcut(KEY_Z, CTRL_MODIFIER | SHIFT_MODIFIER));
-        assert!(!is_redo_shortcut(KEY_Z, CTRL_MODIFIER));
     }
 
     #[test]
