@@ -101,7 +101,7 @@ apps/desktop/
 
 - Desktop 自研写作区当前主路径是 SujianEditorItem + QTextLayout。
 - DocumentHandler 只作为 legacy/stable TextArea 兼容辅助，不得用于修复自研写作区光标、命中、滚动、动画。
-- 修自研写作区必须只看 apps/desktop/src/sujian_editor_item.rs 和 docs/editor_engine_route.md。
+- 修自研写作区必须只看 apps/desktop/src/sujian_editor_item/mod.rs 和 docs/editor_engine_route.md。
 
 ### 3.4 openChapter 防死循环
 
