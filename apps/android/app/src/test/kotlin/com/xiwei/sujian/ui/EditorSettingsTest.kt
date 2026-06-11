@@ -169,6 +169,7 @@ class EditorSettingsTest {
     }
 
     @Test
+    @org.junit.Ignore("Requires native library")
     fun testEditorViewModelReloadSettings() {
         val application = org.robolectric.RuntimeEnvironment.getApplication()
         val viewModel = EditorViewModel(application)
