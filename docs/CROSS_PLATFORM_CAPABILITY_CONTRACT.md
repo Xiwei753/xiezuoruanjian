@@ -66,7 +66,7 @@ Supersedes: None
   - **Response Schema**：输出的数据包，指出受影响的实体（`changedEntities`）。
   - **Error Mapping**：对底层 IO/Git/序列化错误的统一捕获和 errorCode 映射。
   - **Core Tests**：必须包含针对此 Command 的独立单元测试和集成测试，确保脱离 UI 时逻辑 100% 正确。
-- **禁止平台绕道**：平台端严禁越过 Command 机制直接修改 workspace 下的任何文件（包括但不限于 `mind_map/index.json`（LEGACY）、`settings.json`、`.git/` 下的文件）。
+- **禁止平台绕道**：平台端严禁越过 Command 机制直接修改 workspace 下的任何文件（包括但不限于 `mind_map/index.json`（LEGACY）、`settings.local.json`、`.git/` 下的文件）。
 
 ### 6. Shared Event Model (统一事件模型)
 - 业务事件（Domain Event）由 Core 统一捕捉并定义，以用于跨平台通信与 UI 异步刷新：
@@ -243,7 +243,7 @@ graph TD
 
 ### 实例 1：创建项目 (createProject)
 - ❌ **错误做法**：
-  Android 通过 JNI 调起 `createFolder`，然后在 Android 侧向文件夹里写入 `.nomedia`，接着更新 SharedPreferences 中记录的“最近项目”；同时 Desktop 侧由 backend 创建文件夹后，直接生成了一个默认的 `settings.json` 并调用 QML 发送状态刷新。
+  Android 通过 JNI 调起 `createFolder`，然后在 Android 侧向文件夹里写入 `.nomedia`，接着更新 SharedPreferences 中记录的“最近项目”；同时 Desktop 侧由 backend 创建文件夹后，直接生成了一个默认的 `settings.local.json` 并调用 QML 发送状态刷新。
   *后果：双端项目初始化结构不同，最近项目无法通过工作区同步，行为分叉。*
 -  **正确做法**：
   平台层只发送 `ProjectCapability.createProject(workspacePath, "新项目")`。
@@ -260,7 +260,7 @@ graph TD
   *后果：同步机制完全无法触及这些偏好设置，用户换机或多端切换时设置直接丢失。*
 -  **正确做法**：
   平台层在 Settings UI 界面进行操作时只在本地维护一个内存 draft。当点击保存时，调用 `SettingsCapability.saveLocalSettings(workspacePath, newSettings)`。
-  Core 将数据写入到工作区指定的 `settings.json` 中，并在写入成功时广播 `SettingsSaved` 事件。平台端监听该事件，读取最新的有效设置并更新编辑器字体大小。
+  Core 将数据写入到工作区指定的 `settings.local.json` 中，并在写入成功时广播 `SettingsSaved` 事件。平台端监听该事件，读取最新的有效设置并更新编辑器字体大小。
 
 ### 实例 3：同步冲突 (Sync Conflict)
 - ❌ **错误做法**：

@@ -24,7 +24,7 @@ fn setup_large_workspace(dir: &std::path::Path) -> (String, String) {
 
         fs::write(
             ch_dir.join("chapter.meta.json"),
-            format!(r#"{{"id": "{}", "title": "Chapter {}", "created_at": "0", "updated_at": "0"}}"#, ch_id, i),
+            format!(r#"{{"id": "{}", "title": "Chapter {}", "created_at": "0", "updated_at": "0", "word_count": 0, "hash": ""}}"#, ch_id, i),
         ).unwrap();
     }
 
