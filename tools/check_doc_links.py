@@ -22,10 +22,10 @@ FILE_PATTERN = re.compile(
 WHITELIST_FILENAMES = {
     'index.json', 'mind_map.json', 'workspace.json', 'starmap.json', 'writing_stats.json',
     'note.md', 'outline.md', 'scene.md', 'character_notes.md', 'timeline_notes.md', 'draft.md',
-    'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
+    'settings.sync.json', 'settings.local.json', 'settings.json', 'sync_secrets.local.json', 'state.local.json',
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
-    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs'
+    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs', 'sujian_editor_item.rs', 'mod.rs'
 }
 
 WHITELIST_PATHS = {

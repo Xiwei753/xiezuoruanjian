@@ -3,7 +3,7 @@
 Status: active
 Last verified: 2026-06-11
 Truth source: code / product decision / protocol
-Supersedes: docs/ai_development_guide.md, docs/ai_tool_calling.md, AGENTS.md (previous version)
+Supersedes: AGENTS.md (previous version)
 
 本文档是给 AI 助手看的项目规则。修改代码前必须通读。
 
@@ -101,7 +101,7 @@ apps/desktop/
 
 - Desktop 自研写作区当前主路径是 SujianEditorItem + QTextLayout。
 - DocumentHandler 只作为 legacy/stable TextArea 兼容辅助，不得用于修复自研写作区光标、命中、滚动、动画。
-- 修自研写作区必须只看 apps/desktop/src/sujian_editor_item.rs 和 docs/editor_engine_route.md。
+- 修自研写作区必须只看 apps/desktop/src/sujian_editor_item/mod.rs 和 docs/editor_engine_route.md。
 
 ### 3.4 openChapter 防死循环
 
