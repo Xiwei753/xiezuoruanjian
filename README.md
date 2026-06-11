@@ -1,5 +1,10 @@
 # 素笺写作
 
+Status: active
+Last verified: 2026-06-11
+Truth source: product decision / code
+Supersedes: None
+
 ![素笺写作应用图标](packaging/web/icon-192.png)
 
 本仓库包含“素笺写作”的源代码，目前已过渡到“Rust 核心 + 各平台轻量客户端”的单仓库架构。
@@ -13,7 +18,7 @@
 
 > 注：原有的 Flutter 客户端由于其架构冲突已彻底移除。
 
-详情请参阅 `docs/architecture.md`。
+详情请参阅 [《技术路线与架构约束》](docs/TECHNICAL_ROUTE.md)。
 
 ## 核心原则
 
@@ -53,7 +58,7 @@ Linux 客户端统一使用 Qt6。CI、`apps/desktop/build.rs` 和目录 README 
 cargo run -p sujian-desktop
 ```
 
-如果遇到渲染相关问题（例如 Wayland 下的双重 UI 或黑屏错位），可尝试使用以下命令开启基础渲染循环并打开调试日志：
+If you encounter rendering issues (such as double UI or black screen misalignment under Wayland), try running with basic render loop and enabling debug logs:
 
 ```bash
 QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
@@ -69,10 +74,13 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 
 ## 文档
 
-- `docs/architecture.md`: 整体架构
-- `docs/workspace_format.md`: 磁盘上文档结构的单一事实来源。
-- `docs/settings_schema.md`: 本地和可同步设置定义。
-- `docs/core_api.md`: Rust 核心库 API。
-- `docs/sync_rules.md`: 同步规则。
-- `docs/CAPABILITY_MATRIX.md`: 跨平台能力矩阵。
-- `docs/ai_development_guide.md`: 针对 AI 辅助开发的重要说明。
+- `docs/TECHNICAL_ROUTE.md`: 全局技术路线与架构约束
+- `docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md`: 跨平台能力契约与 Core-first 架构约束
+- `docs/API_CONTRACTS.md`: 接口边界与交互契约 (Bridge, Backend, QML)
+- `docs/PRODUCT_DESIGN.md`: 素笺产品设计与视觉契约 (产品定位, 莫奈取色, 星图, 设置设计)
+- `docs/workspace_format.md`: 磁盘上文档结构的单一事实来源
+- `docs/settings_schema.md`: 本地和可同步设置定义
+- `docs/sync_rules.md`: 同步规则
+- `docs/starmap_semantics.md`: 星图语义地基 (独立对象与引用安全)
+- `docs/editor_engine_route.md`: 自绘编辑器与统一事件层路线
+- `docs/desktop_ime_notes.md`: Desktop (Linux) 输入法笔记

@@ -1,5 +1,10 @@
 # 工作区格式定义
 
+Status: active
+Last verified: 2026-06-11
+Truth source: protocol
+Supersedes: None
+
 工作区格式定义了存储写作文件、元数据、设置和缓存的精确目录结构和文件格式。它是共享 Rust 核心和所有原生客户端的唯一事实来源。
 
 ```

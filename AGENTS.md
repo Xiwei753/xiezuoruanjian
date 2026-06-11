@@ -1,5 +1,10 @@
 # AGENTS.md — AI 开发守则
 
+Status: active
+Last verified: 2026-06-11
+Truth source: code / product decision / protocol
+Supersedes: docs/ai_development_guide.md, docs/ai_tool_calling.md, AGENTS.md (previous version)
+
 本文档是给 AI 助手看的项目规则。修改代码前必须通读。
 
 ---
@@ -42,11 +47,23 @@ apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 
 | 要求 | 说明 |
 |------|------|
-| 修改 Rust core 时更新 `docs/core_api.md` | 文档与代码同步 |
 | 修改 Rust core 时写 `cargo test` | 测试覆盖 |
 | 新设置项记录到 `docs/settings_schema.md` | 设置 schema 是权威定义 |
 | 同步状态、删除确认、错误提示走统一状态/事件通道 | 不允许 QML 直接处理业务状态 |
 | QML 只绑定 backend 暴露的 view model / command | 不允许 QML 内部维护业务数据 |
+
+### 2.3 Agent 专属规则与技术路线约束
+
+| 规则与约束 | 说明 |
+|-----------|------|
+| **唯一技术路线** | `docs/TECHNICAL_ROUTE.md` 是唯一的全局技术路线。 |
+| **自研写作区路线** | Desktop 自研写作区当前路线是 `SujianEditorItem + QTextLayout`。 |
+| **禁止旧路线排版修复** | **禁止**再按 `DocumentHandler` / `QTextDocument` 路线修自研写作区。 |
+| **正式图谱路线** | `mind_map` 是 legacy（已废弃），正式图谱是 `starmap`。所有新增图谱能力必须走 StarMapCapability。 |
+| **淘汰 envelope_json** | `envelope_json` 是 legacy 兼容，新功能**绝对禁止**使用，必须完全采用 typed DTO。 |
+| **光标修复要求** | 修光标必须先保证 `QTextLine` `xToCursor/cursorToX` roundtrip。 |
+| **工作区格式神圣不可侵犯** | 不要仅仅为了迁就 UI 需求而修改 `workspace_format.md` 或改变文件在磁盘上的存储方式。工作区格式是唯一的事实来源。 |
+| **保持核心纯净** | 不要将平台特定的 UI 逻辑、动画循环、窗口管理或输入法（IME）处理注入 `writer_core`。核心严格用于数据、逻辑和文件 I/O。 |
 
 ---
 
@@ -143,7 +160,7 @@ core/writer_core/
 - `core/writer_core` 是唯一业务底层核心库。
 - 处理所有文件 I/O、项目管理、同步、格式化和设置规则。
 - **严格排除 UI 逻辑**（动画、窗口管理、输入法、平台特定代码）。
-- 修改 core 后必须跑 `cargo test` 并更新 `docs/core_api.md`。
+- 修改 core 后必须跑 `cargo test`。
 
 ---
 
@@ -199,7 +216,7 @@ cd apps/desktop && cargo check && cargo test
 ### 8.1 修改前
 
 1. **读取目标文件的当前状态**，不要凭记忆假设。
-2. **理解文件的嵌套结构和括号平衡**，QML/Rust 都是。
+2. **理解文件的嵌套结构 and 括号平衡**，QML/Rust 都是。
 3. **确定修改范围**，不要扩散到不相关的文件。
 
 ### 8.2 修改中
@@ -236,3 +253,20 @@ cd apps/desktop && cargo check && cargo test
 ## 10. 一句话总结
 
 > **Rust Core 管逻辑，客户端管展示，QML 只绑定不计算，正文永远是纯文本。**
+
+---
+
+## 11. DeepSeek Thinking Mode + Tool Calls 注意事项
+
+由于 DeepSeek API 在使用 Thinking Mode（深度思考模式）时，对工具调用（Tool Calls）有特殊要求，本项目在底层做做出特定的兼容处理：
+
+- **tool_calls 场景下 reasoning_content 必须完整回传**：当 assistant 产生工具调用请求时，其返回的 `reasoning_content` 必须在随后的请求中原样附带回传，否则会触发 DeepSeek API 返回 400 错误。
+- **普通无工具调用对话不应该把旧 reasoning_content 带回**：如果 assistant 没有产生任何工具调用，而是直接输出了回复结果，此时之前的 `reasoning_content` 已经完成使命，在未来的多轮对话上下文中会自动剔除（丢弃），不再回传以节省 tokens 并且避免造成上下文污染。
+- 本项目通过 **DeepSeekMessageSerializer** 和 **AIConversationSession** 实现针对 provider 特殊行为的隔离与适配：
+  - `DeepSeekMessageSerializer` 负责根据 assistant 是否存在 `tool_calls` 以及提供商是否为 DeepSeek 来动态决定是否序列化保留 `reasoning_content`。
+  - `AIConversationSession` 用于记录会话上下文，如果触发工具调用，它标记 `requiresReasoningContentEcho = true` 来帮助系统进行流转控制。
+- `reasoning_content` 是属于提供商在生成结果过程中的隐藏计算过程数据：
+  - **不展示给用户**（UI 不应把它当成普通的 `content` 处理）。
+  - **不写入正文**（它不是用户的写作数据，不可进入 `chapter.md` 等文档）。
+  - **不写入日志**（考虑可能会占用较多内存和控制台空间）。
+  - 需要持久化记录时只能进入 `app-meta/ai/traces/` 目录下的跟踪文件。

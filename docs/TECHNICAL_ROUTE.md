@@ -1,5 +1,10 @@
 # 技术路线与架构约束
 
+Status: active
+Last verified: 2026-06-11
+Truth source: code / product decision / protocol
+Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, core/writer_core/TECHNICAL_ROUTE.md
+
 ## 最高优先级规则
 - **核心契约约束：** 项目已建立跨平台业务底线契约：[《跨平台能力契约与 Core-first 架构约束》](CROSS_PLATFORM_CAPABILITY_CONTRACT.md)。所有跨平台业务设计与能力对齐，必须以该契约文档为唯一准则。其优先级高于任何单端（Android、Linux、未来新增端）的局部技术路线和实现细节。
 - 任何后续提示词、AI 任务、人工改动，如果与本文档或上述契约冲突，以契约和本文档为准。

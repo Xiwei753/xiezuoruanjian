@@ -1,5 +1,10 @@
 # 设置 Schema 定义
 
+Status: active
+Last verified: 2026-06-11
+Truth source: product decision / code
+Supersedes: None
+
 本文档概述了应用设置的 JSON schema。
 
 ### `settings.local.json`

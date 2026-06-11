@@ -1,7 +1,9 @@
 # 《跨平台能力契约与 Core-first 架构约束》
 
-> [!NOTE]
-> **进度追踪**：请查看 [跨平台能力矩阵 (CAPABILITY MATRIX)](CAPABILITY_MATRIX.md) 了解当前各能力在 Core / Android / Desktop 三边的分叉状态及下一步重构顺序。
+Status: active
+Last verified: 2026-06-11
+Truth source: code / product decision / protocol
+Supersedes: None
 
 > [!IMPORTANT]
 > **最高优先级规则**

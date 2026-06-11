@@ -1,5 +1,10 @@
 # 自绘编辑器与统一事件层路线
 
+Status: active
+Last verified: 2026-06-11
+Truth source: product decision / code
+Supersedes: None
+
 本文档记录新的编辑器底层路线。当前优先级以用户最新指令为准：停止围绕 QML `TextArea` 做文字动画补丁，逐步迁移到 Core 统一编辑事件层 + 平台自绘 renderer。
 
 ## 结论

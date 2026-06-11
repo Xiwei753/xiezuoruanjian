@@ -1,5 +1,10 @@
 # Desktop (Linux) 输入法笔记
 
+Status: active
+Last verified: 2026-06-11
+Truth source: protocol / code
+Supersedes: None
+
 如果你在 Linux 上运行 Desktop 桌面写作应用，特别是在 Fedora KDE Wayland 配合 fcitx5 的环境下，可能会遇到 Qt/QML TextEdit/TextArea 的预编辑候选框（组合区域）在输入时闪烁或抖动的问题。这是文本输入处理与某些 Linux 输入法/Wayland 配置之间的已知交互问题。
 
 ## 解决方法

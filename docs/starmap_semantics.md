@@ -1,5 +1,10 @@
 # StarMap 语义地基 v1.1 (独立对象与引用安全)
 
+Status: active
+Last verified: 2026-06-11
+Truth source: product decision / protocol
+Supersedes: None
+
 ## 概述
 
 StarMap 不再是一个强依赖父子拥有权的嵌套树。它是一个**语义丰富的独立创作视图**。
