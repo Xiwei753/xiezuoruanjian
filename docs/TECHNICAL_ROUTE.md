@@ -100,11 +100,14 @@ Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, co
 
 ## 网络同步路线
 - **核心原则：** 拥抱基于 Token 的标准 API，对容易失败的底层代理探测进行“断舍离”。
+- **当前后端支持事实：**
+  - 同步后端当前事实只写 Git / GithubApi。所有业务流程与多端同步仅在此两个后端上运行和保证。
 - **Android 与多端演进：**
   - 由于移动端（Android）和部分受限网络环境（Linux）下，底层 C 语言库（`libgit2`）对系统 VPN 和代理透明转发的支持极差，导致频繁出现 `Certificate (-17)` 和 TCP 阻断问题。
   - **当前确立**：彻底拥抱基于 Token 的 HTTP/REST API（如 GitHub API）。精简乃至删除内核中对底层 22 端口、443 端口的暴力 TCP 探测和 HTTP CONNECT 代理探针。
-- **未来扩展能力：**
-  - 同步服务保持 `BackendType` 的枚举抽象（Git, GithubApi, WebDav, S3 等）。
+- **未来可能扩展能力：**
+  - 后续可根据需要将同步服务扩展到 WebDav、S3 等其他存储介质，同步服务内部预留 `BackendType` 枚举抽象。
+  - **UI 红线约束**：当前绝对不得在客户端 UI 或 settings 界面新增 WebDav / S3 的假入口或选项占位，避免给用户造成功能已就绪的误导。
   - 网络层只需保证 HTTP Client (如 `reqwest`) 能读取系统级别或用户设定的常规代理配置，网络连接的具体报错直接抛给上层，不在底层过度诊断拦截。
 
 ## AI 智能体旁路路线 (AI Agent Bypass)

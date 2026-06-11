@@ -58,7 +58,7 @@ apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 |-----------|------|
 | **唯一技术路线** | `docs/TECHNICAL_ROUTE.md` 是唯一的全局技术路线。 |
 | **自研写作区路线** | Desktop 自研写作区当前路线是 `SujianEditorItem + QTextLayout`。 |
-| **禁止旧路线排版修复** | **禁止**再按 `DocumentHandler` / `QTextDocument` 路线修自研写作区。 |
+| **禁止旧路线排版修复** | **禁止**再按 `QTextDocument` / `DocumentHandler` 旧排版路线修自研写作区。 |
 | **正式图谱路线** | `mind_map` 是 legacy（已废弃），正式图谱是 `starmap`。所有新增图谱能力必须走 StarMapCapability。 |
 | **淘汰 envelope_json** | `envelope_json` 是 legacy 兼容，新功能**绝对禁止**使用，必须完全采用 typed DTO。 |
 | **光标修复要求** | 修光标必须先保证 `QTextLine` `xToCursor/cursorToX` roundtrip。 |
@@ -99,17 +99,9 @@ apps/desktop/
 
 ### 3.3 编辑器排版架构
 
-```
-EditorController.qml     控制器（逻辑层）
-  └─ DocumentHandler     Rust QObject（QTextDocument 操作）
-       ├─ apply_format()    行距 + 首行缩进（QTextBlockFormat）
-       ├─ set_plain_text()  按行插入纯文本（不接受 HTML）
-       └─ clear_undo_stack()
-```
-
-- `DocumentHandler` 只做视觉排版，不改变正文内容。
-- 字号、行距、首行缩进只影响显示，不改变正文文件。
-- 正文文件永远是纯文本。
+- Desktop 自研写作区当前主路径是 SujianEditorItem + QTextLayout。
+- DocumentHandler 只作为 legacy/stable TextArea 兼容辅助，不得用于修复自研写作区光标、命中、滚动、动画。
+- 修自研写作区必须只看 apps/desktop/src/sujian_editor_item.rs 和 docs/editor_engine_route.md。
 
 ### 3.4 openChapter 防死循环
 
