@@ -54,7 +54,7 @@
 - Android 暂不迁移 Compose。
 - Compose Canvas 可作为参考，但不是当前主路线。
 - 推荐路线：
-  - V1：建立 MindMapSnapshot、MindMapRenderer 接口、Android 自定义渲染 View 骨架。
+  - V1：建立 MindMapSnapshot、MindMapRenderer 接口、Android 自定义渲染 View 骨架。**(LEGACY: 以下渲染路线已迁移至 StarMap，MindMap 仅保留迁移兼容。)**
   - V1 可以用硬件加速 Canvas 验证数据链路和交互。
   - 渲染接口必须预留 GLSurfaceView/OpenGL ES 后端。
   - 目标路线是独立渲染 Surface + GPU 批量绘制节点/边/文本纹理。
@@ -72,7 +72,7 @@
   - Rust `api/` 模块定义稳定 DTO、错误映射和 `WriterCoreApi` 服务，是 Core API 层收口的事实边界。
   - `core/writer_core/src/api.udl` 只声明 UniFFI 需要暴露的 DTO、错误枚举和 `WriterAppService` 方法；Kotlin `writer_core.kt` 必须由 UniFFI 生成，不得手写业务逻辑。
   - `core/writer_core/src/app_service.rs` 是薄 UniFFI adapter，只保留 Android 兼容的 `WriterAppService` 对象和方法名，并委托 `api::WriterCoreApi`。
-  - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap/MindMap Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
+  - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap/(MindMap LEGACY) Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
   - 当前路线已经从“FFI 主链路收口”进入“Core API 层收口”：新增平台能力应优先落到 Rust `api/`，再由 UniFFI 或其他平台 adapter 暴露。
 - **typed DTO 与 envelope_json 的演进与收口路线：**
   - **唯一性原则**：UI 层与 Repository 层只能使用 UniFFI 暴露的 **typed DTO** 进行业务交互，防止出现同一功能双重入口和双套错误映射。
@@ -109,15 +109,15 @@
   - AI 模块必须返回结构化的 `AiActionResponse`，包含 `display_text`（给人看的）和 `actions: Vec<AiAction>`（给 UI 画按钮的）。
   - 各端 UI（Android/Linux）收到数据后，在对话框底部渲染原生按钮。用户点击按钮，通过 UniFFI 接口直接调用 Core 的执行函数（如 `navigate_to_settings` 或 `apply_theme`），实现真正的“智能体”体验。
 
-## Android 导图分层职责
+## Android 导图分层职责 (LEGACY: MindMap 已废弃，以下类型定义仅迁移兼容，正式路线为 StarMap)
 - Rust Core：
-  - MindMapGraph
-  - MindMapNode
-  - MindMapEdge
-  - MindMapAnchor
-  - MindMapLink
-  - MindMapLayout
-  - MindMapRenderSnapshot
+  - MindMapGraph (LEGACY)
+  - MindMapNode (LEGACY)
+  - MindMapEdge (LEGACY)
+  - MindMapAnchor (LEGACY)
+  - MindMapLink (LEGACY)
+  - MindMapLayout (LEGACY)
+  - MindMapRenderSnapshot (LEGACY)
   - 真正作为正文并列图谱的数据由 Core 读写并生成快照。若没有自定义图谱，则退化为从作品/卷/章节自动生成的结构图。
   - 计算 radial tree / horizontal tree 布局。
   - 支持节点与正文片段（MindMapAnchor）的双向绑定，便于后续 AI 扩写及跳转。

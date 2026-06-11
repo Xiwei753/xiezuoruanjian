@@ -1,5 +1,9 @@
 package com.xiwei.sujian.data
 
+/**
+ * LEGACY: MindMap Bridge — 已废弃，仅保留用于旧数据迁移兼容。正式图谱路线为 StarMapBridge。
+ */
+
 import com.xiwei.sujian.model.MindMapBounds
 import com.xiwei.sujian.model.MindMapEdge
 import com.xiwei.sujian.model.MindMapNode

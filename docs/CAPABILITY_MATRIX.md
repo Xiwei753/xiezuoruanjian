@@ -141,9 +141,9 @@
 2. **P1-2：缩小 legacy fallback 暴露面**
    - Android `NativeCoreBridge` 仅允许 fallback，不允许新业务接入。
    - Linux legacy facade 仅作为未迁移能力标记，新增能力必须进 `WriterCoreApi`。
-3. **P1-3：MindMap 编辑入口产品化**
-   - Core 已有强类型 DTO，下一步补双端主编辑/保存入口。
-   - 写入口如需要状态刷新，应补标准 envelope 或等价事件标记。
+3. ~~**P1-3：MindMap 编辑入口产品化**~~ (已废弃 — 正式图谱路线为 StarMap)
+   - ~~Core 已有强类型 DTO，下一步补双端主编辑/保存入口。~~
+   - ~~写入口如需要状态刷新，应补标准 envelope 或等价事件标记。~~
 4. **P1-4：Trash 完整回收站系统**
    - 当前已有 delete guard + trash + tombstone 基础。
    - 仍需补 `list_trash`、`restore_from_trash`、`purge_trash`、清理策略和 UI 权限边界。

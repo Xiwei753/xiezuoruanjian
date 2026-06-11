@@ -57,14 +57,14 @@
   - `permission_denied`：权限不足或工作区锁保护。
 
 ### 5. Shared Command Model (统一写操作命令模型)
-- 任何对 Workspace / Project / Volume / Chapter / MindMap / Settings / Sync 的写入或变更操作，必须抽象为 Core command。
+- 任何对 Workspace / Project / Volume / Chapter / (MindMap LEGACY) / StarMap / Settings / Sync 的写入或变更操作，必须抽象为 Core command。
 - 每个 Command 必须在 Core 中独立且完整地定义：
   - **Request Schema**：输入参数类型及合法性校验规则（`validation`）。
   - **Mutation Logic**：核心文件/内存修改逻辑，且该过程必须为原子操作或支持 Crash-safe 回滚。
   - **Response Schema**：输出的数据包，指出受影响的实体（`changedEntities`）。
   - **Error Mapping**：对底层 IO/Git/序列化错误的统一捕获和 errorCode 映射。
   - **Core Tests**：必须包含针对此 Command 的独立单元测试和集成测试，确保脱离 UI 时逻辑 100% 正确。
-- **禁止平台绕道**：平台端严禁越过 Command 机制直接修改 workspace 下的任何文件（包括但不限于 `mind_map/index.json`、`settings.json`、`.git/` 下的文件）。
+- **禁止平台绕道**：平台端严禁越过 Command 机制直接修改 workspace 下的任何文件（包括但不限于 `mind_map/index.json`（LEGACY）、`settings.json`、`.git/` 下的文件）。
 
 ### 6. Shared Event Model (统一事件模型)
 - 业务事件（Domain Event）由 Core 统一捕捉并定义，以用于跨平台通信与 UI 异步刷新：
@@ -73,8 +73,8 @@
   - `ChapterUpdated` (章节内容/元数据修改)
   - `SettingsSaved` (本地或同步设置已保存)
   - `SyncConflictDetected` (同步检测到不可自动合并的冲突)
-  - `MindMapGraphUpdated` (思维导图图谱/布局发生变更)
-  - `AnchorBroken` (正文变动导致思维导图的锚点失效)
+  - `MindMapGraphUpdated` (LEGACY: 思维导图图谱/布局发生变更，正式路线为 StarMapGraphUpdated)
+  - `AnchorBroken` (正文变动导致思维导图的锚点失效 — LEGACY)
 - **消费规则**：平台端仅能作为 Event 的消费者。平台端可以把事件转换为特定平台的 UI State 或 LiveData/StateFlow 信号，但禁止自己在平台层发明和分发长周期的业务事件。
 
 ### 7. Platform Adapter Only (平台绑定层纯适配器化)
@@ -233,7 +233,7 @@ graph TD
 ### 8. 未来 AI Capability (AI 业务功能)
 - **安全隔离**：AI 辅助功能（如扩写、续写、提示节点）绝对不允许直接操纵或写入平台侧的局部状态。
 - **动作化**：AI 生成的内容在被用户采纳前，只作为 `Core Action Proposal` 传输给平台；用户点击接受后，必须作为 Core Command 写入 workspace 历史中。
-- **图谱输入**：AI 自动抽取的节点、大纲、逻辑锚点，必须走 `MindMapCapability` 提供的标准接口导入。
+- **图谱输入**：AI 自动抽取的节点、大纲、逻辑锚点，必须走 `StarMapCapability` 提供的标准接口导入。(注：原 `MindMapCapability` 已废弃)
 
 ---
 
@@ -269,7 +269,7 @@ graph TD
   `{ "success": false, "errorCode": "SYNC_MERGE_CONFLICT", "status": "conflict", "data": { "conflictFiles": ["chapter_1.txt"] } }`。
   双端均根据 `SYNC_MERGE_CONFLICT` 错误码弹出一致的冲突合并引导对话框，让用户选择解决方案。
 
-### 实例 4：思维导图操作 (MindMap)
+### 实例 4：思维导图操作 (MindMap) (LEGACY - 正式路线为 StarMap)
 - ❌ **错误做法**：
   Android 侧拖动并修改了思维导图节点名字，直接将修改后的 JSON 用文件操作写回 `mind_map.json`，然后重新读取 JSON 并强刷 Canvas。
   *后果：Desktop 端正开着同样的文件但全然不知，没有文件完整性校验，可能随时覆盖或者覆盖掉 Core 的自动布局。*
@@ -330,7 +330,7 @@ graph TD
 
 ### 4. 阶段 4：双端对齐测试 (Cross-platform Integration Testing)
 - **用例复用**：在 CI 中，引入两端测试用例。如同样的 `createProject` 用例在 Kotlin (JNI 方式) 与 C++ (Shared ABI 方式) 下都必须表现出完全等同的断言结果。
-- **行为验收**：双端对于 `SyncConflict` 和 `MindMapEdit` 的处理表现出完全一致的交互。
+- **行为验收**：双端对于 `SyncConflict` 和 `StarMapEdit` 的处理表现出完全一致的交互。(注：原 `MindMapEdit` 已迁移至 `StarMapEdit`)
 
 ### 5. 阶段 5：支持未来五端 (Five-platform Ready)
 - **接入层标准化**：新客户端（如 macOS, Web, iOS）的接入必须只能调用统一导出的 `bindings/shared` 动态链接库。

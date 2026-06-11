@@ -42,7 +42,7 @@ pub enum SettingCategory {
     DeepSeekAi,
     ToolCalls,
     AutoCorrection,
-    GraphMindMap,
+    GraphMindMap, // LEGACY: mind_map 已废弃，仅迁移兼容
     ThemeAppearance,
     PrivacySecurity,
     Debug,

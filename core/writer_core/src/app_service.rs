@@ -525,7 +525,7 @@ impl WriterAppService {
         self.api.flush_writing_stats()
     }
 
-    // MindMap
+    // LEGACY MindMap — retained for migration compatibility. Use starmap for new features.
     pub fn get_mindmap_snapshot(
         &self,
         project_id: String,

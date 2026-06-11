@@ -7,13 +7,13 @@
 - UI/ViewModel/QML 不直接解析内部业务 JSON，不自行判断工作区、章节保存、写作事件分类或字数规则。
 - 旧 `*_json` / `NativeCoreBridge` JSON 包装仍然存在，但只能作为 Android legacy fallback；Repository/UI/ViewModel/Controller 不允许直接依赖它。
 - 新调用必须进入既有或新增领域 Bridge，不得把裸 JSON `String`、`Boolean`、`null` 当作正常上层接口继续扩散。
-- Stats / StarMap / MindMap 仍有 JSON 字符串残留时，解析必须封闭在对应领域 Bridge 内，向上返回 `BridgeResult<T>`；`Error` 和 `NotLoaded` 必须原样传播。
+- Stats / StarMap / (MindMap LEGACY) 仍有 JSON 字符串残留时，解析必须封闭在对应领域 Bridge 内，向上返回 `BridgeResult<T>`；`Error` 和 `NotLoaded` 必须原样传播。
 - Bridge 错误必须包含稳定 `code` 和可展示 `message`，不能只依赖字符串匹配。
 - 写入、写作统计、保存和同步类 API 的 `Boolean` 只能表示业务成功值，不能表示错误状态；失败必须通过 typed error / `BridgeResult.Error` 向上传递。
 
 ## 领域 Bridge 架构
 
-- **Android 三层架构**：`ViewModel/UI → Repository/Controller → 领域 Bridge (WorkspaceBridge, WritingBridge, SettingsBridge, SyncBridge, StatsBridge, StarMapBridge, MindMapBridge 等) → AppServiceBridge → UniFFI typed DTO/error → WriterAppService adapter → WriterCoreApi → Rust Core`
+- **Android 三层架构**：`ViewModel/UI → Repository/Controller → 领域 Bridge (WorkspaceBridge, WritingBridge, SettingsBridge, SyncBridge, StatsBridge, StarMapBridge, (MindMapBridge LEGACY) 等) → AppServiceBridge → UniFFI typed DTO/error → WriterAppService adapter → WriterCoreApi → Rust Core`
 - **Android legacy 例外**：`NativeStatusBridge` 和少量旧 `ActionBridge` 可通过 `NativeCoreBridge` 读取 native 加载状态或旧动作注册；该路径不是主业务入口。
 - **Linux 三层架构**：`QML UI → AppBackend (QObject 适配层) → 领域 Bridge (writing_bridge 等) → Rust Core`
   - Linux `writing_bridge` 已从字符串错误改为稳定 Core Error 与 DTOs（如 `LinuxChapterOpenData`, `ChapterSaveReceipt`）。
@@ -27,7 +27,8 @@
 - Workspace：作品、卷、章节列表与创建、删除、重排序等。
 - Writing：`openChapter`、`saveChapterContent`、`clearChapterContent`、`calculateWordCount`、`processWritingEvent`。
 - Stats：项目统计和写作统计刷新/查询；残留 JSON 只允许在 `StatsBridge` 内解析。
-- StarMap / MindMap：星图/导图列表、快照、读取图、基础节点/边和布局操作；残留 JSON 只允许在对应领域 Bridge 内解析。
+- StarMap：星图列表、快照、读取图、基础节点/边和布局操作；残留 JSON 只允许在 StarMapBridge 内解析。
+- MindMap (LEGACY)：旧导图列表、快照、读取图操作；残留 JSON 只允许在 MindMapBridge 内解析。禁止新增功能。
 - Settings：`getLocalSettings`、`saveLocalSettings`、`getSyncableSettings`、`saveSyncableSettings`。
 - Sync：`loadSyncState`、`loadSyncConfig`、`saveSyncConfig`、`loadSyncSecrets`、`saveSyncSecrets`、`performSyncDiagnostics`、`performSyncDryRun`、`performSync`。
 - NativeStatus：只暴露 native 加载状态、工作区路径、工作区校验、AI 可用性等最小状态；不得透传设置、同步、写作、星图业务方法。

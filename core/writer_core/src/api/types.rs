@@ -625,7 +625,7 @@ fn first_sync_mode_to_wire(mode: &crate::sync::FirstSyncMode) -> String {
     .to_string()
 }
 
-// MindMap DTOs
+// LEGACY MindMap DTOs — retained for migration compatibility only. Use StarMap DTOs for new features.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MindMapSnapshotDto {

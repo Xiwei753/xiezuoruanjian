@@ -91,6 +91,7 @@ impl WriterCore {
 
     /// List all projects in the workspace.
 
+    /// LEGACY: mind_map 已废弃，仅保留迁移兼容。正式图谱路线为 starmap。
     pub fn get_mind_map_snapshot(
         &self,
         project_id: &str,

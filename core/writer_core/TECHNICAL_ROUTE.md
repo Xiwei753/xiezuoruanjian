@@ -46,7 +46,7 @@
 - `EditorAnimationEvent` 只描述 renderer 可以播放的插入、删除、光标事件，不执行绘制。
 - Platform renderer 可以使用 Qt `QTextLayout`、Android `Canvas` / text layout 等本地能力，但不得在平台端自行定义分叉的业务 diff 语义。
 
-## Mind Map Core 路线
+## Mind Map Core 路线 (LEGACY - 已废弃，仅保留迁移兼容。正式图谱路线为 starmap)
 - **分层边界**：必须严格区分 Graph（业务真相）、Layout（纯位置信息）和 Snapshot（发给平台的只读渲染视图）。
 - **存储结构 (V2)**：使用 `projects/<id>/mind_map/graphs/`、`layouts/` 等模块化目录，弃用 V1 单文件方案。引入 `projects/<id>/mind_map/index.json` 作为图的索引，包含 `schemaVersion` (必须为 2)、`defaultGraphId`、`graphIds` 和 `updatedAt`。如果多图存在但无索引文件，则必须返回明确错误。
 - **Schema 与迁移**：目前 schemaVersion 为 2。支持从 V1 `mind_map.json` 解析并自动填充新节点字段，遇到不支持的 schemaVersion 必须返回明确错误。

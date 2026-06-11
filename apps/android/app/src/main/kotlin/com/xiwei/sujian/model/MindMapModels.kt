@@ -9,6 +9,8 @@ import java.lang.reflect.Type
 /**
  * MindMapModels — 思维导图数据模型
  *
+ * **LEGACY: 已废弃，仅保留用于旧数据迁移兼容。正式图谱路线为 StarMap。**
+ *
  * 定义思维导图相关的数据类和枚举，与 Rust Core 的思维导图数据结构一一对应。
  *
  * ## 架构定位

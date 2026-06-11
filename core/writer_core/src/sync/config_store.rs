@@ -67,6 +67,7 @@ impl crate::sync::SyncService {
             if rel_path.ends_with("/project.json") {
                 return true;
             }
+            // LEGACY: mind_map 数据文件的同步白名单，保留迁移兼容
             if rel_path.ends_with("/mind_map.json") || rel_path.contains("/mind_map/") {
                 return true;
             }

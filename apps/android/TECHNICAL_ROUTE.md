@@ -19,7 +19,7 @@
 - **纯适配器桥梁：** `AppServiceBridge` 是 Android 主业务桥接入口，只做 UniFFI typed DTO/error 与 Kotlin model 的转换；`NativeCoreBridge` 只能作为 legacy fallback。两者都绝对不能包含自身业务规则、规则校验或持久化决策，更不能成为业务真相来源。
 - Activity 只负责页面生命周期、入口、权限、错误展示。
 - ViewModel / Repository / 领域 Bridge 承担状态映射和底层调用；领域 Bridge 默认依赖 `AppServiceBridge`。
-- Stats / MindMap / StarMap 若仍接收 Core 返回的 JSON 字符串，只能在领域 Bridge 内解析为 typed model + `BridgeResult<T>`；UI/ViewModel 不接收裸 JSON。
+- Stats / (MindMap LEGACY) / StarMap 若仍接收 Core 返回的 JSON 字符串，只能在领域 Bridge 内解析为 typed model + `BridgeResult<T>`；UI/ViewModel 不接收裸 JSON。
 - UI 不保存长期业务真相。
 - 长期数据必须走 Rust Core / workspace。
 - 不用 SharedPreferences 保存长期业务数据。
@@ -30,7 +30,7 @@
 ## Android 导图路线
 - 导图是大画布图形系统，不是普通页面。
 - V1 使用自定义 View + Canvas 验证链路。
-- 渲染层必须通过 MindMapRenderer / MindMapRenderView 之类接口隔离。
+- 渲染层必须通过 MindMapRenderer / MindMapRenderView 之类接口隔离。**(LEGACY: 以下渲染路线已迁移至 StarMap)**
 - 长期预留 SurfaceView / GLSurfaceView / OpenGL ES 后端。
 - 不用 WebView。
 - 不用 RecyclerView / LinearLayout / 每节点 Android View。
@@ -61,6 +61,6 @@
 
 ## Android 路线变更规则
 - 若要引入 Compose，必须先改本文档，说明为什么整个 Android UI 需要迁移。
-- 若要引入 OpenGL ES，必须保持现有 MindMapSnapshot / Renderer 抽象，不推翻 Core 和 Model。
+- 若要引入 OpenGL ES，必须保持现有 StarMap Snapshot / Renderer 抽象，不推翻 Core 和 Model。(注：原 MindMapSnapshot 已迁移至 StarMap)
 - 若要引入 FlatBuffers / DirectByteBuffer，必须先证明 JSON 快照达到文档里的性能触发条件。
 - 若要改同步或存储，必须同时检查 core/writer_core/TECHNICAL_ROUTE.md。
