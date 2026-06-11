@@ -1703,4 +1703,41 @@ mod tests {
         // Since config is disabled by default, plan should be empty
         assert!(plan.files_to_upload.is_empty());
     }
+
+    #[test]
+    fn test_execute_action_args_parsing() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path());
+        core.create_workspace().unwrap();
+
+        // 1. Empty string
+        let result_empty = core.execute_action("settings.editor.font_size.set", "", "").unwrap();
+        assert!(!result_empty.success);
+        assert_eq!(result_empty.message.unwrap(), "Missing or invalid fontSize parameter");
+
+        // 2. Whitespace string
+        let result_ws = core.execute_action("settings.editor.font_size.set", "   ", "").unwrap();
+        assert!(!result_ws.success);
+        assert_eq!(result_ws.message.unwrap(), "Missing or invalid fontSize parameter");
+
+        // 3. Null JSON
+        let result_null = core.execute_action("settings.editor.font_size.set", "null", "").unwrap();
+        assert!(!result_null.success);
+        assert_eq!(result_null.message.unwrap(), "Missing or invalid fontSize parameter");
+
+        // 4. Invalid JSON
+        let result_invalid = core.execute_action("settings.editor.font_size.set", "{ invalid }", "").unwrap();
+        assert!(!result_invalid.success);
+        assert_eq!(result_invalid.message.unwrap(), "invalid args json");
+
+        // 5. Valid JSON but missing field
+        let result_valid_json = core.execute_action("settings.editor.font_size.set", "{}", "").unwrap();
+        assert!(!result_valid_json.success);
+        assert_eq!(result_valid_json.message.unwrap(), "Missing or invalid fontSize parameter");
+
+        // 6. Valid JSON with valid field
+        let result_valid = core.execute_action("settings.editor.font_size.set", "{\"fontSize\": 14.0}", "").unwrap();
+        assert!(result_valid.success);
+        assert_eq!(result_valid.message.unwrap(), "Font size updated");
+    }
 }
