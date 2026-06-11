@@ -742,6 +742,15 @@ impl ScrollBuffer {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct CursorLayoutRect {
+    x: f64,
+    y: f64,
+    h: f64,
+    visual_line_id: usize,
+    visible: bool,
+}
+
 /// 光标动画状态 — 固定时长 tween，不再用指数追赶
 #[derive(Clone, Debug)]
 struct CursorAnimationState {
@@ -1103,7 +1112,7 @@ pub struct SujianEditorItem {
     cursor_dirty: bool,
     current_cursor_affinity: CaretAffinity,
     current_visual_line_id: Option<usize>,
-    ime_cursor_rect_y: f64,
+    last_cursor_scroll_y: f64,
     ime_cursor_rect_h: f64,
     force_snap_next_cursor: bool,
 }
@@ -1210,7 +1219,7 @@ impl Default for SujianEditorItem {
             cursor_dirty: true,
             current_cursor_affinity: CaretAffinity::Downstream,
             current_visual_line_id: None,
-            ime_cursor_rect_y: 0.0,
+            last_cursor_scroll_y: 0.0,
             ime_cursor_rect_h: 0.0,
             force_snap_next_cursor: false,
         }
@@ -1225,6 +1234,10 @@ impl SujianEditorItem {
     }
 
     fn bounding_width(&self) -> f64 {
+        let obj = self.get_cpp_object();
+        if obj.is_null() {
+            return 800.0;
+        }
         let item = self as &dyn QQuickItem;
         item.bounding_rect().width.max(1.0)
     }
@@ -1246,7 +1259,7 @@ impl SujianEditorItem {
         self.buffer.set_text(normalized);
         self.buffer.cursor = 0;
         self.buffer.selection_anchor = 0;
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
@@ -1265,7 +1278,7 @@ impl SujianEditorItem {
         self.buffer.set_text(normalized);
         self.buffer.cursor = clamp_to_char_boundary(&self.buffer.text, old_cursor);
         self.buffer.selection_anchor = clamp_to_char_boundary(&self.buffer.text, old_anchor);
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
@@ -1483,19 +1496,9 @@ impl SujianEditorItem {
             return;
         }
         if !value {
-            // 滚动结束时，从当前动画位置继续，避免光标跳动
-            let now = Instant::now();
-            let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
-                if anim.is_finished(now) {
-                    (anim.target_x, anim.target_y)
-                } else {
-                    anim.current_position(now)
-                }
-            } else {
-                (self.target_cursor_x, self.target_cursor_y)
-            };
-            self.target_cursor_x = visual_x;
-            self.target_cursor_y = visual_y;
+            self.force_snap_next_cursor = true;
+            self.update_cursor_visual_position();
+            self.request_repaint();
         }
     }
 
@@ -1578,7 +1581,7 @@ impl SujianEditorItem {
         };
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         let cause = if inserted.chars().count() == 1 {
             EditorTransactionCause::Typing
         } else {
@@ -1603,7 +1606,7 @@ impl SujianEditorItem {
             return;
         }
         self.buffer.push_undo(old.clone());
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
         self.insert_animation = None;
@@ -1623,7 +1626,7 @@ impl SujianEditorItem {
             return;
         }
         self.buffer.push_undo(old.clone());
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
         self.insert_animation = None;
@@ -1643,7 +1646,7 @@ impl SujianEditorItem {
             return;
         }
         self.buffer.push_undo(old.clone());
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
         self.insert_animation = None;
@@ -1655,7 +1658,7 @@ impl SujianEditorItem {
 
     fn select_all(&mut self) {
         self.buffer.select_all();
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         self.cursor_position_changed();
         self.selection_changed();
         self.request_repaint();
@@ -1669,7 +1672,7 @@ impl SujianEditorItem {
         let Some((old, new)) = self.buffer.undo() else {
             return;
         };
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         self.record_transaction(old, new, EditorTransactionCause::Undo, true);
         self.emit_content_changed();
     }
@@ -1678,7 +1681,7 @@ impl SujianEditorItem {
         let Some((old, new)) = self.buffer.redo() else {
             return;
         };
-        self.current_cursor_affinity = CaretAffinity::Downstream;
+        self.adjust_affinity_at_wrap_boundary();
         self.record_transaction(old, new, EditorTransactionCause::Redo, true);
         self.emit_content_changed();
     }
@@ -2001,6 +2004,95 @@ impl SujianEditorItem {
         &self.layout_cache.as_ref().unwrap().lines
     }
 
+    fn adjust_affinity_at_wrap_boundary(&mut self) {
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
+        let cursor = self.buffer.cursor;
+
+        let is_wrap_boundary = lines.iter().enumerate().any(|(idx, line)| {
+            idx + 1 < lines.len() && line.end == cursor && lines[idx + 1].start == cursor
+        });
+
+        if is_wrap_boundary {
+            self.current_cursor_affinity = CaretAffinity::Upstream;
+        } else {
+            self.current_cursor_affinity = CaretAffinity::Downstream;
+        }
+    }
+
+    fn editor_layout_cursor_rect(
+        &mut self,
+        cursor_byte: usize,
+        affinity: CaretAffinity,
+        scroll_y: f64,
+    ) -> CursorLayoutRect {
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
+        let line_spacing = self.current_line_spacing as f64;
+        let width = self.bounding_width();
+
+        let lines = self.ensure_layout_cached(width);
+
+        let mut found_line = None;
+        for (idx, line) in lines.iter().enumerate() {
+            if line_contains_cursor_with_affinity(lines, idx, cursor_byte, affinity) {
+                found_line = Some(line.clone());
+                break;
+            }
+        }
+        let line = found_line.unwrap_or_else(|| {
+            if let Some(last) = lines.last() {
+                last.clone()
+            } else {
+                VisualLine {
+                    id: 0,
+                    start: 0,
+                    end: 0,
+                    hard_break: true,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: font_size * line_spacing,
+                    para_text: "".to_string(),
+                    para_start: 0,
+                    qtextline_idx: 0,
+                    para_qchar_start: 0,
+                    para_qchar_end: 0,
+                    line_wrap_width: 0.0,
+                    line_indent_x: 0.0,
+                }
+            }
+        });
+
+        let cursor_x = calculate_cursor_x_for_line(&line, cursor_byte, affinity, font_size, &font_family);
+        let (cursor_y_doc, cursor_h) = cursor_rect_for_line(&line, font_size, &font_family);
+        let cursor_y = cursor_y_doc - scroll_y;
+
+        let vp_h = self.current_viewport_height.max(1.0) as f64;
+        let visible = cursor_y + cursor_h > 0.0 && cursor_y < vp_h;
+
+        // Idempotency check
+        #[cfg(debug_assertions)]
+        {
+            let check_x = calculate_cursor_x_for_line(&line, cursor_byte, affinity, font_size, &font_family);
+            let (check_y_doc, check_h) = cursor_rect_for_line(&line, font_size, &font_family);
+            let check_y = check_y_doc - scroll_y;
+            let check_visible = check_y + check_h > 0.0 && check_y < vp_h;
+            debug_assert_eq!(cursor_x, check_x);
+            debug_assert_eq!(cursor_y, check_y);
+            debug_assert_eq!(cursor_h, check_h);
+            debug_assert_eq!(visible, check_visible);
+        }
+
+        CursorLayoutRect {
+            x: cursor_x,
+            y: cursor_y,
+            h: cursor_h,
+            visual_line_id: line.id,
+            visible,
+        }
+    }
+
     fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
         let width = self.bounding_width();
         let lines = self.ensure_layout_cached(width).clone();
@@ -2030,6 +2122,26 @@ impl SujianEditorItem {
         } else {
             CaretAffinity::Downstream
         };
+
+        // Debug assert: cursor_rect(hit_index) y must fall near the hit visual line
+        let scroll_y = self.current_scroll_y as f64;
+        let rect = self.editor_layout_cursor_rect(index, affinity, scroll_y);
+        let rect_y_doc = rect.y + scroll_y;
+        let line_top = line.y;
+        let line_bottom = line.y + line.height;
+        let diff = if rect_y_doc < line_top {
+            line_top - rect_y_doc
+        } else if rect_y_doc > line_bottom {
+            rect_y_doc - line_bottom
+        } else {
+            0.0
+        };
+        debug_assert!(
+            diff < 5.0,
+            "hit_test debug assert failed: rect_y_doc={:.2} is not within hit line range {:.2}..{:.2} (diff={:.2})",
+            rect_y_doc, line_top, line_bottom, diff
+        );
+
         if sujian_editor_debug_enabled() {
             eprintln!(
                 "hit_test: mouse_x={:.1}, mouse_y={:.1}, doc_y={:.1}, current_scroll_y={:.1}, hit_visual_line_idx={}, line_range={}..{}, raw_index={}, clamped_index={}, affinity={:?}",
@@ -2262,81 +2374,41 @@ impl QQuickItem for SujianEditorItem {
 
         let frame_start = Instant::now();
 
-        // 1. 在 update_paint_node() 开头统一调用一次 update_cursor_visual_position()
+        // 1. 每次进入 update_paint_node()，先调用一次 update_cursor_visual_position() 算出最新的 cursor_visual_x/y
         self.update_cursor_visual_position();
 
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() { sujian_item_dpr(item_ptr) } else { 1.0 };
-        let old_raw = node.into_raw();
-
-        // 2. 清理旧的 cursor overlay 节点，确保 root 只保留 image node
-        if !old_raw.is_null() {
-            cpp!(unsafe [old_raw as "QSGNode*"] {
-                sujian_clean_cursor_nodes(old_raw);
-            });
-        }
+        let root_raw = node.into_raw();
 
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let scroll_y = self.current_scroll_y as f64;
         let content_h = self.current_content_height as f64;
 
+        // Check if scroll buffer or text needs rebuilding
         let mut force_rebuild = false;
         if let Some(ref buf) = self.scroll_buffer {
-            // Check debug invariant first
             let relative_src_y = scroll_y - buf.buffer_scroll_y;
             if relative_src_y < -0.1 || relative_src_y + vp_h > buf.buffer_logical_h + 0.1 {
-                eprintln!(
-                    "DEBUG INVARIANT VIOLATION: relative_src_y={:.2}, vp_h={:.2}, buffer_logical_h={:.2}. Rebuilding buffer.",
-                    relative_src_y, vp_h, buf.buffer_logical_h
-                );
                 force_rebuild = true;
             } else {
-                // Low-watermark or other conditions
                 let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
                 let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
                 if content_changed || dpr_changed || !buf.contains_viewport(scroll_y, vp_h) {
                     force_rebuild = true;
                 }
             }
+        } else {
+            force_rebuild = true;
         }
-        
+
         if force_rebuild {
             self.render_dirty = true;
         }
 
-        // 光标动画进行中也算"需要更新"
-        let cursor_anim_active = self.cursor_animation.as_ref()
-            .is_some_and(|a| !a.is_finished(Instant::now()));
+        let mut final_root = root_raw;
 
-        // 如果光标位置有变或动画进行中，强制重绘文字+光标
-        if self.cursor_dirty || cursor_anim_active {
-            self.render_dirty = true;
-        }
-
-        if !self.render_dirty {
-            return unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) };
-        }
-
-        // 路径 1: 文字需要重绘
         if self.render_dirty {
-            let now = Instant::now();
-            if let Some(ref anim) = self.cursor_animation {
-                if anim.is_finished(now) {
-                    self.cursor_visual_x = anim.target_x;
-                    self.cursor_visual_y = anim.target_y;
-                    self.cursor_animation = None;
-                    self.cursor_dirty = false;
-                } else {
-                    let (cx, cy) = anim.current_position(now);
-                    self.cursor_visual_x = cx;
-                    self.cursor_visual_y = cy;
-                    let item = self as &dyn QQuickItem;
-                    item.update();
-                }
-            } else {
-                self.cursor_dirty = false;
-            }
-
             match self.render_to_image() {
                 Some((image, buf_scroll_y, _buf_h)) => {
                     let (src_y, src_h) = if let Some(ref buf) = self.scroll_buffer {
@@ -2345,10 +2417,10 @@ impl QQuickItem for SujianEditorItem {
                         (scroll_y - buf_scroll_y, vp_h)
                     };
                     let logical_img_w = image.size().width as f64 / dpr;
-                    // Viewport model: image rect at (0, 0), sourceRect scrolls
-                    let new_raw = sujian_update_texture_node(
-                        old_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
+                    final_root = sujian_update_texture_node(
+                        root_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
                     );
+                    self.render_dirty = false;
                     let total_elapsed = frame_start.elapsed();
                     if total_elapsed.as_millis() > 4 {
                         eprintln!(
@@ -2356,52 +2428,86 @@ impl QQuickItem for SujianEditorItem {
                             total_elapsed.as_millis(), buf_scroll_y, buf_scroll_y + _buf_h,
                         );
                     }
-                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(new_raw) }
                 }
                 None => {
-                    if !old_raw.is_null() {
+                    if !root_raw.is_null() {
                         if let Some(ref buf) = self.scroll_buffer {
                             let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
                             let logical_img_w = buf.image.size().width as f64 / dpr;
-                            // Viewport model: image rect at (0, 0), sourceRect scrolls
-                            sujian_update_source_rect(old_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
+                            sujian_update_source_rect(root_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
                         }
                     }
-                    unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
+                    final_root = root_raw;
                 }
             }
         } else {
-            unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(old_raw) }
+            if !root_raw.is_null() {
+                if let Some(ref buf) = self.scroll_buffer {
+                    let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
+                    let logical_img_w = buf.image.size().width as f64 / dpr;
+                    sujian_update_source_rect(root_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
+                }
+            }
+            final_root = root_raw;
         }
+
+        // 2. 更新光标动画位置
+        let now = Instant::now();
+        if let Some(ref anim) = self.cursor_animation {
+            if anim.is_finished(now) {
+                self.cursor_visual_x = anim.target_x;
+                self.cursor_visual_y = anim.target_y;
+                self.cursor_animation = None;
+                self.cursor_dirty = false;
+            } else {
+                let (cx, cy) = anim.current_position(now);
+                self.cursor_visual_x = cx;
+                self.cursor_visual_y = cy;
+                let item = self as &dyn QQuickItem;
+                item.update();
+            }
+        } else {
+            self.cursor_dirty = false;
+        }
+
+        // 3. 更新独立的 cursor node overlay
+        let is_selecting = self.buffer.has_selection();
+        let show_cursor = self.cursor_visible && !self.current_is_scrolling && !is_selecting;
+        let cursor_color_rgba = color_hex_to_rgba(&self.current_cursor_color);
+
+        if !final_root.is_null() && !item_ptr.is_null() {
+            sujian_update_cursor_rect(
+                final_root,
+                item_ptr,
+                self.cursor_visual_x,
+                self.cursor_visual_y,
+                2.0,
+                self.cursor_visual_h,
+                show_cursor,
+                cursor_color_rgba,
+            );
+        }
+
+        unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
     }
 }
 
 impl SujianEditorItem {
     fn update_cursor_visual_position(&mut self) {
-        let width = self.bounding_width();
-        let lines = self.ensure_layout_cached(width).clone();
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = self.current_font_family.to_string();
+        let scroll_y = self.current_scroll_y as f64;
+        let layout_res = self.editor_layout_cursor_rect(self.buffer.cursor, self.current_cursor_affinity, scroll_y);
 
-        let (cursor_x, cursor_line_y, visual_line_id) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-        // Prefer visual_line_id lookup over global byte_index search
-        let cursor_y_doc = if let Some(line) = lines.iter().find(|l| l.id == visual_line_id) {
-            cursor_rect_for_line(line, font_size, &font_family).0
-        } else {
-            cursor_line_y
-        };
-        let cursor_h = if let Some(line) = lines.iter().find(|l| l.id == visual_line_id) {
-            cursor_rect_for_line(line, font_size, &font_family).1
-        } else {
-            cursor_height_for_line(font_size, &font_family)
-        };
+        let cursor_x = layout_res.x;
+        let cursor_y = layout_res.y;
+        let cursor_h = layout_res.h;
+        let visual_line_id = layout_res.visual_line_id;
 
         // Store the visual line id for future lookups
+        let old_visual_line_id = self.current_visual_line_id;
         self.current_visual_line_id = Some(visual_line_id);
 
-        // Convert to viewport coordinates
-        let scroll_y = self.current_scroll_y as f64;
-        let cursor_y = cursor_y_doc - scroll_y;
+        let scroll_changed = (self.last_cursor_scroll_y - scroll_y).abs() > 0.01;
+        self.last_cursor_scroll_y = scroll_y;
 
         // Always save new target position and IME rect — regardless of visibility
         let old_x = self.target_cursor_x;
@@ -2410,7 +2516,6 @@ impl SujianEditorItem {
 
         self.target_cursor_x = cursor_x;
         self.target_cursor_y = cursor_y;
-        self.ime_cursor_rect_y = cursor_y_doc;  // IME needs document coordinates
         self.ime_cursor_rect_h = cursor_h;
         self.cursor_visual_h = cursor_h;
 
@@ -2433,6 +2538,15 @@ impl SujianEditorItem {
             && !self.current_is_scrolling;
         self.cursor_visible = new_visible;
 
+        // Debug assert: cursor target_y must be in viewport coordinates to be visible.
+        if self.cursor_visible {
+            debug_assert!(
+                self.target_cursor_y + cursor_h > 0.0 && self.target_cursor_y < vp_h,
+                "Debug assert failed: cursor is visible but target_cursor_y ({:.2}) is outside viewport [0, {:.2}]",
+                self.target_cursor_y, vp_h
+            );
+        }
+
         if !new_visible {
             // Not in viewport: stop animation, snap visual to target, hide node
             self.cursor_animation = None;
@@ -2450,12 +2564,23 @@ impl SujianEditorItem {
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.preedit_text.is_empty();
 
+        // Check if line changed, target_y shifted by more than half line, or x shifted by a large amount
+        let line_changed = old_visual_line_id.is_none() || old_visual_line_id != Some(visual_line_id);
+        let half_line = cursor_h * 0.5;
+        let target_y_changed_more_than_half_line = (old_y - cursor_y).abs() > half_line;
+        let x_diff = (old_x - cursor_x).abs();
+        let is_small_x_change = x_diff <= 150.0;
+
         // Click/drag/scroll should snap immediately (no animation)
         let should_snap = self.current_is_scrolling 
             || is_selecting 
             || is_preediting
             || !old_visible  // snap when becoming visible again
-            || self.force_snap_next_cursor;
+            || self.force_snap_next_cursor
+            || scroll_changed
+            || line_changed
+            || target_y_changed_more_than_half_line
+            || !is_small_x_change;
 
         let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
             if anim.is_finished(now) {
@@ -2730,15 +2855,6 @@ impl SujianEditorItem {
             }
         }
 
-        // ── Layer 4: Cursor ──
-        if self.cursor_visible && !self.current_is_scrolling && !self.buffer.has_selection() {
-            let cursor_x = self.cursor_visual_x;
-            let scroll_y = self.current_scroll_y as f64;
-            let cursor_y_doc = self.cursor_visual_y + scroll_y;
-            let cursor_h = self.cursor_visual_h;
-            let cursor_color = self.current_cursor_color.clone();
-            draw_rect(painter, cursor_x, cursor_y_doc + paint_offset_y, 2.0, cursor_h, cursor_color);
-        }
         
         // 清理已完成的吐字/吞字动画
         let now_cleanup = Instant::now();
@@ -3944,6 +4060,48 @@ mod tests {
         let doc_y_third = lines[2].y + 2.0; // 66.0
         let matched_third = lines.iter().position(|l| doc_y_third < l.y + l.height);
         assert_eq!(matched_third, Some(2));
+    }
+
+    #[test]
+    fn test_wrap_boundary_affinity_handling() {
+        let mut item = SujianEditorItem::default();
+        item.buffer.text = "abcdefghijklmnopqrst".to_string();
+        
+        // Setup a mock layout cache with 2 lines, wrapped at byte 10
+        let lines = vec![
+            VisualLine { id: 0, start: 0, end: 10, hard_break: false, x: 16.0, y: 10.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 10, line_wrap_width: 500.0, line_indent_x: 0.0 },
+            VisualLine { id: 1, start: 10, end: 20, hard_break: false, x: 16.0, y: 34.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 1, para_qchar_start: 10, para_qchar_end: 20, line_wrap_width: 500.0, line_indent_x: 0.0 },
+        ];
+        
+        item.layout_cache = Some(LayoutCache {
+            text_ptr: item.buffer.text.as_ptr() as usize,
+            text_len: item.buffer.text.len(),
+            width: 800.0,
+            font_size: 16.0,
+            font_family: "serif".to_string(),
+            line_spacing: 1.5,
+            text_indent: 0.0,
+            padding: 16.0,
+            lines,
+            content_height: 100.0,
+        });
+
+        // 1. Cursor at non-boundary index (e.g. 5) -> affinity should be Downstream
+        item.buffer.cursor = 5;
+        item.adjust_affinity_at_wrap_boundary();
+        assert_eq!(item.current_cursor_affinity, CaretAffinity::Downstream);
+
+        // 2. Cursor at wrap boundary (index 10) -> affinity should be Upstream
+        item.buffer.cursor = 10;
+        item.adjust_affinity_at_wrap_boundary();
+        assert_eq!(item.current_cursor_affinity, CaretAffinity::Upstream);
+
+        // 3. Test editor_layout_cursor_rect and idempotency at boundary index 10 with Upstream
+        let rect = item.editor_layout_cursor_rect(10, CaretAffinity::Upstream, 0.0);
+        assert_eq!(rect.visual_line_id, 0);
+        
+        let rect_down = item.editor_layout_cursor_rect(10, CaretAffinity::Downstream, 0.0);
+        assert_eq!(rect_down.visual_line_id, 1);
     }
 }
 
