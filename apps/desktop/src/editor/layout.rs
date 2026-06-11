@@ -1130,6 +1130,18 @@ mod tests {
                 line.start,
                 line.end
             );
+            let rect = caret_rect(snapshot, line.end, CaretAffinity::Upstream, 0.0, 800.0);
+            assert_eq!(
+                rect.visual_line_id, line.id,
+                "caret_rect(line.end, Upstream) must stay on the source visual line"
+            );
+            assert!(
+                rect.x > 0.01,
+                "caret_rect(line.end, Upstream).x must not collapse to 0: line={}, range={}..{}",
+                line.id,
+                line.start,
+                line.end
+            );
             let roundtrip = qtextlayout_x_to_cursor_on_line(
                 &line.para_text,
                 x,
