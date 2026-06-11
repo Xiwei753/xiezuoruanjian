@@ -17,7 +17,7 @@ class WorkspaceRepository(private val context: Context) {
             BridgeResult.NotLoaded -> {
                 android.util.Log.e("WorkspaceRepository", "Native库未加载，无法初始化工作区")
                 // When running tests, skip throwing so the ViewModel can instantiate.
-                if (!"robolectric".equals(android.os.Build.FINGERPRINT)) {
+                if (android.os.Build.FINGERPRINT != "robolectric") {
                     throw RepositoryException("Native库未加载")
                 }
             }
