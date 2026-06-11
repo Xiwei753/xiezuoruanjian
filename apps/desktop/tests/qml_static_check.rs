@@ -499,7 +499,8 @@ fn test_editor_render_format_is_unified() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let document_handler = fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
     let main_rs = fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
-    let sujian_editor_item = fs::read_to_string(manifest_dir.join("src/sujian_editor_item.rs")).unwrap();
+    let sujian_editor_item = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
+    let sujian_rendering = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
     let editor_controller = fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
     let writing_workspace = fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
     let design_tokens = fs::read_to_string(manifest_dir.join("qml/DesignTokens.qml")).unwrap();
@@ -512,7 +513,7 @@ fn test_editor_render_format_is_unified() {
 
     assert!(
         sujian_editor_item.contains("trait QQuickItem")
-            && sujian_editor_item.contains("fn paint_onto(")
+            && (sujian_editor_item.contains("fn paint_onto(") || sujian_rendering.contains("fn paint_onto("))
             && sujian_editor_item.contains("fn update_paint_node")
             && sujian_editor_item.contains("EditorEngine")
             && sujian_editor_item.contains("EditorTransactionCause")
