@@ -3619,6 +3619,7 @@ dependencies = [
  "criterion",
  "git2",
  "md5",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",
