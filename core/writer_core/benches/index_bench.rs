@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use tempfile::tempdir;
 use std::fs;
+use tempfile::tempdir;
 use writer_core::index::{SearchIndex, SearchOptions};
 
 fn setup_large_workspace(dir: &std::path::Path) {
@@ -34,8 +34,12 @@ fn setup_large_workspace(dir: &std::path::Path) {
         fs::write(ch_dir.join("chapter.md"), content).unwrap();
         fs::write(
             ch_dir.join("chapter.meta.json"),
-            format!(r#"{{"id": "{}", "title": "Chapter {}", "created_at": 0, "updated_at": 0}}"#, ch_id, i),
-        ).unwrap();
+            format!(
+                r#"{{"id": "{}", "title": "Chapter {}", "created_at": 0, "updated_at": 0}}"#,
+                ch_id, i
+            ),
+        )
+        .unwrap();
     }
 }
 

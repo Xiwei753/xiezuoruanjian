@@ -295,7 +295,10 @@ impl AppBackend {
 
     fn sujian_editor_item_enabled(&self) -> bool {
         match std::env::var("SUJIAN_DESKTOP_USE_SUJIAN_EDITOR") {
-            Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"),
+            Ok(v) => !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            ),
             Err(_) => true,
         }
     }
