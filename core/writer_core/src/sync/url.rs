@@ -98,6 +98,10 @@ pub fn mask_token_in_url(url: &str) -> String {
             if let Some(at_pos) = rest.find('@') {
                 return format!("{}://***@{}", scheme, &rest[at_pos + 1..]);
             }
+        } else {
+            if let Some(at_pos) = url.find('@') {
+                return format!("***@{}", &url[at_pos + 1..]);
+            }
         }
     }
     url.to_string()
@@ -119,8 +123,10 @@ pub fn redact_secrets_from_message(
     // 1. Always redact URL userinfo
     if let Some(url) = remote_url {
         if url.contains('@') {
-            if let Some(prefix) = url.split("://").next() {
+            if let Some((prefix, _)) = url.split_once("://") {
                 result = result.replace(url, &format!("{}://***@...", prefix));
+            } else {
+                result = result.replace(url, "***@...");
             }
         }
     } else {
@@ -185,4 +191,30 @@ pub fn redact_secrets_from_message(
 /// without known secrets. This prevents the old behavior of masking the entire error message.
 pub fn mask_token(s: &str) -> String {
     redact_secrets_from_message(s, None, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mask_token_in_url() {
+        assert_eq!(
+            mask_token_in_url("https://user:pass@github.com/repo.git"),
+            "https://***@github.com/repo.git"
+        );
+        assert_eq!(
+            mask_token_in_url("user:pass@github.com/repo.git"),
+            "***@github.com/repo.git"
+        );
+        assert_eq!(
+            mask_token_in_url("git@github.com:user/repo.git"),
+            "***@github.com:user/repo.git"
+        );
+        assert_eq!(
+            mask_token_in_url("https://github.com/repo.git"),
+            "https://github.com/repo.git"
+        );
+        assert_eq!(mask_token_in_url("Just some text"), "Just some text");
+    }
 }
