@@ -258,22 +258,22 @@ fn main() {
     qml_resources();
     probe_hub_header_resource();
     qmetaobject::qml_register_type::<AppBackend>(
-        c"SujianApp",
+        CStr::from_bytes_with_nul(b"SujianApp\0").unwrap(),
         1,
         0,
-        c"AppBackend",
+        CStr::from_bytes_with_nul(b"AppBackend\0").unwrap(),
     );
     qmetaobject::qml_register_type::<document_handler::DocumentHandler>(
-        c"Sujian",
+        CStr::from_bytes_with_nul(b"Sujian\0").unwrap(),
         1,
         0,
-        c"DocumentHandler",
+        CStr::from_bytes_with_nul(b"DocumentHandler\0").unwrap(),
     );
     qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
-        c"Sujian",
+        CStr::from_bytes_with_nul(b"Sujian\0").unwrap(),
         1,
         0,
-        c"SujianEditorItem",
+        CStr::from_bytes_with_nul(b"SujianEditorItem\0").unwrap(),
     );
 
     let qml_path = "qrc:/main.qml";
