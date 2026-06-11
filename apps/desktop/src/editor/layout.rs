@@ -34,9 +34,12 @@ cpp! {{
             QTextLine line = layout.createLine();
             if (!line.isValid()) break;
             int line_start = line.textStart();
-            int line_len = line.textLength();
-            if (qchar_count >= line_start && qchar_count <= line_start + line_len) {
-                x = line.cursorToX(qchar_count - line_start);
+            int line_end = line_start + line.textLength();
+            if (qchar_count >= line_start && qchar_count <= line_end) {
+                int pos = qchar_count;
+                if (pos < line_start) pos = line_start;
+                if (pos > line_end) pos = line_end;
+                x = line.cursorToX(pos);
                 break;
             }
         }
@@ -67,18 +70,14 @@ cpp! {{
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
                 int line_start = line.textStart();
-                int line_len = line.textLength();
-                int local_qchar = cursor_qchar - line_start;
-                if (local_qchar < 0) local_qchar = 0;
-                if (local_qchar > line_len) local_qchar = line_len;
-
-                if (local_qchar == line_len && line_len > 0) {
-                    x = line.cursorToX(line_len - 1, QTextLine::Trailing);
-                } else {
-                    x = line.cursorToX(
-                        local_qchar,
-                        use_trailing ? QTextLine::Trailing : QTextLine::Leading
-                    );
+                int line_end = line_start + line.textLength();
+                int pos = cursor_qchar;
+                if (pos < line_start) pos = line_start;
+                if (pos > line_end) pos = line_end;
+                x = line.cursorToX(pos, use_trailing ? QTextLine::Trailing : QTextLine::Leading);
+                if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG")) {
+                    qDebug("[cursor_to_x] qtextline=%d line_start=%d line_end=%d cursor_qchar=%d pos=%d x=%.4f trailing=%d naturalW=%.4f",
+                        qtextline_idx, line_start, line_end, cursor_qchar, pos, x, (int)use_trailing, line.naturalTextWidth());
                 }
                 break;
             }
@@ -112,11 +111,15 @@ cpp! {{
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
                 int line_start = line.textStart();
-                int line_len = line.textLength();
-                int local_qchar = line.xToCursor(x);
-                if (local_qchar < 0) local_qchar = 0;
-                if (local_qchar > line_len) local_qchar = line_len;
-                target_idx = line_start + local_qchar;
+                int line_end = line_start + line.textLength();
+                int pos = line.xToCursor(x);
+                if (pos < line_start) pos = line_start;
+                if (pos > line_end) pos = line_end;
+                target_idx = pos;
+                if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG")) {
+                    qDebug("[x_to_cursor] qtextline=%d line_start=%d line_end=%d input_x=%.4f raw_xToCursor=%d clamped_pos=%d naturalW=%.4f",
+                        qtextline_idx, line_start, line_end, x, line.xToCursor(x), pos, line.naturalTextWidth());
+                }
                 break;
             }
             first = false;
@@ -181,8 +184,8 @@ cpp! {{
                 int r_start = std::max(range_qchar_start, line_start);
                 int r_end = std::min(range_qchar_end, line_end);
                 for (int i = r_start; i < r_end; i++) {
-                    double x1 = line.cursorToX(i - line_start);
-                    double x2 = line.cursorToX(i - line_start + 1);
+                    double x1 = line.cursorToX(i);
+                    double x2 = line.cursorToX(i + 1);
                     EditorLayoutEntry e;
                     e.qcharStart = i;
                     e.width = std::abs(x2 - x1);
@@ -1270,5 +1273,65 @@ mod tests {
         ).clone();
         assert!(snapshot.lines.len() > 1, "text must wrap at fontSize=45");
         assert_line_end_roundtrip(&snapshot);
+    }
+
+    #[test]
+    fn many_wrap_lines_roundtrip() {
+        init_qt();
+        let text = "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。我们通过大量中文段落来测试自动换行后每一行的行尾光标定位是否准确。第一段测试内容结束。第二段继续测试更长的文本内容，确保每一行都能正确地进行光标位置计算和逆向映射。";
+        let mut layout = EditorLayout::default();
+        let snapshot = layout.snapshot(
+            text,
+            LayoutParams {
+                width: 400.0,
+                font_size: 24.0,
+                font_family: "serif".to_string(),
+                line_spacing: 1.5,
+                text_indent: 0.0,
+                padding: 16.0,
+            },
+        ).clone();
+        assert!(
+            snapshot.lines.len() >= 3,
+            "text must wrap into >= 3 lines, got {}",
+            snapshot.lines.len()
+        );
+        assert_line_end_roundtrip(&snapshot);
+        for (idx, line) in snapshot.lines.iter().enumerate() {
+            if line.start == line.end || line.para_text.is_empty() {
+                continue;
+            }
+            let x_end = qtextlayout_cursor_to_x_on_line(
+                &line.para_text,
+                line.end,
+                line.para_start,
+                snapshot.font_size as f64,
+                &snapshot.font_family,
+                line.line_wrap_width + line.line_indent_x,
+                line.para_indent,
+                line.qtextline_idx,
+                true,
+            );
+            assert!(
+                x_end > 1.0,
+                "line {} end x must be > 1.0, got {:.4} (range {}..{})",
+                idx, x_end, line.start, line.end
+            );
+            let roundtrip = qtextlayout_x_to_cursor_on_line(
+                &line.para_text,
+                x_end,
+                line.para_start,
+                snapshot.font_size as f64,
+                &snapshot.font_family,
+                line.line_wrap_width + line.line_indent_x,
+                line.para_indent,
+                line.qtextline_idx,
+            );
+            assert_eq!(
+                roundtrip, line.end,
+                "line {}: xToCursor(cursorToX(line.end={})) returned {}",
+                idx, line.end, roundtrip
+            );
+        }
     }
 }
