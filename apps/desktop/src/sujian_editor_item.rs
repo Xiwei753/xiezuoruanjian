@@ -25,6 +25,7 @@ cpp! {{
     #include <QtQuick/QSGImageNode>
     #include <QtQuick/QSGRectangleNode>
     #include <QGuiApplication>
+    #include <QDebug>
     #include <vector>
 
     struct QTextLayoutEntry {
@@ -215,7 +216,8 @@ cpp! {{
     // `paragraph_wrap_w` is the full paragraph wrap width (line_wrap_width + line_indent_x).
     // Does NOT add indent to the returned x — caller adds line.x which already has indent.
     double sujian_cursor_to_x_on_line(
-        const QString& paraText, int cursor_qchar, double fs, const QString& ff,
+        const QString& paraText, int cursor_qchar, int line_qchar_start, int line_qchar_end,
+        double fs, const QString& ff,
         double paragraph_wrap_w, double indent_w, int qtextline_idx, bool use_trailing
     ) {
         QFont font(ff);
@@ -235,8 +237,46 @@ cpp! {{
             double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
-                int local_qchar = cursor_qchar - line.textStart();
-                x = line.cursorToX(local_qchar, use_trailing ? QTextLine::Trailing : QTextLine::Leading);
+                int cpp_start = line.textStart();
+                int cpp_len = line.textLength();
+                int local_qchar = cursor_qchar - line_qchar_start;
+                int line_len_qchar = line_qchar_end - line_qchar_start;
+
+                if (local_qchar < 0) local_qchar = 0;
+                if (local_qchar > line_len_qchar) local_qchar = line_len_qchar;
+
+                double lead_x = 0.0;
+                double trail_x = 0.0;
+                if (line_len_qchar > 0) {
+                    int target_lead_qchar = std::min(local_qchar, line_len_qchar - 1);
+                    lead_x = line.cursorToX(target_lead_qchar, QTextLine::Leading);
+                    trail_x = line.cursorToX(target_lead_qchar, QTextLine::Trailing);
+                }
+
+                if (local_qchar == line_len_qchar && line_len_qchar > 0) {
+                    x = line.cursorToX(line_len_qchar - 1, QTextLine::Trailing);
+                } else {
+                    x = line.cursorToX(local_qchar, use_trailing ? QTextLine::Trailing : QTextLine::Leading);
+                }
+
+                int x_to_cursor_roundtrip = line.xToCursor(x);
+
+                qDebug() << "[sujian_cursor_to_x_on_line] qtextline_idx:" << qtextline_idx
+                         << "line.textStart():" << cpp_start
+                         << "line.textLength():" << cpp_len
+                         << "line.naturalTextWidth():" << line.naturalTextWidth()
+                         << "input cursor_qchar:" << cursor_qchar
+                         << "passed line_qchar_start:" << line_qchar_start
+                         << "passed line_qchar_end:" << line_qchar_end
+                         << "computed local_qchar:" << local_qchar
+                         << "use_trailing:" << use_trailing
+                         << "cursorToX(local, Leading):" << lead_x
+                         << "cursorToX(local, Trailing):" << trail_x
+                         << "xToCursor(computed_x):" << x_to_cursor_roundtrip
+                         << "line.x():" << line.x()
+                         << "line.width():" << line.width()
+                         << "naturalTextRect:" << line.naturalTextRect()
+                         << "returned_x:" << x;
                 break;
             }
             first = false;
@@ -330,7 +370,8 @@ cpp! {{
     // `x` is relative to line content start (not including indent), so for the first line
     // we subtract indent before calling xToCursor.
     int sujian_x_to_cursor_on_line(
-        const QString& paraText, double x, double fs, const QString& ff,
+        const QString& paraText, double x, int line_qchar_start, int line_qchar_end,
+        double fs, const QString& ff,
         double paragraph_wrap_w, double indent_w, int qtextline_idx
     ) {
         QFont font(ff);
@@ -350,9 +391,27 @@ cpp! {{
             double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
-                // x is relative to line content start; xToCursor expects x relative to QTextLine start
-                target_idx = line.xToCursor(x);
-                target_idx = line.textStart() + target_idx;
+                int local_qchar = line.xToCursor(x);
+                target_idx = line_qchar_start + local_qchar;
+
+                if (target_idx < line_qchar_start) target_idx = line_qchar_start;
+                if (target_idx > line_qchar_end) target_idx = line_qchar_end;
+
+                int cpp_start = line.textStart();
+                int cpp_len = line.textLength();
+
+                qDebug() << "[sujian_x_to_cursor_on_line] qtextline_idx:" << qtextline_idx
+                         << "line.textStart():" << cpp_start
+                         << "line.textLength():" << cpp_len
+                         << "line.naturalTextWidth():" << line.naturalTextWidth()
+                         << "input x:" << x
+                         << "passed line_qchar_start:" << line_qchar_start
+                         << "passed line_qchar_end:" << line_qchar_end
+                         << "computed local_qchar (line.xToCursor):" << local_qchar
+                         << "computed target_idx:" << target_idx
+                         << "line.x():" << line.x()
+                         << "line.width():" << line.width()
+                         << "naturalTextRect:" << line.naturalTextRect();
                 break;
             }
             first = false;
@@ -421,6 +480,7 @@ fn qtextlayout_cursor_to_x(para_text: &str, text_before_cursor: &str, font_size:
 /// `paragraph_wrap_w` should be `line.line_wrap_width + line.line_indent_x`.
 fn qtextlayout_cursor_to_x_on_line(
     para_text: &str, cursor_abs_byte: usize, para_start: usize,
+    line_qchar_start: i32, line_qchar_end: i32,
     font_size: f64, font_family: &str,
     paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
     use_trailing: bool,
@@ -432,11 +492,12 @@ fn qtextlayout_cursor_to_x_on_line(
     let ff: QString = font_family.to_string().into();
     cpp!(unsafe [
         para as "QString", cursor_qchar as "int",
+        line_qchar_start as "int", line_qchar_end as "int",
         fs as "float", ff as "QString",
         paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int",
         use_trailing as "bool"
     ] -> f64 as "double" {
-        return sujian_cursor_to_x_on_line(para, cursor_qchar, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx, use_trailing);
+        return sujian_cursor_to_x_on_line(para, cursor_qchar, line_qchar_start, line_qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx, use_trailing);
     })
 }
 
@@ -502,6 +563,7 @@ fn qtextlayout_x_to_cursor_qchar(para_text: &str, x: f64, font_size: f64, font_f
 /// Returns absolute byte offset in the full text.
 fn qtextlayout_x_to_cursor_on_line(
     para_text: &str, x: f64, para_start: usize,
+    line_qchar_start: i32, line_qchar_end: i32,
     font_size: f64, font_family: &str,
     paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
 ) -> usize {
@@ -510,10 +572,11 @@ fn qtextlayout_x_to_cursor_on_line(
     let ff: QString = font_family.to_string().into();
     let qchar_off = cpp!(unsafe [
         para as "QString", x as "double",
+        line_qchar_start as "int", line_qchar_end as "int",
         fs as "float", ff as "QString",
         paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int"
     ] -> i32 as "int" {
-        return sujian_x_to_cursor_on_line(para, x, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
+        return sujian_x_to_cursor_on_line(para, x, line_qchar_start, line_qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
     });
     let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off as usize);
     para_start + para_byte
@@ -2161,6 +2224,7 @@ impl SujianEditorItem {
         let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
         qtextlayout_x_to_cursor_on_line(
             &line.para_text, relative, line.para_start,
+            line.para_qchar_start as i32, line.para_qchar_end as i32,
             font_size, &font_family,
             paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
         )
@@ -3312,6 +3376,52 @@ fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, paddi
             line_indent_x: indent,
         });
     }
+    // Roundtrip verification checks
+    for line in &result {
+        if line.start == line.end || line.para_text.is_empty() {
+            continue;
+        }
+        let x_right = qtextlayout_cursor_to_x_on_line(
+            &line.para_text,
+            line.end,
+            line.para_start,
+            line.para_qchar_start as i32,
+            line.para_qchar_end as i32,
+            font_size,
+            font_family,
+            line.line_wrap_width + line.line_indent_x,
+            line.line_indent_x,
+            line.qtextline_idx,
+            true,
+        );
+        if x_right <= 0.01 {
+            eprintln!(
+                "ERROR: Roundtrip assert failed for line {}: cursorToX(line.end, Upstream) returned 0 or close to 0! x_right={:.2}, line.x={:.2}, line.width={:.2}, range={}..{}",
+                line.id, x_right, line.x, line.width, line.start, line.end
+            );
+        } else {
+            let index2 = qtextlayout_x_to_cursor_on_line(
+                &line.para_text,
+                x_right,
+                line.para_start,
+                line.para_qchar_start as i32,
+                line.para_qchar_end as i32,
+                font_size,
+                font_family,
+                line.line_wrap_width + line.line_indent_x,
+                line.line_indent_x,
+                line.qtextline_idx,
+            );
+            let diff = (index2 as isize - line.end as isize).abs();
+            if diff > 4 {
+                eprintln!(
+                    "ERROR: Roundtrip index match failed for line {}: xToCursor(x_right={:.2}) returned {}, expected line.end={} (diff={})",
+                    line.id, x_right, index2, line.end, diff
+                );
+            }
+        }
+    }
+
     result
 }
 
@@ -3336,6 +3446,8 @@ fn calculate_cursor_x_for_line(
             &line.para_text,
             cursor,
             line.para_start,
+            line.para_qchar_start as i32,
+            line.para_qchar_end as i32,
             font_size,
             font_family,
             paragraph_wrap_w,
