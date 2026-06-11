@@ -170,8 +170,8 @@ impl StatsAggregator {
         sorted.sort_by_key(|e| e.timestamp_ms);
 
         let bucket_ms = bucket_minutes as i64 * 60 * 1000;
-        let first_ms = sorted.first().unwrap().timestamp_ms;
-        let last_ms = sorted.last().unwrap().timestamp_ms;
+        let first_ms = sorted.first().map(|e| e.timestamp_ms).unwrap_or(0);
+        let last_ms = sorted.last().map(|e| e.timestamp_ms).unwrap_or(0);
 
         let mut buckets = Vec::new();
         let mut bucket_start = first_ms;
