@@ -11,15 +11,18 @@ use crate::editor::layout::{
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
-use buffer::{clamp_to_char_boundary, next_char_boundary, prev_char_boundary, byte_to_char_index, EditorBuffer, EditorSnapshot, normalize_plain_text};
+use buffer::{
+    byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
+    prev_char_boundary, EditorBuffer, EditorSnapshot,
+};
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{
     QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem,
     QRectF, QString,
 };
-use rendering::{CursorAnimationState, InsertAnimation, DeleteAnimation, ScrollBuffer};
 pub use rendering::AnimatedGlyph;
+use rendering::{CursorAnimationState, DeleteAnimation, InsertAnimation, ScrollBuffer};
 use std::cell::Cell;
 use std::time::Instant;
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause};
@@ -1295,4 +1298,3 @@ impl QQuickItem for SujianEditorItem {
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
     }
 }
-

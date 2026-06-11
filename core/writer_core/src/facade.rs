@@ -595,7 +595,10 @@ impl WriterCore {
     }
 
     /// List valid chapter IDs for a project.
-    pub fn list_valid_chapter_ids(&self, project_id: &str) -> Result<std::collections::HashSet<String>> {
+    pub fn list_valid_chapter_ids(
+        &self,
+        project_id: &str,
+    ) -> Result<std::collections::HashSet<String>> {
         chapter::list_valid_chapter_ids(&self.workspace_path, project_id)
     }
 
@@ -845,7 +848,6 @@ impl WriterCore {
         index::update_index()
     }
 
-
     // --- Settings Registry ---
     pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {
         crate::settings_registry::SettingsRegistry::default_registry()
@@ -908,9 +910,7 @@ impl WriterCore {
         crate::sync::SyncService::scan_workspace_for_sync(&self.workspace_path)
     }
 
-    pub fn build_sync_plan_from_workspace(
-        &self,
-    ) -> crate::error::Result<crate::sync::SyncPlan> {
+    pub fn build_sync_plan_from_workspace(&self) -> crate::error::Result<crate::sync::SyncPlan> {
         crate::sync::SyncService::build_sync_plan_from_workspace(&self.workspace_path)
     }
 
@@ -918,10 +918,7 @@ impl WriterCore {
         crate::sync::SyncService::load_sync_state(&self.workspace_path)
     }
 
-    pub fn save_sync_state(
-        &self,
-        state: &crate::sync::SyncState,
-    ) -> crate::error::Result<()> {
+    pub fn save_sync_state(&self, state: &crate::sync::SyncState) -> crate::error::Result<()> {
         crate::sync::SyncService::save_sync_state(&self.workspace_path, state)
     }
 
@@ -997,8 +994,8 @@ impl WriterCore {
 
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
             use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -1056,10 +1053,7 @@ impl WriterCore {
         Ok(config)
     }
 
-    pub fn save_sync_config(
-        &self,
-        config: &crate::sync::SyncConfig,
-    ) -> crate::error::Result<()> {
+    pub fn save_sync_config(&self, config: &crate::sync::SyncConfig) -> crate::error::Result<()> {
         let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1620,10 +1614,7 @@ mod tests {
         // Load non-existent should give default
         let config = core.load_sync_config().unwrap();
         assert!(!config.enabled);
-        assert_eq!(
-            config.backend_type,
-            crate::sync::BackendType::GithubApi
-        );
+        assert_eq!(config.backend_type, crate::sync::BackendType::GithubApi);
 
         // Save new config
         let mut new_config = config.clone();
@@ -1680,16 +1671,10 @@ mod tests {
         .unwrap();
 
         let loaded = core.load_sync_config().unwrap();
-        assert_eq!(
-            loaded.backend_type,
-            crate::sync::BackendType::GithubApi
-        );
+        assert_eq!(loaded.backend_type, crate::sync::BackendType::GithubApi);
 
         let persisted = core.load_sync_config().unwrap();
-        assert_eq!(
-            persisted.backend_type,
-            crate::sync::BackendType::GithubApi
-        );
+        assert_eq!(persisted.backend_type, crate::sync::BackendType::GithubApi);
     }
 
     #[test]

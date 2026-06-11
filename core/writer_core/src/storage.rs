@@ -124,7 +124,7 @@ mod tests {
         // 4. Verify the old file is still intact and readable (no half-written JSON)
         let read_content_after = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(read_content_after, original_content);
-        
+
         // 5. Verify no tmp files are left in the directory
         let mut entries = std::fs::read_dir(temp_dir.path()).unwrap();
         let mut file_names: Vec<String> = Vec::new();
@@ -135,4 +135,3 @@ mod tests {
         assert_eq!(file_names, vec!["test.json".to_string()]);
     }
 }
-

@@ -529,10 +529,7 @@ impl AppBackend {
                         let err_code = e.code();
                         let cat = match err_code {
                             "SYNC_CONFLICT" => "conflict".to_string(),
-                            "SYNC_FAILED" => sync_error_category_from_code(
-                                None,
-                                &err_str,
-                            ),
+                            "SYNC_FAILED" => sync_error_category_from_code(None, &err_str),
                             _ => sync_error_category(&err_str),
                         };
                         let action_result = if cat == "conflict" {
