@@ -192,7 +192,8 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, edges_json: QString, nodes_json: QString) -> QString),
     hit_test_edge_renders_json:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64) -> QString),
-    hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
+    hit_test_nodes_json:
+        qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
     calculate_grid_layout_json:
         qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QString),
     app: SafeAppPtr,

@@ -144,18 +144,15 @@ impl StatsApi {
 
         for stats in &daily_stats {
             for (project_id, proj_stats) in &stats.per_project {
-                let entry =
-                    by_project
-                        .entry(project_id.as_str())
-                        .or_insert_with(|| ProjectStatsAgg {
-                            project_id: project_id.clone(),
-                            human_typed_chars: 0,
-                            pasted_chars: 0,
-                            deleted_chars: 0,
-                            ai_inserted_chars: 0,
-                            net_delta_chars: 0,
-                            active_seconds: 0,
-                        });
+                let entry = by_project.entry(project_id.as_str()).or_insert_with(|| ProjectStatsAgg {
+                    project_id: project_id.clone(),
+                    human_typed_chars: 0,
+                    pasted_chars: 0,
+                    deleted_chars: 0,
+                    ai_inserted_chars: 0,
+                    net_delta_chars: 0,
+                    active_seconds: 0,
+                });
 
                 entry.human_typed_chars += proj_stats.human_typed_chars;
                 entry.pasted_chars += proj_stats.pasted_chars;
@@ -191,18 +188,15 @@ impl StatsApi {
 
         for stats in &daily_stats {
             for (chapter_id, chap_stats) in &stats.per_chapter {
-                let entry =
-                    by_chapter
-                        .entry(chapter_id.as_str())
-                        .or_insert_with(|| ChapterStatsAgg {
-                            chapter_id: chapter_id.clone(),
-                            human_typed_chars: 0,
-                            pasted_chars: 0,
-                            deleted_chars: 0,
-                            ai_inserted_chars: 0,
-                            net_delta_chars: 0,
-                            active_seconds: 0,
-                        });
+                let entry = by_chapter.entry(chapter_id.as_str()).or_insert_with(|| ChapterStatsAgg {
+                    chapter_id: chapter_id.clone(),
+                    human_typed_chars: 0,
+                    pasted_chars: 0,
+                    deleted_chars: 0,
+                    ai_inserted_chars: 0,
+                    net_delta_chars: 0,
+                    active_seconds: 0,
+                });
 
                 entry.human_typed_chars += chap_stats.human_typed_chars;
                 entry.pasted_chars += chap_stats.pasted_chars;
@@ -237,19 +231,17 @@ impl StatsApi {
             std::collections::HashMap::new();
 
         for stats in &daily_stats {
-            let entry = by_device
-                .entry(stats.device_id.as_str())
-                .or_insert_with(|| DeviceStatsAgg {
-                    device_id: stats.device_id.clone(),
-                    platform: stats.platform.clone(),
-                    human_typed_chars: 0,
-                    pasted_chars: 0,
-                    deleted_chars: 0,
-                    ai_inserted_chars: 0,
-                    net_delta_chars: 0,
-                    active_seconds: 0,
-                    sessions_count: 0,
-                });
+            let entry = by_device.entry(stats.device_id.as_str()).or_insert_with(|| DeviceStatsAgg {
+                device_id: stats.device_id.clone(),
+                platform: stats.platform.clone(),
+                human_typed_chars: 0,
+                pasted_chars: 0,
+                deleted_chars: 0,
+                ai_inserted_chars: 0,
+                net_delta_chars: 0,
+                active_seconds: 0,
+                sessions_count: 0,
+            });
 
             entry.human_typed_chars += stats.total_human_typed_chars;
             entry.pasted_chars += stats.total_pasted_chars;

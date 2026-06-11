@@ -129,58 +129,28 @@ mod tests {
     #[test]
     fn test_sync_error_category_fallback_parsing() {
         // configured_untested
-        assert_eq!(
-            sync_error_category("token is missing"),
-            "configured_untested"
-        );
+        assert_eq!(sync_error_category("token is missing"), "configured_untested");
         assert_eq!(sync_error_category("TOKEN is EMPTY"), "configured_untested");
-        assert_eq!(
-            sync_error_category("token not provided here"),
-            "configured_untested"
-        );
+        assert_eq!(sync_error_category("token not provided here"), "configured_untested");
 
         // auth_failed (first block)
-        assert_eq!(
-            sync_error_category("repository not found on github"),
-            "auth_failed"
-        );
+        assert_eq!(sync_error_category("repository not found on github"), "auth_failed");
         assert_eq!(sync_error_category("error: not found repo"), "auth_failed");
         assert_eq!(sync_error_category("status 404"), "auth_failed");
-        assert_eq!(
-            sync_error_category("Permission denied (publickey)"),
-            "auth_failed"
-        );
+        assert_eq!(sync_error_category("Permission denied (publickey)"), "auth_failed");
         assert_eq!(sync_error_category("HTTP 403 Forbidden"), "auth_failed");
 
         // branch_missing
-        assert_eq!(
-            sync_error_category("fatal: ref not found"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("couldn't find remote ref main"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("remote branch not found"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("branch main not found"),
-            "branch_missing"
-        );
+        assert_eq!(sync_error_category("fatal: ref not found"), "branch_missing");
+        assert_eq!(sync_error_category("couldn't find remote ref main"), "branch_missing");
+        assert_eq!(sync_error_category("remote branch not found"), "branch_missing");
+        assert_eq!(sync_error_category("branch main not found"), "branch_missing");
 
         // non_fast_forward
         assert_eq!(sync_error_category("hint: Updates were rejected because the tip of your current branch is behind (non-fast-forward)"), "non_fast_forward");
-        assert_eq!(
-            sync_error_category("non fast forward error"),
-            "non_fast_forward"
-        );
+        assert_eq!(sync_error_category("non fast forward error"), "non_fast_forward");
         assert_eq!(sync_error_category("nonfastforward"), "non_fast_forward");
-        assert_eq!(
-            sync_error_category("fetch first before push"),
-            "non_fast_forward"
-        );
+        assert_eq!(sync_error_category("fetch first before push"), "non_fast_forward");
 
         // conflict
         assert_eq!(sync_error_category("checkout_conflict"), "conflict");
@@ -189,10 +159,7 @@ mod tests {
         assert_eq!(sync_error_category("we have a conflict here"), "conflict");
 
         // unrelated_histories
-        assert_eq!(
-            sync_error_category("fatal: refusing to merge unrelated histories"),
-            "unrelated_histories"
-        );
+        assert_eq!(sync_error_category("fatal: refusing to merge unrelated histories"), "unrelated_histories");
 
         // auth_failed (second block)
         assert_eq!(sync_error_category("authentication failed"), "auth_failed");
@@ -203,33 +170,18 @@ mod tests {
         assert_eq!(sync_error_category("bad credentials"), "auth_failed");
 
         // network_failed
-        assert_eq!(
-            sync_error_category("could not resolve host"),
-            "network_failed"
-        );
+        assert_eq!(sync_error_category("could not resolve host"), "network_failed");
         assert_eq!(sync_error_category("connection timeout"), "network_failed");
         assert_eq!(sync_error_category("Connection refused"), "network_failed");
         assert_eq!(sync_error_category("dns error"), "network_failed");
-        assert_eq!(
-            sync_error_category("network is unreachable"),
-            "network_failed"
-        );
+        assert_eq!(sync_error_category("network is unreachable"), "network_failed");
         assert_eq!(sync_error_category("proxy error"), "network_failed");
         assert_eq!(sync_error_category("unexpected eof"), "network_failed");
-        assert_eq!(
-            sync_error_category("tls handshake failed"),
-            "network_failed"
-        );
-        assert_eq!(
-            sync_error_category("ssl certificate problem"),
-            "network_failed"
-        );
+        assert_eq!(sync_error_category("tls handshake failed"), "network_failed");
+        assert_eq!(sync_error_category("ssl certificate problem"), "network_failed");
         assert_eq!(sync_error_category("invalid certificate"), "network_failed");
         assert_eq!(sync_error_category("host is unreachable"), "network_failed");
-        assert_eq!(
-            sync_error_category("connection reset by peer"),
-            "network_failed"
-        );
+        assert_eq!(sync_error_category("connection reset by peer"), "network_failed");
         assert_eq!(sync_error_category("no route to host"), "network_failed");
 
         // error (default)
@@ -341,7 +293,9 @@ pub fn save_sync_configs(
     let config_envelope: serde_json::Value =
         serde_json::from_str(&config_json).map_err(|e| format!("解析配置保存结果失败: {}", e))?;
     if config_envelope["success"] != true {
-        let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
+        let error_code = config_envelope["errorCode"]
+            .as_str()
+            .unwrap_or("UNKNOWN");
         let user_message = config_envelope["userMessage"]
             .as_str()
             .unwrap_or("保存同步配置失败");
@@ -352,7 +306,9 @@ pub fn save_sync_configs(
     let secrets_envelope: serde_json::Value =
         serde_json::from_str(&secrets_json).map_err(|e| format!("解析凭证保存结果失败: {}", e))?;
     if secrets_envelope["success"] != true {
-        let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
+        let error_code = secrets_envelope["errorCode"]
+            .as_str()
+            .unwrap_or("UNKNOWN");
         let user_message = secrets_envelope["userMessage"]
             .as_str()
             .unwrap_or("保存同步凭证失败");

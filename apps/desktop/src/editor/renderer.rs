@@ -3,7 +3,9 @@ use qmetaobject::{QColor, QPainter, QPointF, QRectF, QString};
 use std::time::{Duration, Instant};
 
 use crate::editor::layout::EditorLayout;
-use crate::sujian_editor_item::{editor_animation_debug_enabled, AnimatedGlyph};
+use crate::sujian_editor_item::{
+    editor_animation_debug_enabled, AnimatedGlyph,
+};
 
 cpp! {{
     #include <QtGui/QPainter>
@@ -27,13 +29,7 @@ pub fn draw_text(
     painter.draw_text(QPointF { x, y: baseline_y }, text);
 }
 
-pub fn draw_text_color(
-    painter: &mut QPainter,
-    x: f64,
-    baseline_y: f64,
-    color: QColor,
-    text: QString,
-) {
+pub fn draw_text_color(painter: &mut QPainter, x: f64, baseline_y: f64, color: QColor, text: QString) {
     painter.set_pen(qmetaobject::QPen::from_color(color));
     painter.draw_text(QPointF { x, y: baseline_y }, text);
 }
@@ -123,8 +119,13 @@ pub fn glyph_rects_for_range(
         if line.para_text.is_empty() {
             continue;
         }
-        let glyph_data =
-            editor_layout.glyph_positions_on_line(line, seg_start, seg_end, font_size, font_family);
+        let glyph_data = editor_layout.glyph_positions_on_line(
+            line,
+            seg_start,
+            seg_end,
+            font_size,
+            font_family,
+        );
         for (abs_byte, x_pos, ch_w) in glyph_data {
             if abs_byte >= buffer_text.len() {
                 continue;

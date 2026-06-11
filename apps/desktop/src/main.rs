@@ -257,7 +257,12 @@ fn main() {
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     probe_hub_header_resource();
-    qmetaobject::qml_register_type::<AppBackend>(c"SujianApp", 1, 0, c"AppBackend");
+    qmetaobject::qml_register_type::<AppBackend>(
+        c"SujianApp",
+        1,
+        0,
+        c"AppBackend",
+    );
     qmetaobject::qml_register_type::<document_handler::DocumentHandler>(
         c"Sujian",
         1,

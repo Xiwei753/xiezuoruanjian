@@ -83,10 +83,7 @@ fn touch_json_updated_at(path: &Path) -> Result<()> {
     crate::storage::atomic_write_string(path, &serde_json::to_string_pretty(&val)?)
 }
 
-pub fn list_valid_chapter_ids(
-    workspace_path: &Path,
-    project_id: &str,
-) -> Result<std::collections::HashSet<String>> {
+pub fn list_valid_chapter_ids(workspace_path: &Path, project_id: &str) -> Result<std::collections::HashSet<String>> {
     let mut chapter_ids = std::collections::HashSet::new();
     let volumes_dir = workspace_path
         .join("projects")

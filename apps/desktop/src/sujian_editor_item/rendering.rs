@@ -4,15 +4,12 @@ use crate::editor::scene_graph;
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{
-    QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF,
-    QString,
+    QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF, QString,
 };
 use std::time::Instant;
 
 use super::buffer::EditorSnapshot;
-use super::{
-    editor_animation_debug_enabled, sujian_editor_debug_enabled, EditorBuffer, SujianEditorItem,
-};
+use super::{editor_animation_debug_enabled, sujian_editor_debug_enabled, EditorBuffer, SujianEditorItem};
 
 pub struct ScrollBuffer {
     pub image: qmetaobject::QImage,
@@ -165,12 +162,7 @@ impl DeleteAnimation {
 
 impl SujianEditorItem {
     /// 渲染文字到 painter。buffer_scroll_y 和 buffer_h 定义缓冲区可见范围。
-    pub(crate) fn paint_onto(
-        &mut self,
-        painter: &mut QPainter,
-        buffer_scroll_y: f64,
-        buffer_h: f64,
-    ) {
+    pub(crate) fn paint_onto(&mut self, painter: &mut QPainter, buffer_scroll_y: f64, buffer_h: f64) {
         let paint_start = Instant::now();
         let width = self.bounding_width();
         let snapshot = self.layout_snapshot(width);
@@ -451,9 +443,7 @@ impl SujianEditorItem {
         }
 
         let elapsed = paint_start.elapsed();
-        if elapsed.as_millis() > 4
-            && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup)
-        {
+        if elapsed.as_millis() > 4 && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup) {
             self.last_slow_paint_log = Some(now_cleanup);
             eprintln!(
                 "sujian_paint_onto: elapsed_ms={}, vis_lines=[{}..{}]={}, insert_anim={}, delete_anim={}, scrolling={}, buffer_h={:.1}",

@@ -646,7 +646,9 @@ impl AppBackend {
                 let secrets_envelope: serde_json::Value = serde_json::from_str(&secrets_json)
                     .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
                 if secrets_envelope["success"] != true {
-                    let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
+                    let error_code = secrets_envelope["errorCode"]
+                        .as_str()
+                        .unwrap_or("UNKNOWN");
                     let user_message = secrets_envelope["userMessage"]
                         .as_str()
                         .unwrap_or("保存同步凭证失败");

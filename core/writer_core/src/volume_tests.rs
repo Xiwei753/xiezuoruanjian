@@ -42,9 +42,7 @@ mod tests {
         let ordered_ids = vec![volume1.id.clone()];
         let result = reorder_volumes(workspace_path, &project.id, &ordered_ids);
         match result {
-            Err(crate::error::Error::Other(msg)) => {
-                assert_eq!(msg, "Invalid ordered_ids for reorder")
-            }
+            Err(crate::error::Error::Other(msg)) => assert_eq!(msg, "Invalid ordered_ids for reorder"),
             _ => panic!("Expected Error::Other for missing IDs"),
         }
 
@@ -53,9 +51,7 @@ mod tests {
         extra_ids.push("non-existent-id".to_string());
         let result = reorder_volumes(workspace_path, &project.id, &extra_ids);
         match result {
-            Err(crate::error::Error::Other(msg)) => {
-                assert_eq!(msg, "Invalid ordered_ids for reorder")
-            }
+            Err(crate::error::Error::Other(msg)) => assert_eq!(msg, "Invalid ordered_ids for reorder"),
             _ => panic!("Expected Error::Other for extra non-existent IDs"),
         }
     }

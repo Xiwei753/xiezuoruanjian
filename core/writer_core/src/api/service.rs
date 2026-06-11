@@ -31,10 +31,7 @@ impl WriterCoreApi {
         serde_json::to_string(value).map_err(Into::into)
     }
 
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use typed DTO API instead. envelope_json is legacy and will be removed."
-    )]
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. envelope_json is legacy and will be removed.")]
     pub fn envelope_json<T: Serialize>(result: ApiResult<T>) -> String {
         ResultEnvelope::from_api_result(result).to_json_string()
     }
@@ -1763,8 +1760,7 @@ mod tests {
             .unwrap();
 
         // Attempt to overwrite with empty content, allow_empty_overwrite = false
-        let result =
-            api.save_chapter_content_with_options(&project.id, &volume.id, &chapter.id, "", false);
+        let result = api.save_chapter_content_with_options(&project.id, &volume.id, &chapter.id, "", false);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1899,15 +1895,9 @@ mod tests {
         let project = api.create_project("Test Project").unwrap();
         let volume = api.create_volume(&project.id, "Volume 1").unwrap();
 
-        let chapter1 = api
-            .create_chapter(&project.id, &volume.id, "Chapter 1")
-            .unwrap();
-        let chapter2 = api
-            .create_chapter(&project.id, &volume.id, "Chapter 2")
-            .unwrap();
-        let chapter3 = api
-            .create_chapter(&project.id, &volume.id, "Chapter 3")
-            .unwrap();
+        let chapter1 = api.create_chapter(&project.id, &volume.id, "Chapter 1").unwrap();
+        let chapter2 = api.create_chapter(&project.id, &volume.id, "Chapter 2").unwrap();
+        let chapter3 = api.create_chapter(&project.id, &volume.id, "Chapter 3").unwrap();
 
         let new_order = vec![
             chapter3.id.clone(),

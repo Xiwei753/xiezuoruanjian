@@ -1,9 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::workspace::{
-        create_workspace, flush_recent_edits, get_recent_edits, record_recent_edit,
-        validate_workspace,
-    };
+    use crate::workspace::{create_workspace, validate_workspace, record_recent_edit, get_recent_edits, flush_recent_edits};
     use std::fs;
     use tempfile::tempdir;
 
@@ -51,10 +48,7 @@ mod tests {
         // Initially no cache, flushing shouldn't create file
         flush_recent_edits(workspace_path).unwrap();
         let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
-        assert!(
-            !recent_path.exists(),
-            "Should not create file if no cached edits"
-        );
+        assert!(!recent_path.exists(), "Should not create file if no cached edits");
 
         // Record edit (this populates cache and may write file depending on global debounce)
         record_recent_edit(workspace_path, "p1", "v1", "c1").unwrap();
@@ -67,10 +61,7 @@ mod tests {
 
         // Flush edits to write cache back to file
         flush_recent_edits(workspace_path).unwrap();
-        assert!(
-            recent_path.exists(),
-            "File should be re-created by flush_recent_edits"
-        );
+        assert!(recent_path.exists(), "File should be re-created by flush_recent_edits");
 
         // Verify content
         let content = fs::read_to_string(&recent_path).unwrap();
@@ -245,8 +236,7 @@ mod tests {
         assert_eq!(service_projects.len(), 1);
 
         // 4. create_project_in_workspace should succeed
-        let new_proj =
-            crate::create_project_in_workspace(path_str.clone(), "我的新作品".to_string()).unwrap();
+        let new_proj = crate::create_project_in_workspace(path_str.clone(), "我的新作品".to_string()).unwrap();
         assert_eq!(new_proj.title, "我的新作品");
 
         let service_projects_after = service.list_projects().unwrap();
@@ -272,16 +262,12 @@ mod tests {
         let projects = service.list_projects().unwrap();
         let project_id = &projects[0].id;
 
-        let chapter = service
-            .create_chapter_in_project(project_id.clone(), "新章：起锚".to_string())
-            .unwrap();
+        let chapter = service.create_chapter_in_project(project_id.clone(), "新章：起锚".to_string()).unwrap();
         assert_eq!(chapter.title, "新章：起锚");
 
         // Verify it was actually created in the project's first volume
         let volumes = service.list_volumes(project_id.clone()).unwrap();
-        let chapters = service
-            .list_chapters(project_id.clone(), volumes[0].id.clone())
-            .unwrap();
+        let chapters = service.list_chapters(project_id.clone(), volumes[0].id.clone()).unwrap();
         // The first volume should now have 2 chapters (the default "第一章：新的起点" and the new "新章：起锚")
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[1].title, "新章：起锚");

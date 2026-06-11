@@ -578,9 +578,7 @@ mod tests {
 
         let path = starmap_graph_path(workspace, starmap_id);
 
-        let expected = std::path::PathBuf::from(
-            "/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json",
-        );
+        let expected = std::path::PathBuf::from("/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json");
         assert_eq!(path, expected);
     }
 
