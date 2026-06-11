@@ -221,6 +221,7 @@ pub struct VisualLine {
     pub para_qchar_end: usize,
     pub line_wrap_width: f64,
     pub line_indent_x: f64,
+    pub para_indent: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -397,7 +398,7 @@ impl EditorLayout {
             font_size,
             font_family,
             line.line_wrap_width + line.line_indent_x,
-            line.line_indent_x,
+            line.para_indent,
             line.qtextline_idx,
         )
     }
@@ -476,6 +477,7 @@ pub fn layout_lines(
                 para_qchar_end: 0,
                 line_wrap_width: available - indent,
                 line_indent_x: indent,
+                para_indent: indent,
             });
             line_id += 1;
             y += line_height;
@@ -562,6 +564,7 @@ pub fn layout_lines(
                     available
                 },
                 line_indent_x: if is_first { indent } else { 0.0 },
+                para_indent: indent,
             });
             line_id += 1;
             y += line_height;
@@ -587,6 +590,7 @@ pub fn layout_lines(
             para_qchar_end: 0,
             line_wrap_width: available - indent,
             line_indent_x: indent,
+            para_indent: indent,
         });
         line_id += 1;
     }
@@ -608,6 +612,7 @@ pub fn layout_lines(
             para_qchar_end: 0,
             line_wrap_width: available - indent,
             line_indent_x: indent,
+            para_indent: indent,
         });
     }
 
@@ -708,6 +713,7 @@ pub fn caret_rect(
                 para_qchar_end: 0,
                 line_wrap_width: 0.0,
                 line_indent_x: 0.0,
+                para_indent: 0.0,
             };
             &fallback
         }
@@ -741,7 +747,7 @@ pub fn index_at_line_x(snapshot: &LayoutSnapshot, line: &VisualLine, x: f64) -> 
         snapshot.font_size as f64,
         &snapshot.font_family,
         paragraph_wrap_w,
-        line.line_indent_x,
+        line.para_indent,
         line.qtextline_idx,
     )
 }
@@ -815,7 +821,7 @@ pub fn calculate_cursor_x_for_line(
                 snapshot.font_size as f64,
                 &snapshot.font_family,
                 paragraph_wrap_w,
-                line.line_indent_x,
+                line.para_indent,
                 line.qtextline_idx,
                 use_trailing,
             )
@@ -1119,7 +1125,7 @@ mod tests {
                 snapshot.font_size as f64,
                 &snapshot.font_family,
                 line.line_wrap_width + line.line_indent_x,
-                line.line_indent_x,
+                line.para_indent,
                 line.qtextline_idx,
                 true,
             );
@@ -1149,7 +1155,7 @@ mod tests {
                 snapshot.font_size as f64,
                 &snapshot.font_family,
                 line.line_wrap_width + line.line_indent_x,
-                line.line_indent_x,
+                line.para_indent,
                 line.qtextline_idx,
             );
             assert_eq!(
