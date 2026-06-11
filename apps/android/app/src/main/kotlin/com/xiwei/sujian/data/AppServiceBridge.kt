@@ -85,47 +85,7 @@ class AppServiceBridge(workspacePath: String) {
         }
     }
 
-    private inline fun <reified T> envelopeJsonResult(envelopeJson: String): BridgeResult<T> {
-        return try {
-            val type = object : TypeToken<ResultEnvelope<T>>() {}.type
-            val envelope = gson.fromJson<ResultEnvelope<T>>(envelopeJson, type)
-            if (envelope.success) {
-                val data = envelope.data ?: return BridgeResult.Error(
-                    ResultEnvelope.error("JSON_ERROR", "ResultEnvelope 缺少 data")
-                )
-                BridgeResult.Success(data, envelope)
-            } else {
-                BridgeResult.Error(
-                    ResultEnvelope(
-                        success = false,
-                        errorCode = envelope.errorCode,
-                        userMessage = envelope.userMessage,
-                        rawError = envelope.rawError,
-                        warnings = envelope.warnings,
-                        changedPaths = envelope.changedPaths,
-                        changedEntities = envelope.changedEntities
-                    )
-                )
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "ResultEnvelope parse failed: ${e.message}", e)
-            BridgeResult.Error(
-                ResultEnvelope.error("JSON_ERROR", e.message ?: "ResultEnvelope 解析失败")
-            )
-        }
-    }
 
-    private inline fun <reified T> envelopeJsonCall(block: () -> String): BridgeResult<T> {
-        return try {
-            envelopeJsonResult(block())
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Native library is not loaded", e)
-            BridgeResult.NotLoaded
-        } catch (e: Exception) {
-            Log.e(TAG, "ResultEnvelope call failed: ${e.message}", e)
-            BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "ResultEnvelope 调用失败"))
-        }
-    }
 
     fun listProjects(): BridgeResult<List<Project>> = wrapResult {
         service.listProjects().map { it.toModel() }
@@ -147,66 +107,81 @@ class AppServiceBridge(workspacePath: String) {
         service.createWorkspaceIfNeeded()
     }
 
-    fun createProject(title: String): BridgeResult<Project> =
-        envelopeJsonCall { service.createProjectEnvelopeJson(title) }
+    fun createProject(title: String): BridgeResult<Project> = wrapResult {
+        service.createProject(title).toModel()
+    }
 
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> = wrapResult {
         service.getProjectStats(projectId).toModel()
     }
 
-    fun renameProject(projectId: String, newTitle: String): BridgeResult<Boolean> =
-        envelopeJsonCall { service.renameProjectEnvelopeJson(projectId, newTitle) }
+    fun renameProject(projectId: String, newTitle: String): BridgeResult<Boolean> = wrapResult {
+        service.renameProject(projectId, newTitle)
+    }
 
-    fun deleteProject(projectId: String): BridgeResult<Boolean> =
-        envelopeJsonCall { service.deleteProjectEnvelopeJson(projectId) }
+    fun deleteProject(projectId: String): BridgeResult<Boolean> = wrapResult {
+        service.deleteProject(projectId)
+    }
 
-    fun reorderProjects(orderedIds: List<String>): BridgeResult<Boolean> =
-        envelopeJsonCall { service.reorderProjectsEnvelopeJson(orderedIds) }
+    fun reorderProjects(orderedIds: List<String>): BridgeResult<Boolean> = wrapResult {
+        service.reorderProjects(orderedIds)
+    }
 
     fun listVolumes(projectId: String): BridgeResult<List<Volume>> = wrapResult {
         service.listVolumes(projectId).map { it.toModel() }
     }
 
-    fun createVolume(projectId: String, title: String): BridgeResult<Volume> =
-        envelopeJsonCall { service.createVolumeEnvelopeJson(projectId, title) }
+    fun createVolume(projectId: String, title: String): BridgeResult<Volume> = wrapResult {
+        service.createVolume(projectId, title).toModel()
+    }
 
-    fun renameVolume(projectId: String, volumeId: String, newTitle: String): BridgeResult<Boolean> =
-        envelopeJsonCall { service.renameVolumeEnvelopeJson(projectId, volumeId, newTitle) }
+    fun renameVolume(projectId: String, volumeId: String, newTitle: String): BridgeResult<Boolean> = wrapResult {
+        service.renameVolume(projectId, volumeId, newTitle)
+    }
 
-    fun deleteVolume(projectId: String, volumeId: String): BridgeResult<Boolean> =
-        envelopeJsonCall { service.deleteVolumeEnvelopeJson(projectId, volumeId) }
+    fun deleteVolume(projectId: String, volumeId: String): BridgeResult<Boolean> = wrapResult {
+        service.deleteVolume(projectId, volumeId)
+    }
 
-    fun reorderVolumes(projectId: String, orderedIds: List<String>): BridgeResult<Boolean> =
-        envelopeJsonCall { service.reorderVolumesEnvelopeJson(projectId, orderedIds) }
+    fun reorderVolumes(projectId: String, orderedIds: List<String>): BridgeResult<Boolean> = wrapResult {
+        service.reorderVolumes(projectId, orderedIds)
+    }
 
     fun listChapters(projectId: String, volumeId: String): BridgeResult<List<ChapterMeta>> = wrapResult {
         service.listChapters(projectId, volumeId).map { it.toModel() }
     }
 
-    fun createChapter(projectId: String, volumeId: String, title: String): BridgeResult<ChapterMeta> =
-        envelopeJsonCall { service.createChapterEnvelopeJson(projectId, volumeId, title) }
+    fun createChapter(projectId: String, volumeId: String, title: String): BridgeResult<ChapterMeta> = wrapResult {
+        service.createChapter(projectId, volumeId, title).toModel()
+    }
 
-    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String): BridgeResult<Boolean> =
-        envelopeJsonCall { service.renameChapterEnvelopeJson(projectId, volumeId, chapterId, newTitle) }
+    fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String): BridgeResult<Boolean> = wrapResult {
+        service.renameChapter(projectId, volumeId, chapterId, newTitle)
+    }
 
-    fun deleteChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<Boolean> =
-        envelopeJsonCall { service.deleteChapterEnvelopeJson(projectId, volumeId, chapterId) }
+    fun deleteChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<Boolean> = wrapResult {
+        service.deleteChapter(projectId, volumeId, chapterId)
+    }
 
-    fun reorderChapters(projectId: String, volumeId: String, orderedIds: List<String>): BridgeResult<Boolean> =
-        envelopeJsonCall { service.reorderChaptersEnvelopeJson(projectId, volumeId, orderedIds) }
+    fun reorderChapters(projectId: String, volumeId: String, orderedIds: List<String>): BridgeResult<Boolean> = wrapResult {
+        service.reorderChapters(projectId, volumeId, orderedIds)
+    }
 
     fun openChapter(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterOpenResult> = wrapResult {
         service.openChapter(projectId, volumeId, chapterId).toModel()
     }
 
-    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> =
-        envelopeJsonCall { service.saveChapterContentEnvelopeJson(projectId, volumeId, chapterId, content) }
+    fun saveChapterContent(projectId: String, volumeId: String, chapterId: String, content: String): BridgeResult<ChapterSaveReceipt> = wrapResult {
+        service.saveChapterContent(projectId, volumeId, chapterId, content).toModel()
+    }
 
-    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterSaveReceipt> =
-        envelopeJsonCall { service.clearChapterContentEnvelopeJson(projectId, volumeId, chapterId) }
+    fun clearChapterContent(projectId: String, volumeId: String, chapterId: String): BridgeResult<ChapterSaveReceipt> = wrapResult {
+        service.clearChapterContent(projectId, volumeId, chapterId).toModel()
+    }
 
-    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): BridgeResult<Boolean> =
-        envelopeJsonCall { service.updateChapterNoteEnvelopeJson(projectId, volumeId, chapterId, note) }
+    fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): BridgeResult<Boolean> = wrapResult {
+        service.updateChapterNote(projectId, volumeId, chapterId, note)
+    }
 
     fun calculateWordCount(text: String): Int {
         return try {
@@ -221,42 +196,73 @@ class AppServiceBridge(workspacePath: String) {
         service.loadLocalSettings().toModel()
     }
 
-    fun saveLocalSettings(settings: LocalSettings): BridgeResult<Boolean> =
-        envelopeJsonCall { service.saveLocalSettingsEnvelopeJson(settings.toDto()) }
+    fun saveLocalSettings(settings: LocalSettings): BridgeResult<Boolean> {
+        return try {
+            val res = service.saveLocalSettings(settings.toDto())
+            BridgeResult.Success(res, ResultEnvelope(success = true, data = res, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Native library is not loaded", e)
+            BridgeResult.NotLoaded
+        } catch (e: WriterException) {
+            Log.e(TAG, "Native exception: ${e.message}", e)
+            BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception: ${e.message}", e)
+            BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
+        }
+    }
 
     fun loadSyncableSettings(): BridgeResult<SyncableSettings> = wrapResult {
         service.loadSyncableSettings().toModel()
     }
 
-    fun saveSyncableSettings(settings: SyncableSettings): BridgeResult<Boolean> =
-        envelopeJsonCall { service.saveSyncableSettingsEnvelopeJson(settings.toDto()) }
+    fun saveSyncableSettings(settings: SyncableSettings): BridgeResult<Boolean> {
+        return try {
+            val res = service.saveSyncableSettings(settings.toDto())
+            BridgeResult.Success(res, ResultEnvelope(success = true, data = res, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Native library is not loaded", e)
+            BridgeResult.NotLoaded
+        } catch (e: WriterException) {
+            Log.e(TAG, "Native exception: ${e.message}", e)
+            BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception: ${e.message}", e)
+            BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
+        }
+    }
 
     fun loadSyncConfig(): BridgeResult<SyncConfig> = wrapResult {
         service.loadSyncConfig().toModel()
     }
 
-    fun saveSyncConfig(config: SyncConfig): BridgeResult<Boolean> =
-        envelopeJsonCall { service.saveSyncConfigEnvelopeJson(config.toDto()) }
+    fun saveSyncConfig(config: SyncConfig): BridgeResult<Boolean> = wrapResult {
+        service.saveSyncConfig(config.toDto())
+    }
 
     fun loadSyncSecrets(): BridgeResult<SyncSecrets> = wrapResult {
         service.loadSyncSecrets().toModel()
     }
 
-    fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> =
-        envelopeJsonCall { service.saveSyncSecretsEnvelopeJson(secrets.toDto()) }
+    fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> = wrapResult {
+        service.saveSyncSecrets(secrets.toDto())
+    }
 
     fun loadSyncState(): BridgeResult<SyncState> = wrapResult {
         service.loadSyncState().toModel()
     }
 
-    fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> =
-        envelopeJsonCall { service.performSyncDiagnosticsEnvelopeJson(config.toDto()) }
+    fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> = wrapResult {
+        service.performSyncDiagnostics(config.toDto()).toModel()
+    }
 
-    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> =
-        envelopeJsonCall { service.performSyncDryRunEnvelopeJson(config.toDto()) }
+    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> = wrapResult {
+        service.performSyncDryRun(config.toDto()).toModel()
+    }
 
-    fun performSync(config: SyncConfig): BridgeResult<SyncResult> =
-        envelopeJsonCall { service.performSyncEnvelopeJson(config.toDto()) }
+    fun performSync(config: SyncConfig): BridgeResult<SyncResult> = wrapResult {
+        service.performSync(config.toDto()).toModel()
+    }
 
     fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<WritingStatsSummary> = wrapResult {
         service.getWritingStatsSummary(startDate, endDate).toModel()
@@ -587,18 +593,12 @@ private fun SyncResultDto.toModel() = SyncResult(
 private fun String?.toBackendType(): BackendType = when (this) {
     "git" -> BackendType.Git
     "github_api" -> BackendType.GithubApi
-    "webdav" -> BackendType.WebDav
-    "s3" -> BackendType.S3
-    "local_folder" -> BackendType.LocalFolder
     else -> BackendType.GithubApi
 }
 
 private fun BackendType?.toWire(): String = when (this ?: BackendType.GithubApi) {
     BackendType.Git -> "git"
     BackendType.GithubApi -> "github_api"
-    BackendType.WebDav -> "webdav"
-    BackendType.S3 -> "s3"
-    BackendType.LocalFolder -> "local_folder"
 }
 
 private fun String?.toSyncTransport(): SyncTransport = when (this) {

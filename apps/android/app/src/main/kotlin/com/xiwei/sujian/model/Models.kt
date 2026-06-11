@@ -116,10 +116,7 @@ enum class SyncTransport {
 
 enum class BackendType {
     @SerializedName("git") Git,
-    @SerializedName("github_api") GithubApi,
-    @SerializedName("webdav") WebDav,
-    @SerializedName("s3") S3,
-    @SerializedName("local_folder") LocalFolder
+    @SerializedName("github_api") GithubApi
 }
 
 data class SyncConfig(

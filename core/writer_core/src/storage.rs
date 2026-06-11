@@ -4,8 +4,9 @@
 //! 1. 写入临时文件（带随机后缀，防止文件名冲突）
 //! 2. `fsync` 临时文件内容
 //! 3. `rename` 原子替换目标文件
+//! 4. 对父目录进行 `fsync`（仅 Unix 平台，持久化目录项以确保 rename 结果持久可见）
 //!
-//! 这样可避免写入过程中断导致目标文件半写入。不同文件系统和挂载参数下，
+//! 这样可避免写入过程中断导致目标文件半写入。不同文件系统 and 挂载参数下，
 //! 目录项持久化仍取决于平台语义，本模块不宣称跨设备断电的绝对耐久性。
 
 pub mod transaction;
@@ -18,7 +19,7 @@ use uuid::Uuid;
 
 /// 原子写入字符串到文件。
 ///
-/// 流程：创建临时文件 → 写入 → fsync 临时文件 → rename 替换目标文件。
+/// 流程：创建临时文件 → 写入 → fsync 临时文件 → rename 替换目标文件 → fsync 父目录（Unix）。
 /// 这是 Core 层所有文件写入的唯一入口。
 pub fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
