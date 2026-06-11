@@ -485,8 +485,14 @@ impl StatsStore {
             return Ok(Vec::new());
         }
 
-        let first_ms = events.first().unwrap().timestamp_ms;
-        let last_ms = events.last().unwrap().timestamp_ms;
+        let Some(first_event) = events.first() else {
+            return Ok(Vec::new());
+        };
+        let Some(last_event) = events.last() else {
+            return Ok(Vec::new());
+        };
+        let first_ms = first_event.timestamp_ms;
+        let last_ms = last_event.timestamp_ms;
 
         let mut buckets = Vec::new();
         let mut bucket_start = first_ms;
