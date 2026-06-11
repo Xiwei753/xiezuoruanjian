@@ -3,7 +3,7 @@
 Status: active
 Last verified: 2026-06-11
 Truth source: code / product decision / protocol
-Supersedes: docs/bridge_contract.md, docs/desktop_backend_contract.md, docs/desktop_qml_ui_contract.md
+
 
 ---
 
