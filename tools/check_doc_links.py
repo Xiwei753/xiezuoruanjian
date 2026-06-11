@@ -25,12 +25,19 @@ WHITELIST_FILENAMES = {
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
-    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs'
+    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
+    'sujian_editor_item.rs', 'ai_development_guide.md', 'ai_tool_calling.md', 'settings.json',
+    'product_design_contract.md', 'desktop_ui_visual_system.md', 'settings_design.md',
+    'bridge_contract.md', 'desktop_backend_contract.md', 'desktop_qml_ui_contract.md'
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
+    'docs/ai_development_guide.md', 'docs/ai_tool_calling.md', 'apps/desktop/src/sujian_editor_item.rs',
+    'apps/android/TECHNICAL_ROUTE.md', 'apps/desktop/TECHNICAL_ROUTE.md', 'core/writer_core/TECHNICAL_ROUTE.md',
+    'docs/product_design_contract.md', 'docs/desktop_ui_visual_system.md', 'docs/settings_design.md',
+    'docs/bridge_contract.md', 'docs/desktop_backend_contract.md', 'docs/desktop_qml_ui_contract.md',
 }
 
 def clean_extracted_path(path):
