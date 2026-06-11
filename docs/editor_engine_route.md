@@ -55,7 +55,7 @@ Supersedes: None
 ## 当前代码落点
 
 - `core/writer_core/src/editor/transaction.rs`：统一编辑事务和动画事件骨架。
-- `apps/desktop/src/sujian_editor_item.rs`：Desktop 自绘编辑器主路径，内部维护纯文本、光标、选区、撤销重做和 Core transaction。
+- `apps/desktop/src/sujian_editor_item/mod.rs`：Desktop 自绘编辑器主路径，内部维护纯文本、光标、选区、撤销重做和 Core transaction。
 - `apps/desktop/qml/WritingWorkspace.qml`：默认启用 `SujianEditorItem` 和平台 IME 输入桥，支持通过开关临时回退至稳定 `TextArea`。
 - `apps/desktop/qml/EditorTypingAnimator.qml`：保留为兼容占位，当前 inert，不再监听文本变化或修改文档格式。
 - `apps/desktop/src/document_handler.rs`：只做视觉排版、纯文本读取和撤销栈清理，不再提供隐藏字符 range API。
