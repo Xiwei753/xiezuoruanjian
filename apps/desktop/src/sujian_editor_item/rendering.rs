@@ -259,8 +259,12 @@ impl SujianEditorItem {
                             insert_anim.glyphs.len(),
                         );
                     }
-                    let first_glyph = insert_anim.glyphs.first().unwrap();
-                    let last_glyph = insert_anim.glyphs.last().unwrap();
+                    let Some(first_glyph) = insert_anim.glyphs.first() else {
+                        continue;
+                    };
+                    let Some(last_glyph) = insert_anim.glyphs.last() else {
+                        continue;
+                    };
                     let insert_start_byte = first_glyph.byte_start;
                     let insert_end_byte = last_glyph.byte_end;
 
@@ -484,8 +488,7 @@ impl SujianEditorItem {
             miss_reason = "no_buffer";
         } else if self.editor_layout.cache().is_none() {
             miss_reason = "layout_invalidated";
-        } else {
-            let buf = self.scroll_buffer.as_ref().unwrap();
+        } else if let Some(buf) = self.scroll_buffer.as_ref() {
             let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
             if content_changed {
                 miss_reason = "content_changed";
