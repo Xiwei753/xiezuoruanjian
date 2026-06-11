@@ -278,14 +278,16 @@ impl EditorLayout {
         let text_ptr = text.as_ptr() as usize;
         let text_len = text.len();
         let needs_refresh = match &self.cache {
-            Some(c) => c.text_ptr != text_ptr
-                || c.text_len != text_len
-                || (c.width - params.width).abs() > 0.1
-                || (c.font_size - params.font_size).abs() > 0.1
-                || c.font_family != params.font_family
-                || (c.line_spacing - params.line_spacing).abs() > 0.01
-                || (c.text_indent - params.text_indent).abs() > 0.1
-                || (c.padding - params.padding).abs() > 0.1,
+            Some(c) => {
+                c.text_ptr != text_ptr
+                    || c.text_len != text_len
+                    || (c.width - params.width).abs() > 0.1
+                    || (c.font_size - params.font_size).abs() > 0.1
+                    || c.font_family != params.font_family
+                    || (c.line_spacing - params.line_spacing).abs() > 0.01
+                    || (c.text_indent - params.text_indent).abs() > 0.1
+                    || (c.padding - params.padding).abs() > 0.1
+            }
             None => true,
         };
 
@@ -326,7 +328,13 @@ impl EditorLayout {
         self.cache = Some(snapshot);
     }
 
-    pub fn hit_test(&self, snapshot: &LayoutSnapshot, x: f64, y: f64, scroll_y: f64) -> (usize, CaretAffinity) {
+    pub fn hit_test(
+        &self,
+        snapshot: &LayoutSnapshot,
+        x: f64,
+        y: f64,
+        scroll_y: f64,
+    ) -> (usize, CaretAffinity) {
         hit_test(snapshot, x, y, scroll_y)
     }
 
@@ -361,6 +369,72 @@ impl EditorLayout {
 
     pub fn index_at_line_x(&self, snapshot: &LayoutSnapshot, line: &VisualLine, x: f64) -> usize {
         index_at_line_x(snapshot, line, x)
+    }
+
+    pub fn cursor_x_for_line(
+        &self,
+        snapshot: &LayoutSnapshot,
+        line: &VisualLine,
+        cursor: usize,
+        affinity: CaretAffinity,
+    ) -> f64 {
+        calculate_cursor_x_for_line(line, cursor, affinity, snapshot)
+    }
+
+    pub fn glyph_positions_on_line(
+        &self,
+        line: &VisualLine,
+        range_start: usize,
+        range_end: usize,
+        font_size: f64,
+        font_family: &str,
+    ) -> Vec<(usize, f64, f64)> {
+        qtextlayout_glyph_positions_on_line(
+            &line.para_text,
+            range_start,
+            range_end,
+            line.para_start,
+            font_size,
+            font_family,
+            line.line_wrap_width + line.line_indent_x,
+            line.line_indent_x,
+            line.qtextline_idx,
+        )
+    }
+
+    pub fn text_width(&self, text: &str, font_size: f64, font_family: &str) -> f64 {
+        qtextlayout_cursor_to_x(text, text, font_size, font_family)
+    }
+
+    pub fn cursor_height(&self, font_size: f64, font_family: &str) -> f64 {
+        cursor_height_for_line(font_size, font_family)
+    }
+
+    pub fn cursor_rect_for_line(
+        &self,
+        line: &VisualLine,
+        font_size: f64,
+        font_family: &str,
+    ) -> (f64, f64) {
+        cursor_rect_for_line(line, font_size, font_family)
+    }
+
+    pub fn text_baseline_y(&self, line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
+        text_baseline_y(line, font_size, font_family)
+    }
+
+    pub fn affinity_for_index_on_line(&self, line: &VisualLine, index: usize) -> CaretAffinity {
+        affinity_for_index_on_line(line, index)
+    }
+
+    pub fn line_contains_cursor_with_affinity(
+        &self,
+        lines: &[VisualLine],
+        idx: usize,
+        cursor: usize,
+        affinity: CaretAffinity,
+    ) -> bool {
+        line_contains_cursor_with_affinity(lines, idx, cursor, affinity)
     }
 }
 
@@ -482,7 +556,11 @@ pub fn layout_lines(
                 qtextline_idx: line_idx as i32,
                 para_qchar_start: qchar_off,
                 para_qchar_end,
-                line_wrap_width: if is_first { available - indent } else { available },
+                line_wrap_width: if is_first {
+                    available - indent
+                } else {
+                    available
+                },
                 line_indent_x: if is_first { indent } else { 0.0 },
             });
             line_id += 1;
@@ -536,7 +614,12 @@ pub fn layout_lines(
     result
 }
 
-pub fn hit_test(snapshot: &LayoutSnapshot, x: f64, y: f64, scroll_y: f64) -> (usize, CaretAffinity) {
+pub fn hit_test(
+    snapshot: &LayoutSnapshot,
+    x: f64,
+    y: f64,
+    scroll_y: f64,
+) -> (usize, CaretAffinity) {
     let lines = &snapshot.lines;
     if lines.is_empty() {
         return (0, CaretAffinity::Downstream);
@@ -599,7 +682,9 @@ pub fn caret_rect(
         .lines
         .iter()
         .enumerate()
-        .find(|(idx, _)| line_contains_cursor_with_affinity(&snapshot.lines, *idx, cursor_byte, affinity))
+        .find(|(idx, _)| {
+            line_contains_cursor_with_affinity(&snapshot.lines, *idx, cursor_byte, affinity)
+        })
         .map(|(_, line)| line)
         .or_else(|| snapshot.lines.last());
 
@@ -629,7 +714,8 @@ pub fn caret_rect(
     };
 
     let cursor_x = calculate_cursor_x_for_line(line, cursor_byte, affinity, snapshot);
-    let (cursor_y_doc, cursor_h) = cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family);
+    let (cursor_y_doc, cursor_h) =
+        cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family);
     let cursor_y = cursor_y_doc - scroll_y;
     let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
@@ -681,11 +767,16 @@ pub fn cursor_line_and_x(
     })
 }
 
-pub fn cursor_geometry(snapshot: &LayoutSnapshot, cursor: usize, affinity: CaretAffinity) -> (f64, f64, usize) {
+pub fn cursor_geometry(
+    snapshot: &LayoutSnapshot,
+    cursor: usize,
+    affinity: CaretAffinity,
+) -> (f64, f64, usize) {
     for (idx, line) in snapshot.lines.iter().enumerate() {
         if line_contains_cursor_with_affinity(&snapshot.lines, idx, cursor, affinity) {
             let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, snapshot);
-            let cursor_y = cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family).0;
+            let cursor_y =
+                cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family).0;
             return (cursor_x, cursor_y, line.id);
         }
     }
@@ -694,7 +785,8 @@ pub fn cursor_geometry(snapshot: &LayoutSnapshot, cursor: usize, affinity: Caret
         .last()
         .map(|line| {
             let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, snapshot);
-            let cursor_y = cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family).0;
+            let cursor_y =
+                cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family).0;
             (cursor_x, cursor_y, line.id)
         })
         .unwrap_or((0.0, 0.0, 0))
@@ -715,21 +807,27 @@ pub fn calculate_cursor_x_for_line(
     } else {
         let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.end;
         let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
-        line.x + qtextlayout_cursor_to_x_on_line(
-            &line.para_text,
-            cursor,
-            line.para_start,
-            snapshot.font_size as f64,
-            &snapshot.font_family,
-            paragraph_wrap_w,
-            line.line_indent_x,
-            line.qtextline_idx,
-            use_trailing,
-        )
+        line.x
+            + qtextlayout_cursor_to_x_on_line(
+                &line.para_text,
+                cursor,
+                line.para_start,
+                snapshot.font_size as f64,
+                &snapshot.font_family,
+                paragraph_wrap_w,
+                line.line_indent_x,
+                line.qtextline_idx,
+                use_trailing,
+            )
     }
 }
 
-pub fn qtextlayout_cursor_to_x(para_text: &str, text_before_cursor: &str, font_size: f64, font_family: &str) -> f64 {
+pub fn qtextlayout_cursor_to_x(
+    para_text: &str,
+    text_before_cursor: &str,
+    font_size: f64,
+    font_family: &str,
+) -> f64 {
     let para: QString = para_text.to_string().into();
     let before: QString = text_before_cursor.to_string().into();
     let fs = font_size as f32;
@@ -977,7 +1075,10 @@ mod tests {
 
     fn init_qt() {
         QT_INIT.call_once(|| {
-            std::env::set_var("QT_QPA_PLATFORM", std::env::var("QT_QPA_PLATFORM").unwrap_or_else(|_| "offscreen".to_string()));
+            std::env::set_var(
+                "QT_QPA_PLATFORM",
+                std::env::var("QT_QPA_PLATFORM").unwrap_or_else(|_| "offscreen".to_string()),
+            );
             cpp!(unsafe [] {
                 static int argc = 1;
                 static char app_name[] = "sujian-layout-tests";
@@ -1122,7 +1223,12 @@ mod tests {
     fn hit_test_and_caret_rect_use_same_snapshot_line() {
         let snapshot = snapshot_for("第一行会自动换行，第二行继续测试命中。", 128.0);
         for line in &snapshot.lines {
-            let (index, affinity) = hit_test(&snapshot, line.x + line.width.max(1.0) / 2.0, line.y + 2.0, 0.0);
+            let (index, affinity) = hit_test(
+                &snapshot,
+                line.x + line.width.max(1.0) / 2.0,
+                line.y + 2.0,
+                0.0,
+            );
             let rect = caret_rect(&snapshot, index, affinity, 0.0, 800.0);
             assert_eq!(rect.visual_line_id, line.id);
         }

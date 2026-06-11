@@ -2,15 +2,15 @@
 // sujian_editor_item.rs — Desktop self-rendered editor item
 // =============================================================================
 
-use cpp::cpp;
 use crate::editor::layout::{
-    affinity_for_index_on_line, calculate_cursor_x_for_line, cursor_height_for_line, cursor_rect_for_line,
-    cursor_top_y, line_contains_cursor_with_affinity, qtextlayout_cursor_to_x,
-    qtextlayout_glyph_positions_on_line, text_baseline_y, CaretAffinity, CursorLayoutRect,
-    EditorLayout, LayoutParams, LayoutSnapshot, VisualLine,
+    CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot, VisualLine,
 };
+use cpp::cpp;
 use qmetaobject::prelude::*;
-use qmetaobject::{QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF, QString};
+use qmetaobject::{
+    QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem,
+    QRectF, QString,
+};
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause};
@@ -247,22 +247,27 @@ impl ScrollBuffer {
         // (buffer_scroll_y + buffer_logical_h >= buffer_content_h), then we shouldn't trigger rebuild
         // just because we are close to those boundaries, since we cannot scroll further anyway.
         let threshold = vp_h * 0.5;
-        
+
         let near_top = scroll_y < self.buffer_scroll_y + threshold;
-        let near_bottom = scroll_y + vp_h > self.buffer_scroll_y + self.buffer_logical_h - threshold;
-        
+        let near_bottom =
+            scroll_y + vp_h > self.buffer_scroll_y + self.buffer_logical_h - threshold;
+
         if near_top && self.buffer_scroll_y > 0.1 {
             return false;
         }
-        if near_bottom && (self.buffer_scroll_y + self.buffer_logical_h) < self.buffer_content_h - 0.1 {
+        if near_bottom
+            && (self.buffer_scroll_y + self.buffer_logical_h) < self.buffer_content_h - 0.1
+        {
             return false;
         }
-        
+
         // Strict boundary check (outside buffer entirely)
-        if scroll_y < self.buffer_scroll_y || scroll_y + vp_h > self.buffer_scroll_y + self.buffer_logical_h {
+        if scroll_y < self.buffer_scroll_y
+            || scroll_y + vp_h > self.buffer_scroll_y + self.buffer_logical_h
+        {
             return false;
         }
-        
+
         true
     }
 
@@ -273,7 +278,7 @@ impl ScrollBuffer {
         if src_y < 0.0 {
             src_y = 0.0;
         }
-        
+
         if src_y + src_h > self.buffer_logical_h {
             if src_h > self.buffer_logical_h {
                 src_h = self.buffer_logical_h;
@@ -282,14 +287,14 @@ impl ScrollBuffer {
                 src_y = self.buffer_logical_h - src_h;
             }
         }
-        
+
         // DPR check to make sure physical coordinates do not exceed QImage physical size
         let phys_h = (self.image.size().height as f64).max(1.0);
         let dpr = self.dpr;
-        
+
         let mut phys_src_y = src_y * dpr;
         let mut phys_src_h = src_h * dpr;
-        
+
         if phys_src_y < 0.0 {
             phys_src_y = 0.0;
         }
@@ -301,7 +306,7 @@ impl ScrollBuffer {
                 phys_src_y = phys_h - phys_src_h;
             }
         }
-        
+
         // Convert back to logical
         src_y = phys_src_y / dpr;
         src_h = phys_src_h / dpr;
@@ -1129,7 +1134,10 @@ impl SujianEditorItem {
         // 记录插入前的光标位置（动画起点）
         let origin_cx = self.target_cursor_x;
         let origin_cy = self.target_cursor_y;
-        let cursor_h = cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string());
+        let cursor_h = self.editor_layout.cursor_height(
+            self.current_font_pixel_size as f64,
+            &self.current_font_family.to_string(),
+        );
 
         let old = self.buffer.snapshot();
         let insert_byte_start = if self.buffer.has_selection() {
@@ -1423,7 +1431,9 @@ impl SujianEditorItem {
             return;
         }
         let index = self.index_at_line_x(&lines[target_idx], x);
-        self.current_cursor_affinity = affinity_for_index_on_line(&lines[target_idx], index);
+        self.current_cursor_affinity = self
+            .editor_layout
+            .affinity_for_index_on_line(&lines[target_idx], index);
         self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
@@ -1523,7 +1533,9 @@ impl SujianEditorItem {
 
     fn layout_snapshot(&mut self, width: f64) -> LayoutSnapshot {
         let params = self.layout_params(width);
-        self.editor_layout.snapshot(&self.buffer.text, params).clone()
+        self.editor_layout
+            .snapshot(&self.buffer.text, params)
+            .clone()
     }
 
     fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
@@ -1592,12 +1604,15 @@ impl SujianEditorItem {
             .cache()
             .expect("cursor_line_and_x requires an existing layout snapshot");
         debug_assert_eq!(lines.len(), snapshot.lines.len());
-        self.editor_layout
-            .cursor_line_and_x(snapshot, self.buffer.cursor, self.current_cursor_affinity)
+        self.editor_layout.cursor_line_and_x(
+            snapshot,
+            self.buffer.cursor,
+            self.current_cursor_affinity,
+        )
     }
 
     /// 给定字节范围 [byte_start, byte_end)，返回每个字形的矩形信息。
-    /// 使用 QTextLayout 精确定位每个字形。
+    /// 使用 layout 层精确定位每个字形。
     #[allow(dead_code)]
     fn glyph_rects_for_range(&self, byte_start: usize, byte_end: usize) -> Vec<AnimatedGlyph> {
         let Some(cache) = self.editor_layout.cache() else {
@@ -1612,9 +1627,9 @@ impl SujianEditorItem {
         let mut result = Vec::new();
 
         let search_start = lines.partition_point(|l| l.end <= byte_start);
-        let search_end = lines.len().min(
-            search_start + lines[search_start..].partition_point(|l| l.start < byte_end) + 1
-        );
+        let search_end = lines
+            .len()
+            .min(search_start + lines[search_start..].partition_point(|l| l.start < byte_end) + 1);
 
         for line_idx in search_start..search_end {
             let line = &lines[line_idx];
@@ -1627,16 +1642,22 @@ impl SujianEditorItem {
                 continue;
             }
 
-            let baseline_y = text_baseline_y(line, font_size, &font_family);
-            let (top_y, h) = cursor_rect_for_line(line, font_size, &font_family);
+            let baseline_y = self
+                .editor_layout
+                .text_baseline_y(line, font_size, &font_family);
+            let (top_y, h) = self
+                .editor_layout
+                .cursor_rect_for_line(line, font_size, &font_family);
 
             if line.para_text.is_empty() {
                 continue;
             }
-            let glyph_data = qtextlayout_glyph_positions_on_line(
-                &line.para_text, seg_start, seg_end, line.para_start,
-                font_size, &font_family,
-                line.line_wrap_width + line.line_indent_x, line.line_indent_x, line.qtextline_idx,
+            let glyph_data = self.editor_layout.glyph_positions_on_line(
+                line,
+                seg_start,
+                seg_end,
+                font_size,
+                &font_family,
             );
             for (abs_byte, x_pos, ch_w) in glyph_data {
                 // Get the character at this position
@@ -1667,14 +1688,20 @@ impl SujianEditorItem {
         let width = self.bounding_width();
         let snapshot = self.layout_snapshot(width);
         let font_size = snapshot.font_size as f64;
-        let (target_x, target_y, target_line_id) =
-            self.editor_layout
-                .cursor_geometry(&snapshot, self.buffer.cursor, self.current_cursor_affinity);
-        let cursor_h = if let Some(line) = snapshot.lines.iter().find(|line| line.id == target_line_id) {
-            cursor_rect_for_line(line, font_size, &snapshot.font_family).1
-        } else {
-            cursor_height_for_line(font_size, &snapshot.font_family)
-        };
+        let (target_x, target_y, target_line_id) = self.editor_layout.cursor_geometry(
+            &snapshot,
+            self.buffer.cursor,
+            self.current_cursor_affinity,
+        );
+        let cursor_h =
+            if let Some(line) = snapshot.lines.iter().find(|line| line.id == target_line_id) {
+                self.editor_layout
+                    .cursor_rect_for_line(line, font_size, &snapshot.font_family)
+                    .1
+            } else {
+                self.editor_layout
+                    .cursor_height(font_size, &snapshot.font_family)
+            };
         let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
         self.delete_animation = Some(DeleteAnimation {
             glyphs,
@@ -1699,7 +1726,13 @@ impl SujianEditorItem {
     }
 
     #[allow(dead_code)]
-    fn log_animation_created(&self, label: &str, offset: usize, glyph_count: usize, visible_line_hit: bool) {
+    fn log_animation_created(
+        &self,
+        label: &str,
+        offset: usize,
+        glyph_count: usize,
+        visible_line_hit: bool,
+    ) {
         if editor_animation_debug_enabled() {
             eprintln!(
                 "{}: offset={}, glyph_count={}, visible_line_hit={}, scrolling={}, enabled={}",
@@ -1718,7 +1751,15 @@ impl SujianEditorItem {
     fn bounding_rect_for_range(&self, byte_start: usize, byte_end: usize) -> (f64, f64, f64, f64) {
         let glyphs = self.glyph_rects_for_range(byte_start, byte_end);
         if glyphs.is_empty() {
-            return (self.target_cursor_x, self.target_cursor_y, 2.0, cursor_height_for_line(self.current_font_pixel_size as f64, &self.current_font_family.to_string()));
+            return (
+                self.target_cursor_x,
+                self.target_cursor_y,
+                2.0,
+                self.editor_layout.cursor_height(
+                    self.current_font_pixel_size as f64,
+                    &self.current_font_family.to_string(),
+                ),
+            );
         }
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
@@ -1791,7 +1832,11 @@ impl QQuickItem for SujianEditorItem {
         self.update_cursor_visual_position();
 
         let item_ptr = self.get_cpp_object();
-        let dpr = if !item_ptr.is_null() { sujian_item_dpr(item_ptr) } else { 1.0 };
+        let dpr = if !item_ptr.is_null() {
+            sujian_item_dpr(item_ptr)
+        } else {
+            1.0
+        };
         let root_raw = node.into_raw();
 
         let vp_h = self.current_viewport_height.max(1.0) as f64;
@@ -1831,7 +1876,16 @@ impl QQuickItem for SujianEditorItem {
                     };
                     let logical_img_w = image.size().width as f64 / dpr;
                     final_root = sujian_update_texture_node(
-                        root_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
+                        root_raw,
+                        item_ptr,
+                        &image,
+                        0.0,
+                        src_y,
+                        logical_img_w,
+                        src_h,
+                        0.0,
+                        vp_h,
+                        dpr,
                     );
                     self.render_dirty = false;
                     let total_elapsed = frame_start.elapsed();
@@ -1847,7 +1901,17 @@ impl QQuickItem for SujianEditorItem {
                         if let Some(ref buf) = self.scroll_buffer {
                             let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
                             let logical_img_w = buf.image.size().width as f64 / dpr;
-                            sujian_update_source_rect(root_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
+                            sujian_update_source_rect(
+                                root_raw,
+                                item_ptr,
+                                0.0,
+                                src_y,
+                                logical_img_w,
+                                src_h,
+                                0.0,
+                                vp_h,
+                                dpr,
+                            );
                         }
                     }
                     final_root = root_raw;
@@ -1858,7 +1922,17 @@ impl QQuickItem for SujianEditorItem {
                 if let Some(ref buf) = self.scroll_buffer {
                     let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
                     let logical_img_w = buf.image.size().width as f64 / dpr;
-                    sujian_update_source_rect(root_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr);
+                    sujian_update_source_rect(
+                        root_raw,
+                        item_ptr,
+                        0.0,
+                        src_y,
+                        logical_img_w,
+                        src_h,
+                        0.0,
+                        vp_h,
+                        dpr,
+                    );
                 }
             }
             final_root = root_raw;
@@ -1908,7 +1982,11 @@ impl QQuickItem for SujianEditorItem {
 impl SujianEditorItem {
     fn update_cursor_visual_position(&mut self) {
         let scroll_y = self.current_scroll_y as f64;
-        let layout_res = self.editor_layout_cursor_rect(self.buffer.cursor, self.current_cursor_affinity, scroll_y);
+        let layout_res = self.editor_layout_cursor_rect(
+            self.buffer.cursor,
+            self.current_cursor_affinity,
+            scroll_y,
+        );
 
         let cursor_x = layout_res.x;
         let cursor_y = layout_res.y;
@@ -1978,15 +2056,16 @@ impl SujianEditorItem {
         let is_preediting = !self.preedit_text.is_empty();
 
         // Check if line changed, target_y shifted by more than half line, or x shifted by a large amount
-        let line_changed = old_visual_line_id.is_none() || old_visual_line_id != Some(visual_line_id);
+        let line_changed =
+            old_visual_line_id.is_none() || old_visual_line_id != Some(visual_line_id);
         let half_line = cursor_h * 0.5;
         let target_y_changed_more_than_half_line = (old_y - cursor_y).abs() > half_line;
         let x_diff = (old_x - cursor_x).abs();
         let is_small_x_change = x_diff <= 150.0;
 
         // Click/drag/scroll should snap immediately (no animation)
-        let should_snap = self.current_is_scrolling 
-            || is_selecting 
+        let should_snap = self.current_is_scrolling
+            || is_selecting
             || is_preediting
             || !old_visible  // snap when becoming visible again
             || self.force_snap_next_cursor
@@ -2005,7 +2084,9 @@ impl SujianEditorItem {
             (old_x, old_y)
         };
 
-        let (final_x, final_y, new_animation) = if should_snap || !self.current_smooth_cursor_enabled {
+        let (final_x, final_y, new_animation) = if should_snap
+            || !self.current_smooth_cursor_enabled
+        {
             (cursor_x, cursor_y, None)
         } else if let Some(ref anim) = self.cursor_animation {
             if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
@@ -2049,9 +2130,8 @@ impl SujianEditorItem {
         self.force_snap_next_cursor = false;
 
         // Dirty when position changed or visibility transitioned
-        let pos_changed = (final_x - old_x).abs() > 0.01
-            || (final_y - old_y).abs() > 0.01
-            || !old_visible;
+        let pos_changed =
+            (final_x - old_x).abs() > 0.01 || (final_y - old_y).abs() > 0.01 || !old_visible;
         if pos_changed {
             self.cursor_dirty = true;
         }
@@ -2089,7 +2169,12 @@ impl SujianEditorItem {
 
         painter.set_render_hint(QPainterRenderHint::TextAntialiasing, true);
         painter.fill_rect(
-            QRectF { x: 0.0, y: 0.0, width, height: buffer_h },
+            QRectF {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: buffer_h,
+            },
             QBrush::from_color(QColor::from_rgba(0, 0, 0, 0)),
         );
 
@@ -2105,7 +2190,9 @@ impl SujianEditorItem {
 
         let lines = &snapshot.lines;
         let vis_start = lines.partition_point(|l| l.y + l.height < scroll_y);
-        let vis_end = lines.len().min(lines.partition_point(|l| l.y < scroll_y + buffer_h + font_size * 2.0) + 1);
+        let vis_end = lines
+            .len()
+            .min(lines.partition_point(|l| l.y < scroll_y + buffer_h + font_size * 2.0) + 1);
 
         let selection = self.buffer.selection_range();
         let now_anim = Instant::now();
@@ -2116,8 +2203,18 @@ impl SujianEditorItem {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
                 let sel_end = selection.1.min(line.end);
-                let x_start = calculate_cursor_x_for_line(line, sel_start, CaretAffinity::Downstream, &snapshot);
-                let x_end = calculate_cursor_x_for_line(line, sel_end, CaretAffinity::Upstream, &snapshot);
+                let x_start = self.editor_layout.cursor_x_for_line(
+                    &snapshot,
+                    line,
+                    sel_start,
+                    CaretAffinity::Downstream,
+                );
+                let x_end = self.editor_layout.cursor_x_for_line(
+                    &snapshot,
+                    line,
+                    sel_end,
+                    CaretAffinity::Upstream,
+                );
                 draw_rect(
                     painter,
                     x_start,
@@ -2138,7 +2235,10 @@ impl SujianEditorItem {
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
             let text = self.buffer.text[line.start..line.end].to_string();
-            let text_y = text_baseline_y(line, font_size, &font_family) + paint_offset_y;
+            let text_y = self
+                .editor_layout
+                .text_baseline_y(line, font_size, &font_family)
+                + paint_offset_y;
 
             if let Some(ref insert_anim) = active_insert {
                 let insert_in_line = insert_anim.glyphs.iter().any(|g| g.line_index == line_idx);
@@ -2159,7 +2259,14 @@ impl SujianEditorItem {
                     // 插入点之前的文字：正常绘制
                     if insert_start_byte > line.start && insert_start_byte <= line.end {
                         let before = &self.buffer.text[line.start..insert_start_byte];
-                        draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), before.to_string().into());
+                        draw_text(
+                            painter,
+                            line.x,
+                            text_y,
+                            fs,
+                            self.current_text_color.clone(),
+                            before.to_string().into(),
+                        );
                     }
 
                     // 插入的文字：逐字绘制，只画 clip 宽度内的字
@@ -2172,7 +2279,14 @@ impl SujianEditorItem {
                         let gx = glyph.rect.0;
                         let gy = glyph.baseline_y + paint_offset_y;
                         if gx + glyph.rect.2 <= clip_right + 0.5 {
-                            draw_text(painter, gx, gy, fs, self.current_text_color.clone(), glyph.text.clone().into());
+                            draw_text(
+                                painter,
+                                gx,
+                                gy,
+                                fs,
+                                self.current_text_color.clone(),
+                                glyph.text.clone().into(),
+                            );
                         } else if gx < clip_right + 0.5 {
                             let visible_frac = ((clip_right - gx) / glyph.rect.2).clamp(0.0, 1.0);
                             let alpha = (visible_frac * 255.0).round() as i32;
@@ -2180,7 +2294,12 @@ impl SujianEditorItem {
                                 painter,
                                 gx,
                                 gy,
-                                QColor::from_rgba(base_color.red(), base_color.green(), base_color.blue(), alpha),
+                                QColor::from_rgba(
+                                    base_color.red(),
+                                    base_color.green(),
+                                    base_color.blue(),
+                                    alpha,
+                                ),
                                 glyph.text.clone().into(),
                             );
                         }
@@ -2191,7 +2310,14 @@ impl SujianEditorItem {
                         let insert_w = final_insert_w;
                         let after_x = first_glyph.rect.0 + insert_w;
                         let after = &self.buffer.text[insert_end_byte..line.end];
-                        draw_text(painter, after_x, text_y, fs, self.current_text_color.clone(), after.to_string().into());
+                        draw_text(
+                            painter,
+                            after_x,
+                            text_y,
+                            fs,
+                            self.current_text_color.clone(),
+                            after.to_string().into(),
+                        );
                     }
 
                     needs_animation_repaint = true;
@@ -2200,7 +2326,14 @@ impl SujianEditorItem {
             }
 
             // 普通文字绘制
-            draw_text(painter, line.x, text_y, fs, self.current_text_color.clone(), text.into());
+            draw_text(
+                painter,
+                line.x,
+                text_y,
+                fs,
+                self.current_text_color.clone(),
+                text.into(),
+            );
         }
 
         // 删除动画不能用旧字节范围切新正文：先画新正文，再把旧 glyph 作为 ghost 叠上去。
@@ -2228,7 +2361,12 @@ impl SujianEditorItem {
                     painter,
                     gx + offset_x,
                     glyph.baseline_y + offset_y + paint_offset_y,
-                    QColor::from_rgba(base_color.red(), base_color.green(), base_color.blue(), alpha),
+                    QColor::from_rgba(
+                        base_color.red(),
+                        base_color.green(),
+                        base_color.blue(),
+                        alpha,
+                    ),
                     glyph.text.clone().into(),
                 );
             }
@@ -2242,9 +2380,22 @@ impl SujianEditorItem {
                 if idx < vis_start || idx >= vis_end {
                     continue;
                 }
-                if line_contains_cursor_with_affinity(lines, idx, pc, self.current_cursor_affinity) {
-                    let x = calculate_cursor_x_for_line(line, pc, self.current_cursor_affinity, &snapshot);
-                    let baseline = text_baseline_y(line, font_size, &font_family) + paint_offset_y;
+                if self.editor_layout.line_contains_cursor_with_affinity(
+                    lines,
+                    idx,
+                    pc,
+                    self.current_cursor_affinity,
+                ) {
+                    let x = self.editor_layout.cursor_x_for_line(
+                        &snapshot,
+                        line,
+                        pc,
+                        self.current_cursor_affinity,
+                    );
+                    let baseline =
+                        self.editor_layout
+                            .text_baseline_y(line, font_size, &font_family)
+                            + paint_offset_y;
                     draw_text(
                         painter,
                         x,
@@ -2254,17 +2405,26 @@ impl SujianEditorItem {
                         self.preedit_text.clone().into(),
                     );
                     // Preedit width: use a single-line layout for the preedit text itself
-                    let preedit_w = qtextlayout_cursor_to_x(&self.preedit_text, &self.preedit_text, font_size, &font_family);
-                    painter.set_pen(QPen::from_color(color_from_qstring(self.current_text_color.clone())));
+                    let preedit_w =
+                        self.editor_layout
+                            .text_width(&self.preedit_text, font_size, &font_family);
+                    painter.set_pen(QPen::from_color(color_from_qstring(
+                        self.current_text_color.clone(),
+                    )));
                     let underline_y = baseline + 2.0;
-                    let line_f = QLineF { pt1: QPointF { x, y: underline_y }, pt2: QPointF { x: x + preedit_w, y: underline_y } };
+                    let line_f = QLineF {
+                        pt1: QPointF { x, y: underline_y },
+                        pt2: QPointF {
+                            x: x + preedit_w,
+                            y: underline_y,
+                        },
+                    };
                     painter.draw_line(line_f);
                     break;
                 }
             }
         }
 
-        
         // 清理已完成的吐字/吞字动画
         let now_cleanup = Instant::now();
         if let Some(ref anim) = self.insert_animation {
@@ -2300,7 +2460,11 @@ impl SujianEditorItem {
     fn render_to_image(&mut self) -> Option<(qmetaobject::QImage, f64, f64)> {
         let render_start = Instant::now();
         let item_ptr = self.get_cpp_object();
-        let dpr = if !item_ptr.is_null() { sujian_item_dpr(item_ptr) } else { 1.0 };
+        let dpr = if !item_ptr.is_null() {
+            sujian_item_dpr(item_ptr)
+        } else {
+            1.0
+        };
         let width = self.bounding_width();
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let img_w = (width as i32).max(1);
@@ -2358,7 +2522,10 @@ impl SujianEditorItem {
         let phys_w = ((img_w as f64 * dpr) as i32).max(1);
         let phys_h = ((buffer_h * dpr) as i32).max(1);
         let mut image = qmetaobject::QImage::new(
-            qmetaobject::QSize { width: phys_w as u32, height: phys_h as u32 },
+            qmetaobject::QSize {
+                width: phys_w as u32,
+                height: phys_h as u32,
+            },
             qmetaobject::ImageFormat::ARGB32_Premultiplied,
         );
         image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
@@ -2387,11 +2554,19 @@ impl SujianEditorItem {
         let render_elapsed = render_start.elapsed();
         if should_log_slow_paint(self.last_slow_paint_log, render_start) {
             self.last_slow_paint_log = Some(render_start);
-            let vis_lines = self.editor_layout.cache().map(|c| {
-                let start = c.lines.partition_point(|l| l.y + l.height < min_y);
-                let end = c.lines.len().min(c.lines.partition_point(|l| l.y < min_y + buffer_h + self.current_font_pixel_size as f64 * 2.0) + 1);
-                end.saturating_sub(start)
-            }).unwrap_or(0);
+            let vis_lines = self
+                .editor_layout
+                .cache()
+                .map(|c| {
+                    let start = c.lines.partition_point(|l| l.y + l.height < min_y);
+                    let end = c.lines.len().min(
+                        c.lines.partition_point(|l| {
+                            l.y < min_y + buffer_h + self.current_font_pixel_size as f64 * 2.0
+                        }) + 1,
+                    );
+                    end.saturating_sub(start)
+                })
+                .unwrap_or(0);
             eprintln!(
                 "sujian_render_to_image: elapsed_ms={}, img={}x{}(phys {}x{}, dpr={}), vis_lines={}, scroll_y={:.1}, buf_scroll={:.1}, buf_h={:.1}",
                 render_elapsed.as_millis(),
@@ -2406,8 +2581,14 @@ impl SujianEditorItem {
 }
 
 fn normalize_plain_text(text: &str) -> String {
-    let replaced = text.replace('\u{2029}', "\n").replace("\r\n", "\n").replace('\r', "\n");
-    replaced.chars().filter(|&c| c == '\n' || c == '\t' || !c.is_control()).collect()
+    let replaced = text
+        .replace('\u{2029}', "\n")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    replaced
+        .chars()
+        .filter(|&c| c == '\n' || c == '\t' || !c.is_control())
+        .collect()
 }
 
 // =============================================================================
@@ -2521,7 +2702,14 @@ extern "C" fn sujian_request_repaint(rust_item: *mut std::ffi::c_void) {
     item.request_repaint();
 }
 
-fn draw_text(painter: &mut QPainter, x: f64, baseline_y: f64, font_size: f32, color: QString, text: QString) {
+fn draw_text(
+    painter: &mut QPainter,
+    x: f64,
+    baseline_y: f64,
+    font_size: f32,
+    color: QString,
+    text: QString,
+) {
     let _ = font_size;
     painter.set_pen(QPen::from_color(color_from_qstring(color)));
     painter.draw_text(QPointF { x, y: baseline_y }, text);
@@ -2534,7 +2722,12 @@ fn draw_text_color(painter: &mut QPainter, x: f64, baseline_y: f64, color: QColo
 
 fn draw_rect(painter: &mut QPainter, x: f64, y: f64, width: f64, height: f64, color: QString) {
     painter.fill_rect(
-        QRectF { x, y, width, height },
+        QRectF {
+            x,
+            y,
+            width,
+            height,
+        },
         QBrush::from_color(color_from_qstring(color)),
     );
 }
@@ -2578,8 +2771,12 @@ fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, dpr: f64) -> *m
 fn sujian_update_source_rect(
     old_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
-    src_x: f64, src_y: f64, src_w: f64, src_h: f64,
-    dest_y: f64, dest_h: f64,
+    src_x: f64,
+    src_y: f64,
+    src_w: f64,
+    src_h: f64,
+    dest_y: f64,
+    dest_h: f64,
     dpr: f64,
 ) {
     cpp!(unsafe [
@@ -2595,17 +2792,17 @@ fn sujian_update_source_rect(
         auto *imgNode = static_cast<QSGImageNode*>(root->firstChild());
         if (!imgNode) return;
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
-        
+
         double final_src_x = src_x * dpr;
         double final_src_y = src_y * dpr;
         double final_src_w = src_w * dpr;
         double final_src_h = src_h * dpr;
-        
+
         if (imgNode->texture()) {
             QSize texSize = imgNode->texture()->textureSize();
             double tex_w = texSize.width();
             double tex_h = texSize.height();
-            
+
             if (final_src_y < 0.0) final_src_y = 0.0;
             if (final_src_y + final_src_h > tex_h) {
                 if (final_src_h > tex_h) {
@@ -2625,7 +2822,7 @@ fn sujian_update_source_rect(
                 }
             }
         }
-        
+
         imgNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
         imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
     })
@@ -2635,8 +2832,12 @@ fn sujian_update_texture_node(
     old_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     image: &qmetaobject::QImage,
-    src_x: f64, src_y: f64, src_w: f64, src_h: f64,
-    dest_y: f64, dest_h: f64,
+    src_x: f64,
+    src_y: f64,
+    src_w: f64,
+    src_h: f64,
+    dest_y: f64,
+    dest_h: f64,
     dpr: f64,
 ) -> *mut std::ffi::c_void {
     let img_ptr = image as *const qmetaobject::QImage;
@@ -2664,14 +2865,14 @@ fn sujian_update_texture_node(
             root->appendChildNode(imgNode);
         }
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
-        
+
         double tex_w = img_ptr->width();
         double tex_h = img_ptr->height();
         double final_src_x = src_x * dpr;
         double final_src_y = src_y * dpr;
         double final_src_w = src_w * dpr;
         double final_src_h = src_h * dpr;
-        
+
         if (final_src_y < 0.0) final_src_y = 0.0;
         if (final_src_y + final_src_h > tex_h) {
             if (final_src_h > tex_h) {
@@ -2690,7 +2891,7 @@ fn sujian_update_texture_node(
                 final_src_x = tex_w - final_src_w;
             }
         }
-        
+
         imgNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
         imgNode->setTexture(item_ptr->window()->createTextureFromImage(*img_ptr));
         imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
@@ -2701,7 +2902,10 @@ fn sujian_update_texture_node(
 fn sujian_update_cursor_rect(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
-    cx: f64, cy: f64, cw: f64, ch: f64,
+    cx: f64,
+    cy: f64,
+    cw: f64,
+    ch: f64,
     visible: bool,
     color_rgba: u32,
 ) {
@@ -2764,11 +2968,18 @@ fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
 }
 
 fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
-    text[..clamp_to_char_boundary(text, byte_index)].chars().count()
+    text[..clamp_to_char_boundary(text, byte_index)]
+        .chars()
+        .count()
 }
 
 #[allow(dead_code)]
-fn byte_index_at_char_offset_in_range(text: &str, start: usize, end: usize, char_offset: usize) -> usize {
+fn byte_index_at_char_offset_in_range(
+    text: &str,
+    start: usize,
+    end: usize,
+    char_offset: usize,
+) -> usize {
     if char_offset == 0 {
         return start;
     }
@@ -2844,7 +3055,10 @@ mod tests {
         let text = "第一行\n第二行";
         let line_end = "第一行".len();
 
-        assert_eq!(byte_index_at_char_offset_in_range(text, 0, line_end, 3), line_end);
+        assert_eq!(
+            byte_index_at_char_offset_in_range(text, 0, line_end, 3),
+            line_end
+        );
     }
 
     #[test]
@@ -2852,14 +3066,17 @@ mod tests {
         // 1. scroll_y change shouldn't invalidate editor layout cache.
         // The layout cache is only invalidated/refreshed when text, width, font, padding etc change.
         // Changing scroll_y does not touch ensure_layout_cached criteria.
-        
+
         // 2. Validate ScrollBuffer helper functions: contains_viewport and clamp_source_rect.
         let vp_h: f64 = 1000.0;
         let content_h: f64 = 5000.0;
-        
+
         let scroll_buffer = ScrollBuffer {
             image: qmetaobject::QImage::new(
-                qmetaobject::QSize { width: 10, height: 3500 },
+                qmetaobject::QSize {
+                    width: 10,
+                    height: 3500,
+                },
                 qmetaobject::ImageFormat::ARGB32_Premultiplied,
             ),
             buffer_scroll_y: 0.0,
@@ -2872,7 +3089,10 @@ mod tests {
         // Threshold is 0.5 * vp_h = 500.0.
         // At scroll_y = 100.0, it is near the top, but since buffer_scroll_y is 0.0 (top of document),
         // contains_viewport should return true because we can't scroll up anyway.
-        assert!(scroll_buffer.contains_viewport(100.0, vp_h), "Should contain viewport at document top");
+        assert!(
+            scroll_buffer.contains_viewport(100.0, vp_h),
+            "Should contain viewport at document top"
+        );
 
         // Scroll to 2000.0 (viewport is [2000, 3000]).
         // This is within the buffer [0, 3500].
@@ -2880,11 +3100,17 @@ mod tests {
         // near_top = 2000 < 500 (false)
         // near_bottom = 3000 > 3500 - 500 (false, equal, but not strictly greater)
         // So contains_viewport should return true.
-        assert!(scroll_buffer.contains_viewport(2000.0, vp_h), "Should contain viewport in the middle of buffer");
+        assert!(
+            scroll_buffer.contains_viewport(2000.0, vp_h),
+            "Should contain viewport in the middle of buffer"
+        );
 
         // Scroll to 3100.0 (viewport is [3100, 4100]).
         // This is strictly outside the buffer [0, 3500], so contains_viewport must return false.
-        assert!(!scroll_buffer.contains_viewport(3100.0, vp_h), "Should not contain viewport if outside buffer");
+        assert!(
+            !scroll_buffer.contains_viewport(3100.0, vp_h),
+            "Should not contain viewport if outside buffer"
+        );
 
         // Test clamp_source_rect.
         // At scroll_y = 2000.0, src_y = 2000.0, src_h = 1000.0.
@@ -2903,5 +3129,4 @@ mod tests {
         let (src_y_clamp, src_h_clamp) = scroll_buffer.clamp_source_rect(3000.0, vp_h);
         assert!(src_y_clamp + src_h_clamp <= 3500.0);
     }
-
 }
