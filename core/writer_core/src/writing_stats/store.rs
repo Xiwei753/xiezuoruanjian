@@ -481,12 +481,12 @@ impl StatsStore {
         events: &[&WritingInputEvent],
         bucket_ms: i64,
     ) -> Result<Vec<SpeedBucket>> {
-        if events.is_empty() {
+        let (Some(first), Some(last)) = (events.first(), events.last()) else {
             return Ok(Vec::new());
-        }
+        };
 
-        let first_ms = events.first().unwrap().timestamp_ms;
-        let last_ms = events.last().unwrap().timestamp_ms;
+        let first_ms = first.timestamp_ms;
+        let last_ms = last.timestamp_ms;
 
         let mut buckets = Vec::new();
         let mut bucket_start = first_ms;
