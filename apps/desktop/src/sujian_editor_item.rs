@@ -3,6 +3,12 @@
 // =============================================================================
 
 use cpp::cpp;
+use crate::editor::layout::{
+    affinity_for_index_on_line, calculate_cursor_x_for_line, cursor_height_for_line, cursor_rect_for_line,
+    cursor_top_y, line_contains_cursor_with_affinity, qtextlayout_cursor_to_x,
+    qtextlayout_glyph_positions_on_line, text_baseline_y, CaretAffinity, CursorLayoutRect,
+    EditorLayout, LayoutParams, LayoutSnapshot, VisualLine,
+};
 use qmetaobject::prelude::*;
 use qmetaobject::{QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF, QString};
 use std::cell::Cell;
@@ -11,11 +17,8 @@ use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTra
 
 cpp! {{
     #include <QtGui/QFont>
-    #include <QtGui/QFontMetricsF>
     #include <QtGui/QPainter>
     #include <QtGui/QClipboard>
-    #include <QtGui/QTextLayout>
-    #include <QtGui/QTextOption>
     #include <QtGui/QInputMethodEvent>
     #include <QtGui/QKeyEvent>
     #include <QtGui/QMouseEvent>
@@ -25,15 +28,6 @@ cpp! {{
     #include <QtQuick/QSGImageNode>
     #include <QtQuick/QSGRectangleNode>
     #include <QGuiApplication>
-    #include <QDebug>
-    #include <vector>
-
-    struct QTextLayoutEntry {
-        int byteStart;
-        double width;
-        double xPos;
-    };
-    thread_local std::vector<QTextLayoutEntry> g_layout_buf;
 
     // ---- Rust callbacks for event filter ----
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
@@ -176,447 +170,6 @@ cpp! {{
     }
 }}
 
-cpp! {{
-    // ---- QTextLayout-based positioning helpers ----
-
-    // Given paragraph text and a cursor byte offset (UTF-8), return x position
-    // relative to paragraph start. Uses QTextLayout for accurate positioning.
-    // `cursor_before` is the text before the cursor (UTF-8 substring).
-    double sujian_cursor_to_x(
-        const QString& paraText, double fs, const QString& ff,
-        const QString& textBeforeCursor
-    ) {
-        QFont font(ff);
-        font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
-
-        // Find which QTextLine contains the cursor by matching text length
-        int qchar_count = textBeforeCursor.size();
-        double x = 0.0;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            int line_start = line.textStart();
-            int line_len = line.textLength();
-            if (qchar_count >= line_start && qchar_count <= line_start + line_len) {
-                x = line.cursorToX(qchar_count - line_start);
-                break;
-            }
-        }
-        layout.endLayout();
-        return x;
-    }
-
-    // Given paragraph text, a cursor QChar offset, and line layout params,
-    // returns x position relative to the specific QTextLine's content start.
-    // `paragraph_wrap_w` is the full paragraph wrap width (line_wrap_width + line_indent_x).
-    // Does NOT add indent to the returned x — caller adds line.x which already has indent.
-    double sujian_cursor_to_x_on_line(
-        const QString& paraText, int cursor_qchar, int line_qchar_start, int line_qchar_end,
-        double fs, const QString& ff,
-        double paragraph_wrap_w, double indent_w, int qtextline_idx, bool use_trailing
-    ) {
-        QFont font(ff);
-        font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
-
-        double x = 0.0;
-        int cur_idx = 0;
-        bool first = true;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
-            line.setLineWidth(lineWrap);
-            if (cur_idx == qtextline_idx) {
-                int cpp_start = line.textStart();
-                int cpp_len = line.textLength();
-                int local_qchar = cursor_qchar - line_qchar_start;
-                int line_len_qchar = line_qchar_end - line_qchar_start;
-
-                if (local_qchar < 0) local_qchar = 0;
-                if (local_qchar > line_len_qchar) local_qchar = line_len_qchar;
-
-                double lead_x = 0.0;
-                double trail_x = 0.0;
-                if (line_len_qchar > 0) {
-                    int target_lead_qchar = std::min(local_qchar, line_len_qchar - 1);
-                    lead_x = line.cursorToX(target_lead_qchar, QTextLine::Leading);
-                    trail_x = line.cursorToX(target_lead_qchar, QTextLine::Trailing);
-                }
-
-                if (local_qchar == line_len_qchar && line_len_qchar > 0) {
-                    x = line.cursorToX(line_len_qchar - 1, QTextLine::Trailing);
-                } else {
-                    x = line.cursorToX(local_qchar, use_trailing ? QTextLine::Trailing : QTextLine::Leading);
-                }
-
-                int x_to_cursor_roundtrip = line.xToCursor(x);
-
-                qDebug() << "[sujian_cursor_to_x_on_line] qtextline_idx:" << qtextline_idx
-                         << "line.textStart():" << cpp_start
-                         << "line.textLength():" << cpp_len
-                         << "line.naturalTextWidth():" << line.naturalTextWidth()
-                         << "input cursor_qchar:" << cursor_qchar
-                         << "passed line_qchar_start:" << line_qchar_start
-                         << "passed line_qchar_end:" << line_qchar_end
-                         << "computed local_qchar:" << local_qchar
-                         << "use_trailing:" << use_trailing
-                         << "cursorToX(local, Leading):" << lead_x
-                         << "cursorToX(local, Trailing):" << trail_x
-                         << "xToCursor(computed_x):" << x_to_cursor_roundtrip
-                         << "line.x():" << line.x()
-                         << "line.width():" << line.width()
-                         << "naturalTextRect:" << line.naturalTextRect()
-                         << "returned_x:" << x;
-                break;
-            }
-            first = false;
-            cur_idx++;
-        }
-        layout.endLayout();
-        return x;
-    }
-
-    // Given paragraph text, a cursor QChar offset (para-relative), and line layout params,
-    // returns glyph positions for [range_qchar_start, range_qchar_end) on the specific QTextLine.
-    // Results stored in g_layout_buf as {byteStart=para_qchar_offset, width=glyph_width, xPos=glyph_x}.
-    // `paragraph_wrap_w` is the full paragraph wrap width (line_wrap_width + line_indent_x).
-    // Does NOT add indent to xPos — caller adds line.x which already has indent.
-    void sujian_glyph_positions_on_line(
-        const QString& paraText, int range_qchar_start, int range_qchar_end,
-        double fs, const QString& ff, double paragraph_wrap_w, double indent_w, int qtextline_idx
-    ) {
-        QFont font(ff);
-        font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
-
-        g_layout_buf.clear();
-        int cur_idx = 0;
-        bool first = true;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
-            line.setLineWidth(lineWrap);
-            if (cur_idx == qtextline_idx) {
-                int line_start = line.textStart();
-                int line_end = line_start + line.textLength();
-                int r_start = std::max(range_qchar_start, line_start);
-                int r_end = std::min(range_qchar_end, line_end);
-                for (int i = r_start; i < r_end; i++) {
-                    double x1 = line.cursorToX(i - line_start);
-                    double x2 = line.cursorToX(i - line_start + 1);
-                    QTextLayoutEntry e;
-                    e.byteStart = i;  // QChar offset within paragraph
-                    e.width = std::abs(x2 - x1);
-                    e.xPos = x1;
-                    g_layout_buf.push_back(e);
-                }
-                break;
-            }
-            first = false;
-            cur_idx++;
-        }
-        layout.endLayout();
-    }
-
-    // Given paragraph text and an x position, return byte offset within paragraph.
-    // Returns the QChar offset; caller converts to UTF-8 byte offset.
-    int sujian_x_to_cursor(
-        const QString& paraText, double x, double fs, const QString& ff,
-        int qtextline_idx
-    ) {
-        QFont font(ff);
-        font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
-
-        int target_idx = 0;
-        int cur_idx = 0;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            if (cur_idx == qtextline_idx) {
-                target_idx = line.xToCursor(x);
-                // Convert to paragraph-relative QChar offset
-                target_idx = line.textStart() + target_idx;
-                break;
-            }
-            cur_idx++;
-        }
-        layout.endLayout();
-        return target_idx;
-    }
-
-    // Given paragraph text, an x position (relative to line content start), and line layout params,
-    // returns QChar offset within paragraph on the specific QTextLine.
-    // `paragraph_wrap_w` is the full paragraph wrap width (line_wrap_width + line_indent_x).
-    // `x` is relative to line content start (not including indent), so for the first line
-    // we subtract indent before calling xToCursor.
-    int sujian_x_to_cursor_on_line(
-        const QString& paraText, double x, int line_qchar_start, int line_qchar_end,
-        double fs, const QString& ff,
-        double paragraph_wrap_w, double indent_w, int qtextline_idx
-    ) {
-        QFont font(ff);
-        font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
-
-        int target_idx = 0;
-        int cur_idx = 0;
-        bool first = true;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
-            line.setLineWidth(lineWrap);
-            if (cur_idx == qtextline_idx) {
-                int local_qchar = line.xToCursor(x);
-                target_idx = line_qchar_start + local_qchar;
-
-                if (target_idx < line_qchar_start) target_idx = line_qchar_start;
-                if (target_idx > line_qchar_end) target_idx = line_qchar_end;
-
-                int cpp_start = line.textStart();
-                int cpp_len = line.textLength();
-
-                qDebug() << "[sujian_x_to_cursor_on_line] qtextline_idx:" << qtextline_idx
-                         << "line.textStart():" << cpp_start
-                         << "line.textLength():" << cpp_len
-                         << "line.naturalTextWidth():" << line.naturalTextWidth()
-                         << "input x:" << x
-                         << "passed line_qchar_start:" << line_qchar_start
-                         << "passed line_qchar_end:" << line_qchar_end
-                         << "computed local_qchar (line.xToCursor):" << local_qchar
-                         << "computed target_idx:" << target_idx
-                         << "line.x():" << line.x()
-                         << "line.width():" << line.width()
-                         << "naturalTextRect:" << line.naturalTextRect();
-                break;
-            }
-            first = false;
-            cur_idx++;
-        }
-        layout.endLayout();
-        return target_idx;
-    }
-
-    // Given paragraph text and a byte range, return per-glyph x positions.
-    // Results stored in g_layout_buf as {byteStart=para_qchar_offset, width=glyph_width, xPos=glyph_x}.
-    void sujian_glyph_positions(
-        const QString& paraText, int range_qchar_start, int range_qchar_end,
-        double fs, const QString& ff, int qtextline_idx
-    ) {
-        QFont font(ff);
-        font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
-
-        g_layout_buf.clear();
-        int cur_idx = 0;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            if (cur_idx == qtextline_idx) {
-                int line_start = line.textStart();
-                int line_end = line_start + line.textLength();
-                int r_start = std::max(range_qchar_start, line_start);
-                int r_end = std::min(range_qchar_end, line_end);
-                for (int i = r_start; i < r_end; i++) {
-                    double x1 = line.cursorToX(i - line_start);
-                    double x2 = line.cursorToX(i - line_start + 1);
-                    QTextLayoutEntry e;
-                    e.byteStart = i;  // QChar offset within paragraph
-                    e.width = std::abs(x2 - x1);
-                    e.xPos = x1;
-                    g_layout_buf.push_back(e);
-                }
-                break;
-            }
-            cur_idx++;
-        }
-        layout.endLayout();
-    }
-}}
-
-/// QTextLayout-based cursor-to-x: given paragraph text and text before cursor,
-/// returns x position relative to paragraph origin.
-/// DEPRECATED: use qtextlayout_cursor_to_x_on_line for wrapped-line accuracy.
-fn qtextlayout_cursor_to_x(para_text: &str, text_before_cursor: &str, font_size: f64, font_family: &str) -> f64 {
-    let para: QString = para_text.to_string().into();
-    let before: QString = text_before_cursor.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    cpp!(unsafe [para as "QString", before as "QString", fs as "float", ff as "QString"] -> f64 as "double" {
-        return sujian_cursor_to_x(para, fs, ff, before);
-    })
-}
-
-/// QTextLayout-based cursor-to-x on a specific visual line with correct wrap/indent.
-/// `cursor_abs_byte` is the absolute byte offset of the cursor in the full text.
-/// `paragraph_wrap_w` should be `line.line_wrap_width + line.line_indent_x`.
-fn qtextlayout_cursor_to_x_on_line(
-    para_text: &str, cursor_abs_byte: usize, para_start: usize,
-    line_qchar_start: i32, line_qchar_end: i32,
-    font_size: f64, font_family: &str,
-    paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
-    use_trailing: bool,
-) -> f64 {
-    let cursor_in_para = cursor_abs_byte.saturating_sub(para_start);
-    let cursor_qchar = byte_offset_to_qchar_offset(para_text, cursor_in_para) as i32;
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    cpp!(unsafe [
-        para as "QString", cursor_qchar as "int",
-        line_qchar_start as "int", line_qchar_end as "int",
-        fs as "float", ff as "QString",
-        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int",
-        use_trailing as "bool"
-    ] -> f64 as "double" {
-        return sujian_cursor_to_x_on_line(para, cursor_qchar, line_qchar_start, line_qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx, use_trailing);
-    })
-}
-
-/// QTextLayout-based glyph positions on a specific visual line with correct wrap/indent.
-/// `range_start` and `range_end` are absolute byte offsets in the full text.
-/// `paragraph_wrap_w` should be `line.line_wrap_width + line.line_indent_x`.
-/// Returns per-glyph (abs_byte_offset, x, width).
-fn qtextlayout_glyph_positions_on_line(
-    para_text: &str, range_start: usize, range_end: usize, para_start: usize,
-    font_size: f64, font_family: &str,
-    paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
-) -> Vec<(usize, f64, f64)> {
-    let seg_start_in_para = range_start.saturating_sub(para_start);
-    let seg_end_in_para = range_end.saturating_sub(para_start).min(para_text.len());
-    let qchar_start = byte_offset_to_qchar_offset(para_text, seg_start_in_para) as i32;
-    let qchar_end = byte_offset_to_qchar_offset(para_text, seg_end_in_para) as i32;
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    let count = cpp!(unsafe [
-        para as "QString", qchar_start as "int", qchar_end as "int",
-        fs as "float", ff as "QString",
-        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int"
-    ] -> i32 as "int" {
-        sujian_glyph_positions_on_line(para, qchar_start, qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
-        return static_cast<int>(g_layout_buf.size());
-    });
-    let mut result = Vec::with_capacity(count as usize);
-    for i in 0..count {
-        let idx = i;
-        let qchar_off = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
-            return static_cast<qulonglong>(g_layout_buf[idx].byteStart);
-        });
-        let w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_layout_buf[idx].width;
-        });
-        let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_layout_buf[idx].xPos;
-        });
-        let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off);
-        let abs_byte = para_start + para_byte;
-        result.push((abs_byte, x_pos, w));
-    }
-    result
-}
-
-/// QTextLayout-based x-to-cursor: given paragraph text and x position,
-/// returns QChar offset within paragraph. Caller converts to UTF-8 byte offset.
-/// DEPRECATED: use qtextlayout_x_to_cursor_on_line for wrapped-line accuracy.
-#[allow(dead_code)]
-fn qtextlayout_x_to_cursor_qchar(para_text: &str, x: f64, font_size: f64, font_family: &str, qtextline_idx: i32) -> i32 {
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    cpp!(unsafe [para as "QString", x as "double", fs as "float", ff as "QString", qtextline_idx as "int"] -> i32 as "int" {
-        return sujian_x_to_cursor(para, x, fs, ff, qtextline_idx);
-    })
-}
-
-/// QTextLayout-based x-to-cursor on a specific visual line with correct wrap/indent.
-/// `x` is relative to the line content start (i.e., caller already subtracted line.x).
-/// `paragraph_wrap_w` should be `line.line_wrap_width + line.line_indent_x`.
-/// Returns absolute byte offset in the full text.
-fn qtextlayout_x_to_cursor_on_line(
-    para_text: &str, x: f64, para_start: usize,
-    line_qchar_start: i32, line_qchar_end: i32,
-    font_size: f64, font_family: &str,
-    paragraph_wrap_w: f64, indent_w: f64, qtextline_idx: i32,
-) -> usize {
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    let qchar_off = cpp!(unsafe [
-        para as "QString", x as "double",
-        line_qchar_start as "int", line_qchar_end as "int",
-        fs as "float", ff as "QString",
-        paragraph_wrap_w as "double", indent_w as "double", qtextline_idx as "int"
-    ] -> i32 as "int" {
-        return sujian_x_to_cursor_on_line(para, x, line_qchar_start, line_qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
-    });
-    let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off as usize);
-    para_start + para_byte
-}
-
-/// QTextLayout-based glyph positions: returns per-glyph (byte_offset_in_para, x, width) for a range.
-#[allow(dead_code)]
-fn qtextlayout_glyph_positions(para_text: &str, range_start: usize, range_end: usize, font_size: f64, font_family: &str, qtextline_idx: i32) -> Vec<(usize, f64, f64)> {
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    let qchar_start = byte_offset_to_qchar_offset(para_text, range_start) as i32;
-    let qchar_end = byte_offset_to_qchar_offset(para_text, range_end) as i32;
-    let count = cpp!(unsafe [para as "QString", qchar_start as "int", qchar_end as "int", fs as "float", ff as "QString", qtextline_idx as "int"] -> i32 as "int" {
-        sujian_glyph_positions(para, qchar_start, qchar_end, fs, ff, qtextline_idx);
-        return static_cast<int>(g_layout_buf.size());
-    });
-    let mut result = Vec::with_capacity(count as usize);
-    for i in 0..count {
-        let idx = i;
-        let qchar_off = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
-            return static_cast<qulonglong>(g_layout_buf[idx].byteStart);
-        });
-        let w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_layout_buf[idx].width;
-        });
-        let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_layout_buf[idx].xPos;
-        });
-        let byte_off = qchar_offset_to_byte_offset(para_text, qchar_off);
-        result.push((byte_off, x_pos, w));
-    }
-    result
-}
-
-/// Convert UTF-8 byte offset to QChar offset within a string.
-fn byte_offset_to_qchar_offset(text: &str, byte_offset: usize) -> usize {
-    text[..byte_offset.min(text.len())].chars().map(|c| c.len_utf16()).sum()
-}
-
 const KEY_BACKSPACE: i32 = 0x0100_0003;
 const KEY_TAB: i32 = 0x0100_0001;
 const KEY_ENTER: i32 = 0x0100_0005;
@@ -674,54 +227,6 @@ struct EditorSnapshot {
     text: String,
     cursor: usize,
     selection_anchor: usize,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct VisualLine {
-    /// 视觉行唯一 ID（从 0 开始递增）
-    id: usize,
-    /// 全文绝对字节起始 (UTF-8)
-    start: usize,
-    /// 全文绝对字节结束 (UTF-8)
-    end: usize,
-    hard_break: bool,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    /// 所属段落的完整文本（用于 QTextLayout 查询）
-    para_text: String,
-    /// 段落在全文中的字节起始偏移 (UTF-8)
-    para_start: usize,
-    /// 在 QTextLayout 中的行索引（同一段落内从 0 开始）
-    qtextline_idx: i32,
-    /// 段落内此行起始的 QChar (UTF-16) 偏移
-    para_qchar_start: usize,
-    /// 段落内此行结束的 QChar (UTF-16) 偏移
-    para_qchar_end: usize,
-    /// 此行的 wrap width（第一行需减去 indent）
-    line_wrap_width: f64,
-    /// 此行的 indent x 偏移（仅段落首行为 indent_w，其余为 0）
-    line_indent_x: f64,
-}
-
-struct LayoutCache {
-    text_ptr: usize,
-    text_len: usize,
-    width: f64,
-    font_size: f32,
-    font_family: String,
-    line_spacing: f32,
-    text_indent: f32,
-    padding: f32,
-    lines: Vec<VisualLine>,
-    content_height: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CaretAffinity {
-    Upstream,   // 靠前（上一行尾）
-    Downstream, // 靠后（下一行首）
 }
 
 /// 滚动缓冲区 — 缓存超大 QImage + 纹理，滚动时只更新 rect 不重绘
@@ -803,15 +308,6 @@ impl ScrollBuffer {
 
         (src_y, src_h)
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct CursorLayoutRect {
-    x: f64,
-    y: f64,
-    h: f64,
-    visual_line_id: usize,
-    visible: bool,
 }
 
 /// 光标动画状态 — 固定时长 tween，不再用指数追赶
@@ -1164,7 +660,7 @@ pub struct SujianEditorItem {
     preedit_text: String,
     preedit_cursor: usize,
     suppress_next_ime_commit: bool,
-    layout_cache: Option<LayoutCache>,
+    editor_layout: EditorLayout,
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
@@ -1271,7 +767,7 @@ impl Default for SujianEditorItem {
             preedit_text: String::new(),
             preedit_cursor: 0,
             suppress_next_ime_commit: false,
-            layout_cache: None,
+            editor_layout: EditorLayout::default(),
             render_dirty: true,
             scroll_buffer: None,
             last_slow_paint_log: None,
@@ -2010,61 +1506,29 @@ impl SujianEditorItem {
     }
 
     fn invalidate_layout_cache(&mut self) {
-        self.layout_cache = None;
+        self.editor_layout.invalidate();
         self.scroll_buffer = None;
     }
 
-    fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
-        let text_ptr = self.buffer.text.as_ptr() as usize;
-        let text_len = self.buffer.text.len();
-        let font_size = self.current_font_pixel_size;
-        let font_family = self.current_font_family.to_string();
-        let line_spacing = self.current_line_spacing;
-        let text_indent = self.current_text_indent;
-        let padding = self.current_padding;
-
-        let needs_refresh = match &self.layout_cache {
-            Some(c) => c.text_ptr != text_ptr
-                || c.text_len != text_len
-                || (c.width - width).abs() > 0.1
-                || (c.font_size - font_size).abs() > 0.1
-                || c.font_family != font_family
-                || (c.line_spacing - line_spacing).abs() > 0.01
-                || (c.text_indent - text_indent).abs() > 0.1
-                || (c.padding - padding).abs() > 0.1,
-            None => true,
-        };
-
-        if needs_refresh {
-            let lines = layout_lines(
-                &self.buffer.text,
-                width,
-                font_size as f64,
-                line_spacing as f64,
-                padding as f64,
-                text_indent as f64,
-                &font_family,
-            );
-            let content_height = lines
-                .last()
-                .map(|l| (l.y + l.height + padding as f64) as f32)
-                .unwrap_or((font_size * line_spacing + padding * 2.0) as f32)
-                .max(1.0);
-            self.layout_cache = Some(LayoutCache {
-                text_ptr,
-                text_len,
-                width,
-                font_size,
-                font_family,
-                line_spacing,
-                text_indent,
-                padding,
-                lines,
-                content_height,
-            });
+    fn layout_params(&self, width: f64) -> LayoutParams {
+        LayoutParams {
+            width,
+            font_size: self.current_font_pixel_size,
+            font_family: self.current_font_family.to_string(),
+            line_spacing: self.current_line_spacing,
+            text_indent: self.current_text_indent,
+            padding: self.current_padding,
         }
+    }
 
-        &self.layout_cache.as_ref().unwrap().lines
+    fn layout_snapshot(&mut self, width: f64) -> LayoutSnapshot {
+        let params = self.layout_params(width);
+        self.editor_layout.snapshot(&self.buffer.text, params).clone()
+    }
+
+    fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
+        let params = self.layout_params(width);
+        &self.editor_layout.snapshot(&self.buffer.text, params).lines
     }
 
     fn adjust_affinity_at_wrap_boundary(&mut self) {
@@ -2089,170 +1553,54 @@ impl SujianEditorItem {
         affinity: CaretAffinity,
         scroll_y: f64,
     ) -> CursorLayoutRect {
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = self.current_font_family.to_string();
-        let line_spacing = self.current_line_spacing as f64;
         let width = self.bounding_width();
-
-        let lines = self.ensure_layout_cached(width);
-
-        let mut found_line = None;
-        for (idx, line) in lines.iter().enumerate() {
-            if line_contains_cursor_with_affinity(lines, idx, cursor_byte, affinity) {
-                found_line = Some(line.clone());
-                break;
-            }
-        }
-        let line = found_line.unwrap_or_else(|| {
-            if let Some(last) = lines.last() {
-                last.clone()
-            } else {
-                VisualLine {
-                    id: 0,
-                    start: 0,
-                    end: 0,
-                    hard_break: true,
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: font_size * line_spacing,
-                    para_text: "".to_string(),
-                    para_start: 0,
-                    qtextline_idx: 0,
-                    para_qchar_start: 0,
-                    para_qchar_end: 0,
-                    line_wrap_width: 0.0,
-                    line_indent_x: 0.0,
-                }
-            }
-        });
-
-        let cursor_x = calculate_cursor_x_for_line(&line, cursor_byte, affinity, font_size, &font_family);
-        let (cursor_y_doc, cursor_h) = cursor_rect_for_line(&line, font_size, &font_family);
-        let cursor_y = cursor_y_doc - scroll_y;
-
-        let vp_h = self.current_viewport_height.max(1.0) as f64;
-        let visible = cursor_y + cursor_h > 0.0 && cursor_y < vp_h;
-
-        // Idempotency check
-        #[cfg(debug_assertions)]
-        {
-            let check_x = calculate_cursor_x_for_line(&line, cursor_byte, affinity, font_size, &font_family);
-            let (check_y_doc, check_h) = cursor_rect_for_line(&line, font_size, &font_family);
-            let check_y = check_y_doc - scroll_y;
-            let check_visible = check_y + check_h > 0.0 && check_y < vp_h;
-            debug_assert_eq!(cursor_x, check_x);
-            debug_assert_eq!(cursor_y, check_y);
-            debug_assert_eq!(cursor_h, check_h);
-            debug_assert_eq!(visible, check_visible);
-        }
-
-        CursorLayoutRect {
-            x: cursor_x,
-            y: cursor_y,
-            h: cursor_h,
-            visual_line_id: line.id,
-            visible,
-        }
+        let snapshot = self.layout_snapshot(width);
+        self.editor_layout.caret_rect(
+            &snapshot,
+            cursor_byte,
+            affinity,
+            scroll_y,
+            self.current_viewport_height.max(1.0) as f64,
+        )
     }
 
     fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
         let width = self.bounding_width();
-        let lines = self.ensure_layout_cached(width).clone();
-        if lines.is_empty() {
-            return (0, CaretAffinity::Downstream);
-        }
-        // Viewport model: y is viewport coordinate, convert to document coordinate
+        let snapshot = self.layout_snapshot(width);
         let scroll_y = self.current_scroll_y as f64;
-        let doc_y = y + scroll_y;
-        let line_opt = lines
-            .iter()
-            .enumerate()
-            .find(|(_, line)| doc_y < line.y + line.height);
-        let (line_idx, line) = match line_opt {
-            Some((idx, l)) => (idx, l),
-            None => (lines.len() - 1, lines.last().unwrap()),
-        };
-        let raw_index = self.index_at_line_x(line, x);
-        // Lock to current visual line: clamp byte_index to line.start..=line.end
-        let index = raw_index.max(line.start).min(line.end);
-        debug_assert!(
-            index >= line.start && index <= line.end,
-            "hit_test: index {} out of line range {}..{}", index, line.start, line.end
-        );
-        let affinity = if index == line.end && line.start != line.end {
-            CaretAffinity::Upstream
-        } else {
-            CaretAffinity::Downstream
-        };
-
-        // Debug assert: cursor_rect(hit_index) y must fall near the hit visual line
-        let scroll_y = self.current_scroll_y as f64;
-        let rect = self.editor_layout_cursor_rect(index, affinity, scroll_y);
-        let rect_y_doc = rect.y + scroll_y;
-        let line_top = line.y;
-        let line_bottom = line.y + line.height;
-        let diff = if rect_y_doc < line_top {
-            line_top - rect_y_doc
-        } else if rect_y_doc > line_bottom {
-            rect_y_doc - line_bottom
-        } else {
-            0.0
-        };
-        debug_assert!(
-            diff < 5.0,
-            "hit_test debug assert failed: rect_y_doc={:.2} is not within hit line range {:.2}..{:.2} (diff={:.2})",
-            rect_y_doc, line_top, line_bottom, diff
-        );
-
+        let (index, affinity) = self.editor_layout.hit_test(&snapshot, x, y, scroll_y);
         if sujian_editor_debug_enabled() {
             eprintln!(
-                "hit_test: mouse_x={:.1}, mouse_y={:.1}, doc_y={:.1}, current_scroll_y={:.1}, hit_visual_line_idx={}, line_range={}..{}, raw_index={}, clamped_index={}, affinity={:?}",
-                x, y, doc_y, self.current_scroll_y, line_idx, line.start, line.end, raw_index, index, affinity
+                "hit_test: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, clamped_index={}, affinity={:?}",
+                x, y, self.current_scroll_y, index, affinity
             );
         }
         (index, affinity)
     }
 
     fn index_at_line_x(&self, line: &VisualLine, x: f64) -> usize {
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = self.current_font_family.to_string();
-        let relative = (x - line.x).max(0.0);
-        if line.para_text.is_empty() {
-            return line.start;
-        }
-        let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
-        qtextlayout_x_to_cursor_on_line(
-            &line.para_text, relative, line.para_start,
-            line.para_qchar_start as i32, line.para_qchar_end as i32,
-            font_size, &font_family,
-            paragraph_wrap_w, line.line_indent_x, line.qtextline_idx,
-        )
+        let snapshot = self
+            .editor_layout
+            .cache()
+            .expect("index_at_line_x requires an existing layout snapshot");
+        self.editor_layout.index_at_line_x(snapshot, line, x)
     }
 
     fn cursor_line_and_x(&self, lines: &[VisualLine]) -> Option<(usize, f64)> {
-        if lines.is_empty() {
-            return None;
-        }
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = self.current_font_family.to_string();
-        for (idx, line) in lines.iter().enumerate() {
-            if line_contains_cursor_with_affinity(lines, idx, self.buffer.cursor, self.current_cursor_affinity) {
-                let cursor_x = calculate_cursor_x_for_line(line, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-                return Some((idx, cursor_x));
-            }
-        }
-        lines.last().map(|line| {
-            let cursor_x = calculate_cursor_x_for_line(line, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-            (lines.len() - 1, cursor_x)
-        })
+        let snapshot = self
+            .editor_layout
+            .cache()
+            .expect("cursor_line_and_x requires an existing layout snapshot");
+        debug_assert_eq!(lines.len(), snapshot.lines.len());
+        self.editor_layout
+            .cursor_line_and_x(snapshot, self.buffer.cursor, self.current_cursor_affinity)
     }
 
     /// 给定字节范围 [byte_start, byte_end)，返回每个字形的矩形信息。
     /// 使用 QTextLayout 精确定位每个字形。
     #[allow(dead_code)]
     fn glyph_rects_for_range(&self, byte_start: usize, byte_end: usize) -> Vec<AnimatedGlyph> {
-        let Some(ref cache) = self.layout_cache else {
+        let Some(cache) = self.editor_layout.cache() else {
             return Vec::new();
         };
         let lines = &cache.lines;
@@ -2317,14 +1665,15 @@ impl SujianEditorItem {
         }
         self.invalidate_layout_cache();
         let width = self.bounding_width();
-        let lines = self.ensure_layout_cached(width).clone();
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = self.current_font_family.to_string();
-        let (target_x, target_y, target_line_idx) = cursor_geometry_with_font(&self.buffer.text, &lines, self.buffer.cursor, self.current_cursor_affinity, font_size, &font_family);
-        let cursor_h = if target_line_idx < lines.len() {
-            cursor_rect_for_line(&lines[target_line_idx], font_size, &font_family).1
+        let snapshot = self.layout_snapshot(width);
+        let font_size = snapshot.font_size as f64;
+        let (target_x, target_y, target_line_id) =
+            self.editor_layout
+                .cursor_geometry(&snapshot, self.buffer.cursor, self.current_cursor_affinity);
+        let cursor_h = if let Some(line) = snapshot.lines.iter().find(|line| line.id == target_line_id) {
+            cursor_rect_for_line(line, font_size, &snapshot.font_family).1
         } else {
-            cursor_height_for_line(font_size, &font_family)
+            cursor_height_for_line(font_size, &snapshot.font_family)
         };
         let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
         self.delete_animation = Some(DeleteAnimation {
@@ -2728,11 +2077,8 @@ impl SujianEditorItem {
     fn paint_onto(&mut self, painter: &mut QPainter, buffer_scroll_y: f64, buffer_h: f64) {
         let paint_start = Instant::now();
         let width = self.bounding_width();
-        // 先确保布局缓存有效，然后借用而非 clone
-        {
-            let _ = self.ensure_layout_cached(width);
-        }
-        let content_h = self.layout_cache.as_ref().map(|c| c.content_height).unwrap_or(self.current_content_height);
+        let snapshot = self.layout_snapshot(width);
+        let content_h = snapshot.content_height;
         if (self.current_content_height - content_h).abs() > 0.5 {
             self.current_content_height = content_h;
             self.content_height_dirty.set(true);
@@ -2757,8 +2103,7 @@ impl SujianEditorItem {
             painter->setFont(f);
         });
 
-        // 借用 layout_cache 中的 lines，不 clone
-        let lines = &self.layout_cache.as_ref().unwrap().lines;
+        let lines = &snapshot.lines;
         let vis_start = lines.partition_point(|l| l.y + l.height < scroll_y);
         let vis_end = lines.len().min(lines.partition_point(|l| l.y < scroll_y + buffer_h + font_size * 2.0) + 1);
 
@@ -2771,8 +2116,8 @@ impl SujianEditorItem {
             if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
                 let sel_start = selection.0.max(line.start);
                 let sel_end = selection.1.min(line.end);
-                let x_start = calculate_cursor_x_for_line(line, sel_start, CaretAffinity::Downstream, font_size, &font_family);
-                let x_end = calculate_cursor_x_for_line(line, sel_end, CaretAffinity::Upstream, font_size, &font_family);
+                let x_start = calculate_cursor_x_for_line(line, sel_start, CaretAffinity::Downstream, &snapshot);
+                let x_end = calculate_cursor_x_for_line(line, sel_end, CaretAffinity::Upstream, &snapshot);
                 draw_rect(
                     painter,
                     x_start,
@@ -2898,7 +2243,7 @@ impl SujianEditorItem {
                     continue;
                 }
                 if line_contains_cursor_with_affinity(lines, idx, pc, self.current_cursor_affinity) {
-                    let x = calculate_cursor_x_for_line(line, pc, self.current_cursor_affinity, font_size, &font_family);
+                    let x = calculate_cursor_x_for_line(line, pc, self.current_cursor_affinity, &snapshot);
                     let baseline = text_baseline_y(line, font_size, &font_family) + paint_offset_y;
                     draw_text(
                         painter,
@@ -2974,7 +2319,7 @@ impl SujianEditorItem {
 
         if self.scroll_buffer.is_none() {
             miss_reason = "no_buffer";
-        } else if self.layout_cache.is_none() {
+        } else if self.editor_layout.cache().is_none() {
             miss_reason = "layout_invalidated";
         } else {
             let buf = self.scroll_buffer.as_ref().unwrap();
@@ -3042,7 +2387,7 @@ impl SujianEditorItem {
         let render_elapsed = render_start.elapsed();
         if should_log_slow_paint(self.last_slow_paint_log, render_start) {
             self.last_slow_paint_log = Some(render_start);
-            let vis_lines = self.layout_cache.as_ref().map(|c| {
+            let vis_lines = self.editor_layout.cache().map(|c| {
                 let start = c.lines.partition_point(|l| l.y + l.height < min_y);
                 let end = c.lines.len().min(c.lines.partition_point(|l| l.y < min_y + buffer_h + self.current_font_pixel_size as f64 * 2.0) + 1);
                 end.saturating_sub(start)
@@ -3174,417 +2519,6 @@ extern "C" fn sujian_ime_cancel(rust_item: *mut std::ffi::c_void) {
 extern "C" fn sujian_request_repaint(rust_item: *mut std::ffi::c_void) {
     let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
     item.request_repaint();
-}
-
-/// Convert UTF-16 QChar offset to UTF-8 byte offset within a string.
-/// Properly handles surrogate pairs (emoji, CJK extension B, etc.).
-fn qchar_offset_to_byte_offset(text: &str, qchar_offset: usize) -> usize {
-    let mut qchar_count: usize = 0;
-    for (byte_pos, ch) in text.char_indices() {
-        if qchar_count >= qchar_offset {
-            return byte_pos;
-        }
-        qchar_count += ch.len_utf16();
-    }
-    // If qchar_offset is beyond the end, return text.len()
-    text.len()
-}
-
-fn layout_lines(text: &str, width: f64, font_size: f64, line_spacing: f64, padding: f64, indent: f64, font_family: &str) -> Vec<VisualLine> {
-    let line_height = (font_size * line_spacing).max(font_size + 4.0);
-    let available = (width - padding * 2.0).max(font_size);
-    let mut result = Vec::new();
-    let mut y = padding;
-    let mut paragraph_start = 0;
-    let mut line_id: usize = 0;
-
-    for paragraph in text.split_inclusive('\n') {
-        let hard_break = paragraph.ends_with('\n');
-        let paragraph_text = paragraph.trim_end_matches('\n');
-        let paragraph_text_end = paragraph_start + paragraph_text.len();
-
-        if paragraph_text.is_empty() {
-            result.push(VisualLine {
-                id: line_id,
-                start: paragraph_start,
-                end: paragraph_start,
-                hard_break,
-                x: padding + indent,
-                y,
-                width: 0.0,
-                height: line_height,
-                para_text: String::new(),
-                para_start: paragraph_start,
-                qtextline_idx: 0,
-                para_qchar_start: 0,
-                para_qchar_end: 0,
-                line_wrap_width: available - indent,
-                line_indent_x: indent,
-            });
-            line_id += 1;
-            y += line_height;
-            paragraph_start += paragraph.len();
-            continue;
-        }
-
-        let para_start = paragraph_start;
-        let fs = font_size as f32;
-        let ff: QString = font_family.to_string().into();
-        let wrap_w = available as f64;
-        let indent_w = indent;
-        let text_qstr: QString = paragraph_text.to_string().into();
-
-        // 用 QTextLayout 做真正的文本布局，结果写入 g_layout_buf
-        let line_count = cpp!(unsafe [
-            text_qstr as "QString",
-            fs as "float",
-            ff as "QString",
-            wrap_w as "double",
-            indent_w as "double"
-        ] -> i32 as "int" {
-            QFont font(ff);
-            font.setPixelSize(static_cast<int>(fs));
-            QTextLayout layout(text_qstr, font);
-            QTextOption option;
-            option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-            layout.setTextOption(option);
-            layout.beginLayout();
-
-            g_layout_buf.clear();
-            bool first = true;
-
-            while (true) {
-                QTextLine line = layout.createLine();
-                if (!line.isValid()) break;
-                double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
-                line.setLineWidth(lineWrap);
-                QTextLayoutEntry e;
-                e.byteStart = line.textStart();
-                e.width = line.naturalTextWidth();
-                e.xPos = first ? indent_w : 0.0;
-                g_layout_buf.push_back(e);
-                first = false;
-            }
-            layout.endLayout();
-            return static_cast<int>(g_layout_buf.size());
-        });
-
-        // 从 g_layout_buf 读取，QChar 偏移转 UTF-8 字节偏移
-        for line_idx in 0..line_count {
-            let idx = line_idx;
-            let qchar_off = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
-                if (idx >= 0 && idx < static_cast<int>(g_layout_buf.size())) {
-                    return static_cast<qulonglong>(g_layout_buf[idx].byteStart);
-                }
-                return 0;
-            });
-            let line_w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-                if (idx >= 0 && idx < static_cast<int>(g_layout_buf.size())) {
-                    return g_layout_buf[idx].width;
-                }
-                return 0.0;
-            });
-            let x_off = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-                if (idx >= 0 && idx < static_cast<int>(g_layout_buf.size())) {
-                    return g_layout_buf[idx].xPos;
-                }
-                return 0.0;
-            });
-
-            let byte_off = qchar_offset_to_byte_offset(paragraph_text, qchar_off);
-            let abs_start = para_start + byte_off;
-            let para_qchar_end = if line_idx + 1 < line_count {
-                let next_idx = line_idx + 1;
-                let next_qchar = cpp!(unsafe [next_idx as "int"] -> usize as "qulonglong" {
-                    if (next_idx >= 0 && next_idx < static_cast<int>(g_layout_buf.size())) {
-                        return static_cast<qulonglong>(g_layout_buf[next_idx].byteStart);
-                    }
-                    return 0;
-                });
-                next_qchar
-            } else {
-                byte_offset_to_qchar_offset(paragraph_text, paragraph_text.len())
-            };
-            let abs_end = if line_idx + 1 < line_count {
-                para_start + qchar_offset_to_byte_offset(paragraph_text, para_qchar_end)
-            } else {
-                paragraph_text_end
-            };
-            let is_first = line_idx == 0;
-
-            result.push(VisualLine {
-                id: line_id,
-                start: abs_start,
-                end: abs_end,
-                hard_break: hard_break && abs_end == paragraph_text_end,
-                x: padding + x_off,
-                y,
-                width: line_w,
-                height: line_height,
-                para_text: paragraph_text.to_string(),
-                para_start,
-                qtextline_idx: line_idx as i32,
-                para_qchar_start: qchar_off,
-                para_qchar_end,
-                line_wrap_width: if is_first { available - indent } else { available },
-                line_indent_x: if is_first { indent } else { 0.0 },
-            });
-            line_id += 1;
-            y += line_height;
-        }
-
-        paragraph_start += paragraph.len();
-    }
-
-    if text.ends_with('\n') {
-        result.push(VisualLine {
-            id: line_id,
-            start: text.len(),
-            end: text.len(),
-            hard_break: false,
-            x: padding + indent,
-            y,
-            width: 0.0,
-            height: line_height,
-            para_text: String::new(),
-            para_start: text.len(),
-            qtextline_idx: 0,
-            para_qchar_start: 0,
-            para_qchar_end: 0,
-            line_wrap_width: available - indent,
-            line_indent_x: indent,
-        });
-        line_id += 1;
-    }
-
-    if text.is_empty() {
-        result.push(VisualLine {
-            id: line_id,
-            start: 0,
-            end: 0,
-            hard_break: false,
-            x: padding + indent,
-            y,
-            width: 0.0,
-            height: line_height,
-            para_text: String::new(),
-            para_start: 0,
-            qtextline_idx: 0,
-            para_qchar_start: 0,
-            para_qchar_end: 0,
-            line_wrap_width: available - indent,
-            line_indent_x: indent,
-        });
-    }
-    // Roundtrip verification checks
-    for line in &result {
-        if line.start == line.end || line.para_text.is_empty() {
-            continue;
-        }
-        let x_right = qtextlayout_cursor_to_x_on_line(
-            &line.para_text,
-            line.end,
-            line.para_start,
-            line.para_qchar_start as i32,
-            line.para_qchar_end as i32,
-            font_size,
-            font_family,
-            line.line_wrap_width + line.line_indent_x,
-            line.line_indent_x,
-            line.qtextline_idx,
-            true,
-        );
-        if x_right <= 0.01 {
-            eprintln!(
-                "ERROR: Roundtrip assert failed for line {}: cursorToX(line.end, Upstream) returned 0 or close to 0! x_right={:.2}, line.x={:.2}, line.width={:.2}, range={}..{}",
-                line.id, x_right, line.x, line.width, line.start, line.end
-            );
-        } else {
-            let index2 = qtextlayout_x_to_cursor_on_line(
-                &line.para_text,
-                x_right,
-                line.para_start,
-                line.para_qchar_start as i32,
-                line.para_qchar_end as i32,
-                font_size,
-                font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.line_indent_x,
-                line.qtextline_idx,
-            );
-            let diff = (index2 as isize - line.end as isize).abs();
-            if diff > 4 {
-                eprintln!(
-                    "ERROR: Roundtrip index match failed for line {}: xToCursor(x_right={:.2}) returned {}, expected line.end={} (diff={})",
-                    line.id, x_right, index2, line.end, diff
-                );
-            }
-        }
-    }
-
-    result
-}
-
-fn calculate_cursor_x_for_line(
-    line: &VisualLine,
-    cursor: usize,
-    affinity: CaretAffinity,
-    font_size: f64,
-    font_family: &str,
-) -> f64 {
-    if line.para_text.is_empty() {
-        if line.width > 0.0 && cursor == line.end {
-            // Support unit tests with mocked non-empty lines that lack para_text
-            line.x + line.width
-        } else {
-            line.x
-        }
-    } else {
-        let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.end;
-        let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
-        line.x + qtextlayout_cursor_to_x_on_line(
-            &line.para_text,
-            cursor,
-            line.para_start,
-            line.para_qchar_start as i32,
-            line.para_qchar_end as i32,
-            font_size,
-            font_family,
-            paragraph_wrap_w,
-            line.line_indent_x,
-            line.qtextline_idx,
-            use_trailing,
-        )
-    }
-}
-
-fn cursor_geometry_with_font(
-    _text: &str,
-    lines: &[VisualLine],
-    cursor: usize,
-    affinity: CaretAffinity,
-    font_size: f64,
-    font_family: &str,
-) -> (f64, f64, usize) {
-    for (idx, line) in lines.iter().enumerate() {
-        if line_contains_cursor_with_affinity(lines, idx, cursor, affinity) {
-            let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, font_size, font_family);
-            let cursor_y = cursor_rect_for_line(line, font_size, font_family).0;
-            return (cursor_x, cursor_y, line.id);
-        }
-    }
-    lines
-        .last()
-        .map(|line| {
-            let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, font_size, font_family);
-            let cursor_y = cursor_rect_for_line(line, font_size, font_family).0;
-            (cursor_x, cursor_y, line.id)
-        })
-        .unwrap_or((0.0, 0.0, 0))
-}
-
-#[cfg(not(test))]
-fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
-    let family = QString::from(font_family);
-    cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
-        QFont font(family);
-        font.setPixelSize(font_size);
-        QFontMetricsF metrics(font);
-        return metrics.ascent();
-    })
-}
-
-#[cfg(test)]
-fn get_font_ascent(_font_family: &str, font_size: f32) -> f64 {
-    font_size as f64 * 0.8
-}
-
-#[cfg(not(test))]
-fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
-    let family = QString::from(font_family);
-    cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
-        QFont font(family);
-        font.setPixelSize(font_size);
-        QFontMetricsF metrics(font);
-        return metrics.descent();
-    })
-}
-
-#[cfg(test)]
-fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
-    font_size as f64 * 0.2
-}
-
-fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
-    let ascent = get_font_ascent(font_family, font_size as f32);
-    let descent = get_font_descent(font_family, font_size as f32);
-    (ascent + descent) as f64
-}
-
-/// Unified cursor rect: (top_y, height), centered in the line box.
-/// Height is capped at line.height * 0.84 so the caret never bleeds into adjacent lines.
-fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str) -> (f64, f64) {
-    let raw_h = cursor_height_for_line(font_size, font_family);
-    let h = raw_h.min(line.height * 0.84);
-    let top_y = line.y + (line.height - h) / 2.0;
-    (top_y, h)
-}
-
-/// Cursor top Y, derived from the unified cursor rect.
-fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
-    cursor_rect_for_line(line, font_size, font_family).0
-}
-
-fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
-    let ascent = get_font_ascent(font_family, font_size as f32);
-    let descent = get_font_descent(font_family, font_size as f32);
-    let top_padding = (line.height - (ascent + descent)).max(0.0) / 2.0;
-    line.y + top_padding + ascent
-}
-
-fn affinity_for_index_on_line(line: &VisualLine, index: usize) -> CaretAffinity {
-    if index == line.end && line.start != line.end {
-        CaretAffinity::Upstream
-    } else {
-        CaretAffinity::Downstream
-    }
-}
-
-fn line_contains_cursor_with_affinity(
-    lines: &[VisualLine],
-    idx: usize,
-    cursor: usize,
-    affinity: CaretAffinity,
-) -> bool {
-    let line = &lines[idx];
-    if line.start == line.end {
-        return cursor == line.start;
-    }
-    if cursor > line.start && cursor < line.end {
-        return true;
-    }
-    if cursor == line.start {
-        let has_prev_overlap = idx > 0 && lines[idx - 1].end == line.start;
-        if has_prev_overlap {
-            return affinity == CaretAffinity::Downstream;
-        } else {
-            return true;
-        }
-    }
-    if cursor == line.end {
-        let has_next_overlap = idx + 1 < lines.len() && lines[idx + 1].start == line.end;
-        if has_next_overlap {
-            return affinity == CaretAffinity::Upstream;
-        } else {
-            return true;
-        }
-    }
-    false
-}
-
-#[allow(dead_code)]
-fn line_contains_cursor(lines: &[VisualLine], idx: usize, cursor: usize) -> bool {
-    line_contains_cursor_with_affinity(lines, idx, cursor, CaretAffinity::Downstream)
 }
 
 fn draw_text(painter: &mut QPainter, x: f64, baseline_y: f64, font_size: f32, color: QString, text: QString) {
@@ -3906,67 +2840,6 @@ mod tests {
     }
 
     #[test]
-    fn layout_keeps_cursor_on_blank_line_after_trailing_newline() {
-        let text = "\n";
-        let lines = layout_lines(text, 800.0, 16.0, 1.5, 16.0, 32.0, "serif");
-
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[1].start, text.len());
-        assert_eq!(lines[1].end, text.len());
-
-        let (_x, y, _li) = cursor_geometry_with_font(text, &lines, text.len(), CaretAffinity::Downstream, 16.0, "serif");
-        assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
-    }
-
-    #[test]
-    fn cursor_geometry_prefers_next_visual_line_at_boundary() {
-        let text = "ab";
-        let lines = vec![
-            VisualLine { id: 0, start: 0, end: 1, hard_break: false, x: 16.0, y: 10.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 1, line_wrap_width: 468.0, line_indent_x: 32.0 },
-            VisualLine { id: 1, start: 1, end: 2, hard_break: false, x: 16.0, y: 34.0, width: 10.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 1, para_qchar_end: 2, line_wrap_width: 500.0, line_indent_x: 0.0 },
-        ];
-
-        let (_x, y, _li) = cursor_geometry_with_font(text, &lines, 1, CaretAffinity::Downstream, 16.0, "serif");
-
-        assert_eq!(y, cursor_top_y(&lines[1], 16.0, "serif"));
-    }
-
-    #[test]
-    fn test_caret_affinity_boundary_matching() {
-        let lines = vec![
-            VisualLine { id: 0, start: 0, end: 10, hard_break: false, x: 16.0, y: 10.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 10, line_wrap_width: 500.0, line_indent_x: 0.0 },
-            VisualLine { id: 1, start: 10, end: 20, hard_break: false, x: 16.0, y: 34.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 10, para_qchar_end: 20, line_wrap_width: 500.0, line_indent_x: 0.0 },
-        ];
-
-        // At boundary index 10:
-        // With CaretAffinity::Upstream, it should belong to lines[0]
-        assert!(line_contains_cursor_with_affinity(&lines, 0, 10, CaretAffinity::Upstream));
-        assert!(!line_contains_cursor_with_affinity(&lines, 1, 10, CaretAffinity::Upstream));
-
-        // With CaretAffinity::Downstream, it should belong to lines[1]
-        assert!(!line_contains_cursor_with_affinity(&lines, 0, 10, CaretAffinity::Downstream));
-        assert!(line_contains_cursor_with_affinity(&lines, 1, 10, CaretAffinity::Downstream));
-
-        // Test visual coordinates resolved directly
-        let (x_up, y_up, _li_up) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Upstream, 16.0, "serif");
-        assert_eq!(x_up, 16.0 + 100.0);
-        assert_eq!(y_up, cursor_top_y(&lines[0], 16.0, "serif"));
-
-        let (x_down, y_down, _li_down) = cursor_geometry_with_font("", &lines, 10, CaretAffinity::Downstream, 16.0, "serif");
-        assert_eq!(x_down, 16.0);
-        assert_eq!(y_down, cursor_top_y(&lines[1], 16.0, "serif"));
-    }
-
-    #[test]
-    fn cursor_and_text_are_vertically_centered_in_spaced_line() {
-        let line = VisualLine { id: 0, start: 0, end: 0, hard_break: false, x: 16.0, y: 10.0, width: 0.0, height: 32.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 468.0, line_indent_x: 32.0 };
-
-        let top_y = cursor_top_y(&line, 16.0, "serif");
-        assert!(top_y > line.y);
-        assert!(text_baseline_y(&line, 16.0, "serif") > top_y);
-    }
-
-    #[test]
     fn line_char_offset_does_not_jump_to_document_end() {
         let text = "第一行\n第二行";
         let line_end = "第一行".len();
@@ -3975,81 +2848,9 @@ mod tests {
     }
 
     #[test]
-    fn qchar_to_byte_mixed_text() {
-        // ASCII: 1 byte per char, 1 UTF-16 unit per char
-        assert_eq!(qchar_offset_to_byte_offset("hello", 0), 0);
-        assert_eq!(qchar_offset_to_byte_offset("hello", 3), 3);
-        assert_eq!(qchar_offset_to_byte_offset("hello", 5), 5);
-
-        // Chinese: 3 bytes per char, 1 UTF-16 unit per char
-        let cn = "你好世界";
-        assert_eq!(qchar_offset_to_byte_offset(cn, 0), 0);
-        assert_eq!(qchar_offset_to_byte_offset(cn, 1), 3);
-        assert_eq!(qchar_offset_to_byte_offset(cn, 2), 6);
-        assert_eq!(qchar_offset_to_byte_offset(cn, 4), 12);
-
-        // Emoji: 4 bytes, 2 UTF-16 units (surrogate pair)
-        let emoji = "😀b"; // U+1F600 (2 UTF-16 units) + 'b' (1 unit)
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 0), 0);   // start of 😀
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 2), 4);   // after 😀, start of 'b'
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 3), 5);   // after 'b'
-
-        // Mixed: "你😀好"
-        let mixed = "你😀好"; // 你(3 bytes, 1 unit) + 😀(4 bytes, 2 units) + 好(3 bytes, 1 unit)
-        assert_eq!(qchar_offset_to_byte_offset(mixed, 0), 0);   // start of 你
-        assert_eq!(qchar_offset_to_byte_offset(mixed, 1), 3);   // after 你, start of 😀
-        assert_eq!(qchar_offset_to_byte_offset(mixed, 3), 7);   // after 😀, start of 好
-        assert_eq!(qchar_offset_to_byte_offset(mixed, 4), 10);  // after 好
-    }
-
-    #[test]
-    fn byte_to_qchar_mixed_text() {
-        // ASCII
-        assert_eq!(byte_offset_to_qchar_offset("hello", 0), 0);
-        assert_eq!(byte_offset_to_qchar_offset("hello", 3), 3);
-
-        // Chinese
-        assert_eq!(byte_offset_to_qchar_offset("你好", 0), 0);
-        assert_eq!(byte_offset_to_qchar_offset("你好", 3), 1);
-
-        // Emoji
-        assert_eq!(byte_offset_to_qchar_offset("😀b", 0), 0);
-        assert_eq!(byte_offset_to_qchar_offset("😀b", 4), 2);
-
-        // Mixed
-        assert_eq!(byte_offset_to_qchar_offset("你😀好", 0), 0);
-        assert_eq!(byte_offset_to_qchar_offset("你😀好", 3), 1);
-        assert_eq!(byte_offset_to_qchar_offset("你😀好", 7), 3);
-    }
-
-    #[test]
-    fn qchar_byte_roundtrip() {
-        let texts = [
-            "hello world",
-            "你好世界",
-            "Hello 你好 World",
-            "a😀b🎉c",
-            "写作者：测试emoji🎉混合",
-        ];
-        for text in &texts {
-            for (byte_pos, _ch) in text.char_indices() {
-                let qchar = byte_offset_to_qchar_offset(text, byte_pos);
-                let back = qchar_offset_to_byte_offset(text, qchar);
-                assert_eq!(back, byte_pos,
-                    "roundtrip failed for '{}' at byte {}: qchar={}, back={}",
-                    text, byte_pos, qchar, back);
-            }
-            // Also check end-of-string
-            let qchar_end = byte_offset_to_qchar_offset(text, text.len());
-            let back_end = qchar_offset_to_byte_offset(text, qchar_end);
-            assert_eq!(back_end, text.len(), "roundtrip failed for end of '{}'", text);
-        }
-    }
-
-    #[test]
     fn test_scroll_y_cache_and_buffer_hit() {
-        // 1. scroll_y change shouldn't invalidate layout cache.
-        // In sujian_editor_item.rs, layout_cache is only invalidated/refreshed when text, width, font, padding etc change.
+        // 1. scroll_y change shouldn't invalidate editor layout cache.
+        // The layout cache is only invalidated/refreshed when text, width, font, padding etc change.
         // Changing scroll_y does not touch ensure_layout_cached criteria.
         
         // 2. Validate ScrollBuffer helper functions: contains_viewport and clamp_source_rect.
@@ -4103,117 +2904,4 @@ mod tests {
         assert!(src_y_clamp + src_h_clamp <= 3500.0);
     }
 
-    #[test]
-    fn test_hit_test_line_matching() {
-        // Mock 3 visual lines manually instead of calling layout_lines (which calls QFont and crashes without QGuiApplication)
-        let lines = vec![
-            VisualLine {
-                id: 0,
-                start: 0,
-                end: 10,
-                hard_break: true,
-                x: 16.0,
-                y: 16.0,
-                width: 100.0,
-                height: 24.0,
-                para_text: "First Line".to_string(),
-                para_start: 0,
-                qtextline_idx: 0,
-                para_qchar_start: 0,
-                para_qchar_end: 10,
-                line_wrap_width: 768.0,
-                line_indent_x: 0.0,
-            },
-            VisualLine {
-                id: 1,
-                start: 11,
-                end: 22,
-                hard_break: true,
-                x: 16.0,
-                y: 40.0, // 16.0 + 24.0
-                width: 110.0,
-                height: 24.0,
-                para_text: "Second Line".to_string(),
-                para_start: 11,
-                qtextline_idx: 0,
-                para_qchar_start: 0,
-                para_qchar_end: 11,
-                line_wrap_width: 768.0,
-                line_indent_x: 0.0,
-            },
-            VisualLine {
-                id: 2,
-                start: 23,
-                end: 33,
-                hard_break: true,
-                x: 16.0,
-                y: 64.0, // 40.0 + 24.0
-                width: 90.0,
-                height: 24.0,
-                para_text: "Third Line".to_string(),
-                para_start: 23,
-                qtextline_idx: 0,
-                para_qchar_start: 0,
-                para_qchar_end: 10,
-                line_wrap_width: 768.0,
-                line_indent_x: 0.0,
-            },
-        ];
-
-        // Under Model B: doc_y = y. Confirm correct hit line finding
-        let doc_y_first = lines[0].y + 2.0; // 18.0
-        let matched_first = lines.iter().position(|l| doc_y_first < l.y + l.height);
-        assert_eq!(matched_first, Some(0));
-        
-        let doc_y_second = lines[1].y + 2.0; // 42.0
-        let matched_second = lines.iter().position(|l| doc_y_second < l.y + l.height);
-        assert_eq!(matched_second, Some(1));
-        
-        let doc_y_third = lines[2].y + 2.0; // 66.0
-        let matched_third = lines.iter().position(|l| doc_y_third < l.y + l.height);
-        assert_eq!(matched_third, Some(2));
-    }
-
-    #[test]
-    fn test_wrap_boundary_affinity_handling() {
-        let mut item = SujianEditorItem::default();
-        item.buffer.text = "abcdefghijklmnopqrst".to_string();
-        
-        // Setup a mock layout cache with 2 lines, wrapped at byte 10
-        let lines = vec![
-            VisualLine { id: 0, start: 0, end: 10, hard_break: false, x: 16.0, y: 10.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 0, para_qchar_start: 0, para_qchar_end: 10, line_wrap_width: 500.0, line_indent_x: 0.0 },
-            VisualLine { id: 1, start: 10, end: 20, hard_break: false, x: 16.0, y: 34.0, width: 100.0, height: 24.0, para_text: String::new(), para_start: 0, qtextline_idx: 1, para_qchar_start: 10, para_qchar_end: 20, line_wrap_width: 500.0, line_indent_x: 0.0 },
-        ];
-        
-        item.layout_cache = Some(LayoutCache {
-            text_ptr: item.buffer.text.as_ptr() as usize,
-            text_len: item.buffer.text.len(),
-            width: 800.0,
-            font_size: 16.0,
-            font_family: "serif".to_string(),
-            line_spacing: 1.5,
-            text_indent: 0.0,
-            padding: 16.0,
-            lines,
-            content_height: 100.0,
-        });
-
-        // 1. Cursor at non-boundary index (e.g. 5) -> affinity should be Downstream
-        item.buffer.cursor = 5;
-        item.adjust_affinity_at_wrap_boundary();
-        assert_eq!(item.current_cursor_affinity, CaretAffinity::Downstream);
-
-        // 2. Cursor at wrap boundary (index 10) -> affinity should be Upstream
-        item.buffer.cursor = 10;
-        item.adjust_affinity_at_wrap_boundary();
-        assert_eq!(item.current_cursor_affinity, CaretAffinity::Upstream);
-
-        // 3. Test editor_layout_cursor_rect and idempotency at boundary index 10 with Upstream
-        let rect = item.editor_layout_cursor_rect(10, CaretAffinity::Upstream, 0.0);
-        assert_eq!(rect.visual_line_id, 0);
-        
-        let rect_down = item.editor_layout_cursor_rect(10, CaretAffinity::Downstream, 0.0);
-        assert_eq!(rect_down.visual_line_id, 1);
-    }
 }
-

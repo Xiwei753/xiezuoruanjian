@@ -33,6 +33,7 @@ use std::sync::{Mutex, OnceLock};
 
 mod backend;
 mod document_handler;
+mod editor;
 mod starmap_bridge;
 mod sujian_editor_item;
 mod sync_bridge;
