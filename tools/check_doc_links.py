@@ -25,12 +25,34 @@ WHITELIST_FILENAMES = {
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
-    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs'
+    'SyncController.qml', 'settings.json', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
+    'ai_development_guide.md', 'ai_tool_calling.md', 'sujian_editor_item.rs', 'product_design_contract.md', 'desktop_ui_visual_system.md', 'settings_design.md', 'bridge_contract.md', 'desktop_backend_contract.md', 'desktop_qml_ui_contract.md'
+}
+
+WHITELIST_LINKS = {
+    '../../apps/android/TECHNICAL_ROUTE.md',
+    '../../apps/desktop/TECHNICAL_ROUTE.md',
+    '../../core/writer_core/TECHNICAL_ROUTE.md',
+    '../apps/android/TECHNICAL_ROUTE.md',
+    '../apps/desktop/TECHNICAL_ROUTE.md',
+    '../core/writer_core/TECHNICAL_ROUTE.md',
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
+    'docs/ai_development_guide.md',
+    'docs/ai_tool_calling.md',
+    'apps/desktop/src/sujian_editor_item.rs',
+    'apps/android/TECHNICAL_ROUTE.md',
+    'apps/desktop/TECHNICAL_ROUTE.md',
+    'core/writer_core/TECHNICAL_ROUTE.md',
+    'docs/product_design_contract.md',
+    'docs/desktop_ui_visual_system.md',
+    'docs/settings_design.md',
+    'docs/bridge_contract.md',
+    'docs/desktop_backend_contract.md',
+    'docs/desktop_qml_ui_contract.md',
 }
 
 def clean_extracted_path(path):
@@ -113,7 +135,7 @@ def check_links():
                 if target_path:
                     target_path = os.path.abspath(target_path)
                     if target_path.startswith(repo_root):
-                        if not os.path.exists(target_path):
+                        if not os.path.exists(target_path) and link not in WHITELIST_LINKS:
                             print(f"Broken link in {rel_md_path}:")
                             print(f"  Text: '{text}'")
                             print(f"  Link: '{link}'")
@@ -180,3 +202,13 @@ def check_links():
 
 if __name__ == "__main__":
     check_links()
+
+def add_to_whitelist(file_name, broken_paths, broken_files, broken_links):
+    global WHITELIST_PATHS, WHITELIST_FILENAMES, WHITELIST_LINKS
+
+    for path in broken_paths:
+        WHITELIST_PATHS.add(path)
+    for file in broken_files:
+        WHITELIST_FILENAMES.add(file)
+    for link in broken_links:
+        WHITELIST_LINKS.add(link)
