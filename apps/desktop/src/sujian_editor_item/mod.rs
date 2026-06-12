@@ -1359,7 +1359,7 @@ impl QQuickItem for SujianEditorItem {
 
         let frame_start = Instant::now();
 
-        // 1. 每次进入 update_paint_node()，先调用一次 update_cursor_visual_position() 算出最新的 cursor_visual_x/y
+        // 1. Update cursor visual position
         self.update_cursor_visual_position();
 
         let item_ptr = self.get_cpp_object();
@@ -1397,6 +1397,7 @@ impl QQuickItem for SujianEditorItem {
 
         let mut final_root = root_raw;
 
+        // ── Layer 0: Static text texture (child[0]) ──
         if self.render_dirty {
             match self.render_to_image() {
                 Some((image, buf_scroll_y, _buf_h)) => {
@@ -1469,7 +1470,43 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // 2. 更新光标动画位置
+        // ── Layer 1: Animation overlay (child[1]) — always rebuilt when active ──
+        let overlay_result = self.paint_animation_overlay();
+        if !final_root.is_null() && !item_ptr.is_null() {
+            match &overlay_result {
+                Some((image, buf_scroll_y, buf_h)) => {
+                    scene_graph::update_animation_overlay(
+                        final_root,
+                        item_ptr,
+                        Some(image),
+                        *buf_scroll_y,
+                        *buf_h,
+                        dpr,
+                    );
+                }
+                None => {
+                    scene_graph::update_animation_overlay(
+                        final_root,
+                        item_ptr,
+                        None,
+                        0.0,
+                        0.0,
+                        dpr,
+                    );
+                }
+            }
+        }
+
+        // Clean up finished animations
+        self.cleanup_finished_animations();
+
+        // If animation is still active, request next frame
+        if self.has_active_animation() {
+            let item = self as &dyn QQuickItem;
+            item.update();
+        }
+
+        // ── Layer 2: Cursor animation + node (child[2]) ──
         let now = Instant::now();
         if let Some(ref anim) = self.cursor_animation {
             if anim.is_finished(now) {
@@ -1488,7 +1525,6 @@ impl QQuickItem for SujianEditorItem {
             self.cursor_dirty = false;
         }
 
-        // 3. 更新独立的 cursor node overlay
         let is_selecting = self.buffer.has_selection();
         let show_cursor = self.cursor_visible && !self.current_is_scrolling && !is_selecting;
         let cursor_color_rgba = renderer::color_hex_to_rgba(&self.current_cursor_color);
@@ -1503,6 +1539,15 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_visual_h,
                 show_cursor,
                 cursor_color_rgba,
+            );
+        }
+
+        let total_elapsed = frame_start.elapsed();
+        if total_elapsed.as_millis() > 4 {
+            eprintln!(
+                "sujian_update_paint_node: total_ms={}, overlay_active={}",
+                total_elapsed.as_millis(),
+                overlay_result.is_some(),
             );
         }
 

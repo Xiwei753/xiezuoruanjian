@@ -7,6 +7,11 @@ cpp! {{
     #include <QtQuick/QSGImageNode>
     #include <QtQuick/QSGRectangleNode>
 
+    // Three-layer scene graph layout:
+    //   child[0] = QSGImageNode  — static text texture
+    //   child[1] = QSGImageNode  — animation overlay texture
+    //   child[2] = QSGRectangleNode — cursor
+
     void sujian_clean_cursor_nodes(QSGNode *root) {
         if (!root) return;
         auto *transformNode = static_cast<QSGTransformNode*>(root);
@@ -17,12 +22,66 @@ cpp! {{
         }
     }
 
+    void sujian_update_animation_overlay(
+        QSGTransformNode *root, QQuickItem *item,
+        const QImage *img_ptr,
+        double src_x, double src_y, double src_w, double src_h,
+        double dest_y, double dest_h, double dpr) {
+        if (!root) return;
+
+        // Ensure child[1] exists as QSGImageNode
+        QSGImageNode *overlayNode = nullptr;
+        if (root->childCount() > 1) {
+            overlayNode = dynamic_cast<QSGImageNode*>(root->childAt(1));
+        }
+        if (!overlayNode) {
+            overlayNode = item->window()->createImageNode();
+            overlayNode->setFiltering(QSGTexture::Nearest);
+            overlayNode->setOwnsTexture(true);
+            // Insert at position 1 (after static text child[0], before cursor child[2])
+            int insertIdx = qMin(1, root->childCount());
+            root->insertChildNode(overlayNode, insertIdx);
+        }
+
+        if (!img_ptr || img_ptr->width() == 0 || img_ptr->height() == 0) {
+            // No animation — hide overlay
+            overlayNode->setRect(QRectF(0, 0, 0, 0));
+            overlayNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+            return;
+        }
+
+        overlayNode->setRect(0, dest_y, item->width(), dest_h);
+
+        double tex_w = img_ptr->width();
+        double tex_h = img_ptr->height();
+        double final_src_x = src_x * dpr;
+        double final_src_y = src_y * dpr;
+        double final_src_w = src_w * dpr;
+        double final_src_h = src_h * dpr;
+
+        if (final_src_y < 0.0) final_src_y = 0.0;
+        if (final_src_y + final_src_h > tex_h) {
+            if (final_src_h > tex_h) final_src_h = tex_h;
+            if (final_src_y + final_src_h > tex_h) final_src_y = tex_h - final_src_h;
+        }
+        if (final_src_x < 0.0) final_src_x = 0.0;
+        if (final_src_x + final_src_w > tex_w) {
+            if (final_src_w > tex_w) final_src_w = tex_w;
+            if (final_src_x + final_src_w > tex_w) final_src_x = tex_w - final_src_w;
+        }
+
+        overlayNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
+        overlayNode->setTexture(item->window()->createTextureFromImage(*img_ptr));
+        overlayNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+    }
+
     void sujian_update_cursor_rect(QSGTransformNode *root, QQuickItem *item,
         double cx, double cy, double cw, double ch, bool visible, unsigned int color_rgba) {
         if (!root) return;
         QSGRectangleNode *cursorNode = nullptr;
-        if (root->childCount() > 1) {
-            cursorNode = dynamic_cast<QSGRectangleNode*>(root->lastChild());
+        // Cursor is always child[2] in three-layer layout
+        if (root->childCount() > 2) {
+            cursorNode = dynamic_cast<QSGRectangleNode*>(root->childAt(2));
         }
         if (!cursorNode) {
             cursorNode = item->window()->createRectangleNode();
@@ -167,6 +226,32 @@ pub fn update_source_rect(
 
         imgNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
         imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+    })
+}
+
+pub fn update_animation_overlay(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    image: Option<&qmetaobject::QImage>,
+    scroll_y: f64,
+    buffer_h: f64,
+    dpr: f64,
+) {
+    let img_ptr = image.map(|i| i as *const qmetaobject::QImage).unwrap_or(std::ptr::null());
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        img_ptr as "const QImage*",
+        scroll_y as "double", buffer_h as "double", dpr as "double"
+    ] {
+        sujian_update_animation_overlay(
+            static_cast<QSGTransformNode*>(root_raw), item_ptr,
+            img_ptr,
+            0.0, scroll_y,
+            img_ptr ? (double)img_ptr->width() / dpr : 0.0,
+            buffer_h,
+            0.0, buffer_h, dpr
+        );
     })
 }
 
