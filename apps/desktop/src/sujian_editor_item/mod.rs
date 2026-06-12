@@ -979,43 +979,43 @@ impl SujianEditorItem {
         let mut glyphs = Vec::new();
         let range_start = event.range_start;
         let range_end = range_start + event.range_len;
-        let mut current_byte = range_start;
 
         for (line_idx, line) in snapshot.lines.iter().enumerate() {
-            if current_byte >= range_end {
-                break;
+            if line.end <= range_start || line.start >= range_end {
+                continue;
             }
-            if line.end <= current_byte {
+            if line.para_text.is_empty() {
+                continue;
+            }
+            let seg_start = range_start.max(line.start);
+            let seg_end = range_end.min(line.end);
+            if seg_start >= seg_end {
                 continue;
             }
 
-            let glyph_start = current_byte.max(line.start);
-            let glyph_end = range_end.min(line.end);
-            if glyph_start >= glyph_end {
-                continue;
-            }
-
-            let glyph_text = self.buffer.text[glyph_start..glyph_end].to_string();
-            let x = self.editor_layout.cursor_x_for_line(
-                &snapshot,
-                line,
-                glyph_start,
-                CaretAffinity::Downstream,
-            );
             let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
-            let w = self.editor_layout.text_width(&glyph_text, font_size, font_family);
-            let h = line.height;
-
-            glyphs.push(AnimatedGlyph {
-                byte_start: glyph_start,
-                byte_end: glyph_end,
-                text: glyph_text,
-                rect: (x, line.y, w, h),
-                baseline_y,
-                line_index: line_idx,
-            });
-
-            current_byte = glyph_end;
+            let glyph_data = self.editor_layout.glyph_positions_on_line(
+                line,
+                seg_start,
+                seg_end,
+                font_size,
+                font_family,
+            );
+            for (abs_byte, x_pos, ch_w) in glyph_data {
+                if abs_byte >= self.buffer.text.len() {
+                    continue;
+                }
+                let ch = self.buffer.text[abs_byte..].chars().next().unwrap();
+                let ch_str = ch.to_string();
+                glyphs.push(AnimatedGlyph {
+                    byte_start: abs_byte,
+                    byte_end: abs_byte + ch_str.len(),
+                    text: ch_str,
+                    rect: (line.x + x_pos, line.y, ch_w, line.height),
+                    baseline_y,
+                    line_index: line_idx,
+                });
+            }
         }
 
         let duration_ms = self.current_typing_animation_duration_ms.max(30) as u64;
@@ -1038,45 +1038,48 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = &self.current_font_family.to_string();
 
-        // Old layout: glyph positions of the deleted text
+        // Old layout: glyph positions of the deleted text via Qt glyph runs
         let old_snapshot = self.layout_snapshot_for_text(old_text, width);
         let mut glyphs = Vec::new();
         let range_start = event.range_start;
         let range_end = range_start + event.range_len;
 
         for (line_idx, line) in old_snapshot.lines.iter().enumerate() {
-            if line.end <= range_start {
+            if line.end <= range_start || line.start >= range_end {
                 continue;
             }
-            if line.start >= range_end {
-                break;
+            if line.para_text.is_empty() {
+                continue;
             }
-
-            let glyph_start = range_start.max(line.start);
-            let glyph_end = range_end.min(line.end);
-            if glyph_start >= glyph_end {
+            let seg_start = range_start.max(line.start);
+            let seg_end = range_end.min(line.end);
+            if seg_start >= seg_end {
                 continue;
             }
 
-            let glyph_text = old_text[glyph_start..glyph_end].to_string();
-            let x = self.editor_layout.cursor_x_for_line(
-                &old_snapshot,
-                line,
-                glyph_start,
-                CaretAffinity::Downstream,
-            );
             let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
-            let w = self.editor_layout.text_width(&glyph_text, font_size, font_family);
-            let h = line.height;
-
-            glyphs.push(AnimatedGlyph {
-                byte_start: glyph_start,
-                byte_end: glyph_end,
-                text: glyph_text,
-                rect: (x, line.y, w, h),
-                baseline_y,
-                line_index: line_idx,
-            });
+            let glyph_data = self.editor_layout.glyph_positions_on_line(
+                line,
+                seg_start,
+                seg_end,
+                font_size,
+                font_family,
+            );
+            for (abs_byte, x_pos, ch_w) in glyph_data {
+                if abs_byte >= old_text.len() {
+                    continue;
+                }
+                let ch = old_text[abs_byte..].chars().next().unwrap();
+                let ch_str = ch.to_string();
+                glyphs.push(AnimatedGlyph {
+                    byte_start: abs_byte,
+                    byte_end: abs_byte + ch_str.len(),
+                    text: ch_str,
+                    rect: (line.x + x_pos, line.y, ch_w, line.height),
+                    baseline_y,
+                    line_index: line_idx,
+                });
+            }
         }
 
         // New layout: compute the cursor rect after deletion
