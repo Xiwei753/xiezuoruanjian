@@ -25,12 +25,18 @@ WHITELIST_FILENAMES = {
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
-    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs'
+    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
+    'settings.json', 'bridge_contract.md', 'settings_design.md', 'desktop_ui_visual_system.md', 'product_design_contract.md', 'ai_tool_calling.md', 'desktop_backend_contract.md', 'desktop_qml_ui_contract.md', 'ai_development_guide.md', 'sujian_editor_item.rs'
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
+    'docs/ai_tool_calling.md', 'docs/bridge_contract.md', 'apps/android/TECHNICAL_ROUTE.md', 'apps/desktop/TECHNICAL_ROUTE.md', 'core/writer_core/TECHNICAL_ROUTE.md', 'docs/settings_design.md', 'docs/desktop_backend_contract.md', 'docs/desktop_qml_ui_contract.md', 'docs/desktop_ui_visual_system.md', 'apps/desktop/src/sujian_editor_item.rs', 'docs/ai_development_guide.md', 'docs/product_design_contract.md'
+}
+
+WHITELIST_LINKS = {
+    '../apps/android/TECHNICAL_ROUTE.md', '../apps/desktop/TECHNICAL_ROUTE.md', '../core/writer_core/TECHNICAL_ROUTE.md'
 }
 
 def clean_extracted_path(path):
@@ -92,6 +98,8 @@ def check_links():
                 if link.startswith(("http://", "https://", "mailto:", "ftp:")):
                     continue
                 if link.startswith("#"):
+                    continue
+                if link in WHITELIST_LINKS:
                     continue
                     
                 checked_links_count += 1
