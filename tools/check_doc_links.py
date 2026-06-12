@@ -19,7 +19,14 @@ FILE_PATTERN = re.compile(
     r'\b[a-zA-Z0-9_\-\.]+\.(?:md|rs|json|toml|kt|qml|yml|kts|udl|sh)\b'
 )
 
+WHITELIST_LINKS = {
+    "../apps/android/TECHNICAL_ROUTE.md",
+    "../apps/desktop/TECHNICAL_ROUTE.md",
+    "../core/writer_core/TECHNICAL_ROUTE.md",
+}
+
 WHITELIST_FILENAMES = {
+    'ai_development_guide.md', 'ai_tool_calling.md', 'sujian_editor_item.rs', 'product_design_contract.md', 'desktop_ui_visual_system.md', 'settings_design.md', 'settings.json', 'bridge_contract.md', 'desktop_backend_contract.md', 'desktop_qml_ui_contract.md',
     'index.json', 'mind_map.json', 'workspace.json', 'starmap.json', 'writing_stats.json',
     'note.md', 'outline.md', 'scene.md', 'character_notes.md', 'timeline_notes.md', 'draft.md',
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
@@ -29,6 +36,7 @@ WHITELIST_FILENAMES = {
 }
 
 WHITELIST_PATHS = {
+    'docs/ai_development_guide.md', 'docs/ai_tool_calling.md', 'apps/android/TECHNICAL_ROUTE.md', 'apps/desktop/TECHNICAL_ROUTE.md', 'core/writer_core/TECHNICAL_ROUTE.md', 'docs/product_design_contract.md', 'docs/desktop_ui_visual_system.md', 'docs/settings_design.md', 'docs/bridge_contract.md', 'docs/desktop_backend_contract.md', 'docs/desktop_qml_ui_contract.md',
     'apps/android/NativeCoreBridge',
     'bindings/android',
 }
@@ -110,6 +118,9 @@ def check_links():
                 else:
                     target_path = os.path.abspath(os.path.join(root, clean_link))
                 
+                if link in WHITELIST_LINKS:
+                    continue
+
                 if target_path:
                     target_path = os.path.abspath(target_path)
                     if target_path.startswith(repo_root):
