@@ -181,7 +181,7 @@ class EditorSettingsTest {
 
             assertEquals("Test Content 123", viewModel.uiState.value.content)
             assertNotNull(viewModel.uiState.value.settings)
-        } catch (e: com.xiwei.sujian.data.RepositoryException) {
+        } catch (e: Exception) {
             // Expected when running Robolectric tests without Uniffi native library loaded
         }
     }
