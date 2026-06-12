@@ -235,10 +235,10 @@ impl SujianEditorItem {
         }
 
         // ── Layer 2: Base text ──
-        let active_insert: Option<&InsertAnimation> = None;
-        let active_delete: Option<&DeleteAnimation> = None;
-        let had_insert_animation = false;
-        let had_delete_animation = false;
+        let active_insert: Option<&InsertAnimation> = self.insert_animation.as_ref();
+        let active_delete: Option<&DeleteAnimation> = self.delete_animation.as_ref();
+        let had_insert_animation = active_insert.is_some();
+        let had_delete_animation = active_delete.is_some();
 
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];

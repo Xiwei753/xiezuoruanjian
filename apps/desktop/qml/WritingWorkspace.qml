@@ -784,8 +784,9 @@ Rectangle {
                         selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
                         cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
                         smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                        cursor_animation_duration_ms: settingsBackend ? Math.min(settingsBackend.setting_smooth_cursor_duration_ms, 90) : 80
+                        cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
                         typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : false
+                        typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 160
                         scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                         viewport_height: editorScroll.availableHeight
                         is_scrolling: editorScroll.editorAnimationSuppressed

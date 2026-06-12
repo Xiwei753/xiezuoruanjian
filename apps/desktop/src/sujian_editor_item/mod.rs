@@ -22,7 +22,7 @@ use rendering::{CursorAnimationState, InsertAnimation, DeleteAnimation, ScrollBu
 pub use rendering::AnimatedGlyph;
 use std::cell::Cell;
 use std::time::Instant;
-use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause};
+use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorAnimationEvent, EditorAnimationKind};
 
 cpp! {{
     #include <QtGui/QFont>
@@ -61,6 +61,7 @@ pub struct SujianEditorItem {
     smooth_cursor_enabled: qt_property!(bool; READ smooth_cursor_enabled WRITE set_smooth_cursor_enabled NOTIFY visual_settings_changed),
     cursor_animation_duration_ms: qt_property!(u32; READ cursor_animation_duration_ms WRITE set_cursor_animation_duration_ms NOTIFY visual_settings_changed),
     typing_animation_enabled: qt_property!(bool; READ typing_animation_enabled WRITE set_typing_animation_enabled NOTIFY visual_settings_changed),
+    typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
@@ -121,6 +122,7 @@ pub struct SujianEditorItem {
     current_smooth_cursor_enabled: bool,
     current_cursor_animation_duration_ms: u32,
     current_typing_animation_enabled: bool,
+    current_typing_animation_duration_ms: u32,
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
@@ -171,6 +173,7 @@ impl Default for SujianEditorItem {
             smooth_cursor_enabled: Default::default(),
             cursor_animation_duration_ms: Default::default(),
             typing_animation_enabled: Default::default(),
+            typing_animation_duration_ms: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
             scroll_y: Default::default(),
@@ -228,6 +231,7 @@ impl Default for SujianEditorItem {
             current_smooth_cursor_enabled: true,
             current_cursor_animation_duration_ms: 160,
             current_typing_animation_enabled: false,
+            current_typing_animation_duration_ms: 160,
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,
@@ -470,18 +474,38 @@ impl SujianEditorItem {
     }
 
     fn set_cursor_animation_duration_ms(&mut self, value: u32) {
-        self.current_cursor_animation_duration_ms = value;
+        let clamped = value.max(30).min(500);
+        self.current_cursor_animation_duration_ms = clamped;
         self.visual_settings_changed();
     }
 
     fn typing_animation_enabled(&self) -> bool {
-        false
+        self.current_typing_animation_enabled
     }
 
-    fn set_typing_animation_enabled(&mut self, _value: bool) {
-        self.current_typing_animation_enabled = false;
+    fn set_typing_animation_enabled(&mut self, value: bool) {
+        if self.current_typing_animation_enabled == value {
+            return;
+        }
+        self.current_typing_animation_enabled = value;
         if editor_animation_debug_enabled() {
-            eprintln!("typing_animation_enabled_changed: forced false");
+            eprintln!("typing_animation_enabled_changed: {}", value);
+        }
+        self.visual_settings_changed();
+    }
+
+    fn typing_animation_duration_ms(&self) -> u32 {
+        self.current_typing_animation_duration_ms
+    }
+
+    fn set_typing_animation_duration_ms(&mut self, value: u32) {
+        let clamped = value.max(30).min(1000);
+        if self.current_typing_animation_duration_ms == clamped {
+            return;
+        }
+        self.current_typing_animation_duration_ms = clamped;
+        if editor_animation_debug_enabled() {
+            eprintln!("typing_animation_duration_ms_changed: {}", clamped);
         }
         self.visual_settings_changed();
     }
@@ -609,12 +633,6 @@ impl SujianEditorItem {
         );
 
         let old = self.buffer.snapshot();
-        let insert_byte_start = if self.buffer.has_selection() {
-            let (s, _) = self.buffer.selection_range();
-            s
-        } else {
-            self.buffer.cursor
-        };
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
         self.adjust_affinity_at_wrap_boundary();
@@ -624,10 +642,20 @@ impl SujianEditorItem {
             EditorTransactionCause::ImeComposition
         };
         let new = self.buffer.snapshot();
-        self.record_transaction(old, new, cause, true);
+        let events = self.record_transaction(old, new, cause, true);
 
         self.delete_animation = None;
         self.insert_animation = None;
+
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            for event in &events {
+                if event.kind == EditorAnimationKind::Insert {
+                    let anim = self.create_insert_animation(event, origin_cx, origin_cy, cursor_h);
+                    self.insert_animation = Some(anim);
+                    break;
+                }
+            }
+        }
 
         self.emit_content_changed();
     }
@@ -645,10 +673,24 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
+        let old_cursor_x = self.target_cursor_x;
+        let old_cursor_y = self.target_cursor_y;
+
         self.insert_animation = None;
         self.delete_animation = None;
 
-        self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            for event in &events {
+                if event.kind == EditorAnimationKind::Delete {
+                    let anim = self.create_delete_animation(event, old_cursor_x, old_cursor_y);
+                    self.delete_animation = Some(anim);
+                    break;
+                }
+            }
+        }
+
         self.emit_content_changed();
     }
 
@@ -665,10 +707,24 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
+        let old_cursor_x = self.target_cursor_x;
+        let old_cursor_y = self.target_cursor_y;
+
         self.insert_animation = None;
         self.delete_animation = None;
 
-        self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            for event in &events {
+                if event.kind == EditorAnimationKind::Delete {
+                    let anim = self.create_delete_animation(event, old_cursor_x, old_cursor_y);
+                    self.delete_animation = Some(anim);
+                    break;
+                }
+            }
+        }
+
         self.emit_content_changed();
     }
 
@@ -685,10 +741,24 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
+        let old_cursor_x = self.target_cursor_x;
+        let old_cursor_y = self.target_cursor_y;
+
         self.insert_animation = None;
         self.delete_animation = None;
 
-        self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            for event in &events {
+                if event.kind == EditorAnimationKind::Delete {
+                    let anim = self.create_delete_animation(event, old_cursor_x, old_cursor_y);
+                    self.delete_animation = Some(anim);
+                    break;
+                }
+            }
+        }
+
         self.emit_content_changed();
     }
 
@@ -865,7 +935,7 @@ impl SujianEditorItem {
         new: EditorSnapshot,
         cause: EditorTransactionCause,
         emit: bool,
-    ) {
+    ) -> Vec<EditorAnimationEvent> {
         let transaction = self.engine.create_transaction(
             &old.text,
             &new.text,
@@ -891,6 +961,134 @@ impl SujianEditorItem {
         .into();
         if emit {
             self.transaction_created();
+        }
+        events
+    }
+
+    fn create_insert_animation(
+        &mut self,
+        event: &EditorAnimationEvent,
+        origin_cx: f64,
+        origin_cy: f64,
+        cursor_h: f64,
+    ) -> InsertAnimation {
+        let width = self.bounding_width();
+        let snapshot = self.layout_snapshot(width);
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+
+        let mut glyphs = Vec::new();
+        let range_start = event.range_start;
+        let range_end = range_start + event.range_len;
+        let mut current_byte = range_start;
+
+        for (line_idx, line) in snapshot.lines.iter().enumerate() {
+            if current_byte >= range_end {
+                break;
+            }
+            if line.end <= current_byte {
+                continue;
+            }
+
+            let glyph_start = current_byte.max(line.start);
+            let glyph_end = range_end.min(line.end);
+            if glyph_start >= glyph_end {
+                continue;
+            }
+
+            let glyph_text = self.buffer.text[glyph_start..glyph_end].to_string();
+            let x = self.editor_layout.cursor_x_for_line(
+                &snapshot,
+                line,
+                glyph_start,
+                CaretAffinity::Downstream,
+            );
+            let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
+            let w = self.editor_layout.text_width(&glyph_text, font_size, font_family);
+            let h = line.height;
+
+            glyphs.push(AnimatedGlyph {
+                byte_start: glyph_start,
+                byte_end: glyph_end,
+                text: glyph_text,
+                rect: (x, line.y, w, h),
+                baseline_y,
+                line_index: line_idx,
+            });
+
+            current_byte = glyph_end;
+        }
+
+        let duration_ms = self.current_typing_animation_duration_ms.max(30) as u64;
+
+        InsertAnimation {
+            glyphs,
+            origin_cursor_rect: (origin_cx, origin_cy, 2.0, cursor_h),
+            start_time: Instant::now(),
+            duration_ms,
+        }
+    }
+
+    fn create_delete_animation(
+        &mut self,
+        event: &EditorAnimationEvent,
+        old_cursor_x: f64,
+        old_cursor_y: f64,
+    ) -> DeleteAnimation {
+        let width = self.bounding_width();
+        let snapshot = self.layout_snapshot(width);
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+
+        let mut glyphs = Vec::new();
+        let range_start = event.range_start;
+        let range_end = range_start + event.range_len;
+        let mut current_byte = range_start;
+
+        for (line_idx, line) in snapshot.lines.iter().enumerate() {
+            if current_byte >= range_end {
+                break;
+            }
+            if line.end <= current_byte {
+                continue;
+            }
+
+            let glyph_start = current_byte.max(line.start);
+            let glyph_end = range_end.min(line.end);
+            if glyph_start >= glyph_end {
+                continue;
+            }
+
+            let glyph_text = event.text[glyph_start - range_start..glyph_end - range_start].to_string();
+            let x = self.editor_layout.cursor_x_for_line(
+                &snapshot,
+                line,
+                glyph_start,
+                CaretAffinity::Downstream,
+            );
+            let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
+            let w = self.editor_layout.text_width(&glyph_text, font_size, font_family);
+            let h = line.height;
+
+            glyphs.push(AnimatedGlyph {
+                byte_start: glyph_start,
+                byte_end: glyph_end,
+                text: glyph_text,
+                rect: (x, line.y, w, h),
+                baseline_y,
+                line_index: line_idx,
+            });
+
+            current_byte = glyph_end;
+        }
+
+        let duration_ms = self.current_typing_animation_duration_ms.max(30) as u64;
+
+        DeleteAnimation {
+            glyphs,
+            target_cursor_rect: (old_cursor_x, old_cursor_y, 2.0, self.cursor_visual_h),
+            start_time: Instant::now(),
+            duration_ms,
         }
     }
 
