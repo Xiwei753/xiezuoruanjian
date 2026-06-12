@@ -644,22 +644,12 @@ impl SujianEditorItem {
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.preedit_text.is_empty();
 
-        let line_changed =
-            old_visual_line_id.is_none() || old_visual_line_id != Some(visual_line_id);
-        let half_line = cursor_h * 0.5;
-        let target_y_changed_more_than_half_line = (old_y - cursor_y).abs() > half_line;
-        let x_diff = (old_x - cursor_x).abs();
-        let is_small_x_change = x_diff <= 150.0;
-
         let should_snap = self.current_is_scrolling
             || is_selecting
             || is_preediting
             || !old_visible
             || self.force_snap_next_cursor
-            || scroll_changed
-            || line_changed
-            || target_y_changed_more_than_half_line
-            || !is_small_x_change;
+            || scroll_changed;
 
         let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
             if anim.is_finished(now) {

@@ -379,7 +379,15 @@ extern "C" fn sujian_handle_key_and_text(
         return false;
     };
     let text = decode_utf16_ptr(text, text_len);
-    handle_key_and_text(item, key, modifiers, text)
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle_key_and_text(item, key, modifiers, text)
+    })) {
+        Ok(result) => result,
+        Err(_) => {
+            eprintln!("[sujian_editor] panic in sujian_handle_key_and_text, caught at FFI boundary");
+            false
+        }
+    }
 }
 
 #[no_mangle]
@@ -388,7 +396,9 @@ extern "C" fn sujian_ime_commit(rust_item: *mut c_void, text: *const u16, text_l
         return;
     };
     let text = decode_utf16_ptr(text, text_len);
-    ime_commit(item, text);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ime_commit(item, text);
+    }));
 }
 
 #[no_mangle]
@@ -402,7 +412,9 @@ extern "C" fn sujian_ime_preedit(
         return;
     };
     let text = decode_utf16_ptr(text, text_len);
-    ime_preedit(item, text, cursor);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ime_preedit(item, text, cursor);
+    }));
 }
 
 #[no_mangle]
@@ -410,7 +422,9 @@ extern "C" fn sujian_ime_cancel(rust_item: *mut c_void) {
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
-    ime_cancel(item);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ime_cancel(item);
+    }));
 }
 
 #[no_mangle]
@@ -418,7 +432,9 @@ extern "C" fn sujian_request_repaint(rust_item: *mut c_void) {
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
-    item.input_request_repaint();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        item.input_request_repaint();
+    }));
 }
 
 #[cfg(test)]

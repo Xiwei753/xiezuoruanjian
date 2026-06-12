@@ -669,6 +669,7 @@ impl SujianEditorItem {
         if !self.buffer.delete_backward() {
             return;
         }
+        let old_text = old.text.clone();
         self.buffer.push_undo(old.clone());
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
@@ -684,7 +685,7 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, old_cursor_x, old_cursor_y);
+                    let anim = self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
                     self.delete_animation = Some(anim);
                     break;
                 }
@@ -703,6 +704,7 @@ impl SujianEditorItem {
         if !self.buffer.delete_forward() {
             return;
         }
+        let old_text = old.text.clone();
         self.buffer.push_undo(old.clone());
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
@@ -718,7 +720,7 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, old_cursor_x, old_cursor_y);
+                    let anim = self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
                     self.delete_animation = Some(anim);
                     break;
                 }
@@ -737,6 +739,7 @@ impl SujianEditorItem {
         if !self.buffer.delete_selection() {
             return;
         }
+        let old_text = old.text.clone();
         self.buffer.push_undo(old.clone());
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
@@ -752,7 +755,7 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, old_cursor_x, old_cursor_y);
+                    let anim = self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
                     self.delete_animation = Some(anim);
                     break;
                 }
@@ -799,7 +802,9 @@ impl SujianEditorItem {
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.current_cursor_affinity = affinity;
-        self.force_snap_next_cursor = true;
+        if extend {
+            self.force_snap_next_cursor = true;
+        }
         if sujian_editor_debug_enabled() {
             eprintln!(
                 "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
@@ -1032,34 +1037,34 @@ impl SujianEditorItem {
     fn create_delete_animation(
         &mut self,
         event: &EditorAnimationEvent,
+        old_text: &str,
         old_cursor_x: f64,
         old_cursor_y: f64,
     ) -> DeleteAnimation {
         let width = self.bounding_width();
-        let snapshot = self.layout_snapshot(width);
+        let snapshot = self.layout_snapshot_for_text(old_text, width);
         let font_size = self.current_font_pixel_size as f64;
         let font_family = &self.current_font_family.to_string();
 
         let mut glyphs = Vec::new();
         let range_start = event.range_start;
         let range_end = range_start + event.range_len;
-        let mut current_byte = range_start;
 
         for (line_idx, line) in snapshot.lines.iter().enumerate() {
-            if current_byte >= range_end {
-                break;
-            }
-            if line.end <= current_byte {
+            if line.end <= range_start {
                 continue;
             }
+            if line.start >= range_end {
+                break;
+            }
 
-            let glyph_start = current_byte.max(line.start);
+            let glyph_start = range_start.max(line.start);
             let glyph_end = range_end.min(line.end);
             if glyph_start >= glyph_end {
                 continue;
             }
 
-            let glyph_text = event.text[glyph_start - range_start..glyph_end - range_start].to_string();
+            let glyph_text = old_text[glyph_start..glyph_end].to_string();
             let x = self.editor_layout.cursor_x_for_line(
                 &snapshot,
                 line,
@@ -1078,8 +1083,6 @@ impl SujianEditorItem {
                 baseline_y,
                 line_index: line_idx,
             });
-
-            current_byte = glyph_end;
         }
 
         let duration_ms = self.current_typing_animation_duration_ms.max(30) as u64;
@@ -1134,6 +1137,11 @@ impl SujianEditorItem {
         self.editor_layout
             .snapshot(&self.buffer.text, params)
             .clone()
+    }
+
+    fn layout_snapshot_for_text(&mut self, text: &str, width: f64) -> LayoutSnapshot {
+        let params = self.layout_params(width);
+        self.editor_layout.snapshot(text, params).clone()
     }
 
     fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
