@@ -19,8 +19,8 @@
 use super::*;
 use crate::backend::SafeAppPtr;
 
-use qmetaobject::QJsonObject;
 use super::super::json_utils::qjson_object_from_json;
+use qmetaobject::QJsonObject;
 
 #[path = "github_init_operations.rs"]
 mod github_init_operations;

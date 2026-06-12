@@ -99,15 +99,16 @@ use std::path::Path;
 pub fn init_workspace(path: String) -> std::result::Result<bool, WriterError> {
     let p = Path::new(&path);
     crate::workspace::create_workspace(p).map_err(WriterError::from)?;
-    
+
     // Check if we need to create a default project
     let projects = crate::project::list_projects(p).map_err(WriterError::from)?;
     if projects.is_empty() {
         let project = crate::project::create_project(p, "示例作品").map_err(WriterError::from)?;
         let volumes = crate::volume::list_volumes(p, &project.id).map_err(WriterError::from)?;
         if let Some(vol) = volumes.first() {
-            let chapter = crate::chapter::create_chapter(p, &project.id, &vol.id, "第一章：新的起点")
-                .map_err(WriterError::from)?;
+            let chapter =
+                crate::chapter::create_chapter(p, &project.id, &vol.id, "第一章：新的起点")
+                    .map_err(WriterError::from)?;
             let _ = crate::chapter::save_chapter(
                 p,
                 &project.id,
@@ -118,11 +119,13 @@ pub fn init_workspace(path: String) -> std::result::Result<bool, WriterError> {
             .map_err(WriterError::from)?;
         }
     }
-    
+
     Ok(true)
 }
 
-pub fn open_workspace(path: String) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
+pub fn open_workspace(
+    path: String,
+) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
     let p = Path::new(&path);
     if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
         return Err(WriterError::InvalidWorkspace);
@@ -145,10 +148,12 @@ pub fn create_project_in_workspace(
     Ok(project.into())
 }
 
-pub fn load_workspace_summary(path: String) -> std::result::Result<WorkspaceSummaryDto, WriterError> {
+pub fn load_workspace_summary(
+    path: String,
+) -> std::result::Result<WorkspaceSummaryDto, WriterError> {
     let p = Path::new(&path);
     let is_valid = crate::workspace::validate_workspace(p).unwrap_or(false);
-    
+
     let projects = if is_valid {
         crate::project::list_projects(p)
             .map(|v| v.into_iter().map(Into::into).collect())
@@ -156,7 +161,7 @@ pub fn load_workspace_summary(path: String) -> std::result::Result<WorkspaceSumm
     } else {
         Vec::new()
     };
-    
+
     let recent_edits = if is_valid {
         crate::workspace::get_recent_edits(p)
             .map(|v| v.into_iter().map(Into::into).collect())
@@ -164,7 +169,7 @@ pub fn load_workspace_summary(path: String) -> std::result::Result<WorkspaceSumm
     } else {
         Vec::new()
     };
-    
+
     Ok(WorkspaceSummaryDto {
         path,
         is_valid,

@@ -290,25 +290,37 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     has_errors = true;
                 }
                 if !content.contains("visible: !root.useSujianEditorItem")
-                    || !content.contains("enabled: !root.useSujianEditorItem && editorController.chapterId !== \"\"")
+                    || !content.contains(
+                        "enabled: !root.useSujianEditorItem && editorController.chapterId !== \"\"",
+                    )
                     || !content.contains("textFormat: TextEdit.PlainText")
                 {
-                    eprintln!("{}: Old TextArea must remain as a plain-text emergency fallback", file_name);
+                    eprintln!(
+                        "{}: Old TextArea must remain as a plain-text emergency fallback",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("contentHeight:")
                     || !content.contains("sujianEditor.content_height")
                 {
-                    eprintln!("{}: ScrollView missing SujianEditorItem contentHeight guard", file_name);
+                    eprintln!(
+                        "{}: ScrollView missing SujianEditorItem contentHeight guard",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("EditorWheelScroller {")
                     || !content.contains("id: editorWheelScroller")
                     || !content.contains("isScrolling: editorScroll.editorIsScrolling")
                     || !content.contains("editorWheelScroller.active")
-                    || !content.contains("editorItem: root.useSujianEditorItem ? sujianEditor : null")
+                    || !content
+                        .contains("editorItem: root.useSujianEditorItem ? sujianEditor : null")
                 {
-                    eprintln!("{}: Stable editor mode must delegate wheel physics to EditorWheelScroller", file_name);
+                    eprintln!(
+                        "{}: Stable editor mode must delegate wheel physics to EditorWheelScroller",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("id: smoothWheelAnim")
@@ -332,11 +344,17 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("overlayItem: paperBg")
                     || !content.contains("isScrolling: editorScroll.editorIsScrolling")
                 {
-                    eprintln!("{}: TextArea fallback must keep the isolated SmoothCursor overlay", file_name);
+                    eprintln!(
+                        "{}: TextArea fallback must keep the isolated SmoothCursor overlay",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("cursorDelegate: Item {}") {
-                    eprintln!("{}: Stable editor mode must hide the native Qt cursor behind SmoothCursor", file_name);
+                    eprintln!(
+                        "{}: Stable editor mode must hide the native Qt cursor behind SmoothCursor",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true")
@@ -378,7 +396,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     has_errors = true;
                 }
                 if !content.contains("Rectangle {") || !content.contains("id: cursorRect") {
-                    eprintln!("{}: SmoothCursor must draw the custom cursorRect", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must draw the custom cursorRect",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("targetTextArea.mapToItem(overlayItem || parent") {
@@ -390,18 +411,25 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("maxSmoothCursorDistance")
                     || !content.contains("snapNextUpdate")
                     || !content.contains("Math.abs(newY - cursorRect.y) > 2")
-                    || !content.contains("Math.abs(newX - cursorRect.x) > root.maxSmoothCursorDistance")
+                    || !content
+                        .contains("Math.abs(newX - cursorRect.x) > root.maxSmoothCursorDistance")
                     || !content.contains("xBehaviorEnabled = false")
                     || !content.contains("yBehaviorEnabled = false")
                 {
-                    eprintln!("{}: SmoothCursor must decide snap vs smooth from cursor geometry", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must decide snap vs smooth from cursor geometry",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("smoothUntilMs")
                     || content.contains("Date.now()")
                     || content.contains("allowSmoothCursorMotion")
                 {
-                    eprintln!("{}: SmoothCursor must not depend on keypress time windows", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must not depend on keypress time windows",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("id: typingLayer")
@@ -413,7 +441,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || content.contains("textAnimationsSuppressed")
                     || content.contains("suppressNextTextAnimation")
                 {
-                    eprintln!("{}: SmoothCursor must not own Linux ghost text animation overlay", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must not own Linux ghost text animation overlay",
+                        file_name
+                    );
                     has_errors = true;
                 }
             }
@@ -429,7 +460,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("applyWheelImpulse")
                     || !content.contains("Math.pow(root.decayPerSecond, dtSeconds)")
                 {
-                    eprintln!("{}: Editor wheel scrolling must use velocity-integrated kinetic scrolling", file_name);
+                    eprintln!(
+                        "{}: Editor wheel scrolling must use velocity-integrated kinetic scrolling",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("id: smoothWheelAnim")
@@ -497,17 +531,21 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 #[test]
 fn test_editor_render_format_is_unified() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let document_handler = fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
+    let document_handler =
+        fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
     let main_rs = fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
-    let sujian_editor_item = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
-    let sujian_rendering = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
-    let editor_controller = fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
-    let writing_workspace = fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
+    let sujian_editor_item =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
+    let sujian_rendering =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
+    let editor_controller =
+        fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
+    let writing_workspace =
+        fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
     let design_tokens = fs::read_to_string(manifest_dir.join("qml/DesignTokens.qml")).unwrap();
 
     assert!(
-        main_rs.contains("mod sujian_editor_item;")
-            && main_rs.contains("SujianEditorItem"),
+        main_rs.contains("mod sujian_editor_item;") && main_rs.contains("SujianEditorItem"),
         "Desktop startup must register the Rust self-rendered SujianEditorItem QML type"
     );
 
@@ -574,7 +612,8 @@ fn test_editor_render_format_is_unified() {
 
     assert!(
         design_tokens.contains("property color onSurface: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
-            && design_tokens.contains("property color textPrimary: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
+            && design_tokens
+                .contains("property color textPrimary: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
             && design_tokens.contains("property color editorText: textPrimary"),
         "DesignTokens.editorText must remain the semantic editor foreground token"
     );
@@ -607,7 +646,9 @@ fn test_editor_render_format_is_unified() {
     // SujianEditorItem must NOT be between editorCanvas start and end
     let editor_canvas_section = &writing_workspace[editor_canvas_start..sujian_start];
     assert!(
-        !editor_canvas_section.contains("ScrollView {") || editor_canvas_section.contains("} //") || true,
+        !editor_canvas_section.contains("ScrollView {")
+            || editor_canvas_section.contains("} //")
+            || true,
         "SujianEditorItem must NOT be nested inside editorCanvas/Flickable contentItem"
     );
 }
@@ -663,7 +704,10 @@ fn test_no_mindmap_in_starmap_backend() {
     let lines: Vec<&str> = content.lines().collect();
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed.starts_with("//") || trimmed.starts_with("#[path") || trimmed.starts_with("mod mind_map") {
+        if trimmed.starts_with("//")
+            || trimmed.starts_with("#[path")
+            || trimmed.starts_with("mod mind_map")
+        {
             continue;
         }
         assert!(
@@ -681,8 +725,10 @@ fn test_no_mindmap_in_android正式代码() {
         .parent()
         .and_then(|p| p.parent())
         .unwrap_or(manifest_dir);
-    let android_data = workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/data");
-    let android_model = workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/model");
+    let android_data =
+        workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/data");
+    let android_model =
+        workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/model");
 
     if android_data.exists() {
         for entry in fs::read_dir(&android_data).unwrap() {

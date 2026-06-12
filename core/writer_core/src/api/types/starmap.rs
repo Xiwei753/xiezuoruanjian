@@ -1190,7 +1190,6 @@ impl From<StarMapLinkPatchDto> for crate::starmap::types::StarMapLinkPatch {
     }
 }
 
-
 // StarMap enums and additional types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

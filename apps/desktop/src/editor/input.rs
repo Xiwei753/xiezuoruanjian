@@ -384,7 +384,9 @@ extern "C" fn sujian_handle_key_and_text(
     })) {
         Ok(result) => result,
         Err(_) => {
-            eprintln!("[sujian_editor] panic in sujian_handle_key_and_text, caught at FFI boundary");
+            eprintln!(
+                "[sujian_editor] panic in sujian_handle_key_and_text, caught at FFI boundary"
+            );
             false
         }
     }

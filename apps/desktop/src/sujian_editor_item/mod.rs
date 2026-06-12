@@ -11,18 +11,24 @@ use crate::editor::layout::{
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
-use buffer::{clamp_to_char_boundary, next_char_boundary, prev_char_boundary, byte_to_char_index, EditorBuffer, EditorSnapshot, normalize_plain_text};
+use buffer::{
+    byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
+    prev_char_boundary, EditorBuffer, EditorSnapshot,
+};
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{
     QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem,
     QRectF, QString,
 };
-use rendering::{CursorAnimationState, InsertAnimation, DeleteAnimation, ScrollBuffer};
 pub use rendering::AnimatedGlyph;
+use rendering::{CursorAnimationState, DeleteAnimation, InsertAnimation, ScrollBuffer};
 use std::cell::Cell;
 use std::time::Instant;
-use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorAnimationEvent, EditorAnimationKind};
+use writer_core::editor::{
+    EditorAnimationEvent, EditorAnimationKind, EditorCursor, EditorEngine, EditorSelection,
+    EditorTransactionCause,
+};
 
 cpp! {{
     #include <QtGui/QFont>
@@ -685,7 +691,8 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
+                    let anim =
+                        self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
                     self.delete_animation = Some(anim);
                     break;
                 }
@@ -720,7 +727,8 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
+                    let anim =
+                        self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
                     self.delete_animation = Some(anim);
                     break;
                 }
@@ -755,7 +763,8 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
+                    let anim =
+                        self.create_delete_animation(event, &old_text, old_cursor_x, old_cursor_y);
                     self.delete_animation = Some(anim);
                     break;
                 }
@@ -1008,8 +1017,12 @@ impl SujianEditorItem {
                 glyph_start,
                 CaretAffinity::Downstream,
             );
-            let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
-            let w = self.editor_layout.text_width(&glyph_text, font_size, font_family);
+            let baseline_y = self
+                .editor_layout
+                .text_baseline_y(line, font_size, font_family);
+            let w = self
+                .editor_layout
+                .text_width(&glyph_text, font_size, font_family);
             let h = line.height;
 
             glyphs.push(AnimatedGlyph {
@@ -1071,8 +1084,12 @@ impl SujianEditorItem {
                 glyph_start,
                 CaretAffinity::Downstream,
             );
-            let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
-            let w = self.editor_layout.text_width(&glyph_text, font_size, font_family);
+            let baseline_y = self
+                .editor_layout
+                .text_baseline_y(line, font_size, font_family);
+            let w = self
+                .editor_layout
+                .text_width(&glyph_text, font_size, font_family);
             let h = line.height;
 
             glyphs.push(AnimatedGlyph {
@@ -1501,4 +1518,3 @@ impl QQuickItem for SujianEditorItem {
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
     }
 }
-
