@@ -19,6 +19,8 @@ cpp! {{
         double xEndLeading;
         double xEndTrailing;
         double naturalTextWidth;
+        double ascent;
+        double descent;
     };
     thread_local std::vector<EditorLayoutEntry> g_editor_layout_buf;
 
@@ -162,6 +164,8 @@ cpp! {{
             e.xEndLeading = line.cursorToX(e.qcharEnd, QTextLine::Leading);
             e.xEndTrailing = line.cursorToX(e.qcharEnd, QTextLine::Trailing);
             e.naturalTextWidth = line.naturalTextWidth();
+            e.ascent = line.ascent();
+            e.descent = line.descent();
             g_editor_layout_buf.push_back(e);
             first = false;
         }
@@ -279,6 +283,8 @@ pub struct VisualLine {
     pub line_indent_x: f64,
     pub para_indent: f64,
     pub x_end_trailing: f64,
+    pub qt_ascent: f64,
+    pub qt_descent: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -536,6 +542,8 @@ pub fn layout_lines(
                 line_indent_x: indent,
                 para_indent: indent,
                 x_end_trailing: 0.0,
+                qt_ascent: 0.0,
+                qt_descent: 0.0,
             });
             line_id += 1;
             y += line_height;
@@ -593,6 +601,18 @@ pub fn layout_lines(
                 }
                 return 0.0;
             });
+            let qt_ascent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+                if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
+                    return g_editor_layout_buf[idx].ascent;
+                }
+                return 0.0;
+            });
+            let qt_descent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+                if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
+                    return g_editor_layout_buf[idx].descent;
+                }
+                return 0.0;
+            });
 
             let byte_off = qchar_offset_to_byte_offset(paragraph_text, qchar_off);
             let abs_start = para_start + byte_off;
@@ -621,6 +641,8 @@ pub fn layout_lines(
                 line_indent_x: if is_first { indent } else { 0.0 },
                 para_indent: indent,
                 x_end_trailing: x_end_trailing,
+                qt_ascent,
+                qt_descent,
             });
             line_id += 1;
             y += line_height;
@@ -648,6 +670,8 @@ pub fn layout_lines(
             line_indent_x: indent,
             para_indent: indent,
             x_end_trailing: 0.0,
+            qt_ascent: 0.0,
+            qt_descent: 0.0,
         });
         line_id += 1;
     }
@@ -671,6 +695,8 @@ pub fn layout_lines(
             line_indent_x: indent,
             para_indent: indent,
             x_end_trailing: 0.0,
+            qt_ascent: 0.0,
+            qt_descent: 0.0,
         });
     }
 
@@ -790,6 +816,8 @@ pub fn caret_rect(
                 line_indent_x: 0.0,
                 para_indent: 0.0,
                 x_end_trailing: 0.0,
+                qt_ascent: 0.0,
+                qt_descent: 0.0,
             };
             &fallback
         }
@@ -802,12 +830,15 @@ pub fn caret_rect(
     let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
     if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
+        let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { get_font_ascent(&snapshot.font_family, snapshot.font_size) };
+        let descent = if line.qt_descent > 0.0 { line.qt_descent } else { get_font_descent(&snapshot.font_family, snapshot.font_size) };
+        let text_baseline = text_baseline_y(line, snapshot.font_size as f64, &snapshot.font_family);
+        let cursor_top_to_baseline = text_baseline - cursor_y_doc;
         eprintln!(
-            "[caret_rect] cursor={}, affinity={:?}, caret_visual_line_id={}, line.start={}, line.end={}, line.x={:.1}, line.y={:.1}, line.width={:.1}, line.para_start={}, line.qtextline_idx={}, line.para_qchar_start={}, line.para_qchar_end={}, line.line_wrap_width={:.1}, line.line_indent_x={:.1}, line.para_indent={:.1}, x_end_trailing={:.1}, final_target_x={:.1}, final_target_y={:.1}",
-            cursor_byte, affinity, line.id, line.start, line.end, line.x, line.y, line.width,
-            line.para_start, line.qtextline_idx, line.para_qchar_start, line.para_qchar_end,
-            line.line_wrap_width, line.line_indent_x, line.para_indent, line.x_end_trailing,
-            cursor_x, cursor_y
+            "[caret_rect] cursor={}, affinity={:?}, visual_line_id={}, line.y={:.1}, line.height={:.1}, line.x={:.1}, line.width={:.1}, target_x={:.1}, target_y={:.1}, cursor_h={:.1}, text_baseline_y={:.1}, font_ascent={:.1}, font_descent={:.1}, line_top_to_baseline={:.1}, cursor_top_to_baseline={:.1}, qt_ascent={:.1}, qt_descent={:.1}",
+            cursor_byte, affinity, line.id, line.y, line.height, line.x, line.width,
+            cursor_x, cursor_y_doc, cursor_h, text_baseline, ascent, descent,
+            text_baseline - line.y, cursor_top_to_baseline, line.qt_ascent, line.qt_descent
         );
     }
 
@@ -1122,7 +1153,7 @@ pub fn qchar_offset_to_byte_offset(text: &str, qchar_offset: usize) -> usize {
 }
 
 #[cfg(not(test))]
-fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
+pub fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
     let family = QString::from(font_family);
     cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
         QFont font(family);
@@ -1133,12 +1164,12 @@ fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
 }
 
 #[cfg(test)]
-fn get_font_ascent(_font_family: &str, font_size: f32) -> f64 {
+pub fn get_font_ascent(_font_family: &str, font_size: f32) -> f64 {
     font_size as f64 * 0.8
 }
 
 #[cfg(not(test))]
-fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
+pub fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
     let family = QString::from(font_family);
     cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
         QFont font(family);
@@ -1149,7 +1180,7 @@ fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
 }
 
 #[cfg(test)]
-fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
+pub fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
     font_size as f64 * 0.2
 }
 
@@ -1160,9 +1191,18 @@ pub fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
 }
 
 pub fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str) -> (f64, f64) {
-    let raw_h = cursor_height_for_line(font_size, font_family);
-    let h = raw_h.min(line.height * 0.84);
-    let top_y = line.y + (line.height - h) / 2.0;
+    let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { get_font_ascent(font_family, font_size as f32) };
+    let descent = if line.qt_descent > 0.0 { line.qt_descent } else { get_font_descent(font_family, font_size as f32) };
+    let baseline = text_baseline_y(line, font_size, font_family);
+    let raw_h = ascent + descent;
+    let h = raw_h.min(line.height * 0.96);
+    let mut top_y = baseline - ascent;
+    if top_y < line.y {
+        top_y = line.y;
+    }
+    if top_y + h > line.y + line.height {
+        top_y = line.y + line.height - h;
+    }
     (top_y, h)
 }
 
@@ -1171,8 +1211,8 @@ pub fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64
 }
 
 pub fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
-    let ascent = get_font_ascent(font_family, font_size as f32);
-    let descent = get_font_descent(font_family, font_size as f32);
+    let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { get_font_ascent(font_family, font_size as f32) };
+    let descent = if line.qt_descent > 0.0 { line.qt_descent } else { get_font_descent(font_family, font_size as f32) };
     let top_padding = (line.height - (ascent + descent)).max(0.0) / 2.0;
     line.y + top_padding + ascent
 }

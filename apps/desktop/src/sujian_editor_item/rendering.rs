@@ -723,9 +723,27 @@ impl SujianEditorItem {
         }
 
         if sujian_editor_debug_enabled() {
+            let mut line_info = String::new();
+            if let Some(snapshot) = self.editor_layout.cache() {
+                if let Some(line) = snapshot.lines.iter().find(|l| l.id == visual_line_id) {
+                    let font_size = snapshot.font_size as f64;
+                    let font_family = &snapshot.font_family;
+                    let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { crate::editor::layout::get_font_ascent(font_family, snapshot.font_size) };
+                    let descent = if line.qt_descent > 0.0 { line.qt_descent } else { crate::editor::layout::get_font_descent(font_family, snapshot.font_size) };
+                    let baseline = crate::editor::layout::text_baseline_y(line, font_size, font_family);
+                    let line_top_to_baseline = baseline - line.y;
+                    let cursor_top_to_baseline = baseline - cursor_y;
+                    line_info = format!(
+                        ", line.y={:.1}, line.height={:.1}, visual_line_id={}, font_ascent={:.1}, font_descent={:.1}, text_baseline_y={:.1}, line_top_to_baseline={:.1}, cursor_top_to_baseline={:.1}, cursor_h={:.1}, qt_ascent={:.1}, qt_descent={:.1}",
+                        line.y, line.height, line.id, ascent, descent, baseline,
+                        line_top_to_baseline, cursor_top_to_baseline, cursor_h,
+                        line.qt_ascent, line.qt_descent
+                    );
+                }
+            }
             eprintln!(
-                "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, scroll_y={:.1}",
-                self.buffer.cursor, self.target_cursor_x, self.target_cursor_y, self.cursor_visual_x, self.cursor_visual_y, self.cursor_animation.is_some(), scroll_y
+                "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, scroll_y={:.1}{}",
+                self.buffer.cursor, self.target_cursor_x, self.target_cursor_y, self.cursor_visual_x, self.cursor_visual_y, self.cursor_animation.is_some(), scroll_y, line_info
             );
         }
 
