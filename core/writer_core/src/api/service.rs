@@ -442,22 +442,6 @@ impl WriterCoreApi {
             .map_err(WriterError::from)
     }
 
-    pub fn get_mindmap_snapshot_json(&self, _project_id: &str) -> ApiResult<String> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn save_mindmap_graph(
-        &self,
-        _project_id: &str,
-        _graph: crate::api::types::MindMapGraphDto,
-    ) -> ApiResult<bool> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
     pub fn list_starmaps_json(&self) -> ApiResult<String> {
         let value = self.core().list_starmaps().map_err(WriterError::from)?;
         Self::json_string(&value)
@@ -555,148 +539,6 @@ impl WriterCoreApi {
             .find_starmap_references(target_starmap_id)
             .map(|list| list.into_iter().map(Into::into).collect())
             .map_err(Into::into)
-    }
-
-    pub fn get_mind_map_snapshot(
-        &self,
-        _project_id: &str,
-    ) -> ApiResult<crate::api::types::MindMapSnapshotDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn create_mind_map_graph(
-        &self,
-        _project_id: &str,
-        _title: &str,
-    ) -> ApiResult<crate::api::types::MindMapGraphDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn list_mind_map_graphs(
-        &self,
-        _project_id: &str,
-    ) -> ApiResult<crate::api::types::MindMapGraphsListDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn set_default_mind_map_graph(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-    ) -> ApiResult<bool> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn create_mind_map_node(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _node: crate::api::types::MindMapGraphNodeDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn update_mind_map_node(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _node_id: &str,
-        _patch: crate::api::types::MindMapNodePatchDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn delete_mind_map_node(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _node_id: &str,
-        _cascade: bool,
-    ) -> ApiResult<bool> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn create_mind_map_edge(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _edge: crate::api::types::MindMapGraphEdgeDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn update_mind_map_edge(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _edge_id: &str,
-        _patch: crate::api::types::MindMapEdgePatchDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn delete_mind_map_edge(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _edge_id: &str,
-    ) -> ApiResult<bool> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn create_mind_map_anchor(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _anchor: crate::api::types::MindMapAnchorDto,
-    ) -> ApiResult<crate::api::types::MindMapAnchorDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn bind_mind_map_node_to_anchor(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _node_id: &str,
-        _anchor_id: &str,
-        _link_kind: &str,
-    ) -> ApiResult<crate::api::types::MindMapLinkDto> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
-    }
-
-    pub fn save_mind_map_layout(
-        &self,
-        _project_id: &str,
-        _graph_id: &str,
-        _layout: crate::api::types::MindMapLayoutDto,
-    ) -> ApiResult<bool> {
-        Err(WriterError::Other(
-            "MindMap API removed; migrate to StarMap".into(),
-        ))
     }
 
     pub fn get_starmap_layout(
@@ -1328,33 +1170,6 @@ mod tests {
         assert_eq!(renders[0].edge_id, "edge-1");
         assert!((renders[0].start_x - 92.0).abs() < 0.1);
         assert!((renders[0].end_x - 208.0).abs() < 0.1);
-    }
-
-    #[test]
-    fn mindmap_api_returns_removed_error() {
-        let api = WriterCoreApi::new("");
-        let err = api.get_mind_map_snapshot("any_project").unwrap_err();
-        assert!(
-            matches!(err, WriterError::Other(ref msg) if msg.contains("MindMap API removed")),
-            "get_mindmap_snapshot should return MindMap API removed error"
-        );
-        let graph = MindMapGraphDto {
-            schema_version: 2,
-            id: "g1".into(),
-            project_id: "p1".into(),
-            title: "t".into(),
-            nodes: vec![],
-            edges: vec![],
-            anchors: vec![],
-            links: vec![],
-            created_at: 0,
-            updated_at: 0,
-        };
-        let err = api.save_mindmap_graph("any_project", graph).unwrap_err();
-        assert!(
-            matches!(err, WriterError::Other(ref msg) if msg.contains("MindMap API removed")),
-            "save_mindmap_graph should return MindMap API removed error"
-        );
     }
 
     #[test]

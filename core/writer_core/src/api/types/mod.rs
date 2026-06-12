@@ -1,5 +1,5 @@
 mod action;
-mod legacy_mindmap;
+pub(crate) mod legacy_mindmap;
 mod platform;
 mod project;
 mod settings;
@@ -10,7 +10,6 @@ mod volume;
 mod workspace;
 
 pub use action::*;
-pub use legacy_mindmap::*;
 pub use platform::*;
 pub use project::*;
 pub use settings::*;
