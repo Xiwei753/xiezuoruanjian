@@ -731,12 +731,13 @@ impl SujianEditorItem {
                     let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { crate::editor::layout::get_font_ascent(font_family, snapshot.font_size) };
                     let descent = if line.qt_descent > 0.0 { line.qt_descent } else { crate::editor::layout::get_font_descent(font_family, snapshot.font_size) };
                     let baseline = crate::editor::layout::text_baseline_y(line, font_size, font_family);
-                    let line_top_to_baseline = baseline - line.y;
-                    let cursor_top_to_baseline = baseline - cursor_y;
+                    let cursor_top_doc = cursor_y + scroll_y;
+                    let cursor_top_to_baseline = baseline - cursor_top_doc;
+                    let cursor_bottom_to_baseline = cursor_top_doc + cursor_h - baseline;
                     line_info = format!(
-                        ", line.y={:.1}, line.height={:.1}, visual_line_id={}, font_ascent={:.1}, font_descent={:.1}, text_baseline_y={:.1}, line_top_to_baseline={:.1}, cursor_top_to_baseline={:.1}, cursor_h={:.1}, qt_ascent={:.1}, qt_descent={:.1}",
+                        ", line.y={:.1}, line.height={:.1}, visual_line_id={}, font_ascent={:.1}, font_descent={:.1}, text_baseline_y={:.1}, cursor_top_to_baseline={:.1}, cursor_bottom_to_baseline={:.1}, cursor_h={:.1}, qt_ascent={:.1}, qt_descent={:.1}",
                         line.y, line.height, line.id, ascent, descent, baseline,
-                        line_top_to_baseline, cursor_top_to_baseline, cursor_h,
+                        cursor_top_to_baseline, cursor_bottom_to_baseline, cursor_h,
                         line.qt_ascent, line.qt_descent
                     );
                 }

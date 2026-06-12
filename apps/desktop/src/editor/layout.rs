@@ -614,6 +614,13 @@ pub fn layout_lines(
                 return 0.0;
             });
 
+            let qt_metrics_h = qt_ascent + qt_descent;
+            let actual_line_h = if qt_metrics_h > 0.0 {
+                line_height.max(qt_metrics_h)
+            } else {
+                line_height
+            };
+
             let byte_off = qchar_offset_to_byte_offset(paragraph_text, qchar_off);
             let abs_start = para_start + byte_off;
             let abs_end = para_start + qchar_offset_to_byte_offset(paragraph_text, qchar_end);
@@ -627,7 +634,7 @@ pub fn layout_lines(
                 x: padding + x_off,
                 y,
                 width: line_w,
-                height: line_height,
+                height: actual_line_h,
                 para_text: paragraph_text.to_string(),
                 para_start,
                 qtextline_idx: line_idx as i32,
@@ -645,7 +652,7 @@ pub fn layout_lines(
                 qt_descent,
             });
             line_id += 1;
-            y += line_height;
+            y += actual_line_h;
         }
 
         paragraph_start += paragraph.len();
@@ -834,11 +841,12 @@ pub fn caret_rect(
         let descent = if line.qt_descent > 0.0 { line.qt_descent } else { get_font_descent(&snapshot.font_family, snapshot.font_size) };
         let text_baseline = text_baseline_y(line, snapshot.font_size as f64, &snapshot.font_family);
         let cursor_top_to_baseline = text_baseline - cursor_y_doc;
+        let cursor_bottom_to_baseline = cursor_y_doc + cursor_h - text_baseline;
         eprintln!(
-            "[caret_rect] cursor={}, affinity={:?}, visual_line_id={}, line.y={:.1}, line.height={:.1}, line.x={:.1}, line.width={:.1}, target_x={:.1}, target_y={:.1}, cursor_h={:.1}, text_baseline_y={:.1}, font_ascent={:.1}, font_descent={:.1}, line_top_to_baseline={:.1}, cursor_top_to_baseline={:.1}, qt_ascent={:.1}, qt_descent={:.1}",
+            "[caret_rect] cursor={}, affinity={:?}, visual_line_id={}, line.y={:.1}, line.height={:.1}, line.x={:.1}, line.width={:.1}, target_x={:.1}, target_y={:.1}, cursor_h={:.1}, text_baseline_y={:.1}, font_ascent={:.1}, font_descent={:.1}, cursor_top_to_baseline={:.1}, cursor_bottom_to_baseline={:.1}, qt_ascent={:.1}, qt_descent={:.1}",
             cursor_byte, affinity, line.id, line.y, line.height, line.x, line.width,
             cursor_x, cursor_y_doc, cursor_h, text_baseline, ascent, descent,
-            text_baseline - line.y, cursor_top_to_baseline, line.qt_ascent, line.qt_descent
+            cursor_top_to_baseline, cursor_bottom_to_baseline, line.qt_ascent, line.qt_descent
         );
     }
 
@@ -1194,8 +1202,7 @@ pub fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str
     let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { get_font_ascent(font_family, font_size as f32) };
     let descent = if line.qt_descent > 0.0 { line.qt_descent } else { get_font_descent(font_family, font_size as f32) };
     let baseline = text_baseline_y(line, font_size, font_family);
-    let raw_h = ascent + descent;
-    let h = raw_h.min(line.height * 0.96);
+    let h = ascent + descent;
     let mut top_y = baseline - ascent;
     if top_y < line.y {
         top_y = line.y;
