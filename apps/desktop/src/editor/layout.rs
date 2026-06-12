@@ -728,7 +728,10 @@ pub fn hit_test(
         .find(|(_, line)| doc_y < line.y + line.height);
     let (_line_idx, line) = match line_opt {
         Some((idx, l)) => (idx, l),
-        None => (lines.len() - 1, lines.last().unwrap()),
+        None => match lines.last() {
+            Some(last_line) => (lines.len() - 1, last_line),
+            None => return (0, CaretAffinity::Downstream),
+        },
     };
     let raw_index = index_at_line_x(snapshot, line, x);
     let index = raw_index.max(line.start).min(line.end);
