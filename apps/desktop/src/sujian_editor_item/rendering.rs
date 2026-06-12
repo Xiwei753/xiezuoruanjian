@@ -259,74 +259,74 @@ impl SujianEditorItem {
                             insert_anim.glyphs.len(),
                         );
                     }
-                    let first_glyph = insert_anim.glyphs.first().unwrap();
-                    let last_glyph = insert_anim.glyphs.last().unwrap();
-                    let insert_start_byte = first_glyph.byte_start;
-                    let insert_end_byte = last_glyph.byte_end;
+                    if let (Some(first_glyph), Some(last_glyph)) = (insert_anim.glyphs.first(), insert_anim.glyphs.last()) {
+                        let insert_start_byte = first_glyph.byte_start;
+                        let insert_end_byte = last_glyph.byte_end;
 
-                    if insert_start_byte > line.start && insert_start_byte <= line.end {
-                        let before = &self.buffer.text[line.start..insert_start_byte];
-                        renderer::draw_text(
-                            painter,
-                            line.x,
-                            text_y,
-                            fs,
-                            self.current_text_color.clone(),
-                            before.to_string().into(),
-                        );
-                    }
-
-                    let clip_origin_x = insert_anim.origin_cursor_rect.0;
-                    let final_insert_w: f64 = insert_anim.glyphs.iter().map(|g| g.rect.2).sum();
-                    let clip_right = clip_origin_x + final_insert_w * eased;
-                    let base_color = renderer::color_from_qstring(self.current_text_color.clone());
-
-                    for glyph in &insert_anim.glyphs {
-                        let gx = glyph.rect.0;
-                        let gy = glyph.baseline_y + paint_offset_y;
-                        if gx + glyph.rect.2 <= clip_right + 0.5 {
+                        if insert_start_byte > line.start && insert_start_byte <= line.end {
+                            let before = &self.buffer.text[line.start..insert_start_byte];
                             renderer::draw_text(
                                 painter,
-                                gx,
-                                gy,
+                                line.x,
+                                text_y,
                                 fs,
                                 self.current_text_color.clone(),
-                                glyph.text.clone().into(),
-                            );
-                        } else if gx < clip_right + 0.5 {
-                            let visible_frac = ((clip_right - gx) / glyph.rect.2).clamp(0.0, 1.0);
-                            let alpha = (visible_frac * 255.0).round() as i32;
-                            renderer::draw_text_color(
-                                painter,
-                                gx,
-                                gy,
-                                QColor::from_rgba(
-                                    base_color.red(),
-                                    base_color.green(),
-                                    base_color.blue(),
-                                    alpha,
-                                ),
-                                glyph.text.clone().into(),
+                                before.to_string().into(),
                             );
                         }
-                    }
 
-                    if insert_end_byte < line.end {
-                        let insert_w = final_insert_w;
-                        let after_x = first_glyph.rect.0 + insert_w;
-                        let after = &self.buffer.text[insert_end_byte..line.end];
-                        renderer::draw_text(
-                            painter,
-                            after_x,
-                            text_y,
-                            fs,
-                            self.current_text_color.clone(),
-                            after.to_string().into(),
-                        );
-                    }
+                        let clip_origin_x = insert_anim.origin_cursor_rect.0;
+                        let final_insert_w: f64 = insert_anim.glyphs.iter().map(|g| g.rect.2).sum();
+                        let clip_right = clip_origin_x + final_insert_w * eased;
+                        let base_color = renderer::color_from_qstring(self.current_text_color.clone());
 
-                    needs_animation_repaint = true;
-                    continue;
+                        for glyph in &insert_anim.glyphs {
+                            let gx = glyph.rect.0;
+                            let gy = glyph.baseline_y + paint_offset_y;
+                            if gx + glyph.rect.2 <= clip_right + 0.5 {
+                                renderer::draw_text(
+                                    painter,
+                                    gx,
+                                    gy,
+                                    fs,
+                                    self.current_text_color.clone(),
+                                    glyph.text.clone().into(),
+                                );
+                            } else if gx < clip_right + 0.5 {
+                                let visible_frac = ((clip_right - gx) / glyph.rect.2).clamp(0.0, 1.0);
+                                let alpha = (visible_frac * 255.0).round() as i32;
+                                renderer::draw_text_color(
+                                    painter,
+                                    gx,
+                                    gy,
+                                    QColor::from_rgba(
+                                        base_color.red(),
+                                        base_color.green(),
+                                        base_color.blue(),
+                                        alpha,
+                                    ),
+                                    glyph.text.clone().into(),
+                                );
+                            }
+                        }
+
+                        if insert_end_byte < line.end {
+                            let insert_w = final_insert_w;
+                            let after_x = first_glyph.rect.0 + insert_w;
+                            let after = &self.buffer.text[insert_end_byte..line.end];
+                            renderer::draw_text(
+                                painter,
+                                after_x,
+                                text_y,
+                                fs,
+                                self.current_text_color.clone(),
+                                after.to_string().into(),
+                            );
+                        }
+
+                        needs_animation_repaint = true;
+                        continue;
+                    }
                 }
             }
 
@@ -480,12 +480,9 @@ impl SujianEditorItem {
         let mut miss_reason = "none";
         let mut needs_render = true;
 
-        if self.scroll_buffer.is_none() {
-            miss_reason = "no_buffer";
-        } else if self.editor_layout.cache().is_none() {
+        if self.editor_layout.cache().is_none() {
             miss_reason = "layout_invalidated";
-        } else {
-            let buf = self.scroll_buffer.as_ref().unwrap();
+        } else if let Some(buf) = self.scroll_buffer.as_ref() {
             let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
             if content_changed {
                 miss_reason = "content_changed";
@@ -502,6 +499,8 @@ impl SujianEditorItem {
                     }
                 }
             }
+        } else {
+            miss_reason = "no_buffer";
         }
 
         if !needs_render {
