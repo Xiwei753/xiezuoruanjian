@@ -285,7 +285,11 @@ impl AppBackend {
     ) -> QString {
         match serde_json::from_str::<serde_json::Value>(envelope_json) {
             Ok(mut envelope) => {
-                if envelope.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if envelope
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     on_success(self, &envelope);
                     envelope["state"] = self.current_app_state_value();
                     envelope.to_string().into()
@@ -375,10 +379,8 @@ impl AppBackend {
             ),
         );
         if let Some(api) = self.core_api() {
-            let envelope = api.create_volume_envelope_json(
-                &project_id.to_string(),
-                &title.to_string(),
-            );
+            let envelope =
+                api.create_volume_envelope_json(&project_id.to_string(), &title.to_string());
             self.core_envelope_to_result(&envelope, |app, value| {
                 if let Some(vol_id) = value
                     .get("data")

@@ -74,19 +74,25 @@ mod tests {
         let vol2 = crate::volume::create_volume(workspace_path, &project.id, "第二卷").unwrap();
 
         // Add chapters
-        let c1 = crate::chapter::create_chapter(workspace_path, &project.id, vol1_id, "Chapter 1").unwrap();
-        let c2 = crate::chapter::create_chapter(workspace_path, &project.id, vol1_id, "Chapter 2").unwrap();
-        let c3 = crate::chapter::create_chapter(workspace_path, &project.id, &vol2.id, "Chapter 3").unwrap();
+        let c1 = crate::chapter::create_chapter(workspace_path, &project.id, vol1_id, "Chapter 1")
+            .unwrap();
+        let c2 = crate::chapter::create_chapter(workspace_path, &project.id, vol1_id, "Chapter 2")
+            .unwrap();
+        let c3 = crate::chapter::create_chapter(workspace_path, &project.id, &vol2.id, "Chapter 3")
+            .unwrap();
 
         // Write content
         let content1 = "This is a test content.";
-        crate::chapter::save_chapter(workspace_path, &project.id, vol1_id, &c1.id, content1).unwrap();
+        crate::chapter::save_chapter(workspace_path, &project.id, vol1_id, &c1.id, content1)
+            .unwrap();
 
         let content2 = "More content.";
-        crate::chapter::save_chapter(workspace_path, &project.id, vol1_id, &c2.id, content2).unwrap();
+        crate::chapter::save_chapter(workspace_path, &project.id, vol1_id, &c2.id, content2)
+            .unwrap();
 
         let content3 = "Even more testing content.";
-        crate::chapter::save_chapter(workspace_path, &project.id, &vol2.id, &c3.id, content3).unwrap();
+        crate::chapter::save_chapter(workspace_path, &project.id, &vol2.id, &c3.id, content3)
+            .unwrap();
 
         // Calculate exact word counts using the core function for robust testing
 
@@ -94,9 +100,9 @@ mod tests {
         assert_eq!(stats.volume_count, 2);
         assert_eq!(stats.chapter_count, 3);
 
-        let expected_word_count = crate::chapter::calculate_word_count(content1) +
-                                  crate::chapter::calculate_word_count(content2) +
-                                  crate::chapter::calculate_word_count(content3);
+        let expected_word_count = crate::chapter::calculate_word_count(content1)
+            + crate::chapter::calculate_word_count(content2)
+            + crate::chapter::calculate_word_count(content3);
 
         assert_eq!(stats.total_word_count, expected_word_count);
     }

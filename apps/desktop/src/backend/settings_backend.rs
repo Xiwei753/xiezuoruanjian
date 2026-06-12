@@ -496,9 +496,7 @@ impl AppBackend {
                 &format!("success={}", local_envelope["success"]),
             );
             if local_envelope["success"] != true {
-                let error_code = local_envelope["errorCode"]
-                    .as_str()
-                    .unwrap_or("UNKNOWN");
+                let error_code = local_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
                 let user_message = local_envelope["userMessage"]
                     .as_str()
                     .unwrap_or("保存本地设置失败");
@@ -523,9 +521,7 @@ impl AppBackend {
                 &format!("success={}", syncable_envelope["success"]),
             );
             if syncable_envelope["success"] != true {
-                let error_code = syncable_envelope["errorCode"]
-                    .as_str()
-                    .unwrap_or("UNKNOWN");
+                let error_code = syncable_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
                 let user_message = syncable_envelope["userMessage"]
                     .as_str()
                     .unwrap_or("保存同步设置失败");

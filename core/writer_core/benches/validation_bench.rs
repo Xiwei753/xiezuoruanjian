@@ -14,7 +14,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     for v in 0..5 {
         let vol = core.create_volume(&proj.id, &format!("Vol {}", v)).unwrap();
         for c in 0..100 {
-            core.create_chapter(&proj.id, &vol.id, &format!("Chap {}", c)).unwrap();
+            core.create_chapter(&proj.id, &vol.id, &format!("Chap {}", c))
+                .unwrap();
         }
     }
 

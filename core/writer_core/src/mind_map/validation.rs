@@ -152,7 +152,9 @@ pub fn validate_graph(
     }
 
     // Pre-build the set of valid chapter ids for this project
-    let valid_chapter_ids = core.list_valid_chapter_ids(&graph.project_id).unwrap_or_default();
+    let valid_chapter_ids = core
+        .list_valid_chapter_ids(&graph.project_id)
+        .unwrap_or_default();
 
     // Validate anchors
     let mut anchor_ids = HashSet::new();

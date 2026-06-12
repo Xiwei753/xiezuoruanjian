@@ -926,7 +926,8 @@ pub fn calculate_cursor_x_for_line(
             let cursor_in_para = cursor.saturating_sub(line.para_start);
             let cursor_qchar = byte_offset_to_qchar_offset(&line.para_text, cursor_in_para);
             let line_end_byte_in_para = line.end.saturating_sub(line.para_start);
-            let line_end_qchar = byte_offset_to_qchar_offset(&line.para_text, line_end_byte_in_para);
+            let line_end_qchar =
+                byte_offset_to_qchar_offset(&line.para_text, line_end_byte_in_para);
             eprintln!(
                 "[INVARIANT] cursor_x <= 1.0 for non-empty line!\n\
                  VisualLine: para_qchar_start={}, para_qchar_end={}, start={}, end={}\n\
@@ -934,10 +935,18 @@ pub fn calculate_cursor_x_for_line(
                  input cursor_qchar={}, cursor_abs_byte={}, qtextline_idx={}\n\
                  line.end byte -> qchar offset={}\n\
                  Qt cursorToX result={:.4}, line.x={:.4}",
-                line.para_qchar_start, line.para_qchar_end, line.start, line.end,
-                line.para_qchar_start, line_end_qchar,
-                cursor_qchar, cursor, line.qtextline_idx,
-                line_end_qchar, x, line.x
+                line.para_qchar_start,
+                line.para_qchar_end,
+                line.start,
+                line.end,
+                line.para_qchar_start,
+                line_end_qchar,
+                cursor_qchar,
+                cursor,
+                line.qtextline_idx,
+                line_end_qchar,
+                x,
+                line.x
             );
             debug_line_metrics(
                 &line.para_text,
@@ -1405,17 +1414,19 @@ mod tests {
         init_qt();
         let mut layout = EditorLayout::default();
         let text = "这是一段测试文字，用来验证大字号下换行后的行尾点击定位是否正确。第二行内容继续测试换行效果。";
-        let snapshot = layout.snapshot(
-            text,
-            LayoutParams {
-                width: 820.0,
-                font_size: 45.0,
-                font_family: "serif".to_string(),
-                line_spacing: 1.5,
-                text_indent: 0.0,
-                padding: 16.0,
-            },
-        ).clone();
+        let snapshot = layout
+            .snapshot(
+                text,
+                LayoutParams {
+                    width: 820.0,
+                    font_size: 45.0,
+                    font_family: "serif".to_string(),
+                    line_spacing: 1.5,
+                    text_indent: 0.0,
+                    padding: 16.0,
+                },
+            )
+            .clone();
         assert!(snapshot.lines.len() > 1, "text must wrap at fontSize=45");
         assert_line_end_roundtrip(&snapshot);
     }
@@ -1425,17 +1436,19 @@ mod tests {
         init_qt();
         let text = "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。我们通过大量中文段落来测试自动换行后每一行的行尾光标定位是否准确。第一段测试内容结束。第二段继续测试更长的文本内容，确保每一行都能正确地进行光标位置计算和逆向映射。";
         let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(
-            text,
-            LayoutParams {
-                width: 400.0,
-                font_size: 24.0,
-                font_family: "serif".to_string(),
-                line_spacing: 1.5,
-                text_indent: 0.0,
-                padding: 16.0,
-            },
-        ).clone();
+        let snapshot = layout
+            .snapshot(
+                text,
+                LayoutParams {
+                    width: 400.0,
+                    font_size: 24.0,
+                    font_family: "serif".to_string(),
+                    line_spacing: 1.5,
+                    text_indent: 0.0,
+                    padding: 16.0,
+                },
+            )
+            .clone();
         assert!(
             snapshot.lines.len() >= 3,
             "text must wrap into >= 3 lines, got {}",
@@ -1460,7 +1473,10 @@ mod tests {
             assert!(
                 x_end > 1.0,
                 "line {} end x must be > 1.0, got {:.4} (range {}..{})",
-                idx, x_end, line.start, line.end
+                idx,
+                x_end,
+                line.start,
+                line.end
             );
             let roundtrip = qtextlayout_x_to_cursor_on_line(
                 &line.para_text,
@@ -1525,7 +1541,10 @@ mod tests {
         let text = "这是一个用来测试软换行后行尾点击定位的段落。当我们点击某个换行后的行尾位置时，光标的target_x不应该回到行首缩进位置。";
         let mut layout = EditorLayout::default();
         let snapshot = layout.snapshot(text, params_large(600.0)).clone();
-        assert!(snapshot.lines.len() >= 2, "must wrap at width=600 fontSize=45");
+        assert!(
+            snapshot.lines.len() >= 2,
+            "must wrap at width=600 fontSize=45"
+        );
         for line in &snapshot.lines {
             if line.start == line.end || line.para_text.is_empty() {
                 continue;
@@ -1544,13 +1563,17 @@ mod tests {
             assert!(
                 x_end > 1.0,
                 "soft-wrap line end x must be > 1.0: line_id={}, range={}..{}, x_end={:.4}",
-                line.id, line.start, line.end, x_end
+                line.id,
+                line.start,
+                line.end,
+                x_end
             );
             let rect = caret_rect(&snapshot, line.end, CaretAffinity::Upstream, 0.0, 800.0);
             assert!(
                 rect.x > 1.0,
                 "caret_rect(line.end, Upstream).x must be > 1.0: line_id={}, rect.x={:.4}",
-                line.id, rect.x
+                line.id,
+                rect.x
             );
             assert_eq!(
                 rect.visual_line_id, line.id,
@@ -1563,7 +1586,8 @@ mod tests {
     #[test]
     fn visual_line_qchar_boundary_matches_qt() {
         init_qt();
-        let text = "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。";
+        let text =
+            "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。";
         let snapshot = snapshot_for(text, 200.0);
         assert!(snapshot.lines.len() >= 2, "must wrap at width=200");
         for line in &snapshot.lines {
@@ -1624,17 +1648,19 @@ mod tests {
         init_qt();
         let text = "这是模拟实机日志中出现的问题段落。当光标位于某个visual line的中间位置时，target_x不应该坍缩到行首缩进位置61.0。通过fontSize=45和长段落来复现这个场景。";
         let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(
-            text,
-            LayoutParams {
-                width: 820.0,
-                font_size: 45.0,
-                font_family: "serif".to_string(),
-                line_spacing: 1.5,
-                text_indent: 32.0,
-                padding: 16.0,
-            },
-        ).clone();
+        let snapshot = layout
+            .snapshot(
+                text,
+                LayoutParams {
+                    width: 820.0,
+                    font_size: 45.0,
+                    font_family: "serif".to_string(),
+                    line_spacing: 1.5,
+                    text_indent: 32.0,
+                    padding: 16.0,
+                },
+            )
+            .clone();
         assert!(snapshot.lines.len() >= 3);
         for line in &snapshot.lines {
             if line.start == line.end || line.para_text.is_empty() {
@@ -1666,7 +1692,8 @@ mod tests {
             assert!(
                 x_end > 1.0,
                 "line-end x must not collapse to indent: line_id={}, x_end={:.4}",
-                line.id, x_end
+                line.id,
+                x_end
             );
         }
     }
@@ -1676,17 +1703,19 @@ mod tests {
         init_qt();
         let text = "验证x_end_trailing缓存值与重新计算值一致。这是测试段落，用来确保布局缓存不会导致光标位置偏差。";
         let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(
-            text,
-            LayoutParams {
-                width: 600.0,
-                font_size: 32.0,
-                font_family: "serif".to_string(),
-                line_spacing: 1.5,
-                text_indent: 0.0,
-                padding: 16.0,
-            },
-        ).clone();
+        let snapshot = layout
+            .snapshot(
+                text,
+                LayoutParams {
+                    width: 600.0,
+                    font_size: 32.0,
+                    font_family: "serif".to_string(),
+                    line_spacing: 1.5,
+                    text_indent: 0.0,
+                    padding: 16.0,
+                },
+            )
+            .clone();
         assert!(snapshot.lines.len() >= 2);
         for line in &snapshot.lines {
             if line.start == line.end || line.para_text.is_empty() {
@@ -1708,7 +1737,10 @@ mod tests {
             assert!(
                 diff < 0.5,
                 "x_end_trailing inconsistency on line {}: cached={:.4} recomputed={:.4} diff={:.4}",
-                line.id, cached, recomputed, diff
+                line.id,
+                cached,
+                recomputed,
+                diff
             );
         }
     }

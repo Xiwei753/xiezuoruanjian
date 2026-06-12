@@ -176,11 +176,7 @@ impl AppBackend {
                 allow_empty_overwrite,
             ) {
                 Ok(receipt) => {
-                    self.debug_log(
-                        "chapter",
-                        "save_chapter_success",
-                        &format!("len={}", len),
-                    );
+                    self.debug_log("chapter", "save_chapter_success", &format!("len={}", len));
                     self.current_save_status = "已保存".to_string();
                     // 正文保存不触发 workspace_state_changed，避免 reload_tree 刷新整棵树。
                     // 保存只改变章节内容，不改变工作区结构（项目/卷/章节增删改）。
@@ -194,11 +190,7 @@ impl AppBackend {
                     }))
                 }
                 Err(e) => {
-                    self.debug_error(
-                        "chapter",
-                        "save_chapter_failed",
-                        &format!("error={}", e),
-                    );
+                    self.debug_error("chapter", "save_chapter_failed", &format!("error={}", e));
                     if is_empty_overwrite_blocked(&e) {
                         self.debug_error(
                             "chapter",
