@@ -96,6 +96,10 @@ impl crate::sync::SyncService {
             return true;
         }
 
+        if rel_path.starts_with("app-meta/starmaps/") {
+            return true;
+        }
+
         if rel_path.starts_with("app-meta/ai/") {
             return true;
         }

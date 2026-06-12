@@ -53,10 +53,9 @@ pub mod editor;
 pub mod error;
 pub mod history;
 pub mod index;
-/// LEGACY: 思维导图 - 已废弃，仅做迁移兼容。
+/// 思维导图 - 已废弃，仅做迁移兼容。
 /// 正式图谱路线为 `starmap`，禁止新增功能进入 mind_map。
-#[deprecated(since = "0.1.1", note = "Please use starmap instead")]
-pub mod mind_map;
+pub(crate) mod mind_map;
 pub mod project;
 pub mod settings;
 pub mod starmap;

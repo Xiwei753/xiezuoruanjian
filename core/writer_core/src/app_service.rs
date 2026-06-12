@@ -388,22 +388,6 @@ impl WriterAppService {
         self.api.flush_writing_stats()
     }
 
-    // LEGACY MindMap — retained for migration compatibility. Use starmap for new features.
-    pub fn get_mindmap_snapshot(
-        &self,
-        project_id: String,
-    ) -> Result<crate::api::types::MindMapSnapshotDto, WriterError> {
-        self.api.get_mind_map_snapshot(&project_id)
-    }
-
-    pub fn save_mindmap_graph(
-        &self,
-        project_id: String,
-        graph: crate::api::types::MindMapGraphDto,
-    ) -> Result<bool, WriterError> {
-        self.api.save_mindmap_graph(&project_id, graph)
-    }
-
     // StarMap
     pub fn list_starmaps(&self) -> Result<Vec<crate::api::types::StarMapMetaDto>, WriterError> {
         self.api.list_starmaps()

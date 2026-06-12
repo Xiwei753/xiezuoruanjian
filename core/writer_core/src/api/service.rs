@@ -442,32 +442,6 @@ impl WriterCoreApi {
             .map_err(WriterError::from)
     }
 
-    pub fn get_mindmap_snapshot_json(&self, project_id: &str) -> ApiResult<String> {
-        let value = self
-            .core()
-            .get_mind_map_snapshot(project_id)
-            .map_err(WriterError::from)?;
-        Self::json_string(&value)
-    }
-
-    pub fn save_mindmap_graph(
-        &self,
-        project_id: &str,
-        graph: crate::api::types::MindMapGraphDto,
-    ) -> ApiResult<bool> {
-        let graph: crate::mind_map::graph::MindMapGraph = graph.into();
-        if graph.project_id != project_id {
-            return Err(WriterError::Other(format!(
-                "project_id mismatch: request project_id={}, graph.project_id={}",
-                project_id, graph.project_id
-            )));
-        }
-
-        let core = self.core();
-        crate::mind_map::storage::save_mind_map_graph(&core, &graph).map_err(WriterError::from)?;
-        Ok(true)
-    }
-
     pub fn list_starmaps_json(&self) -> ApiResult<String> {
         let value = self.core().list_starmaps().map_err(WriterError::from)?;
         Self::json_string(&value)
@@ -564,157 +538,6 @@ impl WriterCoreApi {
         self.core()
             .find_starmap_references(target_starmap_id)
             .map(|list| list.into_iter().map(Into::into).collect())
-            .map_err(Into::into)
-    }
-
-    pub fn get_mind_map_snapshot(
-        &self,
-        project_id: &str,
-    ) -> ApiResult<crate::api::types::MindMapSnapshotDto> {
-        self.core()
-            .get_mind_map_snapshot(project_id)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn create_mind_map_graph(
-        &self,
-        project_id: &str,
-        title: &str,
-    ) -> ApiResult<crate::api::types::MindMapGraphDto> {
-        self.core()
-            .create_mind_map_graph(project_id, title)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn list_mind_map_graphs(
-        &self,
-        project_id: &str,
-    ) -> ApiResult<crate::api::types::MindMapGraphsListDto> {
-        self.core()
-            .list_mind_map_graphs(project_id)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn set_default_mind_map_graph(&self, project_id: &str, graph_id: &str) -> ApiResult<bool> {
-        self.core()
-            .set_default_mind_map_graph(project_id, graph_id)
-            .map(|_| true)
-            .map_err(Into::into)
-    }
-
-    pub fn create_mind_map_node(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        node: crate::api::types::MindMapGraphNodeDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
-        self.core()
-            .create_mind_map_node(project_id, graph_id, node.into())
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn update_mind_map_node(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        node_id: &str,
-        patch: crate::api::types::MindMapNodePatchDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphNodeDto> {
-        self.core()
-            .update_mind_map_node(project_id, graph_id, node_id, patch.into())
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn delete_mind_map_node(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        node_id: &str,
-        cascade: bool,
-    ) -> ApiResult<bool> {
-        self.core()
-            .delete_mind_map_node(project_id, graph_id, node_id, cascade)
-            .map(|_| true)
-            .map_err(Into::into)
-    }
-
-    pub fn create_mind_map_edge(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        edge: crate::api::types::MindMapGraphEdgeDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
-        self.core()
-            .create_mind_map_edge(project_id, graph_id, edge.into())
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn update_mind_map_edge(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        edge_id: &str,
-        patch: crate::api::types::MindMapEdgePatchDto,
-    ) -> ApiResult<crate::api::types::MindMapGraphEdgeDto> {
-        self.core()
-            .update_mind_map_edge(project_id, graph_id, edge_id, patch.into())
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn delete_mind_map_edge(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        edge_id: &str,
-    ) -> ApiResult<bool> {
-        self.core()
-            .delete_mind_map_edge(project_id, graph_id, edge_id)
-            .map(|_| true)
-            .map_err(Into::into)
-    }
-
-    pub fn create_mind_map_anchor(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        anchor: crate::api::types::MindMapAnchorDto,
-    ) -> ApiResult<crate::api::types::MindMapAnchorDto> {
-        self.core()
-            .create_mind_map_anchor(project_id, graph_id, anchor.into())
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn bind_mind_map_node_to_anchor(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        node_id: &str,
-        anchor_id: &str,
-        link_kind: &str,
-    ) -> ApiResult<crate::api::types::MindMapLinkDto> {
-        self.core()
-            .bind_mind_map_node_to_anchor(project_id, graph_id, node_id, anchor_id, link_kind)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    pub fn save_mind_map_layout(
-        &self,
-        project_id: &str,
-        graph_id: &str,
-        layout: crate::api::types::MindMapLayoutDto,
-    ) -> ApiResult<bool> {
-        self.core()
-            .save_mind_map_layout(project_id, graph_id, layout.into())
-            .map(|_| true)
             .map_err(Into::into)
     }
 
@@ -934,16 +757,6 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn create_child_starmap_legacy(
-        &self,
-        parent_id: &str,
-        title: &str,
-        desc: &str,
-        accent_color: Option<&str>,
-    ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        self.create_child_starmap(parent_id, title, desc, accent_color)
-    }
-
     pub fn update_starmap_node(
         &self,
         starmap_id: &str,
@@ -1111,32 +924,8 @@ impl WriterCoreApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mind_map::graph::{MindMapGraph, MindMapGraphNode, MindMapNodeKind};
     use std::fs::File;
     use tempfile::tempdir;
-
-    fn valid_graph(project_id: &str) -> MindMapGraph {
-        MindMapGraph {
-            schema_version: 2,
-            id: "api_graph".to_string(),
-            project_id: project_id.to_string(),
-            title: "API Saved Graph".to_string(),
-            nodes: vec![MindMapGraphNode {
-                id: "custom_node".to_string(),
-                title: "API Saved Node".to_string(),
-                kind: MindMapNodeKind::Character,
-                payload: None,
-                tags: vec!["api".to_string()],
-                created_at: 1,
-                updated_at: 1,
-            }],
-            edges: vec![],
-            anchors: vec![],
-            links: vec![],
-            created_at: 1,
-            updated_at: 1,
-        }
-    }
 
     #[test]
     fn record_writing_event_returns_true_on_success() {
@@ -1311,70 +1100,6 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, WriterError::Io(_)));
-    }
-
-    #[test]
-    fn save_mindmap_graph_persists_graph_and_snapshot_reads_it() {
-        let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
-        let project = api.create_project("Test Project").unwrap();
-        let graph = valid_graph(&project.id);
-
-        assert_eq!(
-            api.save_mindmap_graph(&project.id, graph.into()).unwrap(),
-            true
-        );
-
-        let snapshot_json = api.get_mindmap_snapshot_json(&project.id).unwrap();
-        let snapshot: crate::mind_map::MindMapSnapshot =
-            serde_json::from_str(&snapshot_json).unwrap();
-
-        assert_eq!(snapshot.project_id, project.id);
-        assert_eq!(snapshot.layout_kind, "Freeform");
-        assert_eq!(snapshot.nodes.len(), 1);
-        assert_eq!(snapshot.nodes[0].id, "custom_node");
-        assert_eq!(snapshot.nodes[0].title, "API Saved Node");
-    }
-
-    #[test]
-    fn save_mindmap_graph_rejects_project_id_mismatch() {
-        let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
-        let project = api.create_project("Test Project").unwrap();
-        let graph = valid_graph("another_project");
-
-        let err = api
-            .save_mindmap_graph(&project.id, graph.into())
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            WriterError::Other(message)
-                if message.contains("project_id mismatch")
-                    && message.contains(&project.id)
-                    && message.contains("another_project")
-        ));
-    }
-
-    #[test]
-    fn save_mindmap_graph_propagates_validation_error() {
-        let temp_dir = tempdir().unwrap();
-        crate::workspace::create_workspace(temp_dir.path()).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path());
-        let project = api.create_project("Test Project").unwrap();
-        let mut graph = valid_graph(&project.id);
-        graph.schema_version = 1;
-
-        let err = api
-            .save_mindmap_graph(&project.id, graph.into())
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            WriterError::Io(message) if message.contains("UnsupportedSchemaVersion")
-        ));
     }
 
     #[test]

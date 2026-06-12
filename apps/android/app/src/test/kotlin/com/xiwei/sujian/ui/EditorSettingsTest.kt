@@ -5,9 +5,6 @@ import android.text.style.ForegroundColorSpan
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import com.xiwei.sujian.model.LocalSettings
-import com.xiwei.sujian.model.MindMapGraphNode
-import com.xiwei.sujian.model.MindMapNodeKind
-import com.xiwei.sujian.model.MindMapNodeKindDeserializer
 import org.junit.Assert.*
 
 /**
@@ -93,57 +90,6 @@ class EditorSettingsTest {
         val heightLastLine = fontMetrics.descent - fontMetrics.ascent - 2 * cursorVerticalPadding
         
         assertEquals("Cursor height should be independent of line index and identical across lines", heightNormalLine, heightLastLine, 0.001f)
-    }
-
-    @Test
-    fun testUnknownNodeAndEdgeKindDoesNotCrash() {
-        val gson = GsonBuilder()
-            .registerTypeAdapter(MindMapNodeKind::class.java, MindMapNodeKindDeserializer())
-            .create()
-
-        // Unknown node kind "alien" should fallback to Custom
-        val jsonNode = """
-            {
-                "id": "node-1",
-                "title": "Unknown Node",
-                "kind": "alien",
-                "tags": []
-            }
-        """.trimIndent()
-
-        val node = gson.fromJson(jsonNode, MindMapGraphNode::class.java)
-        assertNotNull(node)
-        assertEquals("node-1", node.id)
-        assertEquals(MindMapNodeKind.Custom, node.kind)
-
-        // Known node kind "character" should parse to Character
-        val jsonNodeKnown = """
-            {
-                "id": "node-2",
-                "title": "Character Node",
-                "kind": "character",
-                "tags": []
-            }
-        """.trimIndent()
-
-        val nodeKnown = gson.fromJson(jsonNodeKnown, MindMapGraphNode::class.java)
-        assertNotNull(nodeKnown)
-        assertEquals(MindMapNodeKind.Character, nodeKnown.kind)
-        
-        // Edge kind is string, unknown kind should parse normally
-        val jsonEdge = """
-            {
-                "id": "edge-1",
-                "from": "node-1",
-                "to": "node-2",
-                "kind": "mysterious_relationship",
-                "label": "Mysterious"
-            }
-        """.trimIndent()
-        
-        val type = object : TypeToken<Map<String, Any>>() {}.type
-        val edgeMap: Map<String, Any> = gson.fromJson(jsonEdge, type)
-        assertEquals("mysterious_relationship", edgeMap["kind"])
     }
 
     @Test

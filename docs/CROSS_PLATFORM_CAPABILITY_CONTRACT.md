@@ -46,7 +46,7 @@ Supersedes: None
 - **敏感数据脱敏**：任何涉及同步 token、secrets、账户密码的信息，在 Core 返回的 Result Envelope 中必须强制脱敏，只允许以掩码或布尔状态暴露。
 
 ### 4. Shared Status Model (统一状态模型)
-- 对同步、设置保存、导图写入、作品创建/删除等高危或复杂长周期操作，其运行期状态必须由 Core 统一定义，并输出以下标准状态机状态，平台层直接映射，不得二次包装或自己发明新状态：
+- 对同步、设置保存、图谱写入、作品创建/删除等高危或复杂长周期操作，其运行期状态必须由 Core 统一定义，并输出以下标准状态机状态，平台层直接映射，不得二次包装或自己发明新状态：
   - `idle`：空闲状态。
   - `running`：正在执行中。
   - `success`：执行成功。
@@ -59,14 +59,14 @@ Supersedes: None
   - `permission_denied`：权限不足或工作区锁保护。
 
 ### 5. Shared Command Model (统一写操作命令模型)
-- 任何对 Workspace / Project / Volume / Chapter / (MindMap LEGACY) / StarMap / Settings / Sync 的写入或变更操作，必须抽象为 Core command。
+- 任何对 Workspace / Project / Volume / Chapter / StarMap / Settings / Sync 的写入或变更操作，必须抽象为 Core command。
 - 每个 Command 必须在 Core 中独立且完整地定义：
   - **Request Schema**：输入参数类型及合法性校验规则（`validation`）。
   - **Mutation Logic**：核心文件/内存修改逻辑，且该过程必须为原子操作或支持 Crash-safe 回滚。
   - **Response Schema**：输出的数据包，指出受影响的实体（`changedEntities`）。
   - **Error Mapping**：对底层 IO/Git/序列化错误的统一捕获和 errorCode 映射。
   - **Core Tests**：必须包含针对此 Command 的独立单元测试和集成测试，确保脱离 UI 时逻辑 100% 正确。
-- **禁止平台绕道**：平台端严禁越过 Command 机制直接修改 workspace 下的任何文件（包括但不限于 `mind_map/index.json`（LEGACY）、`settings.json`、`.git/` 下的文件）。
+- **禁止平台绕道**：平台端严禁越过 Command 机制直接修改 workspace 下的任何文件（包括但不限于 `settings.json`、`.git/` 下的文件）。
 
 ### 6. Shared Event Model (统一事件模型)
 - 业务事件（Domain Event）由 Core 统一捕捉并定义，以用于跨平台通信与 UI 异步刷新：
@@ -75,8 +75,8 @@ Supersedes: None
   - `ChapterUpdated` (章节内容/元数据修改)
   - `SettingsSaved` (本地或同步设置已保存)
   - `SyncConflictDetected` (同步检测到不可自动合并的冲突)
-  - `MindMapGraphUpdated` (LEGACY: 思维导图图谱/布局发生变更，正式路线为 StarMapGraphUpdated)
-  - `AnchorBroken` (正文变动导致思维导图的锚点失效 — LEGACY)
+  - `StarMapGraphUpdated` (星图图谱/布局发生变更)
+  - `AnchorBroken` (正文变动导致星图的锚点失效)
 - **消费规则**：平台端仅能作为 Event 的消费者。平台端可以把事件转换为特定平台的 UI State 或 LiveData/StateFlow 信号，但禁止自己在平台层发明和分发长周期的业务事件。
 
 ### 7. Platform Adapter Only (平台绑定层纯适配器化)
@@ -148,7 +148,7 @@ graph TD
   - UI 渲染、组件渲染、Activity/Fragment 生命周期的处理。
   - 通过领域 Bridge 调用 `AppServiceBridge + UniFFI`；只有 legacy 状态/动作路径可以调用 `NativeCoreBridge`。
   - 不做本地业务缓存。在设置界面编辑时，只允许在内存中修改 Draft，直到点击“保存”通过 SettingsCapability 写入，以 Core 返回的 `SettingsSaved` 事件为刷新 UI 的唯一依据。
-  - 导图的拖拽缩放、手势事件、惯性计算是 UI 逻辑，但节点布局、数据和锚点更新全量来自 Core。
+  - 图谱的拖拽缩放、手势事件、惯性计算是 UI 逻辑，但节点布局、数据和锚点更新全量来自 Core。
 
 - **`apps/desktop` (Desktop 桌面客户端壳层)**
   - 基于 Qt/QML 的 UI 部分和 C++ 编写的 Desktop backend 适配层。
@@ -201,10 +201,10 @@ graph TD
 - **映射规则**：底层调用如 `libgit2` 产生的错误，必须在 Core 中全部映射为 `SyncStatus`，严禁直接把 libgit2 裸字符串传递给平台层展示。
 - **冲突处理**：当发生 Merge 冲突时，冲突判定、备选方案选择（保留本地/覆盖云端/人工合并）必须由 Core 定义的冲突处理算法进行，平台只提供选择 UI。
 
-### 6. MindMapCapability (LEGACY - 已废弃)
+### 6. MindMapCapability (REMOVED)
 
-> **⚠️ 本 Capability 已废弃，仅保留用于旧数据迁移兼容。**
-> 正式图谱路线为 `starmap`（星图）。所有新增图谱能力必须走 StarMapCapability，禁止继续在 MindMapCapability 中开发新功能。
+> MindMap API 已从运行时移除。旧数据迁移请使用 `starmap::legacy_migration` 模块。
+> 正式图谱路线为 `starmap`（星图）。所有图谱能力必须走 StarMapCapability。
 
 - `createGraph(workspacePath: String, projectId: String, graphName: String) -> ResultEnvelope<GraphId>`
 - `listGraphs(workspacePath: String, projectId: String) -> ResultEnvelope<List<GraphMeta>>`
@@ -271,13 +271,13 @@ graph TD
   `{ "success": false, "errorCode": "SYNC_MERGE_CONFLICT", "status": "conflict", "data": { "conflictFiles": ["chapter_1.txt"] } }`。
   双端均根据 `SYNC_MERGE_CONFLICT` 错误码弹出一致的冲突合并引导对话框，让用户选择解决方案。
 
-### 实例 4：思维导图操作 (MindMap) (LEGACY - 正式路线为 StarMap)
+### 实例 4：图谱操作 (StarMap)
 - ❌ **错误做法**：
-  Android 侧拖动并修改了思维导图节点名字，直接将修改后的 JSON 用文件操作写回 `mind_map.json`，然后重新读取 JSON 并强刷 Canvas。
+  Android 侧拖动并修改了图谱节点名字，直接将修改后的 JSON 用文件操作写回文件，然后重新读取 JSON 并强刷 Canvas。
   *后果：Desktop 端正开着同样的文件但全然不知，没有文件完整性校验，可能随时覆盖或者覆盖掉 Core 的自动布局。*
 -  **正确做法**：
-  Android 侧修改节点名称，发送 `MindMapCapability.updateNode(workspacePath, projectId, graphId, nodeId, "新节点名称")` 命令。
-  Core 在内部图数据结构中修改节点并校验，写回统一的 workspace 并触发 `MindMapGraphUpdated` 事件，双端在收到该事件后高效率更新快照并重新进行裁剪区重绘。
+  Android 侧修改节点名称，发送 `StarMapCapability.updateNode(workspacePath, starmapId, nodeId, patch)` 命令。
+  Core 在内部图数据结构中修改节点并校验，写回统一的 workspace 并触发 `StarMapGraphUpdated` 事件，双端在收到该事件后高效率更新快照并重新进行裁剪区重绘。
 
 ---
 
@@ -332,7 +332,7 @@ graph TD
 
 ### 4. 阶段 4：双端对齐测试 (Cross-platform Integration Testing)
 - **用例复用**：在 CI 中，引入两端测试用例。如同样的 `createProject` 用例在 Kotlin (JNI 方式) 与 C++ (Shared ABI 方式) 下都必须表现出完全等同的断言结果。
-- **行为验收**：双端对于 `SyncConflict` 和 `StarMapEdit` 的处理表现出完全一致的交互。(注：原 `MindMapEdit` 已迁移至 `StarMapEdit`)
+- **行为验收**：双端对于 `SyncConflict` 和 `StarMapEdit` 的处理表现出完全一致的交互。
 
 ### 5. 阶段 5：支持未来五端 (Five-platform Ready)
 - **接入层标准化**：新客户端（如 macOS, Web, iOS）的接入必须只能调用统一导出的 `bindings/shared` 动态链接库。
