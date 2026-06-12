@@ -3,7 +3,7 @@
 Status: active
 Last verified: 2026-06-11
 Truth source: code / product decision / protocol
-Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, core/writer_core/TECHNICAL_ROUTE.md
+Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, core/writer_core/TECHNICAL_ROUTE.md (these files have been removed, this is the single source of truth)
 
 ## 最高优先级规则
 - **核心契约约束：** 项目已建立跨平台业务底线契约：[《跨平台能力契约与 Core-first 架构约束》](CROSS_PLATFORM_CAPABILITY_CONTRACT.md)。所有跨平台业务设计与能力对齐，必须以该契约文档为唯一准则。其优先级高于任何单端（Android、Linux、未来新增端）的局部技术路线和实现细节。
@@ -207,12 +207,8 @@ Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, co
   - 以后如何改变该决策：无。
 
 ## 目录级技术路线
-除了本全局技术路线外，各个核心目录也定义了各自的实现边界。后续修改代码时，必须遵守对应目录的技术路线：
-
-- **Android 技术路线**：[apps/android/TECHNICAL_ROUTE.md](../apps/android/TECHNICAL_ROUTE.md)
-- **Linux 技术路线**：[apps/desktop/TECHNICAL_ROUTE.md](../apps/desktop/TECHNICAL_ROUTE.md)
-- **Rust Core 技术路线**：[core/writer_core/TECHNICAL_ROUTE.md](../core/writer_core/TECHNICAL_ROUTE.md)
+（注：各目录的底层技术路线已经合并到本文档以及产品架构层契约文档中，这里作为全局最高原则指引。）
 
 **冲突处理规则**：
-- 如果全局文档和目录文档存在冲突，先以更严格的约束为准。
+- 如果遇到其他残留的说明与本全局文档冲突，以本全局约束为准。
 - 如果需要调整路线，必须先提交文档变更，不能在功能代码里绕开。
