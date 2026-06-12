@@ -33,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap
 import android.os.Build
 import androidx.annotation.RequiresApi
 import java.util.concurrent.atomic.AtomicBoolean
+import android.util.Log
 
 // This is a helper for safely working with byte buffers returned from the Rust code.
 // A rust-owned buffer is represented by its capacity, its current length, and a
@@ -2398,12 +2399,13 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
 
     override fun destroy() {
         // Only allow a single call to this method.
-        // TODO: maybe we should log a warning if called more than once?
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
                 cleanable.clean()
             }
+        } else {
+            Log.w("UniFFI", "destroy() called more than once")
         }
     }
 
