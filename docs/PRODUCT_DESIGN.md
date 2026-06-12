@@ -3,7 +3,7 @@
 Status: active
 Last verified: 2026-06-11
 Truth source: code / product decision / protocol
-Supersedes: docs/product_design_contract.md, docs/desktop_ui_visual_system.md, docs/settings_design.md
+Supersedes: product_design_contract (legacy), desktop_ui_visual_system (legacy), settings_design (legacy)
 
 ---
 
