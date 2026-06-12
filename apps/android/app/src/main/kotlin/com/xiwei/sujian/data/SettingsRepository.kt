@@ -49,7 +49,7 @@ class SettingsRepository(context: Context) {
                 warn("加载本地设置失败: ${result.message}")
                 LocalSettings()
             }
-            BridgeResult.NotLoaded -> LocalSettings()
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -63,7 +63,7 @@ class SettingsRepository(context: Context) {
                 warn("保存本地设置失败: ${result.message}")
                 false
             }
-            BridgeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -75,7 +75,7 @@ class SettingsRepository(context: Context) {
                 val defaultSettings = SyncableSettings()
                 defaultSettings
             }
-            BridgeResult.NotLoaded -> SyncableSettings()
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
@@ -89,7 +89,7 @@ class SettingsRepository(context: Context) {
                 warn("保存同步设置失败: ${result.message}")
                 false
             }
-            BridgeResult.NotLoaded -> false
+            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
         }
     }
 
