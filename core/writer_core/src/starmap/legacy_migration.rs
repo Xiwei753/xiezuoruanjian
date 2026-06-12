@@ -6,7 +6,12 @@ fn backup_path(p: &Path) -> PathBuf {
     PathBuf::from(format!("{}.legacy.backup.json", p.display()))
 }
 
-pub fn migrate_project_mind_map(workspace: &Path, project_id: &str) -> Result<Option<String>> {
+/// Isolate old MindMap data by renaming files to `.legacy.backup.json`.
+///
+/// This is NOT a real migration — it does not create StarMap data.
+/// It only prevents old MindMap files from being read at runtime.
+/// Old files are preserved as backups, never deleted.
+pub fn quarantine_project_mind_map(workspace: &Path, project_id: &str) -> Result<Option<String>> {
     let mm_dir = workspace
         .join("projects")
         .join(project_id)
@@ -72,7 +77,7 @@ pub fn migrate_project_mind_map(workspace: &Path, project_id: &str) -> Result<Op
     }
 
     Ok(Some(format!(
-        "Migrated MindMap index for project {}",
+        "Quarantined MindMap data for project {}",
         project_id
     )))
 }
@@ -115,14 +120,14 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_returns_none_when_no_mm_dir() {
+    fn test_quarantine_returns_none_when_no_mm_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let result = migrate_project_mind_map(tmp.path(), "proj1").unwrap();
+        let result = quarantine_project_mind_map(tmp.path(), "proj1").unwrap();
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_migrate_renames_old_files() {
+    fn test_quarantine_renames_old_files() {
         let tmp = tempfile::tempdir().unwrap();
         let mm_dir = tmp
             .path()
@@ -133,7 +138,7 @@ mod tests {
         fs::write(mm_dir.join("index.json"), r#"{"graphs":[]}"#).unwrap();
         fs::write(mm_dir.join("graphs").join("g1.json"), "{}").unwrap();
 
-        let result = migrate_project_mind_map(tmp.path(), "proj1").unwrap();
+        let result = quarantine_project_mind_map(tmp.path(), "proj1").unwrap();
         assert!(result.is_some());
 
         assert!(!mm_dir.join("index.json").exists());

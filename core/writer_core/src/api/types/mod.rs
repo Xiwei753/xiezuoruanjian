@@ -1,5 +1,4 @@
 mod action;
-pub(crate) mod legacy_mindmap;
 mod platform;
 mod project;
 mod settings;

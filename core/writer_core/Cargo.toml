@@ -46,7 +46,3 @@ harness = false
 name = "aggregate_events"
 harness = false
 
-[[bench]]
-name = "validation_bench"
-harness = false
-
