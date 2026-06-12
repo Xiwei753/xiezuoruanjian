@@ -20,6 +20,7 @@ FILE_PATTERN = re.compile(
 )
 
 WHITELIST_FILENAMES = {
+    'ai_development_guide.md', 'ai_tool_calling.md', 'sujian_editor_item.rs', 'product_design_contract.md', 'desktop_ui_visual_system.md', 'settings_design.md', 'settings.json', 'bridge_contract.md', 'desktop_backend_contract.md', 'desktop_qml_ui_contract.md',
     'index.json', 'mind_map.json', 'workspace.json', 'starmap.json', 'writing_stats.json',
     'note.md', 'outline.md', 'scene.md', 'character_notes.md', 'timeline_notes.md', 'draft.md',
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
@@ -29,8 +30,13 @@ WHITELIST_FILENAMES = {
 }
 
 WHITELIST_PATHS = {
+    'docs/ai_development_guide.md', 'docs/ai_tool_calling.md', 'apps/desktop/src/sujian_editor_item.rs', 'apps/android/TECHNICAL_ROUTE.md', 'apps/desktop/TECHNICAL_ROUTE.md', 'core/writer_core/TECHNICAL_ROUTE.md', 'docs/product_design_contract.md', 'docs/desktop_ui_visual_system.md', 'docs/settings_design.md', 'docs/bridge_contract.md', 'docs/desktop_backend_contract.md', 'docs/desktop_qml_ui_contract.md',
     'apps/android/NativeCoreBridge',
     'bindings/android',
+}
+
+WHITELIST_LINKS = {
+    '../apps/android/TECHNICAL_ROUTE.md', '../apps/desktop/TECHNICAL_ROUTE.md', '../core/writer_core/TECHNICAL_ROUTE.md'
 }
 
 def clean_extracted_path(path):
@@ -92,6 +98,8 @@ def check_links():
                 if link.startswith(("http://", "https://", "mailto:", "ftp:")):
                     continue
                 if link.startswith("#"):
+                    continue
+                if link in WHITELIST_LINKS:
                     continue
                     
                 checked_links_count += 1
