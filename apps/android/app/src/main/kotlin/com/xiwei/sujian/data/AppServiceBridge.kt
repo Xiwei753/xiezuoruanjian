@@ -296,11 +296,6 @@ class AppServiceBridge(workspacePath: String) {
         service.flushWritingStats()
     }
 
-    // LEGACY: MindMap — 仅迁移兼容，正式图谱路线为 StarMap
-    fun getMindMapSnapshot(projectId: String): BridgeResult<uniffi.writer_core.MindMapSnapshotDto> = wrapResult {
-        service.getMindmapSnapshot(projectId)
-    }
-
     fun listStarMaps(): BridgeResult<List<uniffi.writer_core.StarMapMetaDto>> = wrapResult {
         service.listStarmaps()
     }

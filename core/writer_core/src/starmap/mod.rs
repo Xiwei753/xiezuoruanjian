@@ -14,6 +14,7 @@
 pub mod graph;
 pub mod hittest;
 pub mod layout;
+pub mod legacy_migration;
 pub mod render;
 pub mod semantic;
 pub mod types;
@@ -221,8 +222,7 @@ pub fn create_child_starmap(
     Ok(meta)
 }
 
-/// **LEGACY API**: 创建子星图。
-/// 保留此方法仅为向下兼容，新的调用入口使用 `create_child_starmap`。
+#[cfg(test)]
 pub fn create_child_starmap_legacy(
     workspace: &Path,
     parent_id: &str,
@@ -291,6 +291,7 @@ pub fn delete_starmap(workspace: &Path, starmap_id: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn delete_starmap_cascade_legacy(workspace: &Path, starmap_id: &str) -> Result<()> {
     // Delete children first
     let idx = load_index(workspace)?;
@@ -307,7 +308,7 @@ pub fn delete_starmap_cascade_legacy(workspace: &Path, starmap_id: &str) -> Resu
     idx.updated_at = now_epoch();
     save_index(workspace, &idx)?;
 
-    // Clean up the underlying mind_map graph if it exists
+    // Clean up the underlying starmap graph directory
     let graph_dir = starmaps_dir(workspace).join(starmap_id);
     if graph_dir.exists() {
         let _ = fs::remove_dir_all(&graph_dir);

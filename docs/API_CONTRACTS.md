@@ -16,13 +16,13 @@ Supersedes: docs/bridge_contract.md, docs/desktop_backend_contract.md, docs/desk
 - UI/ViewModel/QML 不直接解析内部业务 JSON，不自行判断工作区、章节保存、写作事件分类或字数规则。
 - 旧 `*_json` / `NativeCoreBridge` JSON 包装仍然存在，但只能作为 Android legacy fallback；Repository/UI/ViewModel/Controller 不允许直接依赖它。
 - 新调用必须进入既有或新增领域 Bridge，不得把裸 JSON `String`、`Boolean`、`null` 当作正常上层接口继续扩散。
-- Stats / StarMap / (MindMap LEGACY) 仍有 JSON 字符串残留时，解析必须封闭在对应领域 Bridge 内，向上返回 `BridgeResult<T>`；`Error` 和 `NotLoaded` 必须原样传播。
+- Stats / StarMap 仍有 JSON 字符串残留时，解析必须封闭在对应领域 Bridge 内，向上返回 `BridgeResult<T>`；`Error` 和 `NotLoaded` 必须原样传播。
 - Bridge 错误必须包含稳定 `code` 和可展示 `message`，不能只依赖字符串匹配。
 - 写入、写作统计、保存和同步类 API 的 `Boolean` 只能表示业务成功值，不能表示错误状态；失败必须通过 typed error / `BridgeResult.Error` 向上传递。
 
 ### 1.1 领域 Bridge 架构
 
-- **Android 三层架构**：`ViewModel/UI → Repository/Controller → 领域 Bridge (WorkspaceBridge, WritingBridge, SettingsBridge, SyncBridge, StatsBridge, StarMapBridge, (MindMapBridge LEGACY) 等) → AppServiceBridge → UniFFI typed DTO/error → WriterAppService adapter → WriterCoreApi → Rust Core`
+- **Android 三层架构**：`ViewModel/UI → Repository/Controller → 领域 Bridge (WorkspaceBridge, WritingBridge, SettingsBridge, SyncBridge, StatsBridge, StarMapBridge 等) → AppServiceBridge → UniFFI typed DTO/error → WriterAppService adapter → WriterCoreApi → Rust Core`
 - **Android legacy 例外**：`NativeStatusBridge` 和少量旧 `ActionBridge` 可通过 `NativeCoreBridge` 读取 native 加载状态或旧动作注册；该路径不是主业务入口。
 - **Linux 三层架构**：`QML UI → AppBackend (QObject 适配层) → 领域 Bridge (writing_bridge 等) → Rust Core`
   - Linux `writing_bridge` 已从字符串错误改为稳定 Core Error 与 DTOs（如 `LinuxChapterOpenData`, `ChapterSaveReceipt`）。
@@ -206,10 +206,10 @@ Supersedes: docs/bridge_contract.md, docs/desktop_backend_contract.md, docs/desk
 - **映射规则**：底层调用如 `libgit2` 产生的错误，必须在 Core 中全部映射为 `SyncStatus`，严禁直接把 libgit2 裸字符串传递给平台层展示。
 - **冲突处理**：当发生 Merge 冲突时，冲突判定、备选方案选择（保留本地/覆盖云端/人工合并）必须由 Core 定义的冲突处理算法进行，平台只提供选择 UI。
 
-### 4.6 MindMapCapability (LEGACY - 已废弃)
+### 4.6 MindMapCapability (REMOVED)
 
-> **⚠️ 本 Capability 已废弃，仅保留用于旧数据迁移兼容。**
-> 正式图谱路线为 `starmap`（星图）。所有新增图谱能力必须走 StarMapCapability，禁止继续在 MindMapCapability 中开发新功能。
+> MindMap API 已从运行时移除。旧数据迁移请使用 `starmap::legacy_migration` 模块。
+> 正式图谱路线为 `starmap`（星图）。所有图谱能力必须走 StarMapCapability。
 
 - `createGraph(workspacePath: String, projectId: String, graphName: String) -> ResultEnvelope<GraphId>`
 - `listGraphs(workspacePath: String, projectId: String) -> ResultEnvelope<List<GraphMeta>>`
@@ -240,4 +240,4 @@ Supersedes: docs/bridge_contract.md, docs/desktop_backend_contract.md, docs/desk
 ### 4.8 未来 AI Capability (AI 业务功能)
 - **安全隔离**：AI 辅助功能（如扩写、续写、提示节点）绝对不允许直接操纵或写入平台侧的局部状态。
 - **动作化**：AI 生成的内容在被用户采纳前，只作为 `Core Action Proposal` 传输给平台；用户点击接受后，必须作为 Core Command 写入 workspace 历史中。
-- **图谱输入**：AI 自动抽取的节点、大纲、逻辑锚点，必须走 `StarMapCapability` 提供的标准接口导入。(注：原 `MindMapCapability` 已废弃)
+- **图谱输入**：AI 自动抽取的节点、大纲、逻辑锚点，必须走 `StarMapCapability` 提供的标准接口导入。

@@ -11,7 +11,6 @@ class WriterRepository private constructor(context: Context) {
     val settings = SettingsBridge(appService)
     val sync = SyncBridge(appService)
     val stats = StatsBridge(appService)
-    val mindMap = MindMapBridge(appService) // LEGACY: 仅迁移兼容，正式图谱路线为 starMap
     val starMap = StarMapBridge(appService)
 
 

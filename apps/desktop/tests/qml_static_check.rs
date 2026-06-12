@@ -611,3 +611,95 @@ fn test_editor_render_format_is_unified() {
         "SujianEditorItem must NOT be nested inside editorCanvas/Flickable contentItem"
     );
 }
+
+#[test]
+fn test_no_mindmap_in_api_udl() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(manifest_dir);
+    let udl_path = workspace_root.join("core/writer_core/src/api.udl");
+    if !udl_path.exists() {
+        return;
+    }
+    let content = fs::read_to_string(&udl_path).unwrap();
+    assert!(
+        !content.contains("MindMap"),
+        "api.udl must not contain MindMap types or methods after route consolidation"
+    );
+}
+
+#[test]
+fn test_no_mindmap_in_qml() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let qml_dir = manifest_dir.join("qml");
+    if !qml_dir.exists() {
+        return;
+    }
+    for entry in fs::read_dir(&qml_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("qml") {
+            let content = fs::read_to_string(&path).unwrap();
+            let file_name = path.file_name().unwrap().to_str().unwrap();
+            assert!(
+                !content.contains("mind_map") && !content.contains("mindMap"),
+                "QML file {} must not reference mind_map/mindMap after route consolidation",
+                file_name
+            );
+        }
+    }
+}
+
+#[test]
+fn test_no_mindmap_in_starmap_backend() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend_path = manifest_dir.join("src/backend/starmap_backend.rs");
+    if !backend_path.exists() {
+        return;
+    }
+    let content = fs::read_to_string(&backend_path).unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with("#[path") || trimmed.starts_with("mod mind_map") {
+            continue;
+        }
+        assert!(
+            !trimmed.contains("mind_map_operations"),
+            "starmap_backend.rs:{} must not reference mind_map_operations in non-comment code",
+            idx + 1
+        );
+    }
+}
+
+#[test]
+fn test_no_mindmap_in_android正式代码() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(manifest_dir);
+    let android_data = workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/data");
+    let android_model = workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/model");
+
+    if android_data.exists() {
+        for entry in fs::read_dir(&android_data).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.file_name().unwrap().to_str() == Some("MindMapBridge.kt") {
+                panic!("MindMapBridge.kt must be deleted after route consolidation");
+            }
+        }
+    }
+    if android_model.exists() {
+        for entry in fs::read_dir(&android_model).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.file_name().unwrap().to_str() == Some("MindMapModels.kt") {
+                panic!("MindMapModels.kt must be deleted after route consolidation");
+            }
+        }
+    }
+}

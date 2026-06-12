@@ -1192,18 +1192,6 @@ impl WriterCore {
         )
     }
 
-    /// **LEGACY API**: 创建子星图。
-    /// 保留此方法仅为向下兼容，新的调用入口使用 `create_child_starmap`。
-    pub fn create_child_starmap_legacy(
-        &self,
-        parent_id: &str,
-        title: &str,
-        description: &str,
-        accent_color: Option<&str>,
-    ) -> Result<crate::starmap::StarMapMeta> {
-        self.create_child_starmap(parent_id, title, description, accent_color)
-    }
-
     pub fn rename_starmap(
         &self,
         starmap_id: &str,

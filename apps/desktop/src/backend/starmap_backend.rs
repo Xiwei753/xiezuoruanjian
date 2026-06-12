@@ -1,16 +1,15 @@
 // =============================================================================
-// starmap_backend.rs — 星图与创作脑图领域 QObject 后端适配层
+// starmap_backend.rs — 星图领域 QObject 后端适配层
 // =============================================================================
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新星图与脑图数据。
+// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新星图数据。
 //
 // 干什么的：
 // - 实现 StarMapBackend 结构体，作为 QML 中 "starmapBackend" 对象的桥梁。
 // - 提供星图管理交互（starmap_bridge::*），包括获取列表、新建、重命名、物理删除、作品绑定解绑。
 // - 负责星图二维大画布节点（Nodes）的添加/更新/删除、连接线（Edges）的增删改查、以及高频拖拽节点后的坐标布局落盘（save_starmap_layout）。
-// - 负责脑图（Mind Map）元数据与大纲树结构管理，包含脑图快照解析（get_mind_map_snapshot）、脑图节点创建、锚点绑定（bind_mind_map_anchor）与脑图坐标排版保存，协助用户绘制作品的创作知识图谱。
 //
 // 被什么引用：
 // - 被 apps/desktop/src/backend/mod.rs 引用，用于实例化星图后端并绑定为 QML 全局上下文属性。
@@ -19,9 +18,6 @@
 use super::*;
 use crate::backend::SafeAppPtr;
 use writer_core::api::WriterCoreApi;
-
-#[path = "mind_map_operations.rs"]
-mod mind_map_operations;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -130,64 +126,6 @@ pub struct StarMapBackend {
         qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QString),
     save_starmap_layout:
         qt_method!(fn(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject),
-    get_mind_map_snapshot_json: qt_method!(fn(&self, project_id: QString) -> QString),
-    create_mind_map_graph_json:
-        qt_method!(fn(&mut self, project_id: QString, title: QString) -> QString),
-    list_mind_map_graphs_json: qt_method!(fn(&self, project_id: QString) -> QString),
-    set_default_mind_map_graph_json:
-        qt_method!(fn(&mut self, project_id: QString, graph_id: QString) -> QString),
-    create_mind_map_node_json: qt_method!(
-        fn(&mut self, project_id: QString, graph_id: QString, node_json: QString) -> QString
-    ),
-    update_mind_map_node_json: qt_method!(
-        fn(
-            &mut self,
-            project_id: QString,
-            graph_id: QString,
-            node_id: QString,
-            patch_json: QString,
-        ) -> QString
-    ),
-    delete_mind_map_node_json: qt_method!(
-        fn(
-            &mut self,
-            project_id: QString,
-            graph_id: QString,
-            node_id: QString,
-            cascade: bool,
-        ) -> QString
-    ),
-    create_mind_map_edge_json: qt_method!(
-        fn(&mut self, project_id: QString, graph_id: QString, edge_json: QString) -> QString
-    ),
-    update_mind_map_edge_json: qt_method!(
-        fn(
-            &mut self,
-            project_id: QString,
-            graph_id: QString,
-            edge_id: QString,
-            patch_json: QString,
-        ) -> QString
-    ),
-    delete_mind_map_edge_json: qt_method!(
-        fn(&mut self, project_id: QString, graph_id: QString, edge_id: QString) -> QString
-    ),
-    create_mind_map_anchor_json: qt_method!(
-        fn(&mut self, project_id: QString, graph_id: QString, anchor_json: QString) -> QString
-    ),
-    bind_mind_map_anchor_json: qt_method!(
-        fn(
-            &mut self,
-            project_id: QString,
-            graph_id: QString,
-            node_id: QString,
-            anchor_id: QString,
-            link_kind: QString,
-        ) -> QString
-    ),
-    save_mind_map_layout_json: qt_method!(
-        fn(&mut self, project_id: QString, graph_id: QString, layout_json: QString) -> QString
-    ),
     compute_edge_renders_json:
         qt_method!(fn(&self, edges_json: QString, nodes_json: QString) -> QString),
     hit_test_edge_renders_json:
@@ -461,123 +399,6 @@ impl StarMapBackend {
     fn save_starmap_layout(&mut self, starmap_id: QString, layout_json: QString) -> QJsonObject {
         self.with_app_mut(QJsonObject::default(), |app| {
             app.save_starmap_layout(starmap_id, layout_json)
-        })
-    }
-    fn get_mind_map_snapshot_json(&self, project_id: QString) -> QString {
-        self.with_app("{}".into(), |app| {
-            app.get_mind_map_snapshot_json(project_id)
-        })
-    }
-    fn create_mind_map_graph_json(&mut self, project_id: QString, title: QString) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.create_mind_map_graph_json(project_id, title)
-        })
-    }
-    fn list_mind_map_graphs_json(&self, project_id: QString) -> QString {
-        self.with_app("[]".into(), |app| app.list_mind_map_graphs_json(project_id))
-    }
-    fn set_default_mind_map_graph_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.set_default_mind_map_graph_json(project_id, graph_id)
-        })
-    }
-    fn create_mind_map_node_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        node_json: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.create_mind_map_node_json(project_id, graph_id, node_json)
-        })
-    }
-    fn update_mind_map_node_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        node_id: QString,
-        patch_json: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.update_mind_map_node_json(project_id, graph_id, node_id, patch_json)
-        })
-    }
-    fn delete_mind_map_node_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        node_id: QString,
-        cascade: bool,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.delete_mind_map_node_json(project_id, graph_id, node_id, cascade)
-        })
-    }
-    fn create_mind_map_edge_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        edge_json: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.create_mind_map_edge_json(project_id, graph_id, edge_json)
-        })
-    }
-    fn update_mind_map_edge_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        edge_id: QString,
-        patch_json: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.update_mind_map_edge_json(project_id, graph_id, edge_id, patch_json)
-        })
-    }
-    fn delete_mind_map_edge_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        edge_id: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.delete_mind_map_edge_json(project_id, graph_id, edge_id)
-        })
-    }
-    fn create_mind_map_anchor_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        anchor_json: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.create_mind_map_anchor_json(project_id, graph_id, anchor_json)
-        })
-    }
-    fn bind_mind_map_anchor_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        node_id: QString,
-        anchor_id: QString,
-        link_kind: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.bind_mind_map_anchor_json(project_id, graph_id, node_id, anchor_id, link_kind)
-        })
-    }
-    fn save_mind_map_layout_json(
-        &mut self,
-        project_id: QString,
-        graph_id: QString,
-        layout_json: QString,
-    ) -> QString {
-        self.with_app_mut("{}".into(), |app| {
-            app.save_mind_map_layout_json(project_id, graph_id, layout_json)
         })
     }
 }

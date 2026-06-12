@@ -45,21 +45,22 @@ Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, co
 - Android 最终使用 `SujianEditorView : View` 自绘，并通过 `InputConnection` 接输入法。
 - 在新自绘编辑器落地前，Desktop typing animation 必须关闭，不得恢复 hidden-range/reveal 或 QTextDocument 字符格式隐藏方案。
 
-## Android 导图技术路线
-- 导图不是普通页面，而是大画布图形系统。**导图最终是与正文并列的创作知识图谱，不仅限于章节树结构。**
-- 章节结构图只是导图在未自定义时的**一种自动生成视图**。
-- 正文和导图通过 anchor 和 link 绑定。
+## Android 图谱技术路线
+- 图谱不是普通页面，而是大画布图形系统。**图谱最终是与正文并列的创作知识图谱，不仅限于章节树结构。**
+- 章节结构图只是图谱在未自定义时的**一种自动生成视图**。
+- 正文和图谱通过 anchor 和 link 绑定。
 - 数据模型与布局在 Rust Core。**存储也必须由 Rust Core 的 workspace 统一管理**，不允许 Android 私自用 SharedPreferences 等保存长期图数据。
 - Android 只拿快照渲染。
 - Android 不在每帧访问 Rust Core。
 - Android 不在每帧解析 JSON。
 - Android 不在每帧重新布局。
 - Android 不用 RecyclerView / LinearLayout / 普通 ViewGroup 拼节点。
-- Android 不用 WebView 做导图。
+- Android 不用 WebView 做图谱。
 - Android 暂不迁移 Compose。
 - Compose Canvas 可作为参考，但不是当前主路线。
+- 正式图谱路线为 **StarMap**（星图）。MindMap 已废弃，仅保留迁移兼容。
 - 推荐路线：
-  - V1：建立 MindMapSnapshot、MindMapRenderer 接口、Android 自定义渲染 View 骨架。**(LEGACY: 以下渲染路线已迁移至 StarMap，MindMap 仅保留迁移兼容。)**
+  - V1：建立 StarMapSnapshot、StarMapRenderer 接口、Android 自定义渲染 View 骨架。
   - V1 可以用硬件加速 Canvas 验证数据链路和交互。
   - 渲染接口必须预留 GLSurfaceView/OpenGL ES 后端。
   - 目标路线是独立渲染 Surface + GPU 批量绘制节点/边/文本纹理。
@@ -77,7 +78,7 @@ Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, co
   - Rust `api/` 模块定义稳定 DTO、错误映射和 `WriterCoreApi` 服务，是 Core API 层收口的事实边界。
   - `core/writer_core/src/api.udl` 只声明 UniFFI 需要暴露的 DTO、错误枚举和 `WriterAppService` 方法；Kotlin `writer_core.kt` 必须由 UniFFI 生成，不得手写业务逻辑。
   - `core/writer_core/src/app_service.rs` 是薄 UniFFI adapter，只保留 Android 兼容的 `WriterAppService` 对象和方法名，并委托 `api::WriterCoreApi`。
-  - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap/(MindMap LEGACY) Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
+  - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
   - 当前路线已经从“FFI 主链路收口”进入“Core API 层收口”：新增平台能力应优先落到 Rust `api/`，再由 UniFFI 或其他平台 adapter 暴露。
 - **typed DTO 与 envelope_json 的演进与收口路线：**
   - **唯一性原则**：UI 层与 Repository 层只能使用 UniFFI 暴露的 **typed DTO** 进行业务交互，防止出现同一功能双重入口和双套错误映射。
@@ -86,7 +87,7 @@ Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, co
   - **旧接口清理**：现有的 `envelope_json` API 全部标记为 `legacy`（过时），后续迭代中逐步予以重构和删除。
 - **legacy JSON 使用边界：**
   - `NativeCoreBridge` / `writer_core_jni` 仅保留给尚未迁完的 fallback、native 加载状态和少量 legacy 动作路径。
-  - 统计、导图、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内并转换为 `BridgeResult<T>`；不得把裸 JSON 扩散到 UI 作为新契约。
+  - 统计、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内并转换为 `BridgeResult<T>`；不得把裸 JSON 扩散到 UI 作为新契约。
   - 当前收口目标不是把所有 Core 接口一次性 API-ification / typed DTO 化，而是先确保残留 JSON 不越过领域 Bridge 边界。
 - **禁止事项：**
   - 禁止在 UI / Repository 层直接使用/调用任何 `envelope_json` 或 raw JSON 字符串 API。
@@ -117,18 +118,12 @@ Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, co
   - AI 模块必须返回结构化的 `AiActionResponse`，包含 `display_text`（给人看的）和 `actions: Vec<AiAction>`（给 UI 画按钮的）。
   - 各端 UI（Android/Linux）收到数据后，在对话框底部渲染原生按钮。用户点击按钮，通过 UniFFI 接口直接调用 Core 的执行函数（如 `navigate_to_settings` 或 `apply_theme`），实现真正的“智能体”体验。
 
-## Android 导图分层职责 (LEGACY: MindMap 已废弃，以下类型定义仅迁移兼容，正式路线为 StarMap)
+## Android 图谱分层职责 (正式路线为 StarMap)
 - Rust Core：
-  - MindMapGraph (LEGACY)
-  - MindMapNode (LEGACY)
-  - MindMapEdge (LEGACY)
-  - MindMapAnchor (LEGACY)
-  - MindMapLink (LEGACY)
-  - MindMapLayout (LEGACY)
-  - MindMapRenderSnapshot (LEGACY)
+  - StarMapGraph / StarMapNode / StarMapEdge / StarMapEmbed / StarMapLink / StarMapLayout / StarMapSnapshot。
   - 真正作为正文并列图谱的数据由 Core 读写并生成快照。若没有自定义图谱，则退化为从作品/卷/章节自动生成的结构图。
-  - 计算 radial tree / horizontal tree 布局。
-  - 支持节点与正文片段（MindMapAnchor）的双向绑定，便于后续 AI 扩写及跳转。
+  - 计算 grid / radial 布局。
+  - 支持节点与正文片段（StarMapAnchor）的双向绑定，便于后续 AI 扩写及跳转。
 - Android Bridge：
   - 主链路通过 `AppServiceBridge + UniFFI` 暴露 typed DTO / typed error。
   - 少量高复杂度统计/图谱快照可暂时返回 JSON 字符串，但必须封闭在领域 Bridge 内。
@@ -184,10 +179,10 @@ Supersedes: apps/android/TECHNICAL_ROUTE.md, apps/desktop/TECHNICAL_ROUTE.md, co
 - 不用每节点 Android View。
   - 原因：普通 View 树无法承受大量节点高频平移缩放。
   - 以后如何改变该决策：除非 Android 推出能在普通 View 树上支持无限大画布万级节点高性能的新机制。
-- 不把 Compose 作为当前导图主路线。
-  - 原因：当前仓库没有 Compose 依赖，迁移成本高，不适合为导图单点引入。
+- 不把 Compose 作为当前图谱主路线。
+  - 原因：当前仓库没有 Compose 依赖，迁移成本高，不适合为图谱单点引入。
   - 以后如何改变该决策：当整个 Android App 全面迁移 Compose，且 Compose Canvas 性能达标时。
-- 不把导图数据写死在 Android。
+- 不把图谱数据写死在 Android。
   - 原因：业务数据和结构应由 Rust Core 统一管理，保证多端一致性。
   - 以后如何改变该决策：如果完全放弃跨平台策略。
 - Rust Core 负责图数据和布局。
