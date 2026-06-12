@@ -737,7 +737,7 @@ mod tests {
         assert_eq!(link.anchor_id, "anchor_1");
 
         // 10. Generate snapshot and verify anchorCount
-        let snapshot = core.get_mind_map_snapshot(&proj.id).unwrap();
+        let snapshot = crate::mind_map::generate_snapshot(&core, &proj.id).unwrap();
         let sn1 = snapshot.nodes.iter().find(|n| n.id == "node_1").unwrap();
         assert_eq!(sn1.anchor_count, 1);
 
@@ -749,7 +749,7 @@ mod tests {
         assert!(!loaded_graph.edges.iter().any(|e| e.id == "edge_1"));
         assert!(!loaded_graph.links.iter().any(|l| l.node_id == "node_1"));
 
-        // 12. Save layout and verify it is retrieved by get_mind_map_snapshot
+        // 12. Save layout and verify it is retrieved by generate_snapshot
         let layout = MindMapLayout {
             kind: crate::mind_map::layout::LayoutKind::Freeform,
             nodes: vec![MindMapLayoutNode {
@@ -765,7 +765,7 @@ mod tests {
         };
         save_mind_map_layout(&core, &proj.id, &graph.id, layout).unwrap();
 
-        let snapshot2 = core.get_mind_map_snapshot(&proj.id).unwrap();
+        let snapshot2 = crate::mind_map::generate_snapshot(&core, &proj.id).unwrap();
         let sn2 = snapshot2.nodes.iter().find(|n| n.id == "node_2").unwrap();
         assert_eq!(sn2.x, 150.0);
         assert_eq!(sn2.y, 250.0);
