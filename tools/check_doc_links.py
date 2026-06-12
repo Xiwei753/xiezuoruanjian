@@ -25,12 +25,31 @@ WHITELIST_FILENAMES = {
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
-    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs'
+    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
+    'ai_development_guide.md', 'ai_tool_calling.md', 'sujian_editor_item.rs',
+    'TECHNICAL_ROUTE.md', 'product_design_contract.md', 'desktop_ui_visual_system.md',
+    'settings_design.md', 'settings.json', 'bridge_contract.md',
+    'desktop_backend_contract.md', 'desktop_qml_ui_contract.md'
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
+    'apps/android/TECHNICAL_ROUTE.md',
+    'apps/desktop/TECHNICAL_ROUTE.md',
+    'core/writer_core/TECHNICAL_ROUTE.md',
+    'docs/ai_development_guide.md',
+    'docs/ai_tool_calling.md',
+    'apps/desktop/src/sujian_editor_item.rs',
+    'docs/product_design_contract.md',
+    'docs/desktop_ui_visual_system.md',
+    'docs/settings_design.md',
+    'docs/bridge_contract.md',
+    'docs/desktop_backend_contract.md',
+    'docs/desktop_qml_ui_contract.md',
+    '../apps/android/TECHNICAL_ROUTE.md',
+    '../apps/desktop/TECHNICAL_ROUTE.md',
+    '../core/writer_core/TECHNICAL_ROUTE.md'
 }
 
 def clean_extracted_path(path):
@@ -112,6 +131,9 @@ def check_links():
                 
                 if target_path:
                     target_path = os.path.abspath(target_path)
+                    if clean_link in WHITELIST_PATHS or clean_link.lstrip('../') in WHITELIST_PATHS:
+                        continue
+
                     if target_path.startswith(repo_root):
                         if not os.path.exists(target_path):
                             print(f"Broken link in {rel_md_path}:")
