@@ -95,7 +95,7 @@ class EditorActivity : AppCompatActivity() {
         val editorStatusBar = findViewById<View>(R.id.editorStatusBar)
         editorEditText = findViewById(R.id.editorEditText)
 
-        ViewCompat.setOnApplyWindowInsetsListener(mainLayout) { view, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(mainLayout) { _, insets ->
             val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
             val systemBarsInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
 

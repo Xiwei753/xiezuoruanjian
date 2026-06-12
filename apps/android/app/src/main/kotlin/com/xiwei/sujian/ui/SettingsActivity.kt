@@ -101,6 +101,13 @@ class SettingsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
 
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                saveAndFinish(true)
+                finish()
+            }
+        })
+
         ErrorUtil.safeRun(this) {
             settingsRepository = SettingsRepository(this)
         }
@@ -770,10 +777,6 @@ class SettingsActivity : AppCompatActivity() {
         updateTokenStatusUI()
     }
 
-    override fun onBackPressed() {
-        saveAndFinish(true)
-        super.onBackPressed()
-    }
 
     private fun saveAndFinish(finishActivity: Boolean = true) {
         val themeStr = when (spinnerTheme.selectedItemPosition) {

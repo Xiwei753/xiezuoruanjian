@@ -226,7 +226,7 @@ class ChapterListActivity : AppCompatActivity() {
 
 
     private fun showVolumeMenu(view: View, volumeId: String, volumeTitle: String) {
-        val pid = projectId ?: return
+        projectId ?: return
         val popup = android.widget.PopupMenu(this, view)
         popup.menu.add(0, 1, 0, getString(R.string.action_rename))
         popup.menu.add(0, 2, 0, getString(R.string.action_delete))
@@ -336,7 +336,7 @@ class ChapterListActivity : AppCompatActivity() {
     }
 
     private fun showChapterMenu(view: View, volumeId: String, chapterId: String, chapterTitle: String) {
-        val pid = projectId ?: return
+        projectId ?: return
         val popup = android.widget.PopupMenu(this, view)
         popup.menu.add(0, 1, 0, getString(R.string.action_rename))
         popup.menu.add(0, 2, 0, getString(R.string.action_delete))

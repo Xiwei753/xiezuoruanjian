@@ -109,19 +109,17 @@ android {
     applicationVariants.all {
         val variant = this
         variant.outputs.all {
-            val output = this
-            if (output is com.android.build.gradle.api.ApkVariantOutput) {
-                val abi = output.filters.find { it.filterType == "ABI" }?.identifier ?: "all"
-                variant.packageApplicationProvider.configure {
-                    doLast {
-                        val defaultApk = output.outputFile
-                        if (defaultApk.exists()) {
-                            val flavorName = variant.productFlavors.firstOrNull()?.name ?: variant.name
-                            val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
-                            val destFile = File(defaultApk.parentFile, customName)
-                            defaultApk.copyTo(destFile, overwrite = true)
-                            println("Successfully copied custom-named APK to ${destFile.absolutePath}")
-                        }
+            val output = this as com.android.build.gradle.api.BaseVariantOutput
+            val abi = output.filters.find { it.filterType == com.android.build.VariantOutput.ABI }?.identifier ?: "all"
+            variant.packageApplicationProvider.configure {
+                doLast {
+                    val defaultApk = output.outputFile
+                    if (defaultApk.exists()) {
+                        val flavorName = variant.productFlavors.firstOrNull()?.name ?: variant.name
+                        val customName = "sujian-android-${flavorName}-${appVersionName}-${appVersionCode}-${gitCommitSha}-${abi}.apk"
+                        val destFile = File(defaultApk.parentFile, customName)
+                        defaultApk.copyTo(destFile, overwrite = true)
+                        println("Successfully copied custom-named APK to ${destFile.absolutePath}")
                     }
                 }
             }

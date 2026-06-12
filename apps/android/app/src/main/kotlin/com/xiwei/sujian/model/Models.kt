@@ -394,7 +394,7 @@ data class InputSchemaProperty(
             if (element == null || !element.isJsonObject) return emptyList()
             val obj = element.asJsonObject
             val props = obj.getAsJsonObject("properties") ?: return emptyList()
-            val required = obj.getAsJsonArray("required")?.map { it.asString } ?: emptyList()
+            // val required = obj.getAsJsonArray("required")?.map { it.asString } ?: emptyList() // 移除未使用变量
             return props.entrySet().map { (key, value) ->
                 val propObj = value.asJsonObject
                 InputSchemaProperty(

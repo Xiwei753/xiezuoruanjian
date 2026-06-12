@@ -396,7 +396,7 @@ class ActionRegistryActivity : AppCompatActivity() {
 
     private fun showActionResult(
         result: BridgeResult<ActionResult>,
-        action: ActionDescriptor,
+        _action: ActionDescriptor,
         resultContainer: LinearLayout
     ) {
         resultContainer.removeAllViews()
