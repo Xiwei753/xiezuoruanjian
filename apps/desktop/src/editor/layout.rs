@@ -728,7 +728,10 @@ pub fn hit_test(
         .find(|(_, line)| doc_y < line.y + line.height);
     let (_line_idx, line) = match line_opt {
         Some((idx, l)) => (idx, l),
-        None => (lines.len() - 1, lines.last().unwrap()),
+        None => {
+            let last_idx = lines.len() - 1;
+            (last_idx, &lines[last_idx])
+        }
     };
     let raw_index = index_at_line_x(snapshot, line, x);
     let index = raw_index.max(line.start).min(line.end);
