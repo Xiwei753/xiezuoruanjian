@@ -171,18 +171,14 @@ class EditorSettingsTest {
     @Test
     fun testEditorViewModelReloadSettings() {
         val application = org.robolectric.RuntimeEnvironment.getApplication()
-        try {
-            val viewModel = EditorViewModel(application)
+        val viewModel = EditorViewModel(application)
 
-            viewModel.onContentChanged("Test Content 123")
-            assertEquals("Test Content 123", viewModel.uiState.value.content)
+        viewModel.onContentChanged("Test Content 123")
+        assertEquals("Test Content 123", viewModel.uiState.value.content)
 
-            viewModel.reloadSettings()
+        viewModel.reloadSettings()
 
-            assertEquals("Test Content 123", viewModel.uiState.value.content)
-            assertNotNull(viewModel.uiState.value.settings)
-        } catch (e: com.xiwei.sujian.data.RepositoryException) {
-            // Expected in Robolectric tests because Native library is not loaded
-        }
+        assertEquals("Test Content 123", viewModel.uiState.value.content)
+        assertNotNull(viewModel.uiState.value.settings)
     }
 }
