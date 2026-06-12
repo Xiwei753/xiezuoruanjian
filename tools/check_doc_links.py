@@ -20,39 +20,62 @@ FILE_PATTERN = re.compile(
 )
 
 WHITELIST_FILENAMES = {
-    'index.json', 'mind_map.json', 'workspace.json', 'starmap.json', 'writing_stats.json',
-    'note.md', 'outline.md', 'scene.md', 'character_notes.md', 'timeline_notes.md', 'draft.md',
-    'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
-    'conflicts.json', 'manifest.sync.json', 'sync_config.json',
+    'SyncController.qml',
+    'ai_development_guide.md',
+    'ai_tool_calling.md',
+    'analyzer.rs',
+    'bridge_contract.md',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
-    'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
-    'ai_development_guide.md', 'ai_tool_calling.md', 'sujian_editor_item.rs',
-    'settings.json', 'product_design_contract.md', 'desktop_ui_visual_system.md',
-    'settings_design.md', 'bridge_contract.md', 'desktop_backend_contract.md',
-    'desktop_qml_ui_contract.md'
-}
-
-WHITELIST_PATHS = {
-    'apps/android/NativeCoreBridge',
-    'bindings/android',
-    'docs/ai_development_guide.md',
-    'docs/ai_tool_calling.md',
-    'apps/desktop/src/sujian_editor_item.rs',
-    'apps/android/TECHNICAL_ROUTE.md',
-    'apps/desktop/TECHNICAL_ROUTE.md',
-    'core/writer_core/TECHNICAL_ROUTE.md',
-    'docs/product_design_contract.md',
-    'docs/desktop_ui_visual_system.md',
-    'docs/settings_design.md',
-    'docs/bridge_contract.md',
-    'docs/desktop_backend_contract.md',
-    'docs/desktop_qml_ui_contract.md'
+    'chapter_store.rs',
+    'character_notes.md',
+    'conflicts.json',
+    'desktop_backend_contract.md',
+    'desktop_qml_ui_contract.md',
+    'desktop_ui_visual_system.md',
+    'draft.md',
+    'index.json',
+    'manifest.sync.json',
+    'mind_map.json',
+    'note.md',
+    'outline.md',
+    'product_design_contract.md',
+    'scene.md',
+    'schema.rs',
+    'settings.json',
+    'settings.local.json',
+    'settings.sync.json',
+    'settings_design.md',
+    'starmap.json',
+    'state.local.json',
+    'sujian_editor_item.rs',
+    'sync_config.json',
+    'sync_secrets.local.json',
+    'timeline_notes.md',
+    'workspace.json',
+    'writing_stats.json'
 }
 
 WHITELIST_LINKS = {
     '../apps/android/TECHNICAL_ROUTE.md',
     '../apps/desktop/TECHNICAL_ROUTE.md',
-    '../core/writer_core/TECHNICAL_ROUTE.md'
+    '../core/writer_core/TECHNICAL_ROUTE.md',
+}
+
+WHITELIST_PATHS = {
+    'apps/android/NativeCoreBridge',
+    'apps/android/TECHNICAL_ROUTE.md',
+    'apps/desktop/TECHNICAL_ROUTE.md',
+    'apps/desktop/src/sujian_editor_item.rs',
+    'bindings/android',
+    'core/writer_core/TECHNICAL_ROUTE.md',
+    'docs/ai_development_guide.md',
+    'docs/ai_tool_calling.md',
+    'docs/bridge_contract.md',
+    'docs/desktop_backend_contract.md',
+    'docs/desktop_qml_ui_contract.md',
+    'docs/desktop_ui_visual_system.md',
+    'docs/product_design_contract.md',
+    'docs/settings_design.md'
 }
 
 def clean_extracted_path(path):
@@ -115,6 +138,8 @@ def check_links():
                     continue
                 if link.startswith("#"):
                     continue
+                if link in WHITELIST_LINKS:
+                    continue
                     
                 checked_links_count += 1
                 clean_link = link.split("#")[0]
@@ -133,8 +158,6 @@ def check_links():
                     target_path = os.path.abspath(os.path.join(root, clean_link))
                 
                 if target_path:
-                    if link in WHITELIST_LINKS:
-                        continue
                     target_path = os.path.abspath(target_path)
                     if target_path.startswith(repo_root):
                         if not os.path.exists(target_path):
