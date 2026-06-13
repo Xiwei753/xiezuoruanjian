@@ -604,13 +604,13 @@ impl From<StarMapEdgeEndpointDto> for crate::starmap::types::StarMapEdgeEndpoint
 }
 
 // Flattened struct (was tagged enum StarMapEndpointPathSegmentDto)
+// 路径段只允许 EnterChildMap（进入子星图空间），节点只能作为 endpoint。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEndpointPathSegmentDto {
     #[serde(rename = "type")]
     pub kind: String,
     pub starmap_id: Option<String>,
-    pub node_id: Option<String>,
 }
 
 impl From<crate::starmap::types::StarMapEndpointPathSegment> for StarMapEndpointPathSegmentDto {
@@ -619,12 +619,6 @@ impl From<crate::starmap::types::StarMapEndpointPathSegment> for StarMapEndpoint
             crate::starmap::types::StarMapEndpointPathSegment::EnterChildMap { starmap_id } => Self {
                 kind: "enterChildMap".to_string(),
                 starmap_id: Some(starmap_id),
-                node_id: None,
-            },
-            crate::starmap::types::StarMapEndpointPathSegment::EnterNode { node_id } => Self {
-                kind: "enterNode".to_string(),
-                starmap_id: None,
-                node_id: Some(node_id),
             },
         }
     }
@@ -632,13 +626,8 @@ impl From<crate::starmap::types::StarMapEndpointPathSegment> for StarMapEndpoint
 
 impl From<StarMapEndpointPathSegmentDto> for crate::starmap::types::StarMapEndpointPathSegment {
     fn from(d: StarMapEndpointPathSegmentDto) -> Self {
-        match d.kind.as_str() {
-            "enterChildMap" => Self::EnterChildMap {
-                starmap_id: d.starmap_id.unwrap_or_default(),
-            },
-            _ => Self::EnterNode {
-                node_id: d.node_id.unwrap_or_default(),
-            },
+        Self::EnterChildMap {
+            starmap_id: d.starmap_id.unwrap_or_default(),
         }
     }
 }

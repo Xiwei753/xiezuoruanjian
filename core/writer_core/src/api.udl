@@ -463,7 +463,6 @@ dictionary StarMapEdgeEndpointDto {
 dictionary StarMapEndpointPathSegmentDto {
     string kind;
     string? starmap_id;
-    string? node_id;
 };
 
 dictionary StarMapEndpointPathDto {

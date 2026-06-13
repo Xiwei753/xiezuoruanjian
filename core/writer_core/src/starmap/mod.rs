@@ -15,6 +15,7 @@ pub mod graph;
 pub mod hittest;
 pub mod layout;
 pub mod legacy_migration;
+pub mod package_storage;
 pub mod render;
 pub mod semantic;
 pub mod types;
@@ -63,7 +64,7 @@ pub struct StarMapIndex {
     pub updated_at: u64,
 }
 
-fn now_epoch() -> u64 {
+pub(crate) fn now_epoch() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

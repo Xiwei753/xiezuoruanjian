@@ -140,8 +140,9 @@ impl Default for StarMapDocument {
 
 /// 端点路径：描述从当前 StarMap 出发，经过一系列层级到达目标端点的路径。
 ///
-/// 路径由 `segments` 组成，每个 segment 描述一次层级穿越（进入子星图或进入节点），
-/// 最终的 `endpoint` 描述路径终点的具体端点类型。
+/// 路径由 `segments` 组成，每个 segment 描述一次层级穿越（进入子星图空间），
+/// 最终的 `endpoint` 描述路径终点的具体端点类型（节点/锚点/星图/深目标）。
+/// 节点是原子，不允许作为路径段；节点只能出现在 `endpoint` 中。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEndpointPath {
@@ -160,10 +161,9 @@ impl StarMapEndpointPath {
     pub fn has_cycle(&self) -> bool {
         let mut visited = std::collections::HashSet::new();
         for seg in &self.segments {
-            if let StarMapEndpointPathSegment::EnterChildMap { starmap_id } = seg {
-                if !visited.insert(starmap_id.clone()) {
-                    return true;
-                }
+            let StarMapEndpointPathSegment::EnterChildMap { starmap_id } = seg;
+            if !visited.insert(starmap_id.clone()) {
+                return true;
             }
         }
         false
@@ -172,15 +172,13 @@ impl StarMapEndpointPath {
 
 /// 端点路径段：描述一次层级穿越。
 ///
-/// - `EnterChildMap`：进入一个子星图（通过 embed 实例）。
-/// - `EnterNode`：进入一个节点（通过节点的 portal）。
+/// 路径中间层只允许进入子星图空间，节点是原子，不能作为路径段"进入"。
+/// 节点只能作为路径终点的 `endpoint`（`StarMapEdgeEndpoint::Node` / `Anchor`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapEndpointPathSegment {
-    /// 进入子星图。`starmap_id` 是目标子星图的 ID。
+    /// 进入子星图空间。`starmap_id` 是目标子星图的 ID。
     EnterChildMap { starmap_id: String },
-    /// 进入节点。`node_id` 是目标节点的 ID。
-    EnterNode { node_id: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -684,14 +682,11 @@ mod tests {
     // -----------------------------------------------------------------------
     #[test]
     fn test_endpoint_path_multi_layer_roundtrip() {
-        // 构造一个多层 EndpointPath: 进入子星图 A -> 进入节点 N1 -> 终点是 Anchor
+        // 构造一个多层 EndpointPath: 进入子星图 A -> 进入子星图 B -> 终点是 Anchor
         let path = StarMapEndpointPath {
             segments: vec![
                 StarMapEndpointPathSegment::EnterChildMap {
                     starmap_id: "sm_child_a".to_string(),
-                },
-                StarMapEndpointPathSegment::EnterNode {
-                    node_id: "n1".to_string(),
                 },
                 StarMapEndpointPathSegment::EnterChildMap {
                     starmap_id: "sm_child_b".to_string(),
@@ -709,7 +704,7 @@ mod tests {
         let deserialized: StarMapEndpointPath = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized, path);
-        assert_eq!(deserialized.segments.len(), 3);
+        assert_eq!(deserialized.segments.len(), 2);
         assert_eq!(
             deserialized.segments[0],
             StarMapEndpointPathSegment::EnterChildMap {
@@ -718,12 +713,6 @@ mod tests {
         );
         assert_eq!(
             deserialized.segments[1],
-            StarMapEndpointPathSegment::EnterNode {
-                node_id: "n1".to_string(),
-            }
-        );
-        assert_eq!(
-            deserialized.segments[2],
             StarMapEndpointPathSegment::EnterChildMap {
                 starmap_id: "sm_child_b".to_string(),
             }
@@ -764,8 +753,8 @@ mod tests {
                 StarMapEndpointPathSegment::EnterChildMap {
                     starmap_id: "sm_a".to_string(),
                 },
-                StarMapEndpointPathSegment::EnterNode {
-                    node_id: "n1".to_string(),
+                StarMapEndpointPathSegment::EnterChildMap {
+                    starmap_id: "sm_b".to_string(),
                 },
                 StarMapEndpointPathSegment::EnterChildMap {
                     starmap_id: "sm_a".to_string(), // 循环！
@@ -784,21 +773,16 @@ mod tests {
         };
         assert!(!empty.has_cycle());
 
-        // 只有 EnterNode 段，无循环
-        let only_nodes = StarMapEndpointPath {
-            segments: vec![
-                StarMapEndpointPathSegment::EnterNode {
-                    node_id: "n1".to_string(),
-                },
-                StarMapEndpointPathSegment::EnterNode {
-                    node_id: "n1".to_string(), // 同一节点不算循环（不是 starmap_id）
-                },
-            ],
+        // 单段路径无循环
+        let single = StarMapEndpointPath {
+            segments: vec![StarMapEndpointPathSegment::EnterChildMap {
+                starmap_id: "sm_a".to_string(),
+            }],
             endpoint: StarMapEdgeEndpoint::Node {
-                node_id: "n2".to_string(),
+                node_id: "n1".to_string(),
             },
         };
-        assert!(!only_nodes.has_cycle());
+        assert!(!single.has_cycle());
     }
 
     // -----------------------------------------------------------------------
