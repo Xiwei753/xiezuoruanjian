@@ -445,7 +445,7 @@ impl EditorLayout {
             });
         }
 
-        self.cache.as_ref().unwrap()
+        self.cache.as_ref().expect("Layout cache was not populated")
     }
 
     #[cfg(test)]
@@ -1464,7 +1464,7 @@ mod tests {
     #[test]
     fn punctuation_hit_test_and_caret_rect_match() {
         let snapshot = snapshot_for("你好，world! 句号。", 360.0);
-        let line = snapshot.lines.first().unwrap();
+        let line = snapshot.lines.first().expect("lines should not be empty");
         let comma = "你好".len();
         let rect = caret_rect(&snapshot, comma, CaretAffinity::Downstream, 0.0, 800.0);
         let (hit, affinity) = hit_test(&snapshot, rect.x + 1.0, line.y + 2.0, 0.0);

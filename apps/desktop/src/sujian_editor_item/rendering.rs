@@ -407,12 +407,10 @@ impl SujianEditorItem {
 
         let miss_reason = self.scroll_buffer_miss_reason(scroll_y, vp_h, content_h, dpr);
 
-        if miss_reason.is_none() {
+        let Some(miss_reason) = miss_reason else {
             self.render_dirty = false;
             return None;
-        }
-
-        let miss_reason = miss_reason.unwrap();
+        };
 
         if sujian_editor_debug_enabled() {
             eprintln!(
