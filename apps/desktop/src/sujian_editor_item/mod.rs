@@ -270,6 +270,17 @@ impl SujianEditorItem {
         item.update();
     }
 
+    fn request_static_repaint(&mut self) {
+        self.render_dirty = true;
+        let item = self as &dyn QQuickItem;
+        item.update();
+    }
+
+    fn request_frame_update(&mut self) {
+        let item = self as &dyn QQuickItem;
+        item.update();
+    }
+
     fn bounding_width(&self) -> f64 {
         let obj = self.get_cpp_object();
         if obj.is_null() {
@@ -1397,6 +1408,11 @@ impl QQuickItem for SujianEditorItem {
 
         let mut final_root = root_raw;
 
+        // Ensure three-layer scene graph structure is correct
+        if !root_raw.is_null() && !item_ptr.is_null() {
+            scene_graph::ensure_three_layer_nodes(root_raw, item_ptr);
+        }
+
         // ── Layer 0: Static text texture (child[0]) ──
         if self.render_dirty {
             match self.render_to_image() {
@@ -1502,8 +1518,7 @@ impl QQuickItem for SujianEditorItem {
 
         // If animation is still active, request next frame
         if self.has_active_animation() {
-            let item = self as &dyn QQuickItem;
-            item.update();
+            self.request_frame_update();
         }
 
         // ── Layer 2: Cursor animation + node (child[2]) ──
@@ -1518,8 +1533,7 @@ impl QQuickItem for SujianEditorItem {
                 let (cx, cy) = anim.current_position(now);
                 self.cursor_visual_x = cx;
                 self.cursor_visual_y = cy;
-                let item = self as &dyn QQuickItem;
-                item.update();
+                self.request_frame_update();
             }
         } else {
             self.cursor_dirty = false;

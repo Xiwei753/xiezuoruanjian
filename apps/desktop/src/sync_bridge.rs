@@ -17,6 +17,7 @@
 // - 被 apps/desktop/src/backend/workspace_backend.rs 引用，协助 GitHub 初始化克隆工作区。
 // =============================================================================
 
+#[allow(deprecated)]
 use writer_core::api::types::SyncDiagnosticsResultDto;
 use writer_core::api::WriterCoreApi;
 use writer_core::sync::{SyncConfig, SyncSecrets};

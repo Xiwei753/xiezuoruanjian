@@ -8,6 +8,7 @@ use qmetaobject::{
 use std::time::Instant;
 
 use super::{sujian_editor_debug_enabled, SujianEditorItem};
+use super::buffer::clamp_to_char_boundary;
 
 pub struct ScrollBuffer {
     pub image: qmetaobject::QImage,
@@ -111,6 +112,17 @@ impl CursorAnimationState {
 }
 
 #[derive(Clone, Debug)]
+pub struct TextMaskRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StaticTextRenderPlan {
+    pub masks: Vec<TextMaskRange>,
+}
+
+#[derive(Clone, Debug)]
 pub struct AnimatedGlyph {
     pub byte_start: usize,
     pub byte_end: usize,
@@ -165,6 +177,30 @@ impl SujianEditorItem {
             || self.delete_animation.as_ref().is_some_and(|a| !a.is_finished(now))
     }
 
+    pub(crate) fn static_text_render_plan(&self) -> StaticTextRenderPlan {
+        let now = Instant::now();
+        if let Some(ref insert_anim) = self.insert_animation {
+            if !insert_anim.is_finished(now) && !insert_anim.glyphs.is_empty() {
+                let first = &insert_anim.glyphs[0];
+                let last = &insert_anim.glyphs[insert_anim.glyphs.len() - 1];
+                let range_start = first.byte_start;
+                let range_end = last.byte_end;
+                let text = &self.buffer.text;
+                let range_start = clamp_to_char_boundary(text, range_start);
+                let range_end = clamp_to_char_boundary(text, range_end);
+                if range_start < range_end && range_end <= text.len() {
+                    return StaticTextRenderPlan {
+                        masks: vec![TextMaskRange {
+                            start: range_start,
+                            end: range_end,
+                        }],
+                    };
+                }
+            }
+        }
+        StaticTextRenderPlan::default()
+    }
+
     pub(crate) fn cleanup_finished_animations(&mut self) {
         let now = Instant::now();
         if let Some(ref anim) = self.insert_animation {
@@ -193,6 +229,8 @@ impl SujianEditorItem {
 
         let scroll_y = buffer_scroll_y;
         let paint_offset_y = -scroll_y;
+
+        let render_plan = self.static_text_render_plan();
 
         painter.set_render_hint(QPainterRenderHint::TextAntialiasing, true);
         painter.fill_rect(
@@ -251,23 +289,52 @@ impl SujianEditorItem {
             }
         }
 
-        // ── Layer 2: Base text (no animation — animation is in overlay layer) ──
+        // ── Layer 2: Base text (masked during insert animation) ──
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
-            let text = self.buffer.text[line.start..line.end].to_string();
             let text_y = self
                 .editor_layout
                 .text_baseline_y(line, font_size, &font_family)
                 + paint_offset_y;
 
-            renderer::draw_text(
-                painter,
-                line.x,
-                text_y,
-                fs,
-                self.current_text_color.clone(),
-                text.into(),
-            );
+            if render_plan.masks.is_empty() {
+                let text = self.buffer.text[line.start..line.end].to_string();
+                renderer::draw_text(
+                    painter,
+                    line.x,
+                    text_y,
+                    fs,
+                    self.current_text_color.clone(),
+                    text.into(),
+                );
+            } else {
+                let segments = compute_visible_segments(
+                    &self.buffer.text,
+                    line.start,
+                    line.end,
+                    &render_plan.masks,
+                );
+                for seg in segments {
+                    if seg.start >= seg.end {
+                        continue;
+                    }
+                    let seg_text = self.buffer.text[seg.start..seg.end].to_string();
+                    let seg_x = self.editor_layout.cursor_x_for_line(
+                        &snapshot,
+                        line,
+                        seg.start,
+                        CaretAffinity::Downstream,
+                    );
+                    renderer::draw_text(
+                        painter,
+                        seg_x,
+                        text_y,
+                        fs,
+                        self.current_text_color.clone(),
+                        seg_text.into(),
+                    );
+                }
+            }
         }
 
         // ── Layer 3: Preedit ──
@@ -509,29 +576,76 @@ impl SujianEditorItem {
             painter->setFont(f);
         });
 
-        let paint_offset_y = -scroll_y;
+        let paint_offset_y = -min_y;
         let now_anim = Instant::now();
 
-        // Draw insert animation ghosts
+        // Draw insert animation ghosts — clip-based reveal from cursor origin
         if let Some(ref insert_anim) = self.insert_animation {
             let eased = 1.0 - (1.0 - insert_anim.progress(now_anim)).powi(3);
             let base_color = renderer::color_from_qstring(self.current_text_color.clone());
+
+            let total_advance: f64 = insert_anim.glyphs.iter().map(|g| g.rect.2).sum();
+            let reveal_w = total_advance * eased;
+            let mut consumed: f64 = 0.0;
+
             for glyph in &insert_anim.glyphs {
+                let glyph_w = glyph.rect.2;
+                if consumed >= reveal_w {
+                    break;
+                }
                 let gx = glyph.rect.0;
                 let gy = glyph.baseline_y + paint_offset_y;
-                let alpha = (eased * 255.0).round() as i32;
-                renderer::draw_text_color(
-                    painter,
-                    gx,
-                    gy,
-                    QColor::from_rgba(
-                        base_color.red(),
-                        base_color.green(),
-                        base_color.blue(),
-                        alpha,
-                    ),
-                    glyph.text.clone().into(),
-                );
+
+                if consumed + glyph_w <= reveal_w {
+                    let alpha = (eased * 255.0).round() as i32;
+                    renderer::draw_text_color(
+                        painter,
+                        gx,
+                        gy,
+                        QColor::from_rgba(
+                            base_color.red(),
+                            base_color.green(),
+                            base_color.blue(),
+                            alpha,
+                        ),
+                        glyph.text.clone().into(),
+                    );
+                } else {
+                    let visible_w = reveal_w - consumed;
+                    if visible_w > 0.0 {
+                        let clip_x = gx;
+                        let clip_y = glyph.rect.1 + paint_offset_y;
+                        let clip_w = visible_w;
+                        let clip_h = glyph.rect.3;
+                        let clip_rect = QRectF {
+                            x: clip_x,
+                            y: clip_y,
+                            width: clip_w,
+                            height: clip_h,
+                        };
+                        cpp!(unsafe [painter as "QPainter*", clip_rect as "QRectF"] {
+                            painter->save();
+                            painter->setClipRect(clip_rect);
+                        });
+                        let alpha = (eased * 255.0).round() as i32;
+                        renderer::draw_text_color(
+                            painter,
+                            gx,
+                            gy,
+                            QColor::from_rgba(
+                                base_color.red(),
+                                base_color.green(),
+                                base_color.blue(),
+                                alpha,
+                            ),
+                            glyph.text.clone().into(),
+                        );
+                        cpp!(unsafe [painter as "QPainter*"] {
+                            painter->restore();
+                        });
+                    }
+                }
+                consumed += glyph_w;
             }
         }
 
@@ -735,17 +849,70 @@ impl SujianEditorItem {
         if let Some(ref anim) = self.cursor_animation {
             if !anim.is_finished(now) {
                 self.cursor_dirty = true;
-                let item = self as &dyn QQuickItem;
-                item.update();
+                self.request_frame_update();
             }
         }
     }
 }
 
+pub(crate) fn compute_visible_segments_for_test(
+    text: &str,
+    line_start: usize,
+    line_end: usize,
+    masks: &[TextMaskRange],
+) -> Vec<(usize, usize)> {
+    let segments = compute_visible_segments(text, line_start, line_end, masks);
+    segments.into_iter().map(|s| (s.start, s.end)).collect()
+}
+
+struct VisibleSegment {
+    start: usize,
+    end: usize,
+}
+
+fn compute_visible_segments(
+    text: &str,
+    line_start: usize,
+    line_end: usize,
+    masks: &[TextMaskRange],
+) -> Vec<VisibleSegment> {
+    let mut segments = Vec::new();
+    let mut cursor = line_start;
+
+    for mask in masks {
+        if mask.end <= line_start || mask.start >= line_end {
+            continue;
+        }
+        let mask_start = mask.start.max(line_start);
+        let mask_end = mask.end.min(line_end);
+
+        if cursor < mask_start {
+            let seg_start = cursor;
+            let seg_end = clamp_to_char_boundary(text, mask_start);
+            if seg_start < seg_end {
+                segments.push(VisibleSegment {
+                    start: seg_start,
+                    end: seg_end,
+                });
+            }
+        }
+        cursor = clamp_to_char_boundary(text, mask_end);
+    }
+
+    if cursor < line_end {
+        segments.push(VisibleSegment {
+            start: cursor,
+            end: line_end,
+        });
+    }
+
+    segments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qmetaobject::QImage;
+
 
     #[test]
     fn test_scroll_y_cache_and_buffer_hit() {
@@ -791,5 +958,202 @@ mod tests {
 
         let (src_y_clamp, src_h_clamp) = scroll_buffer.clamp_source_rect(3000.0, vp_h);
         assert!(src_y_clamp + src_h_clamp <= 3500.0);
+    }
+
+    #[test]
+    fn test_visible_segments_no_mask() {
+        let text = "hello world";
+        let segs = compute_visible_segments_for_test(text, 0, 11, &[]);
+        assert_eq!(segs, vec![(0, 11)]);
+    }
+
+    #[test]
+    fn test_visible_segments_single_mask() {
+        let text = "hello world";
+        let masks = vec![TextMaskRange { start: 5, end: 6 }];
+        let segs = compute_visible_segments_for_test(text, 0, 11, &masks);
+        assert_eq!(segs, vec![(0, 5), (6, 11)]);
+    }
+
+    #[test]
+    fn test_visible_segments_mask_covers_full_line() {
+        let text = "hello";
+        let masks = vec![TextMaskRange { start: 0, end: 5 }];
+        let segs = compute_visible_segments_for_test(text, 0, 5, &masks);
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn test_visible_segments_mask_before_line() {
+        let text = "hello world";
+        let masks = vec![TextMaskRange { start: 0, end: 3 }];
+        let segs = compute_visible_segments_for_test(text, 5, 11, &masks);
+        assert_eq!(segs, vec![(5, 11)]);
+    }
+
+    #[test]
+    fn test_visible_segments_mask_after_line() {
+        let text = "hello world";
+        let masks = vec![TextMaskRange { start: 8, end: 11 }];
+        let segs = compute_visible_segments_for_test(text, 0, 5, &masks);
+        assert_eq!(segs, vec![(0, 5)]);
+    }
+
+    #[test]
+    fn test_visible_segments_chinese_mask() {
+        let text = "你好世界";
+        let masks = vec![TextMaskRange { start: 3, end: 6 }];
+        let segs = compute_visible_segments_for_test(text, 0, 12, &masks);
+        assert_eq!(segs, vec![(0, 3), (6, 12)]);
+    }
+
+    #[test]
+    fn test_visible_segments_emoji_mask() {
+        let text = "hi🙂bye";
+        let masks = vec![TextMaskRange { start: 2, end: 6 }];
+        let segs = compute_visible_segments_for_test(text, 0, 9, &masks);
+        assert_eq!(segs, vec![(0, 2), (6, 9)]);
+    }
+
+    #[test]
+    fn test_insert_animation_masks_static_text_range() {
+        let text = "hello world";
+        let glyphs = vec![
+            AnimatedGlyph {
+                byte_start: 6,
+                byte_end: 11,
+                text: "world".to_string(),
+                rect: (50.0, 0.0, 40.0, 20.0),
+                baseline_y: 16.0,
+                line_index: 0,
+            },
+        ];
+        let insert_anim = InsertAnimation {
+            glyphs,
+            origin_cursor_rect: (50.0, 0.0, 2.0, 20.0),
+            start_time: Instant::now(),
+            duration_ms: 160,
+        };
+        assert!(!insert_anim.is_finished(Instant::now()));
+        assert_eq!(insert_anim.glyphs[0].byte_start, 6);
+        assert_eq!(insert_anim.glyphs[0].byte_end, 11);
+    }
+
+    #[test]
+    fn test_delete_animation_uses_old_layout_and_new_cursor() {
+        let old_text = "hello";
+        let new_text = "he";
+        let glyphs = vec![
+            AnimatedGlyph {
+                byte_start: 2,
+                byte_end: 3,
+                text: "l".to_string(),
+                rect: (20.0, 0.0, 8.0, 20.0),
+                baseline_y: 16.0,
+                line_index: 0,
+            },
+            AnimatedGlyph {
+                byte_start: 3,
+                byte_end: 4,
+                text: "l".to_string(),
+                rect: (28.0, 0.0, 8.0, 20.0),
+                baseline_y: 16.0,
+                line_index: 0,
+            },
+            AnimatedGlyph {
+                byte_start: 4,
+                byte_end: 5,
+                text: "o".to_string(),
+                rect: (36.0, 0.0, 8.0, 20.0),
+                baseline_y: 16.0,
+                line_index: 0,
+            },
+        ];
+        let delete_anim = DeleteAnimation {
+            glyphs,
+            target_cursor_rect: (20.0, 0.0, 2.0, 20.0),
+            start_time: Instant::now(),
+            duration_ms: 160,
+        };
+        assert!(!delete_anim.is_finished(Instant::now()));
+        assert_eq!(delete_anim.glyphs.len(), 3);
+        assert_eq!(delete_anim.glyphs[0].text, "l");
+        assert_eq!(delete_anim.target_cursor_rect.0, 20.0);
+    }
+
+    #[test]
+    fn test_unicode_delete_animation_no_panic() {
+        let old_text = "你好🙂世界";
+        let glyphs: Vec<AnimatedGlyph> = old_text
+            .char_indices()
+            .map(|(i, c)| AnimatedGlyph {
+                byte_start: i,
+                byte_end: i + c.len_utf8(),
+                text: c.to_string(),
+                rect: (0.0, 0.0, 10.0, 20.0),
+                baseline_y: 16.0,
+                line_index: 0,
+            })
+            .collect();
+        let delete_anim = DeleteAnimation {
+            glyphs,
+            target_cursor_rect: (0.0, 0.0, 2.0, 20.0),
+            start_time: Instant::now(),
+            duration_ms: 160,
+        };
+        for g in &delete_anim.glyphs {
+            assert!(g.byte_start < old_text.len());
+            assert!(g.byte_end <= old_text.len());
+            assert!(old_text.is_char_boundary(g.byte_start));
+            assert!(old_text.is_char_boundary(g.byte_end));
+        }
+    }
+
+    #[test]
+    fn test_emoji_delete_animation_no_panic() {
+        let old_text = "a🙂b";
+        let glyphs: Vec<AnimatedGlyph> = old_text
+            .char_indices()
+            .map(|(i, c)| AnimatedGlyph {
+                byte_start: i,
+                byte_end: i + c.len_utf8(),
+                text: c.to_string(),
+                rect: (0.0, 0.0, 10.0, 20.0),
+                baseline_y: 16.0,
+                line_index: 0,
+            })
+            .collect();
+        assert_eq!(glyphs.len(), 3);
+        assert_eq!(glyphs[0].text, "a");
+        assert_eq!(glyphs[1].text, "🙂");
+        assert_eq!(glyphs[2].text, "b");
+    }
+
+    #[test]
+    fn test_mixed_text_insert_delete_no_panic() {
+        let text = "a，b🙂c";
+        for (i, c) in text.char_indices() {
+            assert!(text.is_char_boundary(i));
+            assert_eq!(&text[i..i + c.len_utf8()], c.to_string());
+        }
+    }
+
+    #[test]
+    fn test_visible_segments_mask_at_line_boundary() {
+        let text = "hello world";
+        let masks = vec![TextMaskRange { start: 5, end: 6 }];
+        let segs = compute_visible_segments_for_test(text, 0, 5, &masks);
+        assert_eq!(segs, vec![(0, 5)]);
+    }
+
+    #[test]
+    fn test_visible_segments_multiple_masks() {
+        let text = "abcdefghij";
+        let masks = vec![
+            TextMaskRange { start: 2, end: 4 },
+            TextMaskRange { start: 6, end: 8 },
+        ];
+        let segs = compute_visible_segments_for_test(text, 0, 10, &masks);
+        assert_eq!(segs, vec![(0, 2), (4, 6), (8, 10)]);
     }
 }

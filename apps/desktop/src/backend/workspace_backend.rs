@@ -477,7 +477,7 @@ impl AppBackend {
     pub(crate) fn open_workspace_dir(&mut self) {
         let path = self.current_workspace.clone();
         if !path.is_empty() {
-            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+            let _ = std::process::Command::new("xdg-open").arg("--").arg(&path).spawn();
         }
     }
 }

@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 ai = []
+legacy-mind-map = []
 
 [dependencies]
 walkdir = "2.3"

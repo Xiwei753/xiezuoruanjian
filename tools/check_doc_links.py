@@ -26,34 +26,17 @@ WHITELIST_FILENAMES = {
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
     'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
-    'ai_development_guide.md', 'ai_tool_calling.md', 'sujian_editor_item.rs',
-    'settings.json', 'bridge_contract.md', 'desktop_backend_contract.md',
-    'desktop_qml_ui_contract.md', 'product_design_contract.md',
-    'desktop_ui_visual_system.md', 'settings_design.md'
+    'sujian_editor_item.rs',
+    'settings.json'
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
-    'docs/ai_development_guide.md',
-    'docs/ai_tool_calling.md',
-    'apps/desktop/src/sujian_editor_item.rs',
-    'docs/bridge_contract.md',
-    'docs/desktop_backend_contract.md',
-    'docs/desktop_qml_ui_contract.md',
-    'docs/product_design_contract.md',
-    'docs/desktop_ui_visual_system.md',
-    'docs/settings_design.md',
-    'apps/android/TECHNICAL_ROUTE.md',
-    'apps/desktop/TECHNICAL_ROUTE.md',
-    'core/writer_core/TECHNICAL_ROUTE.md'
+    'apps/desktop/src/sujian_editor_item.rs'
 }
 
-WHITELIST_LINKS = {
-    '../apps/android/TECHNICAL_ROUTE.md',
-    '../apps/desktop/TECHNICAL_ROUTE.md',
-    '../core/writer_core/TECHNICAL_ROUTE.md'
-}
+WHITELIST_LINKS = set()
 
 def clean_extracted_path(path):
     # Strip any trailing punctuation that might be part of markdown or sentences

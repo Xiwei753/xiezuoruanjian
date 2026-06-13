@@ -12,13 +12,59 @@ cpp! {{
     //   child[1] = QSGImageNode  — animation overlay texture
     //   child[2] = QSGRectangleNode — cursor
 
-    void sujian_clean_cursor_nodes(QSGNode *root) {
-        if (!root) return;
-        auto *transformNode = static_cast<QSGTransformNode*>(root);
-        while (transformNode->childCount() > 1) {
-            QSGNode *child = transformNode->lastChild();
-            transformNode->removeChildNode(child);
-            delete child;
+    void ensure_three_layer_nodes(QSGTransformNode *root, QQuickItem *item) {
+        if (!root || !item) return;
+
+        // Ensure child[0] is QSGImageNode (static text)
+        QSGImageNode *staticNode = nullptr;
+        if (root->childCount() > 0) {
+            staticNode = dynamic_cast<QSGImageNode*>(root->childAt(0));
+        }
+        if (!staticNode) {
+            // Remove wrong-typed child[0] if present
+            if (root->childCount() > 0) {
+                QSGNode *old = root->childAt(0);
+                root->removeChildNode(old);
+                delete old;
+            }
+            staticNode = item->window()->createImageNode();
+            staticNode->setFiltering(QSGTexture::Nearest);
+            staticNode->setOwnsTexture(true);
+            root->prependChildNode(staticNode);
+        }
+
+        // Ensure child[1] is QSGImageNode (animation overlay)
+        QSGImageNode *overlayNode = nullptr;
+        if (root->childCount() > 1) {
+            overlayNode = dynamic_cast<QSGImageNode*>(root->childAt(1));
+        }
+        if (!overlayNode) {
+            if (root->childCount() > 1) {
+                QSGNode *old = root->childAt(1);
+                root->removeChildNode(old);
+                delete old;
+            }
+            overlayNode = item->window()->createImageNode();
+            overlayNode->setFiltering(QSGTexture::Nearest);
+            overlayNode->setOwnsTexture(true);
+            int insertIdx = qMin(1, root->childCount());
+            root->insertChildNode(overlayNode, insertIdx);
+        }
+
+        // Ensure child[2] is QSGRectangleNode (cursor)
+        QSGRectangleNode *cursorNode = nullptr;
+        if (root->childCount() > 2) {
+            cursorNode = dynamic_cast<QSGRectangleNode*>(root->childAt(2));
+        }
+        if (!cursorNode) {
+            if (root->childCount() > 2) {
+                QSGNode *old = root->childAt(2);
+                root->removeChildNode(old);
+                delete old;
+            }
+            cursorNode = item->window()->createRectangleNode();
+            int insertIdx = qMin(2, root->childCount());
+            root->insertChildNode(cursorNode, insertIdx);
         }
     }
 
@@ -97,6 +143,20 @@ cpp! {{
         cursorNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
     }
 }}
+
+pub fn ensure_three_layer_nodes(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+) {
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*"
+    ] {
+        ensure_three_layer_nodes(
+            static_cast<QSGTransformNode*>(root_raw), item_ptr
+        );
+    })
+}
 
 pub fn update_texture_node(
     old_raw: *mut std::ffi::c_void,

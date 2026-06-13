@@ -176,6 +176,7 @@ impl WriterCoreApi {
         }
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn create_project_envelope_json(&self, title: &str) -> String {
         match self.create_project(title) {
             Ok(project) => {
@@ -187,6 +188,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn rename_project_envelope_json(&self, project_id: &str, new_title: &str) -> String {
         Self::changed_result_envelope(
             self.rename_project(project_id, new_title),
@@ -196,6 +198,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn reorder_projects_envelope_json(&self, ordered_project_ids: &[String]) -> String {
         Self::changed_result_envelope(
             self.reorder_projects(ordered_project_ids),
@@ -205,6 +208,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn create_volume_envelope_json(&self, project_id: &str, title: &str) -> String {
         match self.create_volume(project_id, title) {
             Ok(volume) => {
@@ -216,6 +220,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn rename_volume_envelope_json(
         &self,
         project_id: &str,
@@ -230,6 +235,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn reorder_volumes_envelope_json(
         &self,
         project_id: &str,
@@ -243,6 +249,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn create_chapter_envelope_json(
         &self,
         project_id: &str,
@@ -259,6 +266,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn rename_chapter_envelope_json(
         &self,
         project_id: &str,
@@ -274,6 +282,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn reorder_chapters_envelope_json(
         &self,
         project_id: &str,
@@ -305,6 +314,7 @@ impl WriterCoreApi {
         }
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn save_chapter_content_envelope_json(
         &self,
         project_id: &str,
@@ -319,6 +329,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn clear_chapter_content_envelope_json(
         &self,
         project_id: &str,
@@ -333,6 +344,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn update_chapter_note_envelope_json(
         &self,
         project_id: &str,
@@ -366,11 +378,13 @@ impl WriterCoreApi {
         }
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn delete_project_envelope_json(&self, project_id: &str) -> String {
         Self::delete_envelope(self.delete_project(project_id), "Project", project_id)
             .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn delete_volume_envelope_json(&self, project_id: &str, volume_id: &str) -> String {
         Self::delete_envelope(
             self.delete_volume(project_id, volume_id),
@@ -380,6 +394,7 @@ impl WriterCoreApi {
         .to_json_string()
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn delete_chapter_envelope_json(
         &self,
         project_id: &str,

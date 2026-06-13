@@ -15,6 +15,7 @@
 // - 被 apps/desktop/src/backend/starmap_backend.rs 引用，作为后端 QObject 完成星图数据管理的执行模块。
 // =============================================================================
 
+#[allow(deprecated)]
 use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
     StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchDto, StarMapNodeContentDto, StarMapNodeDto,

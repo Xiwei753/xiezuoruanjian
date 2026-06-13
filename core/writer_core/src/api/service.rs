@@ -128,6 +128,7 @@ impl WriterCoreApi {
         })
     }
 
+    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
     pub fn get_workspace_diagnostics_envelope_json(
         &self,
         has_workspace: bool,
