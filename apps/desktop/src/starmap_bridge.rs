@@ -39,7 +39,10 @@ fn now_ms() -> u64 {
 }
 
 fn envelope<T: serde::Serialize>(result: Result<T, WriterError>) -> String {
-    WriterCoreApi::envelope_json(result)
+    match result {
+        Ok(data) => writer_core::api::ResultEnvelope::success(data).to_json_string(),
+        Err(error) => writer_core::api::ResultEnvelope::<T>::error(error).to_json_string(),
+    }
 }
 
 fn envelope_ok<T: serde::Serialize>(data: T) -> String {

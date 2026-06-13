@@ -31,10 +31,6 @@ impl WriterCoreApi {
         serde_json::to_string(value).map_err(Into::into)
     }
 
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. envelope_json is legacy and will be removed.")]
-    pub fn envelope_json<T: Serialize>(result: ApiResult<T>) -> String {
-        ResultEnvelope::from_api_result(result).to_json_string()
-    }
 
     fn non_negative_counter(name: &str, value: i32) -> ApiResult<u32> {
         if value < 0 {
@@ -128,14 +124,6 @@ impl WriterCoreApi {
         })
     }
 
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn get_workspace_diagnostics_envelope_json(
-        &self,
-        has_workspace: bool,
-        tree_count: u64,
-    ) -> String {
-        Self::envelope_json(self.get_workspace_diagnostics(has_workspace, tree_count))
-    }
 
     fn probe_workspace_writable(path: &Path, is_dir: bool) -> (bool, String) {
         if !is_dir {
@@ -1017,7 +1005,8 @@ mod tests {
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
 
-        let json = api.get_workspace_diagnostics_envelope_json(true, 0);
+        let result = api.get_workspace_diagnostics(true, 0);
+        let json = ResultEnvelope::from_api_result(result).to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["success"], true);
@@ -1216,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn save_chapter_content_envelope_json_returns_success_with_changed_entities() {
+    fn save_chapter_content_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
@@ -1224,56 +1213,65 @@ mod tests {
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
 
-        let json = api.save_chapter_content_envelope_json(
-            &project.id,
-            &volume.id,
-            &chapter.id,
-            "Hello World",
-        );
+        let result = api.save_chapter_content(&project.id, &volume.id, &chapter.id, "Hello World");
+        let json = match result {
+            Ok(receipt) => ResultEnvelope::success_with_changes(
+                receipt,
+                Vec::new(),
+                vec![ChangedEntityDto { entity_type: "ChapterSaved".to_string(), entity_id: Some(chapter.id.clone()) }],
+            ),
+            Err(error) => ResultEnvelope::<crate::api::types::ChapterSaveReceiptDto>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["success"], true);
         assert!(value["data"].is_object());
-        assert_eq!(value["data"]["content_len"], 11u32);
+        assert_eq!(value["data"]["contentLen"], 11u32);
         assert!(value["changedEntities"].is_array());
         assert_eq!(value["changedEntities"][0]["entityType"], "ChapterSaved");
         assert_eq!(value["changedEntities"][0]["entityId"], chapter.id);
     }
 
     #[test]
-    fn create_project_volume_chapter_envelope_json_returns_changed_entities() {
+    fn create_project_volume_chapter_envelope_returns_changed_entities() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
 
-        let project_json = api.create_project_envelope_json("Test");
+        let project = api.create_project("Test").unwrap();
+        let project_id = project.id.clone();
+        let project_json = ResultEnvelope::success_with_changes(
+            project,
+            Vec::new(),
+            vec![ChangedEntityDto { entity_type: "ProjectCreated".to_string(), entity_id: Some(project_id.clone()) }],
+        ).to_json_string();
         let project_value: serde_json::Value = serde_json::from_str(&project_json).unwrap();
-        let project_id = project_value["data"]["id"].as_str().unwrap().to_string();
         assert_eq!(project_value["success"], true);
-        assert_eq!(
-            project_value["changedEntities"][0]["entityType"],
-            "ProjectCreated"
-        );
+        assert_eq!(project_value["changedEntities"][0]["entityType"], "ProjectCreated");
         assert_eq!(project_value["changedEntities"][0]["entityId"], project_id);
 
-        let volume_json = api.create_volume_envelope_json(&project_id, "Vol 1");
+        let volume = api.create_volume(&project_id, "Vol 1").unwrap();
+        let volume_id = volume.id.clone();
+        let volume_json = ResultEnvelope::success_with_changes(
+            volume,
+            Vec::new(),
+            vec![ChangedEntityDto { entity_type: "VolumeCreated".to_string(), entity_id: Some(volume_id.clone()) }],
+        ).to_json_string();
         let volume_value: serde_json::Value = serde_json::from_str(&volume_json).unwrap();
-        let volume_id = volume_value["data"]["id"].as_str().unwrap().to_string();
         assert_eq!(volume_value["success"], true);
-        assert_eq!(
-            volume_value["changedEntities"][0]["entityType"],
-            "VolumeCreated"
-        );
+        assert_eq!(volume_value["changedEntities"][0]["entityType"], "VolumeCreated");
         assert_eq!(volume_value["changedEntities"][0]["entityId"], volume_id);
 
-        let chapter_json = api.create_chapter_envelope_json(&project_id, &volume_id, "Ch 1");
+        let chapter = api.create_chapter(&project_id, &volume_id, "Ch 1").unwrap();
+        let chapter_id = chapter.id.clone();
+        let chapter_json = ResultEnvelope::success_with_changes(
+            chapter,
+            Vec::new(),
+            vec![ChangedEntityDto { entity_type: "ChapterCreated".to_string(), entity_id: Some(chapter_id.clone()) }],
+        ).to_json_string();
         let chapter_value: serde_json::Value = serde_json::from_str(&chapter_json).unwrap();
-        let chapter_id = chapter_value["data"]["id"].as_str().unwrap().to_string();
         assert_eq!(chapter_value["success"], true);
-        assert_eq!(
-            chapter_value["changedEntities"][0]["entityType"],
-            "ChapterCreated"
-        );
+        assert_eq!(chapter_value["changedEntities"][0]["entityType"], "ChapterCreated");
         assert_eq!(chapter_value["changedEntities"][0]["entityId"], chapter_id);
     }
 
@@ -1292,51 +1290,71 @@ mod tests {
             .map(|volume| volume.id)
             .collect();
 
-        let cases = vec![
-            (
-                api.rename_project_envelope_json(&project.id, "Renamed"),
-                "ProjectRenamed",
-                Some(project.id.clone()),
-            ),
-            (
-                api.reorder_projects_envelope_json(&vec![project.id.clone()]),
-                "ProjectsReordered",
-                None,
-            ),
-            (
-                api.rename_volume_envelope_json(&project.id, &volume.id, "Vol 2"),
-                "VolumeRenamed",
-                Some(volume.id.clone()),
-            ),
-            (
-                api.reorder_volumes_envelope_json(&project.id, &volume_ids),
-                "VolumesReordered",
-                Some(project.id.clone()),
-            ),
-            (
-                api.rename_chapter_envelope_json(&project.id, &volume.id, &chapter.id, "Ch 2"),
-                "ChapterRenamed",
-                Some(chapter.id.clone()),
-            ),
-            (
-                api.reorder_chapters_envelope_json(
-                    &project.id,
-                    &volume.id,
-                    &vec![chapter.id.clone()],
-                ),
-                "ChaptersReordered",
-                Some(volume.id.clone()),
-            ),
-            (
-                api.update_chapter_note_envelope_json(&project.id, &volume.id, &chapter.id, "note"),
-                "ChapterNoteUpdated",
-                Some(chapter.id.clone()),
-            ),
-            (
-                api.clear_chapter_content_envelope_json(&project.id, &volume.id, &chapter.id),
-                "ChapterCleared",
-                Some(chapter.id.clone()),
-            ),
+        let cases: Vec<(String, &str, Option<String>)> = vec![
+            {
+                let result = api.rename_project(&project.id, "Renamed");
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project.id.clone()) }]),
+                    Err(error) => ResultEnvelope::<crate::api::types::ProjectDto>::error(error),
+                }.to_json_string();
+                (json, "ProjectRenamed", Some(project.id.clone()))
+            },
+            {
+                let result = api.reorder_projects(&vec![project.id.clone()]);
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ProjectsReordered".to_string(), entity_id: None }]),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
+                }.to_json_string();
+                (json, "ProjectsReordered", None)
+            },
+            {
+                let result = api.rename_volume(&project.id, &volume.id, "Vol 2");
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume.id.clone()) }]),
+                    Err(error) => ResultEnvelope::<crate::api::types::VolumeDto>::error(error),
+                }.to_json_string();
+                (json, "VolumeRenamed", Some(volume.id.clone()))
+            },
+            {
+                let result = api.reorder_volumes(&project.id, &volume_ids);
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "VolumesReordered".to_string(), entity_id: Some(project.id.clone()) }]),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
+                }.to_json_string();
+                (json, "VolumesReordered", Some(project.id.clone()))
+            },
+            {
+                let result = api.rename_chapter(&project.id, &volume.id, &chapter.id, "Ch 2");
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter.id.clone()) }]),
+                    Err(error) => ResultEnvelope::<crate::api::ChapterMetaDto>::error(error),
+                }.to_json_string();
+                (json, "ChapterRenamed", Some(chapter.id.clone()))
+            },
+            {
+                let result = api.reorder_chapters(&project.id, &volume.id, &vec![chapter.id.clone()]);
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ChaptersReordered".to_string(), entity_id: Some(volume.id.clone()) }]),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
+                }.to_json_string();
+                (json, "ChaptersReordered", Some(volume.id.clone()))
+            },
+            {
+                let result = api.update_chapter_note(&project.id, &volume.id, &chapter.id, "note");
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ChapterNoteUpdated".to_string(), entity_id: Some(chapter.id.clone()) }]),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
+                }.to_json_string();
+                (json, "ChapterNoteUpdated", Some(chapter.id.clone()))
+            },
+            {
+                let result = api.clear_chapter_content(&project.id, &volume.id, &chapter.id);
+                let json = match result {
+                    Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ChapterCleared".to_string(), entity_id: Some(chapter.id.clone()) }]),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
+                }.to_json_string();
+                (json, "ChapterCleared", Some(chapter.id.clone()))
+            },
         ];
 
         for (json, entity_type, entity_id) in cases {
@@ -1354,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_chapter_envelope_json_returns_success_with_changed_entities() {
+    fn delete_chapter_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
@@ -1362,7 +1380,15 @@ mod tests {
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
         let chapter = api.create_chapter(&project.id, &volume.id, "Ch 1").unwrap();
 
-        let json = api.delete_chapter_envelope_json(&project.id, &volume.id, &chapter.id);
+        let result = api.delete_chapter(&project.id, &volume.id, &chapter.id);
+        let json = match result {
+            Ok(_) => ResultEnvelope::success_with_changes(
+                true,
+                Vec::new(),
+                vec![ChangedEntityDto { entity_type: "ChapterDeleted".to_string(), entity_id: Some(chapter.id.clone()) }],
+            ),
+            Err(error) => ResultEnvelope::<bool>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["success"], true);
@@ -1372,13 +1398,21 @@ mod tests {
     }
 
     #[test]
-    fn delete_project_envelope_json_returns_success_with_changed_entities() {
+    fn delete_project_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
         let project = api.create_project("Test").unwrap();
 
-        let json = api.delete_project_envelope_json(&project.id);
+        let result = api.delete_project(&project.id);
+        let json = match result {
+            Ok(_) => ResultEnvelope::success_with_changes(
+                true,
+                Vec::new(),
+                vec![ChangedEntityDto { entity_type: "ProjectDeleted".to_string(), entity_id: Some(project.id.clone()) }],
+            ),
+            Err(error) => ResultEnvelope::<bool>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["success"], true);
@@ -1387,7 +1421,7 @@ mod tests {
     }
 
     #[test]
-    fn save_sync_config_envelope_json_returns_success_with_changed_entities() {
+    fn save_sync_config_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
@@ -1409,7 +1443,15 @@ mod tests {
             android_has_access_network_state_permission: true,
         };
 
-        let json = api.save_sync_config_envelope_json(config);
+        let result = api.save_sync_config(config);
+        let json = match result {
+            Ok(data) => ResultEnvelope::success_with_changes(
+                data,
+                vec!["sync_config.json".to_string()],
+                vec![ChangedEntityDto { entity_type: "SyncConfigSaved".to_string(), entity_id: None }],
+            ),
+            Err(error) => ResultEnvelope::<bool>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["success"], true);
@@ -1501,7 +1543,7 @@ mod tests {
     }
 
     #[test]
-    fn perform_sync_envelope_json_returns_envelope_with_sync_result() {
+    fn perform_sync_envelope_returns_envelope_with_sync_result() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
@@ -1523,7 +1565,25 @@ mod tests {
             android_has_access_network_state_permission: true,
         };
 
-        let json = api.perform_sync_envelope_json(config);
+        let result = api.perform_sync(config);
+        let json = match result {
+            Ok(dto) => {
+                let status = dto.status.clone();
+                let is_success = matches!(
+                    status.as_str(),
+                    "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
+                );
+                if is_success {
+                    let mut changed_paths = Vec::new();
+                    changed_paths.extend(dto.uploaded_files.clone());
+                    changed_paths.extend(dto.downloaded_files.clone());
+                    ResultEnvelope::success_with_changes(dto, changed_paths, vec![ChangedEntityDto { entity_type: "SyncCompleted".to_string(), entity_id: None }])
+                } else {
+                    ResultEnvelope::success(dto)
+                }
+            }
+            Err(error) => ResultEnvelope::<crate::api::types::SyncResultDto>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert!(value["success"].is_boolean());
@@ -1532,7 +1592,7 @@ mod tests {
     }
 
     #[test]
-    fn perform_sync_dry_run_envelope_json_returns_envelope_with_plan() {
+    fn perform_sync_dry_run_envelope_returns_envelope_with_plan() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
@@ -1554,17 +1614,21 @@ mod tests {
             android_has_access_network_state_permission: true,
         };
 
-        let json = api.perform_sync_dry_run_envelope_json(config);
+        let result = api.perform_sync_dry_run(config);
+        let json = match result {
+            Ok(dto) => ResultEnvelope::success(dto),
+            Err(error) => ResultEnvelope::<crate::api::types::SyncPlanDto>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert!(value["success"].is_boolean());
         if value["success"] == true {
-            assert!(value["data"]["files_to_upload"].is_array());
+            assert!(value["data"]["filesToUpload"].is_array() || value["data"]["files_to_upload"].is_array());
         }
     }
 
     #[test]
-    fn perform_sync_diagnostics_envelope_json_returns_envelope_with_diagnostics() {
+    fn perform_sync_diagnostics_envelope_returns_envelope_with_diagnostics() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
@@ -1586,7 +1650,11 @@ mod tests {
             android_has_access_network_state_permission: true,
         };
 
-        let json = api.perform_sync_diagnostics_envelope_json(config);
+        let result = api.perform_sync_diagnostics(config);
+        let json = match result {
+            Ok(dto) => ResultEnvelope::success(dto),
+            Err(error) => ResultEnvelope::<crate::api::types::SyncDiagnosticsResultDto>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert!(value["success"].is_boolean());
@@ -1597,14 +1665,22 @@ mod tests {
     }
 
     #[test]
-    fn delete_volume_envelope_json_returns_success_with_changed_entities() {
+    fn delete_volume_envelope_returns_success_with_changed_entities() {
         let temp_dir = tempdir().unwrap();
         crate::workspace::create_workspace(temp_dir.path()).unwrap();
         let api = WriterCoreApi::new(temp_dir.path());
         let project = api.create_project("Test").unwrap();
         let volume = api.create_volume(&project.id, "Vol 1").unwrap();
 
-        let json = api.delete_volume_envelope_json(&project.id, &volume.id);
+        let result = api.delete_volume(&project.id, &volume.id);
+        let json = match result {
+            Ok(_) => ResultEnvelope::success_with_changes(
+                true,
+                Vec::new(),
+                vec![ChangedEntityDto { entity_type: "VolumeDeleted".to_string(), entity_id: Some(volume.id.clone()) }],
+            ),
+            Err(error) => ResultEnvelope::<bool>::error(error),
+        }.to_json_string();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["success"], true);

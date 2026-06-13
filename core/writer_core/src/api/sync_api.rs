@@ -62,7 +62,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    // --- Sync envelope_json methods ---
+    // --- Sync envelope helpers (internal) ---
 
     fn sync_saved_envelope(result: ApiResult<bool>, path: &str) -> ResultEnvelope<bool> {
         match result {
@@ -76,18 +76,6 @@ impl WriterCoreApi {
             ),
             Err(error) => ResultEnvelope::error(error),
         }
-    }
-
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn save_sync_config_envelope_json(&self, config: SyncConfigDto) -> String {
-        Self::sync_saved_envelope(self.save_sync_config(config), "sync_config.json")
-            .to_json_string()
-    }
-
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn save_sync_secrets_envelope_json(&self, secrets: SyncSecretsDto) -> String {
-        Self::sync_saved_envelope(self.save_sync_secrets(secrets), "sync_secrets.local.json")
-            .to_json_string()
     }
 
     fn sync_result_envelope(result: ApiResult<SyncResultDto>) -> ResultEnvelope<SyncResultDto> {
@@ -174,21 +162,6 @@ impl WriterCoreApi {
             Ok(dto) => ResultEnvelope::success(dto),
             Err(error) => ResultEnvelope::error(error),
         }
-    }
-
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn perform_sync_envelope_json(&self, config: SyncConfigDto) -> String {
-        Self::sync_result_envelope(self.perform_sync(config)).to_json_string()
-    }
-
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn perform_sync_dry_run_envelope_json(&self, config: SyncConfigDto) -> String {
-        Self::sync_plan_envelope(self.perform_sync_dry_run(config)).to_json_string()
-    }
-
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn perform_sync_diagnostics_envelope_json(&self, config: SyncConfigDto) -> String {
-        Self::sync_diagnostics_envelope(self.perform_sync_diagnostics(config)).to_json_string()
     }
 }
 

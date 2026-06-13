@@ -463,10 +463,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::create_starmap(&core, &t, &d, color_ref).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -503,10 +502,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::create_child_starmap(&core, &pid, &t, &d, color_ref).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -533,10 +531,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::rename_starmap(&core, &sid, &t).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -547,10 +544,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::delete_starmap(&core, &sid).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -561,10 +557,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::get_starmap_graph_and_layout(&core, &sid).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -590,10 +585,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::create_starmap_node(&core, &sid, &t, &k, x, y).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -626,10 +620,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::update_starmap_node(&core, &sid, &nid, &p).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -658,10 +651,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::delete_starmap_node(&core, &sid, &nid).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -695,10 +687,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::create_starmap_edge(&core, &sid, &from_id, &to_id, &k, &l).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -731,10 +722,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::update_starmap_edge(&core, &sid, &eid, &p).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -763,10 +753,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::delete_starmap_edge(&core, &sid, &eid).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -794,10 +783,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::save_starmap_layout(&core, &sid, &lj).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -825,10 +813,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::bind_starmap_to_project(&core, &sid, &pid).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -844,10 +831,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::set_main_starmap(&core, &sid, &pid).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }
@@ -868,10 +854,9 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             starmap_bridge::unbind_starmap(&core, &sid).into()
         } else {
-            WriterCoreApi::envelope_json::<serde_json::Value>(Err(
+            crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
-            .to_string()
+            )
             .into()
         }
     }

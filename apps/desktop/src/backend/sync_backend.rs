@@ -632,7 +632,15 @@ impl AppBackend {
                 s.token = Some(self.current_sync_token.clone());
             }
 
-            let config_json = api.save_sync_config_envelope_json(c);
+            let config_result = api.save_sync_config(c);
+            let config_json = match config_result {
+                Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
+                    data,
+                    vec!["sync_config.json".to_string()],
+                    vec![writer_core::api::ChangedEntityDto { entity_type: "SyncConfigSaved".to_string(), entity_id: None }],
+                ),
+                Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+            }.to_json_string();
             let config_envelope: serde_json::Value = serde_json::from_str(&config_json)
                 .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
             if config_envelope["success"] != true {
@@ -642,7 +650,15 @@ impl AppBackend {
                     .unwrap_or("保存同步配置失败");
                 error_msg = Some(format!("{} ({})", user_message, error_code));
             } else {
-                let secrets_json = api.save_sync_secrets_envelope_json(s);
+                let secrets_result = api.save_sync_secrets(s);
+                let secrets_json = match secrets_result {
+                    Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
+                        data,
+                        vec!["sync_secrets.local.json".to_string()],
+                        vec![writer_core::api::ChangedEntityDto { entity_type: "SyncConfigSaved".to_string(), entity_id: None }],
+                    ),
+                    Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+                }.to_json_string();
                 let secrets_envelope: serde_json::Value = serde_json::from_str(&secrets_json)
                     .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
                 if secrets_envelope["success"] != true {

@@ -26,9 +26,9 @@ use super::super::json_utils::qjson_object_from_json;
 mod github_init_operations;
 
 fn backend_link_broken_json() -> QString {
-    WriterCoreApi::envelope_json::<String>(Err(writer_core::api::WriterError::Other(
+    crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
         "底层链接断开，请重启应用".to_string(),
-    )))
+    ))
     .into()
 }
 
@@ -270,12 +270,11 @@ impl AppBackend {
 
     // AppBackend::get_workspace_diagnostics
     pub(crate) fn get_workspace_diagnostics(&self) -> QString {
-        WriterCoreApi::new(&self.current_workspace)
-            .get_workspace_diagnostics_envelope_json(
-                self.current_has_workspace,
-                self.cached_tree.len() as u64,
-            )
-            .into()
+        let api = WriterCoreApi::new(&self.current_workspace);
+        match api.get_workspace_diagnostics(self.current_has_workspace, self.cached_tree.len() as u64) {
+            Ok(diagnostics) => crate::backend::json_utils::envelope_ok_json(diagnostics),
+            Err(e) => crate::backend::json_utils::envelope_error_json(e),
+        }.into()
     }
 
     // AppBackend::try_restore_last_workspace
@@ -352,9 +351,9 @@ impl AppBackend {
             let err_msg = "不是有效工作区。请选择其他目录，或使用「新建工作区」初始化该目录。";
             self.set_error(err_msg);
             self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
-            return WriterCoreApi::envelope_json::<String>(Err(
+            return crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
+            )
             .into();
         }
 
@@ -364,7 +363,7 @@ impl AppBackend {
                 let err_msg = format!("无法创建工作区: {}", e);
                 self.set_error(&err_msg);
                 self.debug_error("workspace", "internal_open_workspace_failed", &err_msg);
-                return WriterCoreApi::envelope_json::<String>(Err(e)).into();
+                return crate::backend::json_utils::envelope_error_json(e).into();
             }
         }
 
@@ -378,9 +377,9 @@ impl AppBackend {
             let err_msg = "工作区验证失败";
             self.set_error(err_msg);
             self.debug_error("workspace", "internal_open_workspace_failed", err_msg);
-            return WriterCoreApi::envelope_json::<String>(Err(
+            return crate::backend::json_utils::envelope_error_json(
                 writer_core::api::WriterError::InvalidWorkspace,
-            ))
+            )
             .into();
         }
 

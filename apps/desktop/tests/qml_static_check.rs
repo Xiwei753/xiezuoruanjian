@@ -741,3 +741,60 @@ fn test_sujian_editor_item_no_request_repaint() {
         }
     }
 }
+
+#[test]
+fn test_desktop_no_envelope_json_calls() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src_dir = manifest_dir.join("src");
+
+    let mut violations = Vec::new();
+
+    fn check_rs_file(path: &Path, prefix: &str, violations: &mut Vec<String>) {
+        let content = fs::read_to_string(path).unwrap();
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+        for (line_idx, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if trimmed.contains("envelope_json(") {
+                violations.push(format!(
+                    "{}{}:{}: Found forbidden envelope_json call: {}",
+                    prefix,
+                    file_name,
+                    line_idx + 1,
+                    trimmed
+                ));
+            }
+        }
+    }
+
+    if src_dir.exists() {
+        for entry in fs::read_dir(&src_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            check_rs_file(&path, "", &mut violations);
+        }
+
+        let backend_dir = src_dir.join("backend");
+        if backend_dir.exists() {
+            for entry in fs::read_dir(&backend_dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                check_rs_file(&path, "backend/", &mut violations);
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Desktop must not call envelope_json — use typed DTO API + ResultEnvelope instead:\n{}",
+        violations.join("\n")
+    );
+}

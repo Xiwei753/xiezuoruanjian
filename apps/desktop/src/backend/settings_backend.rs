@@ -487,7 +487,15 @@ impl AppBackend {
             local.desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
             local.desktop_editor_width = self.current_setting_desktop_editor_width;
 
-            let local_json = core.save_local_settings_envelope_json(local.clone());
+            let local_result = core.save_local_settings(local.clone());
+            let local_json = match local_result {
+                Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
+                    data,
+                    vec!["settings.local.json".to_string()],
+                    vec![writer_core::api::ChangedEntityDto { entity_type: "SettingsSaved".to_string(), entity_id: None }],
+                ),
+                Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+            }.to_json_string();
             let local_envelope: serde_json::Value = serde_json::from_str(&local_json)
                 .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
             self.debug_log(
@@ -514,7 +522,15 @@ impl AppBackend {
             syncable.theme_mode = self.current_setting_theme_mode.clone();
             syncable.monet_color = self.current_setting_monet_color.clone();
 
-            let syncable_json = core.save_syncable_settings_envelope_json(syncable.clone());
+            let syncable_result = core.save_syncable_settings(syncable.clone());
+            let syncable_json = match syncable_result {
+                Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
+                    data,
+                    vec!["settings.syncable.json".to_string()],
+                    vec![writer_core::api::ChangedEntityDto { entity_type: "SettingsSaved".to_string(), entity_id: None }],
+                ),
+                Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+            }.to_json_string();
             let syncable_envelope: serde_json::Value = serde_json::from_str(&syncable_json)
                 .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
             self.debug_log(

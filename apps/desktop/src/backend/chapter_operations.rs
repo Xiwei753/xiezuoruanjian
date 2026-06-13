@@ -254,8 +254,16 @@ impl AppBackend {
         );
 
         if let Some(api) = self.core_api() {
-            let envelope_json = api.clear_chapter_content_envelope_json(&p, &v, &c);
-            match serde_json::from_str::<serde_json::Value>(&envelope_json) {
+            let result = api.clear_chapter_content(&p, &v, &c);
+            let envelope = match result {
+                Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
+                    data,
+                    Vec::new(),
+                    vec![writer_core::api::ChangedEntityDto { entity_type: "ChapterCleared".to_string(), entity_id: Some(c.clone()) }],
+                ),
+                Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+            }.to_json_string();
+            match serde_json::from_str::<serde_json::Value>(&envelope) {
                 Ok(envelope) => {
                     let is_success = envelope
                         .get("success")

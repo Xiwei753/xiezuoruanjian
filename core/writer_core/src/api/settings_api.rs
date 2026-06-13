@@ -31,12 +31,6 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn save_local_settings_envelope_json(&self, settings: LocalSettingsDto) -> String {
-        Self::settings_saved_envelope(self.save_local_settings(settings), "settings.local.json")
-            .to_json_string()
-    }
-
     pub fn load_syncable_settings(&self) -> ApiResult<SyncableSettingsDto> {
         self.core()
             .load_syncable_settings()
@@ -49,14 +43,5 @@ impl WriterCoreApi {
             .save_syncable_settings(&settings.into())
             .map(|_| true)
             .map_err(Into::into)
-    }
-
-    #[deprecated(since = "0.2.0", note = "Use typed DTO API instead. Will be removed.")]
-    pub fn save_syncable_settings_envelope_json(&self, settings: SyncableSettingsDto) -> String {
-        Self::settings_saved_envelope(
-            self.save_syncable_settings(settings),
-            "settings.syncable.json",
-        )
-        .to_json_string()
     }
 }

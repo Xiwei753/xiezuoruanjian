@@ -5,7 +5,7 @@
 
 use super::*;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
-use writer_core::api::{ChapterMetaDto, VolumeDto, WriterError};
+use writer_core::api::{ChangedEntityDto, ChapterMetaDto, ResultEnvelope, VolumeDto, WriterError};
 
 impl AppBackend {
     pub(crate) fn reconcile_selection_after_tree_reload(&mut self) -> bool {
@@ -281,10 +281,10 @@ impl AppBackend {
     // -------------------------------------------------------------------------
     fn core_envelope_to_result(
         &mut self,
-        envelope_json: &str,
+        envelope_str: &str,
         on_success: impl FnOnce(&mut Self, &serde_json::Value),
     ) -> QString {
-        match serde_json::from_str::<serde_json::Value>(envelope_json) {
+        match serde_json::from_str::<serde_json::Value>(envelope_str) {
             Ok(mut envelope) => {
                 if envelope.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                     on_success(self, &envelope);
@@ -325,7 +325,18 @@ impl AppBackend {
         }
 
         if let Some(api) = self.core_api() {
-            let envelope = api.create_project_envelope_json(&title_str);
+            let result = api.create_project(&title_str);
+            let envelope = match result {
+                Ok(project) => {
+                    let project_id = project.id.clone();
+                    ResultEnvelope::success_with_changes(
+                        project,
+                        Vec::new(),
+                        vec![ChangedEntityDto { entity_type: "ProjectCreated".to_string(), entity_id: Some(project_id) }],
+                    )
+                }
+                Err(error) => ResultEnvelope::<writer_core::api::types::ProjectDto>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, value| {
                 if let Some(proj_id) = value
                     .get("data")
@@ -376,10 +387,18 @@ impl AppBackend {
             ),
         );
         if let Some(api) = self.core_api() {
-            let envelope = api.create_volume_envelope_json(
-                &project_id.to_string(),
-                &title.to_string(),
-            );
+            let result = api.create_volume(&project_id.to_string(), &title.to_string());
+            let envelope = match result {
+                Ok(volume) => {
+                    let volume_id = volume.id.clone();
+                    ResultEnvelope::success_with_changes(
+                        volume,
+                        Vec::new(),
+                        vec![ChangedEntityDto { entity_type: "VolumeCreated".to_string(), entity_id: Some(volume_id) }],
+                    )
+                }
+                Err(error) => ResultEnvelope::<writer_core::api::types::VolumeDto>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, value| {
                 if let Some(vol_id) = value
                     .get("data")
@@ -425,11 +444,18 @@ impl AppBackend {
             ),
         );
         if let Some(api) = self.core_api() {
-            let envelope = api.create_chapter_envelope_json(
-                &project_id.to_string(),
-                &volume_id.to_string(),
-                &title.to_string(),
-            );
+            let result = api.create_chapter(&project_id.to_string(), &volume_id.to_string(), &title.to_string());
+            let envelope = match result {
+                Ok(chapter) => {
+                    let chapter_id = chapter.id.clone();
+                    ResultEnvelope::success_with_changes(
+                        chapter,
+                        Vec::new(),
+                        vec![ChangedEntityDto { entity_type: "ChapterCreated".to_string(), entity_id: Some(chapter_id) }],
+                    )
+                }
+                Err(error) => ResultEnvelope::<writer_core::api::ChapterMetaDto>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, value| {
                 if let Some(chap_id) = value
                     .get("data")
@@ -510,7 +536,15 @@ impl AppBackend {
             &format!("[actionId={}] project_id={}", action_id_str, project_id_str),
         );
         if let Some(api) = self.core_api() {
-            let envelope = api.delete_project_envelope_json(&project_id_str);
+            let result = api.delete_project(&project_id_str);
+            let envelope = match result {
+                Ok(_) => ResultEnvelope::success_with_changes(
+                    true,
+                    Vec::new(),
+                    vec![ChangedEntityDto { entity_type: "ProjectDeleted".to_string(), entity_id: Some(project_id_str.clone()) }],
+                ),
+                Err(error) => ResultEnvelope::<bool>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 if app.selected_project_id.as_deref() == Some(&project_id_str) {
                     app.selected_project_id = None;
@@ -549,7 +583,15 @@ impl AppBackend {
             ),
         );
         if let Some(api) = self.core_api() {
-            let envelope = api.delete_volume_envelope_json(&project_id_str, &volume_id_str);
+            let result = api.delete_volume(&project_id_str, &volume_id_str);
+            let envelope = match result {
+                Ok(_) => ResultEnvelope::success_with_changes(
+                    true,
+                    Vec::new(),
+                    vec![ChangedEntityDto { entity_type: "VolumeDeleted".to_string(), entity_id: Some(volume_id_str.clone()) }],
+                ),
+                Err(error) => ResultEnvelope::<bool>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 if app.selected_volume_id.as_deref() == Some(&volume_id_str) {
                     app.selected_volume_id = None;
@@ -589,8 +631,15 @@ impl AppBackend {
             ),
         );
         if let Some(api) = self.core_api() {
-            let envelope =
-                api.delete_chapter_envelope_json(&project_id_str, &volume_id_str, &chapter_id_str);
+            let result = api.delete_chapter(&project_id_str, &volume_id_str, &chapter_id_str);
+            let envelope = match result {
+                Ok(_) => ResultEnvelope::success_with_changes(
+                    true,
+                    Vec::new(),
+                    vec![ChangedEntityDto { entity_type: "ChapterDeleted".to_string(), entity_id: Some(chapter_id_str.clone()) }],
+                ),
+                Err(error) => ResultEnvelope::<bool>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 if app.selected_chapter_id.as_deref() == Some(&chapter_id_str) {
                     app.clear_editor_state();
@@ -659,8 +708,15 @@ impl AppBackend {
         new_title: QString,
     ) -> QString {
         if let Some(api) = self.core_api() {
-            let envelope =
-                api.rename_project_envelope_json(&project_id.to_string(), &new_title.to_string());
+            let result = api.rename_project(&project_id.to_string(), &new_title.to_string());
+            let envelope = match result {
+                Ok(data) => ResultEnvelope::success_with_changes(
+                    data,
+                    Vec::new(),
+                    vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project_id.to_string()) }],
+                ),
+                Err(error) => ResultEnvelope::<writer_core::api::types::ProjectDto>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
@@ -713,11 +769,15 @@ impl AppBackend {
         new_title: QString,
     ) -> QString {
         if let Some(api) = self.core_api() {
-            let envelope = api.rename_volume_envelope_json(
-                &project_id.to_string(),
-                &volume_id.to_string(),
-                &new_title.to_string(),
-            );
+            let result = api.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string());
+            let envelope = match result {
+                Ok(data) => ResultEnvelope::success_with_changes(
+                    data,
+                    Vec::new(),
+                    vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume_id.to_string()) }],
+                ),
+                Err(error) => ResultEnvelope::<writer_core::api::types::VolumeDto>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
@@ -775,12 +835,15 @@ impl AppBackend {
         new_title: QString,
     ) -> QString {
         if let Some(api) = self.core_api() {
-            let envelope = api.rename_chapter_envelope_json(
-                &project_id.to_string(),
-                &volume_id.to_string(),
-                &chapter_id.to_string(),
-                &new_title.to_string(),
-            );
+            let result = api.rename_chapter(&project_id.to_string(), &volume_id.to_string(), &chapter_id.to_string(), &new_title.to_string());
+            let envelope = match result {
+                Ok(data) => ResultEnvelope::success_with_changes(
+                    data,
+                    Vec::new(),
+                    vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter_id.to_string()) }],
+                ),
+                Err(error) => ResultEnvelope::<writer_core::api::ChapterMetaDto>::error(error),
+            }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();

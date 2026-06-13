@@ -290,7 +290,15 @@ pub fn save_sync_configs(
     secrets: &SyncSecrets,
 ) -> Result<(), String> {
     let api = WriterCoreApi::new(path);
-    let config_json = api.save_sync_config_envelope_json(config.clone().into());
+    let config_result = api.save_sync_config(config.clone().into());
+    let config_json = match config_result {
+        Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
+            data,
+            vec!["sync_config.json".to_string()],
+            vec![writer_core::api::ChangedEntityDto { entity_type: "SyncConfigSaved".to_string(), entity_id: None }],
+        ),
+        Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+    }.to_json_string();
     let config_envelope: serde_json::Value =
         serde_json::from_str(&config_json).map_err(|e| format!("解析配置保存结果失败: {}", e))?;
     if config_envelope["success"] != true {
@@ -303,7 +311,15 @@ pub fn save_sync_configs(
         return Err(format!("{} ({})", user_message, error_code));
     }
 
-    let secrets_json = api.save_sync_secrets_envelope_json(secrets.clone().into());
+    let secrets_result = api.save_sync_secrets(secrets.clone().into());
+    let secrets_json = match secrets_result {
+        Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
+            data,
+            vec!["sync_secrets.local.json".to_string()],
+            vec![writer_core::api::ChangedEntityDto { entity_type: "SyncConfigSaved".to_string(), entity_id: None }],
+        ),
+        Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+    }.to_json_string();
     let secrets_envelope: serde_json::Value =
         serde_json::from_str(&secrets_json).map_err(|e| format!("解析凭证保存结果失败: {}", e))?;
     if secrets_envelope["success"] != true {
