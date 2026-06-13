@@ -713,6 +713,8 @@ mod tests {
                     target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
                 },
             }),
+            from_endpoint_path: None,
+            to_endpoint_path: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -743,6 +745,8 @@ mod tests {
                     target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
                 },
             }),
+            from_endpoint_path: None,
+            to_endpoint_path: None,
             created_at: 0,
             updated_at: 0,
         };
@@ -785,6 +789,8 @@ mod tests {
                 },
             }),
             to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
             created_at: 0,
             updated_at: 0,
         };

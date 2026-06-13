@@ -357,6 +357,7 @@ pub fn add_starmap_edge(
 
     let from_valid = edge.from_target.is_some()
         || edge.from_endpoint.is_some()
+        || edge.from_endpoint_path.is_some()
         || edge
             .from
             .as_ref()
@@ -364,6 +365,7 @@ pub fn add_starmap_edge(
             .unwrap_or(false);
     let to_valid = edge.to_target.is_some()
         || edge.to_endpoint.is_some()
+        || edge.to_endpoint_path.is_some()
         || edge
             .to
             .as_ref()
@@ -412,6 +414,12 @@ pub fn update_starmap_edge(
         }
         if let Some(te) = patch.to_endpoint {
             edge.to_endpoint = te;
+        }
+        if let Some(fep) = patch.from_endpoint_path {
+            edge.from_endpoint_path = fep;
+        }
+        if let Some(tep) = patch.to_endpoint_path {
+            edge.to_endpoint_path = tep;
         }
         edge.updated_at = now_epoch();
         let updated_edge = edge.clone();
@@ -1196,6 +1204,8 @@ mod tests {
             to_target: None,
             from_endpoint: None,
             to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -1216,6 +1226,8 @@ mod tests {
                 to_target: None,
                 from_endpoint: None,
                 to_endpoint: None,
+                from_endpoint_path: None,
+                to_endpoint_path: None,
             },
         )
         .unwrap();
@@ -1509,6 +1521,8 @@ mod tests {
             }),
             from_endpoint: None,
             to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -1601,6 +1615,8 @@ mod tests {
             }),
             from_endpoint: None,
             to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -1627,6 +1643,8 @@ mod tests {
             to_target: Some(dt_cycle),
             from_endpoint: None,
             to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
             created_at: now_epoch(),
             updated_at: now_epoch(),
         };
@@ -1807,6 +1825,8 @@ mod tests {
                 to_target: None,
                 from_endpoint: None,
                 to_endpoint: None,
+                from_endpoint_path: None,
+                to_endpoint_path: None,
                 created_at: now_epoch(),
                 updated_at: now_epoch(),
             },
@@ -1835,6 +1855,8 @@ mod tests {
                 to_endpoint: Some(Some(
                     crate::starmap::types::StarMapEdgeEndpoint::DeepTarget { target: dt.clone() },
                 )),
+                from_endpoint_path: None,
+                to_endpoint_path: None,
             },
         )
         .unwrap();
@@ -1857,6 +1879,8 @@ mod tests {
                 to_target: None,
                 from_endpoint: None,
                 to_endpoint: Some(None),
+                from_endpoint_path: None,
+                to_endpoint_path: None,
             },
         )
         .unwrap();
@@ -1878,6 +1902,8 @@ mod tests {
                     node_id: "n1".to_string(),
                 })),
                 to_endpoint: None,
+                from_endpoint_path: None,
+                to_endpoint_path: None,
             },
         )
         .unwrap();

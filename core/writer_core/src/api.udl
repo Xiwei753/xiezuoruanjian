@@ -460,6 +460,17 @@ dictionary StarMapEdgeEndpointDto {
     StarMapDeepTargetDto? target;
 };
 
+dictionary StarMapEndpointPathSegmentDto {
+    string kind;
+    string? starmap_id;
+    string? node_id;
+};
+
+dictionary StarMapEndpointPathDto {
+    sequence<StarMapEndpointPathSegmentDto> segments;
+    StarMapEdgeEndpointDto endpoint;
+};
+
 dictionary StarMapEdgeDto {
     string id;
     string? from;
@@ -471,6 +482,8 @@ dictionary StarMapEdgeDto {
     StarMapDeepTargetDto? to_target;
     StarMapEdgeEndpointDto? from_endpoint;
     StarMapEdgeEndpointDto? to_endpoint;
+    StarMapEndpointPathDto? from_endpoint_path;
+    StarMapEndpointPathDto? to_endpoint_path;
     u64 created_at;
     u64 updated_at;
 };

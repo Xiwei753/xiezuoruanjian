@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::api::error::WriterError;
 use crate::api::types::*;
+use crate::api::ChangedEntityDto;
 use crate::api::ResultEnvelope;
 use crate::facade::WriterCore;
 
@@ -1112,6 +1113,8 @@ mod tests {
                 to_target: None,
                 from_endpoint: None,
                 to_endpoint: None,
+                from_endpoint_path: None,
+                to_endpoint_path: None,
                 created_at: 0,
                 updated_at: 0,
             }],
@@ -1295,7 +1298,7 @@ mod tests {
                 let result = api.rename_project(&project.id, "Renamed");
                 let json = match result {
                     Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project.id.clone()) }]),
-                    Err(error) => ResultEnvelope::<crate::api::types::ProjectDto>::error(error),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
                 }.to_json_string();
                 (json, "ProjectRenamed", Some(project.id.clone()))
             },
@@ -1311,7 +1314,7 @@ mod tests {
                 let result = api.rename_volume(&project.id, &volume.id, "Vol 2");
                 let json = match result {
                     Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume.id.clone()) }]),
-                    Err(error) => ResultEnvelope::<crate::api::types::VolumeDto>::error(error),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
                 }.to_json_string();
                 (json, "VolumeRenamed", Some(volume.id.clone()))
             },
@@ -1327,7 +1330,7 @@ mod tests {
                 let result = api.rename_chapter(&project.id, &volume.id, &chapter.id, "Ch 2");
                 let json = match result {
                     Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter.id.clone()) }]),
-                    Err(error) => ResultEnvelope::<crate::api::ChapterMetaDto>::error(error),
+                    Err(error) => ResultEnvelope::<bool>::error(error),
                 }.to_json_string();
                 (json, "ChapterRenamed", Some(chapter.id.clone()))
             },
@@ -1351,7 +1354,7 @@ mod tests {
                 let result = api.clear_chapter_content(&project.id, &volume.id, &chapter.id);
                 let json = match result {
                     Ok(data) => ResultEnvelope::success_with_changes(data, Vec::new(), vec![ChangedEntityDto { entity_type: "ChapterCleared".to_string(), entity_id: Some(chapter.id.clone()) }]),
-                    Err(error) => ResultEnvelope::<bool>::error(error),
+                    Err(error) => ResultEnvelope::<crate::api::ChapterSaveReceiptDto>::error(error),
                 }.to_json_string();
                 (json, "ChapterCleared", Some(chapter.id.clone()))
             },

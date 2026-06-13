@@ -603,23 +603,99 @@ impl From<StarMapEdgeEndpointDto> for crate::starmap::types::StarMapEdgeEndpoint
     }
 }
 
+// Flattened struct (was tagged enum StarMapEndpointPathSegmentDto)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEndpointPathSegmentDto {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub starmap_id: Option<String>,
+    pub node_id: Option<String>,
+}
+
+impl From<crate::starmap::types::StarMapEndpointPathSegment> for StarMapEndpointPathSegmentDto {
+    fn from(s: crate::starmap::types::StarMapEndpointPathSegment) -> Self {
+        match s {
+            crate::starmap::types::StarMapEndpointPathSegment::EnterChildMap { starmap_id } => Self {
+                kind: "enterChildMap".to_string(),
+                starmap_id: Some(starmap_id),
+                node_id: None,
+            },
+            crate::starmap::types::StarMapEndpointPathSegment::EnterNode { node_id } => Self {
+                kind: "enterNode".to_string(),
+                starmap_id: None,
+                node_id: Some(node_id),
+            },
+        }
+    }
+}
+
+impl From<StarMapEndpointPathSegmentDto> for crate::starmap::types::StarMapEndpointPathSegment {
+    fn from(d: StarMapEndpointPathSegmentDto) -> Self {
+        match d.kind.as_str() {
+            "enterChildMap" => Self::EnterChildMap {
+                starmap_id: d.starmap_id.unwrap_or_default(),
+            },
+            _ => Self::EnterNode {
+                node_id: d.node_id.unwrap_or_default(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEndpointPathDto {
+    #[serde(default)]
+    pub segments: Vec<StarMapEndpointPathSegmentDto>,
+    pub endpoint: StarMapEdgeEndpointDto,
+}
+
+impl From<crate::starmap::types::StarMapEndpointPath> for StarMapEndpointPathDto {
+    fn from(p: crate::starmap::types::StarMapEndpointPath) -> Self {
+        Self {
+            segments: p.segments.into_iter().map(Into::into).collect(),
+            endpoint: p.endpoint.into(),
+        }
+    }
+}
+
+impl From<StarMapEndpointPathDto> for crate::starmap::types::StarMapEndpointPath {
+    fn from(d: StarMapEndpointPathDto) -> Self {
+        Self {
+            segments: d.segments.into_iter().map(Into::into).collect(),
+            endpoint: d.endpoint.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEdgeDto {
     pub id: String,
+    /// Legacy
     pub from: Option<String>,
+    /// Legacy
     pub to: Option<String>,
     pub kind: StarMapEdgeKindDto,
     pub label: Option<String>,
     pub payload: Option<String>,
+    /// Legacy
     #[serde(default)]
     pub from_target: Option<StarMapDeepTargetDto>,
+    /// Legacy
     #[serde(default)]
     pub to_target: Option<StarMapDeepTargetDto>,
+    /// Legacy
     #[serde(default)]
     pub from_endpoint: Option<StarMapEdgeEndpointDto>,
+    /// Legacy
     #[serde(default)]
     pub to_endpoint: Option<StarMapEdgeEndpointDto>,
+    #[serde(default)]
+    pub from_endpoint_path: Option<StarMapEndpointPathDto>,
+    #[serde(default)]
+    pub to_endpoint_path: Option<StarMapEndpointPathDto>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -639,6 +715,8 @@ impl From<crate::starmap::types::StarMapEdge> for StarMapEdgeDto {
             to_target: e.to_target.map(Into::into),
             from_endpoint: e.from_endpoint.map(Into::into),
             to_endpoint: e.to_endpoint.map(Into::into),
+            from_endpoint_path: e.from_endpoint_path.map(Into::into),
+            to_endpoint_path: e.to_endpoint_path.map(Into::into),
             created_at: e.created_at,
             updated_at: e.updated_at,
         }
@@ -660,6 +738,8 @@ impl From<StarMapEdgeDto> for crate::starmap::types::StarMapEdge {
             to_target: d.to_target.map(Into::into),
             from_endpoint: d.from_endpoint.map(Into::into),
             to_endpoint: d.to_endpoint.map(Into::into),
+            from_endpoint_path: d.from_endpoint_path.map(Into::into),
+            to_endpoint_path: d.to_endpoint_path.map(Into::into),
             created_at: d.created_at,
             updated_at: d.updated_at,
         }
@@ -1032,10 +1112,16 @@ pub struct StarMapEdgePatchDto {
     pub kind: Option<StarMapEdgeKindDto>,
     pub label: Option<Option<String>>,
     pub payload: Option<Option<String>>,
+    /// Legacy
     pub from_target: Option<Option<StarMapDeepTargetDto>>,
+    /// Legacy
     pub to_target: Option<Option<StarMapDeepTargetDto>>,
+    /// Legacy
     pub from_endpoint: Option<Option<StarMapEdgeEndpointDto>>,
+    /// Legacy
     pub to_endpoint: Option<Option<StarMapEdgeEndpointDto>>,
+    pub from_endpoint_path: Option<Option<StarMapEndpointPathDto>>,
+    pub to_endpoint_path: Option<Option<StarMapEndpointPathDto>>,
 }
 
 impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
@@ -1050,6 +1136,8 @@ impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
             to_target: d.to_target.map(|v| v.map(Into::into)),
             from_endpoint: d.from_endpoint.map(|v| v.map(Into::into)),
             to_endpoint: d.to_endpoint.map(|v| v.map(Into::into)),
+            from_endpoint_path: d.from_endpoint_path.map(|v| v.map(Into::into)),
+            to_endpoint_path: d.to_endpoint_path.map(|v| v.map(Into::into)),
         }
     }
 }
