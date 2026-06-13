@@ -103,3 +103,46 @@ Supersedes: None
 - 修改 `sujian_editor_item` 下任何文件后，必须运行 `cargo check -p sujian-desktop` 确认编译通过。
 - 如果本地缺少 Qt6 开发环境，必须在有 Qt6 的环境（CI 或其他机器）上验证后才能合并。
 - 任何涉及 `cpp!` 宏的修改，必须同时检查 Rust 侧和 C++ 侧的类型匹配。
+
+## 最小静态渲染链路协议
+
+自研编辑器任何渲染改动必须遵守"静态渲染最小链路优先"。这是硬规则，不是建议。
+
+### 分层启用顺序
+
+1. **static text texture 单独可运行** — `render_to_image()` → `update_texture_node()` → `QSGImageNode` child[0] 必须独立稳定。
+2. **cursor 单独可开关** — `update_cursor_rect()` → `QSGRectangleNode` child[2] 必须在 static text 稳定后才能启用。
+3. **overlay 单独可开关** — `paint_animation_overlay()` → `update_animation_overlay()` → `QSGImageNode` child[1] 必须在 static text + cursor 稳定后才能启用。
+4. **三层同时开启前必须分别通过** — 不允许在任意一层未单独验证的情况下全量启用。
+5. **出现 crash 先禁用上层，不许在完整链路里猜** — 设置 `SUJIAN_MINIMAL_STATIC_RENDER=1` 运行，只保留 Layer 0。
+
+### QSG 层操作约束
+
+- QSG 层不许一次改多个节点层。每次只改一层，验证通过后再改下一层。
+- `QImage -> QSGTexture` 必须有单独 smoke test。`createTextureFromImage` 是已知高风险调用，必须在 render thread 正确阶段执行。
+- overlay 不许参与正文可见性。overlay 只做叠加视觉效果，正文可见性由 static text texture 唯一决定。
+- `glyphRuns` 只服务动画定位，不影响静态正文绘制。
+
+### 最小渲染模式
+
+- 环境变量 `SUJIAN_MINIMAL_STATIC_RENDER=1` 启用最小渲染模式。
+- 最小模式下只执行 Layer 0（static text texture），跳过 Layer 1（overlay）和 Layer 2（cursor）的 QSG 更新。
+- 动画状态仍会清理（`cleanup_finished_animations`），但不绘制、不更新 QSG 节点。
+- 此模式用于隔离崩溃：如果最小模式下仍崩溃，问题在 `QImage -> QSGTexture` / `QSGImageNode` 路线本身。
+
+### 降级路线
+
+如果静态 texture 也崩，说明当前 `QImage + QSGImageNode + rust-cpp` 路线需要降级：
+
+- **短期**：`QQuickPaintedItem` + `QPainter` 静态绘制，先保证正确性。Qt 官方说明 `QQuickPaintedItem` 性能不如直接 QSG，但它适合先把 QPainter 内容稳定画出来。
+- **中期**：`QQuickItem + QSG` 只做光标/overlay。
+- **长期**：再把正文 texture 化。
+
+这不是倒退，是工程顺序。
+
+### text_revision 闭环
+
+- `text_revision` 字段和 `bump_revision` 方法必须进入统一链路，不允许存在"加了但没读"的死代码。
+- 任何导致文本内容变化的操作必须 bump `text_revision`。
+- `scroll_buffer_miss_reason` 依赖 `text_revision` 判断是否需要重绘。
+- 如果编译器警告 `field text_revision is never read` 或 `method bump_revision never used`，必须立即修复，不能留死代码。

@@ -1491,82 +1491,99 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // ── Layer 1: Animation overlay (child[1]) — always rebuilt when active ──
-        // Clean up finished animations BEFORE painting the overlay, so that
-        // the overlay is hidden on the exact frame the animation ends.
-        self.cleanup_finished_animations();
-        let overlay_result = self.paint_animation_overlay();
-        if !final_root.is_null() && !item_ptr.is_null() {
-            match &overlay_result {
-                Some((image, buf_scroll_y, buf_h)) => {
-                    scene_graph::update_animation_overlay(
-                        final_root,
-                        item_ptr,
-                        Some(image),
-                        *buf_scroll_y,
-                        *buf_h,
-                        dpr,
-                    );
-                }
-                None => {
-                    scene_graph::update_animation_overlay(
-                        final_root,
-                        item_ptr,
-                        None,
-                        0.0,
-                        0.0,
-                        dpr,
-                    );
+        // ── Layer 1: Animation overlay (child[1]) — SKIPPED in minimal render mode ──
+        // When SUJIAN_MINIMAL_STATIC_RENDER=1, overlay and cursor QSG updates are
+        // disabled so that only the static text texture (Layer 0) is active.
+        // This isolates crashes to the QImage -> QSGTexture path.
+        // See editor_engine_route.md "最小静态渲染链路" for the protocol.
+        let minimal_render = std::env::var("SUJIAN_MINIMAL_STATIC_RENDER")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+
+        if !minimal_render {
+            // Clean up finished animations BEFORE painting the overlay, so that
+            // the overlay is hidden on the exact frame the animation ends.
+            self.cleanup_finished_animations();
+            let overlay_result = self.paint_animation_overlay();
+            if !final_root.is_null() && !item_ptr.is_null() {
+                match &overlay_result {
+                    Some((image, buf_scroll_y, buf_h)) => {
+                        scene_graph::update_animation_overlay(
+                            final_root,
+                            item_ptr,
+                            Some(image),
+                            *buf_scroll_y,
+                            *buf_h,
+                            dpr,
+                        );
+                    }
+                    None => {
+                        scene_graph::update_animation_overlay(
+                            final_root,
+                            item_ptr,
+                            None,
+                            0.0,
+                            0.0,
+                            dpr,
+                        );
+                    }
                 }
             }
-        }
 
-        // If animation is still active, request next frame
-        if self.has_active_animation() {
-            self.request_frame_update();
-        }
-
-        // ── Layer 2: Cursor animation + node (child[2]) ──
-        let now = Instant::now();
-        if let Some(ref anim) = self.cursor_animation {
-            if anim.is_finished(now) {
-                self.cursor_visual_x = anim.target_x;
-                self.cursor_visual_y = anim.target_y;
-                self.cursor_animation = None;
-                self.cursor_dirty = false;
-            } else {
-                let (cx, cy) = anim.current_position(now);
-                self.cursor_visual_x = cx;
-                self.cursor_visual_y = cy;
+            // If animation is still active, request next frame
+            if self.has_active_animation() {
                 self.request_frame_update();
             }
         } else {
-            self.cursor_dirty = false;
+            self.cleanup_finished_animations();
+            if sujian_editor_debug_enabled() {
+                eprintln!("sujian_update_paint_node: MINIMAL_STATIC_RENDER mode — overlay and cursor QSG updates skipped");
+            }
         }
 
-        let is_selecting = self.buffer.has_selection();
-        let show_cursor = self.cursor_visible && !self.current_is_scrolling && !is_selecting;
-        let cursor_color_rgba = renderer::color_hex_to_rgba(&self.current_cursor_color);
+        // ── Layer 2: Cursor animation + node (child[2]) — SKIPPED in minimal render mode ──
+        if !minimal_render {
+            let now = Instant::now();
+            if let Some(ref anim) = self.cursor_animation {
+                if anim.is_finished(now) {
+                    self.cursor_visual_x = anim.target_x;
+                    self.cursor_visual_y = anim.target_y;
+                    self.cursor_animation = None;
+                    self.cursor_dirty = false;
+                } else {
+                    let (cx, cy) = anim.current_position(now);
+                    self.cursor_visual_x = cx;
+                    self.cursor_visual_y = cy;
+                    self.request_frame_update();
+                }
+            } else {
+                self.cursor_dirty = false;
+            }
 
-        if !final_root.is_null() && !item_ptr.is_null() {
-            scene_graph::update_cursor_rect(
-                final_root,
-                item_ptr,
-                self.cursor_visual_x,
-                self.cursor_visual_y,
-                2.0,
-                self.cursor_visual_h,
-                show_cursor,
-                cursor_color_rgba,
-            );
+            let is_selecting = self.buffer.has_selection();
+            let show_cursor = self.cursor_visible && !self.current_is_scrolling && !is_selecting;
+            let cursor_color_rgba = renderer::color_hex_to_rgba(&self.current_cursor_color);
+
+            if !final_root.is_null() && !item_ptr.is_null() {
+                scene_graph::update_cursor_rect(
+                    final_root,
+                    item_ptr,
+                    self.cursor_visual_x,
+                    self.cursor_visual_y,
+                    2.0,
+                    self.cursor_visual_h,
+                    show_cursor,
+                    cursor_color_rgba,
+                );
+            }
         }
 
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {
             eprintln!(
-                "sujian_update_paint_node: total_ms={}, overlay_active={}",
+                "sujian_update_paint_node: total_ms={}, minimal_render={}",
                 total_elapsed.as_millis(),
-                overlay_result.is_some(),
+                minimal_render,
             );
         }
 

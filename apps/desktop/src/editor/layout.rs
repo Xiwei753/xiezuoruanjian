@@ -386,20 +386,10 @@ pub type LayoutCache = LayoutSnapshot;
 #[derive(Default)]
 pub struct EditorLayout {
     cache: Option<LayoutSnapshot>,
-    text_revision: u64,
 }
 
 impl EditorLayout {
     pub fn invalidate(&mut self) {
-        self.cache = None;
-    }
-
-    /// Bump the text revision counter.  Must be called every time the text
-    /// content changes, regardless of whether the length changes.  This
-    /// ensures that same-length replacements (e.g. swapping one symbol for
-    /// another) correctly invalidate cached layout data.
-    pub fn bump_revision(&mut self) {
-        self.text_revision = self.text_revision.wrapping_add(1);
         self.cache = None;
     }
 
