@@ -703,3 +703,41 @@ fn test_no_mindmap_in_android正式代码() {
         }
     }
 }
+
+#[test]
+fn test_sujian_editor_item_no_request_repaint() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mod_rs = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
+    let rendering_rs = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
+
+    assert!(
+        !mod_rs.contains("fn request_repaint("),
+        "sujian_editor_item/mod.rs must not define fn request_repaint — use request_static_repaint or request_frame_update instead"
+    );
+
+    for (line_idx, line) in rendering_rs.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if trimmed.contains("request_frame_update") && trimmed.contains("render_dirty") && trimmed.contains("= true") {
+            panic!(
+                "rendering.rs:{}: request_frame_update path must not set render_dirty = true — animation frames must not invalidate the static texture",
+                line_idx + 1
+            );
+        }
+    }
+
+    for (line_idx, line) in mod_rs.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if trimmed.contains("request_frame_update") && trimmed.contains("render_dirty") && trimmed.contains("= true") {
+            panic!(
+                "sujian_editor_item/mod.rs:{}: request_frame_update path must not set render_dirty = true — animation frames must not invalidate the static texture",
+                line_idx + 1
+            );
+        }
+    }
+}

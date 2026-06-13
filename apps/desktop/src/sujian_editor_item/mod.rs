@@ -264,11 +264,6 @@ impl Default for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    fn request_repaint(&mut self) {
-        self.render_dirty = true;
-        let item = self as &dyn QQuickItem;
-        item.update();
-    }
 
     fn request_static_repaint(&mut self) {
         self.render_dirty = true;
@@ -360,7 +355,7 @@ impl SujianEditorItem {
         }
         self.current_editor_enabled = value;
         self.editor_enabled_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn font_pixel_size(&self) -> f32 {
@@ -531,7 +526,7 @@ impl SujianEditorItem {
         }
         self.current_scroll_y = value;
         self.force_snap_next_cursor = true;
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn viewport_height(&self) -> f32 {
@@ -543,7 +538,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_viewport_height = value;
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn is_scrolling(&self) -> bool {
@@ -560,13 +555,13 @@ impl SujianEditorItem {
             self.insert_animation = None;
             self.delete_animation = None;
             self.force_snap_next_cursor = true;
-            self.request_repaint();
+            self.request_static_repaint();
             return;
         }
         if !value {
             self.force_snap_next_cursor = true;
             self.update_cursor_visual_position();
-            self.request_repaint();
+            self.request_static_repaint();
         }
     }
 
@@ -599,7 +594,7 @@ impl SujianEditorItem {
         self.invalidate_layout_cache();
         self.recalculate_content_height_quiet();
         self.visual_settings_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn emit_content_changed(&mut self) {
@@ -609,7 +604,7 @@ impl SujianEditorItem {
         self.text_changed();
         self.cursor_position_changed();
         self.selection_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn flush_content_height(&mut self) {
@@ -775,7 +770,7 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         self.cursor_position_changed();
         self.selection_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn selected_text(&self) -> QString {
@@ -822,7 +817,7 @@ impl SujianEditorItem {
         self.cursor_position_changed();
         self.selection_changed();
         self.cursor_dirty = true;
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn drag_select_at(&mut self, x: f32, y: f32) {
@@ -832,7 +827,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, true);
         self.cursor_position_changed();
         self.selection_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn clipboard_copy(&self) -> bool {
@@ -893,7 +888,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(next, extend);
         self.cursor_position_changed();
         self.selection_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn move_cursor_vertical(&mut self, down: bool, extend: bool) {
@@ -917,7 +912,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn move_to_line_edge(&mut self, end: bool, extend: bool) {
@@ -936,7 +931,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn record_transaction(
@@ -1323,7 +1318,7 @@ impl EditorInputHost for SujianEditorItem {
     }
 
     fn input_request_repaint(&mut self) {
-        self.request_repaint();
+        self.request_static_repaint();
     }
 }
 
@@ -1340,7 +1335,7 @@ impl QQuickItem for SujianEditorItem {
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
         self.scroll_buffer = None;
         self.recalculate_content_height_quiet();
-        self.request_repaint();
+        self.request_static_repaint();
     }
 
     fn mouse_event(&mut self, event: QMouseEvent) -> bool {

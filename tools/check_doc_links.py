@@ -26,14 +26,14 @@ WHITELIST_FILENAMES = {
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
     'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
-    'sujian_editor_item.rs',
+
     'settings.json'
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
-    'apps/desktop/src/sujian_editor_item.rs'
+
 }
 
 WHITELIST_LINKS = set()
