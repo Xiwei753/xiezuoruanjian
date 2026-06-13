@@ -346,6 +346,43 @@ impl SujianEditorItem {
         }
     }
 
+    /// 判断当前 scroll buffer 是否可以复用。返回 None 表示可以复用，
+    /// 返回 Some(reason) 表示需要重新渲染及原因。
+    /// 使用早返回风格，避免多层嵌套 if/else。
+    pub(crate) fn scroll_buffer_miss_reason(
+        &self,
+        scroll_y: f64,
+        vp_h: f64,
+        content_h: f64,
+        dpr: f64,
+    ) -> Option<&'static str> {
+        let Some(buf) = self.scroll_buffer.as_ref() else {
+            return Some("no_buffer");
+        };
+
+        if self.editor_layout.cache().is_none() {
+            return Some("layout_invalidated");
+        }
+
+        if buf.text_revision != self.text_revision {
+            return Some("text_revision_changed");
+        }
+
+        if (content_h - buf.buffer_content_h).abs() > 1.0 {
+            return Some("content_changed");
+        }
+
+        if (dpr - buf.dpr).abs() > 0.01 {
+            return Some("dpr_changed");
+        }
+
+        if !buf.contains_viewport(scroll_y, vp_h) {
+            return Some("outside_buffer");
+        }
+
+        None
+    }
+
     pub(crate) fn render_to_image(&mut self) -> Option<(qmetaobject::QImage, f64, f64)> {
         let render_start = Instant::now();
         let item_ptr = self.get_cpp_object();
@@ -365,41 +402,14 @@ impl SujianEditorItem {
         let max_y = (scroll_y + vp_h + overscan).min(content_h.max(vp_h));
         let buffer_h = max_y - min_y;
 
-        let mut miss_reason = "none";
-        let mut needs_render = true;
+        let miss_reason = self.scroll_buffer_miss_reason(scroll_y, vp_h, content_h, dpr);
 
-        if self.scroll_buffer.is_none() {
-            miss_reason = "no_buffer";
-        } else if self.editor_layout.cache().is_none() {
-            miss_reason = "layout_invalidated";
-        } else {
-            let buf = self.scroll_buffer.as_ref().unwrap();
-            let revision_changed = buf.text_revision != self.text_revision;
-            if revision_changed {
-                miss_reason = "text_revision_changed";
-            } else {
-                let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
-                if content_changed {
-                    miss_reason = "content_changed";
-                } else {
-                    let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
-                    if dpr_changed {
-                        miss_reason = "dpr_changed";
-                    } else {
-                        let inside_buffer = buf.contains_viewport(scroll_y, vp_h);
-                        if !inside_buffer {
-                            miss_reason = "outside_buffer";
-                        } else {
-                            needs_render = false;
-                        }
-                }
-            }
-        }
-
-        if !needs_render {
+        if miss_reason.is_none() {
             self.render_dirty = false;
             return None;
         }
+
+        let miss_reason = miss_reason.unwrap();
 
         if sujian_editor_debug_enabled() {
             eprintln!(

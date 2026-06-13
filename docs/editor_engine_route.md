@@ -69,3 +69,37 @@ Supersedes: None
 - 不允许保存 HTML。
 - 不允许为了动画污染撤销栈、输入法 composition 或正文格式。
 - 不允许 Android 恢复 `ForegroundColorSpan(Color.TRANSPARENT)` 隐藏真实正文文字。
+
+## sujian_editor_item 安全改法约束
+
+以下约束针对 `apps/desktop/src/sujian_editor_item/` 下的高风险文件（rendering.rs、scene_graph.rs、mod.rs），防止 AI 或人类在修改时引入编译错误或逻辑回归。
+
+### 静态层与 overlay 分离
+
+- 静态层（`paint_onto`）永远完整绘制正文，是文本可见性的唯一权威来源。
+- 动画 overlay（`paint_animation_overlay`）只能叠加视觉效果，不能决定正文可见性。
+- overlay 的 glyph 位置计算错误，最坏情况是高亮条偏移，正文本身必须始终可见。
+
+### text_revision
+
+- 任何导致文本内容变化的操作必须 bump `text_revision`。
+- `scroll_buffer_miss_reason` 依赖 `text_revision` 判断是否需要重绘，漏 bump 会导致旧文本残留。
+
+### render/cache 逻辑改法
+
+- 修改 `render_to_image` / `update_paint_node` / `paint_onto` 等大函数时，**禁止继续堆嵌套 if/else**。
+- 必须拆 helper 函数，或使用早返回（early return）风格。
+- 嵌套深度不得超过 3 层。超过时必须重构为独立函数。
+- `scroll_buffer_miss_reason` 已作为示范：所有判断条件用早返回，最终只留 `None`。
+
+### Qt Scene Graph 操作
+
+- 禁止直接使用 `childAt(index)` 或 `insertChildNode(node, index)` 等 Qt 6.11 不存在的 API。
+- 只能通过 `scene_graph.rs` 中已定义的 helper 函数操作 QSGNode 子节点顺序。
+- scene graph 固定三层结构（child[0]=static, child[1]=overlay, child[2]=cursor）的注释描述了目标结构，但操作必须走 helper。
+
+### 提交前验证
+
+- 修改 `sujian_editor_item` 下任何文件后，必须运行 `cargo check -p sujian-desktop` 确认编译通过。
+- 如果本地缺少 Qt6 开发环境，必须在有 Qt6 的环境（CI 或其他机器）上验证后才能合并。
+- 任何涉及 `cpp!` 宏的修改，必须同时检查 Rust 侧和 C++ 侧的类型匹配。
