@@ -33,7 +33,6 @@ import java.util.concurrent.ConcurrentHashMap
 import android.os.Build
 import androidx.annotation.RequiresApi
 import java.util.concurrent.atomic.AtomicBoolean
-import android.util.Log
 
 // This is a helper for safely working with byte buffers returned from the Rust code.
 // A rust-owned buffer is represented by its capacity, its current length, and a
@@ -378,7 +377,7 @@ private fun findLibraryName(componentName: String): String {
     if (libOverride != null) {
         return libOverride
     }
-    return "uniffi_writer_core"
+    return "writer_core"
 }
 
 private inline fun <reified Lib : Library> loadIndirect(
@@ -861,54 +860,6 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -946,52 +897,36 @@ internal interface UniffiLib : Library {
     ): Int
     fun uniffi_writer_core_fn_method_writerappservice_clear_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_clear_chapter_content_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_compute_starmap_edge_renders(`ptr`: Pointer,`graph`: RustBuffer.ByValue,`layout`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_chapter_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_chapter_in_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_project(`ptr`: Pointer,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_project_envelope_json(`ptr`: Pointer,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_starmap(`ptr`: Pointer,`title`: RustBuffer.ByValue,`desc`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_create_volume_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_create_workspace_if_needed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_delete_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_chapter_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_delete_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_project_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_delete_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_delete_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_delete_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_delete_volume_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_execute_action(`ptr`: Pointer,`actionId`: RustBuffer.ByValue,`argsJson`: RustBuffer.ByValue,`contextJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_find_starmap_references(`ptr`: Pointer,`targetStarmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_project_stats(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_get_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1038,13 +973,7 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_perform_sync_diagnostics(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_diagnostics_envelope_json(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run_envelope_json(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_perform_sync_envelope_json(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_process_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`oldText`: RustBuffer.ByValue,`newText`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1054,37 +983,19 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_rename_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_rename_chapter_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_rename_project(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_rename_project_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_rename_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_rename_volume_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_reorder_chapters(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`orderedChapterIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_reorder_chapters_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`orderedChapterIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_reorder_projects(`ptr`: Pointer,`orderedProjectIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_reorder_projects_envelope_json(`ptr`: Pointer,`orderedProjectIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_save_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_save_chapter_content_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_save_local_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_local_settings_envelope_json(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`graph`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_starmap_layout(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`layout`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1092,20 +1003,12 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_save_sync_config(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_sync_config_envelope_json(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_save_sync_secrets(`ptr`: Pointer,`secrets`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_sync_secrets_envelope_json(`ptr`: Pointer,`secrets`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_save_syncable_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_save_syncable_settings_envelope_json(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_update_chapter_note(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`note`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_update_chapter_note_envelope_json(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`note`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_update_starmap_embed(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`patch`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_update_starmap_link(`ptr`: Pointer,`starmapId`: RustBuffer.ByValue,`linkId`: RustBuffer.ByValue,`patch`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1260,35 +1163,23 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_compute_starmap_edge_renders(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_chapter(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_create_chapter_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_chapter_in_project(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_project(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_create_project_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_starmap(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_volume(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_create_volume_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_create_workspace_if_needed(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_chapter(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_delete_chapter_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_project(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_delete_project_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_starmap_embed(
     ): Short
@@ -1296,15 +1187,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_volume(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_delete_volume_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_execute_action(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_find_starmap_references(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_project_stats(
     ): Short
@@ -1352,13 +1239,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_perform_sync_diagnostics(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_perform_sync_diagnostics_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run_envelope_json(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_perform_sync_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_process_writing_event(
     ): Short
@@ -1368,37 +1249,19 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_rename_chapter(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_rename_chapter_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_rename_project(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_rename_project_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_rename_volume(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_rename_volume_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_reorder_chapters(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_reorder_chapters_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_reorder_projects(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_reorder_projects_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_reorder_volumes(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_reorder_volumes_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_chapter_content(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_chapter_content_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings_envelope_json(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout(
     ): Short
@@ -1406,19 +1269,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_sync_config(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_sync_config_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_sync_secrets(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_sync_secrets_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings(
     ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings_envelope_json(
-    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_update_chapter_note(
-    ): Short
-    fun uniffi_writer_core_checksum_method_writerappservice_update_chapter_note_envelope_json(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed(
     ): Short
@@ -1481,16 +1336,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content() != 36280.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_clear_chapter_content_envelope_json() != 42343.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_compute_starmap_edge_renders() != 63065.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_chapter() != 27761.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_chapter_envelope_json() != 7545.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_chapter_in_project() != 14307.toShort()) {
@@ -1499,16 +1348,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_project() != 52962.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_project_envelope_json() != 39227.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_starmap() != 16698.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_volume() != 57493.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_create_volume_envelope_json() != 26554.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_create_workspace_if_needed() != 34073.toShort()) {
@@ -1517,13 +1360,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_chapter() != 39585.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_chapter_envelope_json() != 5304.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_project() != 13182.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_project_envelope_json() != 49462.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_starmap_embed() != 24452.toShort()) {
@@ -1535,9 +1372,6 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume() != 5254.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume_envelope_json() != 41907.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_execute_action() != 64822.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1545,9 +1379,6 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats() != 56971.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_get_mindmap_snapshot() != 28930.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_get_project_stats() != 19600.toShort()) {
@@ -1619,16 +1450,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_diagnostics() != 3447.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_diagnostics_envelope_json() != 59613.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run() != 3610.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run_envelope_json() != 53640.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_envelope_json() != 51203.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_process_writing_event() != 21664.toShort()) {
@@ -1643,52 +1465,25 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_chapter() != 2312.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_chapter_envelope_json() != 37845.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_project() != 65428.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_project_envelope_json() != 60818.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_volume() != 64258.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_volume_envelope_json() != 45491.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_chapters() != 30010.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_chapters_envelope_json() != 15215.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_projects() != 46469.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_projects_envelope_json() != 54817.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_volumes() != 7484.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_volumes_envelope_json() != 62601.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_chapter_content() != 9144.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_chapter_content_envelope_json() != 52497.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_local_settings() != 60350.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_local_settings_envelope_json() != 37495.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_mindmap_graph() != 39673.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_starmap_layout() != 21329.toShort()) {
@@ -1700,25 +1495,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_config() != 43143.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_config_envelope_json() != 47262.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_secrets() != 50294.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_sync_secrets_envelope_json() != 22070.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings() != 28364.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_save_syncable_settings_envelope_json() != 31155.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_update_chapter_note() != 23190.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_update_chapter_note_envelope_json() != 19911.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_update_starmap_embed() != 10898.toShort()) {
@@ -2197,35 +1980,23 @@ public interface WriterAppServiceInterface {
     
     fun `clearChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): ChapterSaveReceiptDto
     
-    fun `clearChapterContentEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.String
-    
     fun `computeStarmapEdgeRenders`(`graph`: StarMapGraphDto, `layout`: StarMapLayoutDto): List<StarMapEdgeRenderDto>
     
     fun `createChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): ChapterMetaDto
-    
-    fun `createChapterEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): kotlin.String
     
     fun `createChapterInProject`(`projectId`: kotlin.String, `title`: kotlin.String): ChapterMetaDto
     
     fun `createProject`(`title`: kotlin.String): ProjectDto
     
-    fun `createProjectEnvelopeJson`(`title`: kotlin.String): kotlin.String
-    
     fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): StarMapMetaDto
     
     fun `createVolume`(`projectId`: kotlin.String, `title`: kotlin.String): VolumeDto
-    
-    fun `createVolumeEnvelopeJson`(`projectId`: kotlin.String, `title`: kotlin.String): kotlin.String
     
     fun `createWorkspaceIfNeeded`(): kotlin.Boolean
     
     fun `deleteChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean
     
-    fun `deleteChapterEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.String
-    
     fun `deleteProject`(`projectId`: kotlin.String): kotlin.Boolean
-    
-    fun `deleteProjectEnvelopeJson`(`projectId`: kotlin.String): kotlin.String
     
     fun `deleteStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String): kotlin.Boolean
     
@@ -2233,15 +2004,11 @@ public interface WriterAppServiceInterface {
     
     fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean
     
-    fun `deleteVolumeEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.String
-    
     fun `executeAction`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): ActionResultDto
     
     fun `findStarmapReferences`(`targetStarmapId`: kotlin.String): List<StarMapReferenceDto>
     
     fun `flushWritingStats`(): kotlin.Boolean
-    
-    fun `getMindmapSnapshot`(`projectId`: kotlin.String): MindMapSnapshotDto
     
     fun `getProjectStats`(`projectId`: kotlin.String): ProjectStatsDto
     
@@ -2289,13 +2056,7 @@ public interface WriterAppServiceInterface {
     
     fun `performSyncDiagnostics`(`config`: SyncConfigDto): SyncDiagnosticsResultDto
     
-    fun `performSyncDiagnosticsEnvelopeJson`(`config`: SyncConfigDto): kotlin.String
-    
     fun `performSyncDryRun`(`config`: SyncConfigDto): SyncPlanDto
-    
-    fun `performSyncDryRunEnvelopeJson`(`config`: SyncConfigDto): kotlin.String
-    
-    fun `performSyncEnvelopeJson`(`config`: SyncConfigDto): kotlin.String
     
     fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean
     
@@ -2305,37 +2066,19 @@ public interface WriterAppServiceInterface {
     
     fun `renameChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
     
-    fun `renameChapterEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.String
-    
     fun `renameProject`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
-    
-    fun `renameProjectEnvelopeJson`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.String
     
     fun `renameVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
     
-    fun `renameVolumeEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `newTitle`: kotlin.String): kotlin.String
-    
     fun `reorderChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.Boolean
-    
-    fun `reorderChaptersEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.String
     
     fun `reorderProjects`(`orderedProjectIds`: List<kotlin.String>): kotlin.Boolean
     
-    fun `reorderProjectsEnvelopeJson`(`orderedProjectIds`: List<kotlin.String>): kotlin.String
-    
     fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean
-    
-    fun `reorderVolumesEnvelopeJson`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.String
     
     fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto
     
-    fun `saveChapterContentEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): kotlin.String
-    
     fun `saveLocalSettings`(`settings`: LocalSettingsDto): kotlin.Boolean
-    
-    fun `saveLocalSettingsEnvelopeJson`(`settings`: LocalSettingsDto): kotlin.String
-    
-    fun `saveMindmapGraph`(`projectId`: kotlin.String, `graph`: MindMapGraphDto): kotlin.Boolean
     
     fun `saveStarmapLayout`(`starmapId`: kotlin.String, `layout`: StarMapLayoutDto): kotlin.Boolean
     
@@ -2343,19 +2086,11 @@ public interface WriterAppServiceInterface {
     
     fun `saveSyncConfig`(`config`: SyncConfigDto): kotlin.Boolean
     
-    fun `saveSyncConfigEnvelopeJson`(`config`: SyncConfigDto): kotlin.String
-    
     fun `saveSyncSecrets`(`secrets`: SyncSecretsDto): kotlin.Boolean
-    
-    fun `saveSyncSecretsEnvelopeJson`(`secrets`: SyncSecretsDto): kotlin.String
     
     fun `saveSyncableSettings`(`settings`: SyncableSettingsDto): kotlin.Boolean
     
-    fun `saveSyncableSettingsEnvelopeJson`(`settings`: SyncableSettingsDto): kotlin.String
-    
     fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean
-    
-    fun `updateChapterNoteEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.String
     
     fun `updateStarmapEmbed`(`starmapId`: kotlin.String, `instanceId`: kotlin.String, `patch`: StarMapEmbedPatchInputDto): StarMapEmbedDto
     
@@ -2399,13 +2134,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
 
     override fun destroy() {
         // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
                 cleanable.clean()
             }
-        } else {
-            Log.w("UniFFI", "destroy() called more than once")
         }
     }
 
@@ -2531,18 +2265,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `clearChapterContentEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_clear_chapter_content_envelope_json(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `computeStarmapEdgeRenders`(`graph`: StarMapGraphDto, `layout`: StarMapLayoutDto): List<StarMapEdgeRenderDto> {
             return FfiConverterSequenceTypeStarMapEdgeRenderDto.lift(
@@ -2562,18 +2284,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_chapter(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`title`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `createChapterEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `title`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_chapter_envelope_json(
         it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`title`),_status)
 }
     }
@@ -2607,18 +2317,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `createProjectEnvelopeJson`(`title`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_project_envelope_json(
-        it, FfiConverterString.lower(`title`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `createStarmap`(`title`: kotlin.String, `desc`: kotlin.String): StarMapMetaDto {
             return FfiConverterTypeStarMapMetaDto.lift(
@@ -2638,18 +2336,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_volume(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`title`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `createVolumeEnvelopeJson`(`projectId`: kotlin.String, `title`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_create_volume_envelope_json(
         it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`title`),_status)
 }
     }
@@ -2683,36 +2369,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `deleteChapterEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_delete_chapter_envelope_json(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `deleteProject`(`projectId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_delete_project(
-        it, FfiConverterString.lower(`projectId`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `deleteProjectEnvelopeJson`(`projectId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_delete_project_envelope_json(
         it, FfiConverterString.lower(`projectId`),_status)
 }
     }
@@ -2759,18 +2421,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `deleteVolumeEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_delete_volume_envelope_json(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `executeAction`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): ActionResultDto {
             return FfiConverterTypeActionResultDto.lift(
@@ -2804,19 +2454,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(
         it, _status)
-}
-    }
-    )
-    }
-    
-
-    
-    @Throws(WriterException::class)override fun `getMindmapSnapshot`(`projectId`: kotlin.String): MindMapSnapshotDto {
-            return FfiConverterTypeMindMapSnapshotDto.lift(
-    callWithPointer {
-    uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_get_mindmap_snapshot(
-        it, FfiConverterString.lower(`projectId`),_status)
 }
     }
     )
@@ -3122,48 +2759,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `performSyncDiagnosticsEnvelopeJson`(`config`: SyncConfigDto): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_perform_sync_diagnostics_envelope_json(
-        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `performSyncDryRun`(`config`: SyncConfigDto): SyncPlanDto {
             return FfiConverterTypeSyncPlanDto.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run(
-        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `performSyncDryRunEnvelopeJson`(`config`: SyncConfigDto): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run_envelope_json(
-        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `performSyncEnvelopeJson`(`config`: SyncConfigDto): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_perform_sync_envelope_json(
         it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
 }
     }
@@ -3223,36 +2824,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `renameChapterEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_rename_chapter_envelope_json(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`newTitle`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `renameProject`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_rename_project(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`newTitle`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `renameProjectEnvelopeJson`(`projectId`: kotlin.String, `newTitle`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_rename_project_envelope_json(
         it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`newTitle`),_status)
 }
     }
@@ -3273,36 +2850,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `renameVolumeEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `newTitle`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_rename_volume_envelope_json(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`newTitle`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `reorderChapters`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_chapters(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterSequenceString.lower(`orderedChapterIds`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `reorderChaptersEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `orderedChapterIds`: List<kotlin.String>): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_chapters_envelope_json(
         it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterSequenceString.lower(`orderedChapterIds`),_status)
 }
     }
@@ -3323,36 +2876,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `reorderProjectsEnvelopeJson`(`orderedProjectIds`: List<kotlin.String>): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_projects_envelope_json(
-        it, FfiConverterSequenceString.lower(`orderedProjectIds`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_volumes(
-        it, FfiConverterString.lower(`projectId`),FfiConverterSequenceString.lower(`orderedVolumeIds`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `reorderVolumesEnvelopeJson`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_volumes_envelope_json(
         it, FfiConverterString.lower(`projectId`),FfiConverterSequenceString.lower(`orderedVolumeIds`),_status)
 }
     }
@@ -3373,18 +2902,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `saveChapterContentEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_chapter_content_envelope_json(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`content`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `saveLocalSettings`(`settings`: LocalSettingsDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
@@ -3392,31 +2909,6 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_local_settings(
         it, FfiConverterTypeLocalSettingsDto.lower(`settings`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `saveLocalSettingsEnvelopeJson`(`settings`: LocalSettingsDto): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_local_settings_envelope_json(
-        it, FfiConverterTypeLocalSettingsDto.lower(`settings`),_status)
-}
-    }
-    )
-    }
-    
-
-    
-    @Throws(WriterException::class)override fun `saveMindmapGraph`(`projectId`: kotlin.String, `graph`: MindMapGraphDto): kotlin.Boolean {
-            return FfiConverterBoolean.lift(
-    callWithPointer {
-    uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_mindmap_graph(
-        it, FfiConverterString.lower(`projectId`),FfiConverterTypeMindMapGraphDto.lower(`graph`),_status)
 }
     }
     )
@@ -3462,36 +2954,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `saveSyncConfigEnvelopeJson`(`config`: SyncConfigDto): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_sync_config_envelope_json(
-        it, FfiConverterTypeSyncConfigDto.lower(`config`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `saveSyncSecrets`(`secrets`: SyncSecretsDto): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_sync_secrets(
-        it, FfiConverterTypeSyncSecretsDto.lower(`secrets`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `saveSyncSecretsEnvelopeJson`(`secrets`: SyncSecretsDto): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_sync_secrets_envelope_json(
         it, FfiConverterTypeSyncSecretsDto.lower(`secrets`),_status)
 }
     }
@@ -3512,36 +2980,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
-    override fun `saveSyncableSettingsEnvelopeJson`(`settings`: SyncableSettingsDto): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_save_syncable_settings_envelope_json(
-        it, FfiConverterTypeSyncableSettingsDto.lower(`settings`),_status)
-}
-    }
-    )
-    }
-    
-
     
     @Throws(WriterException::class)override fun `updateChapterNote`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_chapter_note(
-        it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`note`),_status)
-}
-    }
-    )
-    }
-    
-
-    override fun `updateChapterNoteEnvelopeJson`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `note`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    callWithPointer {
-    uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_update_chapter_note_envelope_json(
         it, FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`note`),_status)
 }
     }
@@ -4241,658 +3685,6 @@ public object FfiConverterTypeLocalSettingsDto: FfiConverterRustBuffer<LocalSett
             FfiConverterOptionalString.write(value.`statsDeviceId`, buf)
             FfiConverterDouble.write(value.`desktopSidebarWidth`, buf)
             FfiConverterDouble.write(value.`desktopEditorWidth`, buf)
-    }
-}
-
-
-
-data class MindMapAnchorDto (
-    var `id`: kotlin.String, 
-    var `projectId`: kotlin.String, 
-    var `chapterId`: kotlin.String, 
-    var `startOffset`: kotlin.UInt, 
-    var `endOffset`: kotlin.UInt, 
-    var `selectedText`: kotlin.String, 
-    var `prefixText`: kotlin.String, 
-    var `suffixText`: kotlin.String, 
-    var `checksum`: kotlin.String, 
-    var `createdAt`: kotlin.ULong, 
-    var `updatedAt`: kotlin.ULong
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapAnchorDto: FfiConverterRustBuffer<MindMapAnchorDto> {
-    override fun read(buf: ByteBuffer): MindMapAnchorDto {
-        return MindMapAnchorDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterUInt.read(buf),
-            FfiConverterUInt.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterULong.read(buf),
-            FfiConverterULong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapAnchorDto) = (
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`projectId`) +
-            FfiConverterString.allocationSize(value.`chapterId`) +
-            FfiConverterUInt.allocationSize(value.`startOffset`) +
-            FfiConverterUInt.allocationSize(value.`endOffset`) +
-            FfiConverterString.allocationSize(value.`selectedText`) +
-            FfiConverterString.allocationSize(value.`prefixText`) +
-            FfiConverterString.allocationSize(value.`suffixText`) +
-            FfiConverterString.allocationSize(value.`checksum`) +
-            FfiConverterULong.allocationSize(value.`createdAt`) +
-            FfiConverterULong.allocationSize(value.`updatedAt`)
-    )
-
-    override fun write(value: MindMapAnchorDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`projectId`, buf)
-            FfiConverterString.write(value.`chapterId`, buf)
-            FfiConverterUInt.write(value.`startOffset`, buf)
-            FfiConverterUInt.write(value.`endOffset`, buf)
-            FfiConverterString.write(value.`selectedText`, buf)
-            FfiConverterString.write(value.`prefixText`, buf)
-            FfiConverterString.write(value.`suffixText`, buf)
-            FfiConverterString.write(value.`checksum`, buf)
-            FfiConverterULong.write(value.`createdAt`, buf)
-            FfiConverterULong.write(value.`updatedAt`, buf)
-    }
-}
-
-
-
-data class MindMapBoundsDto (
-    var `minX`: kotlin.Float, 
-    var `minY`: kotlin.Float, 
-    var `maxX`: kotlin.Float, 
-    var `maxY`: kotlin.Float
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapBoundsDto: FfiConverterRustBuffer<MindMapBoundsDto> {
-    override fun read(buf: ByteBuffer): MindMapBoundsDto {
-        return MindMapBoundsDto(
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapBoundsDto) = (
-            FfiConverterFloat.allocationSize(value.`minX`) +
-            FfiConverterFloat.allocationSize(value.`minY`) +
-            FfiConverterFloat.allocationSize(value.`maxX`) +
-            FfiConverterFloat.allocationSize(value.`maxY`)
-    )
-
-    override fun write(value: MindMapBoundsDto, buf: ByteBuffer) {
-            FfiConverterFloat.write(value.`minX`, buf)
-            FfiConverterFloat.write(value.`minY`, buf)
-            FfiConverterFloat.write(value.`maxX`, buf)
-            FfiConverterFloat.write(value.`maxY`, buf)
-    }
-}
-
-
-
-data class MindMapGraphDto (
-    var `schemaVersion`: kotlin.UInt, 
-    var `id`: kotlin.String, 
-    var `projectId`: kotlin.String, 
-    var `title`: kotlin.String, 
-    var `nodes`: List<MindMapGraphNodeDto>, 
-    var `edges`: List<MindMapGraphEdgeDto>, 
-    var `anchors`: List<MindMapAnchorDto>, 
-    var `links`: List<MindMapLinkDto>, 
-    var `createdAt`: kotlin.ULong, 
-    var `updatedAt`: kotlin.ULong
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapGraphDto: FfiConverterRustBuffer<MindMapGraphDto> {
-    override fun read(buf: ByteBuffer): MindMapGraphDto {
-        return MindMapGraphDto(
-            FfiConverterUInt.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterSequenceTypeMindMapGraphNodeDto.read(buf),
-            FfiConverterSequenceTypeMindMapGraphEdgeDto.read(buf),
-            FfiConverterSequenceTypeMindMapAnchorDto.read(buf),
-            FfiConverterSequenceTypeMindMapLinkDto.read(buf),
-            FfiConverterULong.read(buf),
-            FfiConverterULong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapGraphDto) = (
-            FfiConverterUInt.allocationSize(value.`schemaVersion`) +
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`projectId`) +
-            FfiConverterString.allocationSize(value.`title`) +
-            FfiConverterSequenceTypeMindMapGraphNodeDto.allocationSize(value.`nodes`) +
-            FfiConverterSequenceTypeMindMapGraphEdgeDto.allocationSize(value.`edges`) +
-            FfiConverterSequenceTypeMindMapAnchorDto.allocationSize(value.`anchors`) +
-            FfiConverterSequenceTypeMindMapLinkDto.allocationSize(value.`links`) +
-            FfiConverterULong.allocationSize(value.`createdAt`) +
-            FfiConverterULong.allocationSize(value.`updatedAt`)
-    )
-
-    override fun write(value: MindMapGraphDto, buf: ByteBuffer) {
-            FfiConverterUInt.write(value.`schemaVersion`, buf)
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`projectId`, buf)
-            FfiConverterString.write(value.`title`, buf)
-            FfiConverterSequenceTypeMindMapGraphNodeDto.write(value.`nodes`, buf)
-            FfiConverterSequenceTypeMindMapGraphEdgeDto.write(value.`edges`, buf)
-            FfiConverterSequenceTypeMindMapAnchorDto.write(value.`anchors`, buf)
-            FfiConverterSequenceTypeMindMapLinkDto.write(value.`links`, buf)
-            FfiConverterULong.write(value.`createdAt`, buf)
-            FfiConverterULong.write(value.`updatedAt`, buf)
-    }
-}
-
-
-
-data class MindMapGraphEdgeDto (
-    var `id`: kotlin.String, 
-    var `from`: kotlin.String, 
-    var `to`: kotlin.String, 
-    var `kind`: MindMapEdgeKindDto, 
-    var `label`: kotlin.String?, 
-    var `payload`: kotlin.String?, 
-    var `createdAt`: kotlin.ULong, 
-    var `updatedAt`: kotlin.ULong
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapGraphEdgeDto: FfiConverterRustBuffer<MindMapGraphEdgeDto> {
-    override fun read(buf: ByteBuffer): MindMapGraphEdgeDto {
-        return MindMapGraphEdgeDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterTypeMindMapEdgeKindDto.read(buf),
-            FfiConverterOptionalString.read(buf),
-            FfiConverterOptionalString.read(buf),
-            FfiConverterULong.read(buf),
-            FfiConverterULong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapGraphEdgeDto) = (
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`from`) +
-            FfiConverterString.allocationSize(value.`to`) +
-            FfiConverterTypeMindMapEdgeKindDto.allocationSize(value.`kind`) +
-            FfiConverterOptionalString.allocationSize(value.`label`) +
-            FfiConverterOptionalString.allocationSize(value.`payload`) +
-            FfiConverterULong.allocationSize(value.`createdAt`) +
-            FfiConverterULong.allocationSize(value.`updatedAt`)
-    )
-
-    override fun write(value: MindMapGraphEdgeDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`from`, buf)
-            FfiConverterString.write(value.`to`, buf)
-            FfiConverterTypeMindMapEdgeKindDto.write(value.`kind`, buf)
-            FfiConverterOptionalString.write(value.`label`, buf)
-            FfiConverterOptionalString.write(value.`payload`, buf)
-            FfiConverterULong.write(value.`createdAt`, buf)
-            FfiConverterULong.write(value.`updatedAt`, buf)
-    }
-}
-
-
-
-data class MindMapGraphMetadataDto (
-    var `id`: kotlin.String, 
-    var `title`: kotlin.String, 
-    var `createdAt`: kotlin.ULong, 
-    var `updatedAt`: kotlin.ULong
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapGraphMetadataDto: FfiConverterRustBuffer<MindMapGraphMetadataDto> {
-    override fun read(buf: ByteBuffer): MindMapGraphMetadataDto {
-        return MindMapGraphMetadataDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterULong.read(buf),
-            FfiConverterULong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapGraphMetadataDto) = (
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`title`) +
-            FfiConverterULong.allocationSize(value.`createdAt`) +
-            FfiConverterULong.allocationSize(value.`updatedAt`)
-    )
-
-    override fun write(value: MindMapGraphMetadataDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`title`, buf)
-            FfiConverterULong.write(value.`createdAt`, buf)
-            FfiConverterULong.write(value.`updatedAt`, buf)
-    }
-}
-
-
-
-data class MindMapGraphNodeDto (
-    var `id`: kotlin.String, 
-    var `title`: kotlin.String, 
-    var `kind`: MindMapNodeKindDto, 
-    var `payload`: kotlin.String?, 
-    var `tags`: List<kotlin.String>, 
-    var `createdAt`: kotlin.ULong, 
-    var `updatedAt`: kotlin.ULong
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapGraphNodeDto: FfiConverterRustBuffer<MindMapGraphNodeDto> {
-    override fun read(buf: ByteBuffer): MindMapGraphNodeDto {
-        return MindMapGraphNodeDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterTypeMindMapNodeKindDto.read(buf),
-            FfiConverterOptionalString.read(buf),
-            FfiConverterSequenceString.read(buf),
-            FfiConverterULong.read(buf),
-            FfiConverterULong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapGraphNodeDto) = (
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`title`) +
-            FfiConverterTypeMindMapNodeKindDto.allocationSize(value.`kind`) +
-            FfiConverterOptionalString.allocationSize(value.`payload`) +
-            FfiConverterSequenceString.allocationSize(value.`tags`) +
-            FfiConverterULong.allocationSize(value.`createdAt`) +
-            FfiConverterULong.allocationSize(value.`updatedAt`)
-    )
-
-    override fun write(value: MindMapGraphNodeDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`title`, buf)
-            FfiConverterTypeMindMapNodeKindDto.write(value.`kind`, buf)
-            FfiConverterOptionalString.write(value.`payload`, buf)
-            FfiConverterSequenceString.write(value.`tags`, buf)
-            FfiConverterULong.write(value.`createdAt`, buf)
-            FfiConverterULong.write(value.`updatedAt`, buf)
-    }
-}
-
-
-
-data class MindMapGraphsListDto (
-    var `defaultGraphId`: kotlin.String?, 
-    var `graphs`: List<MindMapGraphMetadataDto>
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapGraphsListDto: FfiConverterRustBuffer<MindMapGraphsListDto> {
-    override fun read(buf: ByteBuffer): MindMapGraphsListDto {
-        return MindMapGraphsListDto(
-            FfiConverterOptionalString.read(buf),
-            FfiConverterSequenceTypeMindMapGraphMetadataDto.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapGraphsListDto) = (
-            FfiConverterOptionalString.allocationSize(value.`defaultGraphId`) +
-            FfiConverterSequenceTypeMindMapGraphMetadataDto.allocationSize(value.`graphs`)
-    )
-
-    override fun write(value: MindMapGraphsListDto, buf: ByteBuffer) {
-            FfiConverterOptionalString.write(value.`defaultGraphId`, buf)
-            FfiConverterSequenceTypeMindMapGraphMetadataDto.write(value.`graphs`, buf)
-    }
-}
-
-
-
-data class MindMapLayoutDto (
-    var `kind`: MindMapLayoutKindDto, 
-    var `nodes`: List<MindMapLayoutNodeDto>
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapLayoutDto: FfiConverterRustBuffer<MindMapLayoutDto> {
-    override fun read(buf: ByteBuffer): MindMapLayoutDto {
-        return MindMapLayoutDto(
-            FfiConverterTypeMindMapLayoutKindDto.read(buf),
-            FfiConverterSequenceTypeMindMapLayoutNodeDto.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapLayoutDto) = (
-            FfiConverterTypeMindMapLayoutKindDto.allocationSize(value.`kind`) +
-            FfiConverterSequenceTypeMindMapLayoutNodeDto.allocationSize(value.`nodes`)
-    )
-
-    override fun write(value: MindMapLayoutDto, buf: ByteBuffer) {
-            FfiConverterTypeMindMapLayoutKindDto.write(value.`kind`, buf)
-            FfiConverterSequenceTypeMindMapLayoutNodeDto.write(value.`nodes`, buf)
-    }
-}
-
-
-
-data class MindMapLayoutNodeDto (
-    var `nodeId`: kotlin.String, 
-    var `x`: kotlin.Float, 
-    var `y`: kotlin.Float, 
-    var `width`: kotlin.Float, 
-    var `height`: kotlin.Float, 
-    var `radius`: kotlin.Float, 
-    var `collapsed`: kotlin.Boolean, 
-    var `zIndex`: kotlin.Int
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapLayoutNodeDto: FfiConverterRustBuffer<MindMapLayoutNodeDto> {
-    override fun read(buf: ByteBuffer): MindMapLayoutNodeDto {
-        return MindMapLayoutNodeDto(
-            FfiConverterString.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterInt.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapLayoutNodeDto) = (
-            FfiConverterString.allocationSize(value.`nodeId`) +
-            FfiConverterFloat.allocationSize(value.`x`) +
-            FfiConverterFloat.allocationSize(value.`y`) +
-            FfiConverterFloat.allocationSize(value.`width`) +
-            FfiConverterFloat.allocationSize(value.`height`) +
-            FfiConverterFloat.allocationSize(value.`radius`) +
-            FfiConverterBoolean.allocationSize(value.`collapsed`) +
-            FfiConverterInt.allocationSize(value.`zIndex`)
-    )
-
-    override fun write(value: MindMapLayoutNodeDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`nodeId`, buf)
-            FfiConverterFloat.write(value.`x`, buf)
-            FfiConverterFloat.write(value.`y`, buf)
-            FfiConverterFloat.write(value.`width`, buf)
-            FfiConverterFloat.write(value.`height`, buf)
-            FfiConverterFloat.write(value.`radius`, buf)
-            FfiConverterBoolean.write(value.`collapsed`, buf)
-            FfiConverterInt.write(value.`zIndex`, buf)
-    }
-}
-
-
-
-data class MindMapLinkDto (
-    var `id`: kotlin.String, 
-    var `nodeId`: kotlin.String, 
-    var `anchorId`: kotlin.String, 
-    var `kind`: kotlin.String, 
-    var `createdAt`: kotlin.ULong, 
-    var `updatedAt`: kotlin.ULong
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapLinkDto: FfiConverterRustBuffer<MindMapLinkDto> {
-    override fun read(buf: ByteBuffer): MindMapLinkDto {
-        return MindMapLinkDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterULong.read(buf),
-            FfiConverterULong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapLinkDto) = (
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`nodeId`) +
-            FfiConverterString.allocationSize(value.`anchorId`) +
-            FfiConverterString.allocationSize(value.`kind`) +
-            FfiConverterULong.allocationSize(value.`createdAt`) +
-            FfiConverterULong.allocationSize(value.`updatedAt`)
-    )
-
-    override fun write(value: MindMapLinkDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`nodeId`, buf)
-            FfiConverterString.write(value.`anchorId`, buf)
-            FfiConverterString.write(value.`kind`, buf)
-            FfiConverterULong.write(value.`createdAt`, buf)
-            FfiConverterULong.write(value.`updatedAt`, buf)
-    }
-}
-
-
-
-data class MindMapSnapshotDto (
-    var `projectId`: kotlin.String, 
-    var `layoutKind`: kotlin.String, 
-    var `nodes`: List<MindMapSnapshotNodeDto>, 
-    var `edges`: List<MindMapSnapshotEdgeDto>, 
-    var `bounds`: MindMapBoundsDto, 
-    var `generatedAt`: kotlin.ULong
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapSnapshotDto: FfiConverterRustBuffer<MindMapSnapshotDto> {
-    override fun read(buf: ByteBuffer): MindMapSnapshotDto {
-        return MindMapSnapshotDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterSequenceTypeMindMapSnapshotNodeDto.read(buf),
-            FfiConverterSequenceTypeMindMapSnapshotEdgeDto.read(buf),
-            FfiConverterTypeMindMapBoundsDto.read(buf),
-            FfiConverterULong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapSnapshotDto) = (
-            FfiConverterString.allocationSize(value.`projectId`) +
-            FfiConverterString.allocationSize(value.`layoutKind`) +
-            FfiConverterSequenceTypeMindMapSnapshotNodeDto.allocationSize(value.`nodes`) +
-            FfiConverterSequenceTypeMindMapSnapshotEdgeDto.allocationSize(value.`edges`) +
-            FfiConverterTypeMindMapBoundsDto.allocationSize(value.`bounds`) +
-            FfiConverterULong.allocationSize(value.`generatedAt`)
-    )
-
-    override fun write(value: MindMapSnapshotDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`projectId`, buf)
-            FfiConverterString.write(value.`layoutKind`, buf)
-            FfiConverterSequenceTypeMindMapSnapshotNodeDto.write(value.`nodes`, buf)
-            FfiConverterSequenceTypeMindMapSnapshotEdgeDto.write(value.`edges`, buf)
-            FfiConverterTypeMindMapBoundsDto.write(value.`bounds`, buf)
-            FfiConverterULong.write(value.`generatedAt`, buf)
-    }
-}
-
-
-
-data class MindMapSnapshotEdgeDto (
-    var `id`: kotlin.String, 
-    var `from`: kotlin.String, 
-    var `to`: kotlin.String, 
-    var `kind`: kotlin.String, 
-    var `label`: kotlin.String?
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapSnapshotEdgeDto: FfiConverterRustBuffer<MindMapSnapshotEdgeDto> {
-    override fun read(buf: ByteBuffer): MindMapSnapshotEdgeDto {
-        return MindMapSnapshotEdgeDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterOptionalString.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapSnapshotEdgeDto) = (
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`from`) +
-            FfiConverterString.allocationSize(value.`to`) +
-            FfiConverterString.allocationSize(value.`kind`) +
-            FfiConverterOptionalString.allocationSize(value.`label`)
-    )
-
-    override fun write(value: MindMapSnapshotEdgeDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`from`, buf)
-            FfiConverterString.write(value.`to`, buf)
-            FfiConverterString.write(value.`kind`, buf)
-            FfiConverterOptionalString.write(value.`label`, buf)
-    }
-}
-
-
-
-data class MindMapSnapshotNodeDto (
-    var `id`: kotlin.String, 
-    var `title`: kotlin.String, 
-    var `kind`: MindMapNodeKindDto, 
-    var `x`: kotlin.Float, 
-    var `y`: kotlin.Float, 
-    var `width`: kotlin.Float, 
-    var `height`: kotlin.Float, 
-    var `radius`: kotlin.Float, 
-    var `collapsed`: kotlin.Boolean, 
-    var `anchorCount`: kotlin.UInt, 
-    var `brokenLink`: kotlin.Boolean, 
-    var `tags`: List<kotlin.String>
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapSnapshotNodeDto: FfiConverterRustBuffer<MindMapSnapshotNodeDto> {
-    override fun read(buf: ByteBuffer): MindMapSnapshotNodeDto {
-        return MindMapSnapshotNodeDto(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterTypeMindMapNodeKindDto.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterUInt.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterSequenceString.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: MindMapSnapshotNodeDto) = (
-            FfiConverterString.allocationSize(value.`id`) +
-            FfiConverterString.allocationSize(value.`title`) +
-            FfiConverterTypeMindMapNodeKindDto.allocationSize(value.`kind`) +
-            FfiConverterFloat.allocationSize(value.`x`) +
-            FfiConverterFloat.allocationSize(value.`y`) +
-            FfiConverterFloat.allocationSize(value.`width`) +
-            FfiConverterFloat.allocationSize(value.`height`) +
-            FfiConverterFloat.allocationSize(value.`radius`) +
-            FfiConverterBoolean.allocationSize(value.`collapsed`) +
-            FfiConverterUInt.allocationSize(value.`anchorCount`) +
-            FfiConverterBoolean.allocationSize(value.`brokenLink`) +
-            FfiConverterSequenceString.allocationSize(value.`tags`)
-    )
-
-    override fun write(value: MindMapSnapshotNodeDto, buf: ByteBuffer) {
-            FfiConverterString.write(value.`id`, buf)
-            FfiConverterString.write(value.`title`, buf)
-            FfiConverterTypeMindMapNodeKindDto.write(value.`kind`, buf)
-            FfiConverterFloat.write(value.`x`, buf)
-            FfiConverterFloat.write(value.`y`, buf)
-            FfiConverterFloat.write(value.`width`, buf)
-            FfiConverterFloat.write(value.`height`, buf)
-            FfiConverterFloat.write(value.`radius`, buf)
-            FfiConverterBoolean.write(value.`collapsed`, buf)
-            FfiConverterUInt.write(value.`anchorCount`, buf)
-            FfiConverterBoolean.write(value.`brokenLink`, buf)
-            FfiConverterSequenceString.write(value.`tags`, buf)
     }
 }
 
@@ -7432,125 +6224,6 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
 
 
 
-enum class MindMapEdgeKindDto {
-    
-    CONTAINS,
-    REFERENCES,
-    APPEARS_IN,
-    CAUSES,
-    RELATED_TO,
-    LOCATED_AT,
-    CHARACTER_RELATION,
-    TIMELINE,
-    FORESHADOWS,
-    RESOLVES,
-    DEPENDS_ON,
-    CONFLICTS_WITH,
-    CUSTOM;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapEdgeKindDto: FfiConverterRustBuffer<MindMapEdgeKindDto> {
-    override fun read(buf: ByteBuffer) = try {
-        MindMapEdgeKindDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: MindMapEdgeKindDto) = 4UL
-
-    override fun write(value: MindMapEdgeKindDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-
-enum class MindMapLayoutKindDto {
-    
-    AUTO_RADIAL,
-    HORIZONTAL_TREE,
-    FREEFORM,
-    TIMELINE,
-    RELATIONSHIP,
-    CUSTOM;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapLayoutKindDto: FfiConverterRustBuffer<MindMapLayoutKindDto> {
-    override fun read(buf: ByteBuffer) = try {
-        MindMapLayoutKindDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: MindMapLayoutKindDto) = 4UL
-
-    override fun write(value: MindMapLayoutKindDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-
-enum class MindMapNodeKindDto {
-    
-    PROJECT,
-    VOLUME,
-    CHAPTER,
-    TEXT_ANCHOR,
-    CHARACTER,
-    EVENT,
-    LOCATION,
-    ITEM,
-    CONCEPT,
-    THEME,
-    NOTE,
-    ORGANIZATION,
-    TIMELINE,
-    PLOT,
-    FORESHADOWING,
-    CUSTOM;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeMindMapNodeKindDto: FfiConverterRustBuffer<MindMapNodeKindDto> {
-    override fun read(buf: ByteBuffer) = try {
-        MindMapNodeKindDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: MindMapNodeKindDto) = 4UL
-
-    override fun write(value: MindMapNodeKindDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-
 enum class PlatformDto {
     
     LINUX,
@@ -8656,230 +7329,6 @@ public object FfiConverterSequenceTypeDeviceStatsRecordDto: FfiConverterRustBuff
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeDeviceStatsRecordDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapAnchorDto: FfiConverterRustBuffer<List<MindMapAnchorDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapAnchorDto> {
-        val len = buf.getInt()
-        return List<MindMapAnchorDto>(len) {
-            FfiConverterTypeMindMapAnchorDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapAnchorDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapAnchorDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapAnchorDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapAnchorDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapGraphEdgeDto: FfiConverterRustBuffer<List<MindMapGraphEdgeDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapGraphEdgeDto> {
-        val len = buf.getInt()
-        return List<MindMapGraphEdgeDto>(len) {
-            FfiConverterTypeMindMapGraphEdgeDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapGraphEdgeDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapGraphEdgeDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapGraphEdgeDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapGraphEdgeDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapGraphMetadataDto: FfiConverterRustBuffer<List<MindMapGraphMetadataDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapGraphMetadataDto> {
-        val len = buf.getInt()
-        return List<MindMapGraphMetadataDto>(len) {
-            FfiConverterTypeMindMapGraphMetadataDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapGraphMetadataDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapGraphMetadataDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapGraphMetadataDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapGraphMetadataDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapGraphNodeDto: FfiConverterRustBuffer<List<MindMapGraphNodeDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapGraphNodeDto> {
-        val len = buf.getInt()
-        return List<MindMapGraphNodeDto>(len) {
-            FfiConverterTypeMindMapGraphNodeDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapGraphNodeDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapGraphNodeDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapGraphNodeDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapGraphNodeDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapLayoutNodeDto: FfiConverterRustBuffer<List<MindMapLayoutNodeDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapLayoutNodeDto> {
-        val len = buf.getInt()
-        return List<MindMapLayoutNodeDto>(len) {
-            FfiConverterTypeMindMapLayoutNodeDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapLayoutNodeDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapLayoutNodeDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapLayoutNodeDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapLayoutNodeDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapLinkDto: FfiConverterRustBuffer<List<MindMapLinkDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapLinkDto> {
-        val len = buf.getInt()
-        return List<MindMapLinkDto>(len) {
-            FfiConverterTypeMindMapLinkDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapLinkDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapLinkDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapLinkDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapLinkDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapSnapshotEdgeDto: FfiConverterRustBuffer<List<MindMapSnapshotEdgeDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapSnapshotEdgeDto> {
-        val len = buf.getInt()
-        return List<MindMapSnapshotEdgeDto>(len) {
-            FfiConverterTypeMindMapSnapshotEdgeDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapSnapshotEdgeDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapSnapshotEdgeDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapSnapshotEdgeDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapSnapshotEdgeDto.write(it, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceTypeMindMapSnapshotNodeDto: FfiConverterRustBuffer<List<MindMapSnapshotNodeDto>> {
-    override fun read(buf: ByteBuffer): List<MindMapSnapshotNodeDto> {
-        val len = buf.getInt()
-        return List<MindMapSnapshotNodeDto>(len) {
-            FfiConverterTypeMindMapSnapshotNodeDto.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<MindMapSnapshotNodeDto>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterTypeMindMapSnapshotNodeDto.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<MindMapSnapshotNodeDto>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterTypeMindMapSnapshotNodeDto.write(it, buf)
         }
     }
 }
