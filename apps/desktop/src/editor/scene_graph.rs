@@ -110,8 +110,9 @@ cpp! {{
         }
 
         if (!img_ptr || img_ptr->width() == 0 || img_ptr->height() == 0) {
-            // No animation — hide overlay
+            // No animation — hide overlay and release texture
             overlayNode->setRect(QRectF(0, 0, 0, 0));
+            overlayNode->setTexture(nullptr);
             overlayNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
             return;
         }

@@ -137,6 +137,7 @@ pub struct SujianEditorItem {
     preedit_cursor: usize,
     suppress_next_ime_commit: bool,
     editor_layout: EditorLayout,
+    text_revision: u64,
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
@@ -246,6 +247,7 @@ impl Default for SujianEditorItem {
             preedit_cursor: 0,
             suppress_next_ime_commit: false,
             editor_layout: EditorLayout::default(),
+            text_revision: 0,
             render_dirty: true,
             scroll_buffer: None,
             last_slow_paint_log: None,
@@ -598,6 +600,7 @@ impl SujianEditorItem {
     }
 
     fn emit_content_changed(&mut self) {
+        self.text_revision = self.text_revision.wrapping_add(1);
         self.invalidate_layout_cache();
         self.recalculate_content_height_quiet();
         self.plain_text_changed();
@@ -1149,18 +1152,20 @@ impl SujianEditorItem {
     fn layout_snapshot(&mut self, width: f64) -> LayoutSnapshot {
         let params = self.layout_params(width);
         self.editor_layout
-            .snapshot(&self.buffer.text, params)
+            .snapshot(&self.buffer.text, params, self.text_revision)
             .clone()
     }
 
     fn layout_snapshot_for_text(&mut self, text: &str, width: f64) -> LayoutSnapshot {
         let params = self.layout_params(width);
-        self.editor_layout.snapshot(text, params).clone()
+        // For temporary text (e.g. old text in delete animation), use revision 0
+        // since this is a one-off layout that won't be cached across frames.
+        self.editor_layout.snapshot(text, params, 0).clone()
     }
 
     fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
         let params = self.layout_params(width);
-        &self.editor_layout.snapshot(&self.buffer.text, params).lines
+        &self.editor_layout.snapshot(&self.buffer.text, params, self.text_revision).lines
     }
 
     fn adjust_affinity_at_wrap_boundary(&mut self) {
@@ -1383,14 +1388,19 @@ impl QQuickItem for SujianEditorItem {
         // Check if scroll buffer or text needs rebuilding
         let mut force_rebuild = false;
         if let Some(ref buf) = self.scroll_buffer {
-            let relative_src_y = scroll_y - buf.buffer_scroll_y;
-            if relative_src_y < -0.1 || relative_src_y + vp_h > buf.buffer_logical_h + 0.1 {
+            let revision_changed = buf.text_revision != self.text_revision;
+            if revision_changed {
                 force_rebuild = true;
             } else {
-                let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
-                let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
-                if content_changed || dpr_changed || !buf.contains_viewport(scroll_y, vp_h) {
+                let relative_src_y = scroll_y - buf.buffer_scroll_y;
+                if relative_src_y < -0.1 || relative_src_y + vp_h > buf.buffer_logical_h + 0.1 {
                     force_rebuild = true;
+                } else {
+                    let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
+                    let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
+                    if content_changed || dpr_changed || !buf.contains_viewport(scroll_y, vp_h) {
+                        force_rebuild = true;
+                    }
                 }
             }
         } else {
@@ -1482,6 +1492,9 @@ impl QQuickItem for SujianEditorItem {
         }
 
         // ── Layer 1: Animation overlay (child[1]) — always rebuilt when active ──
+        // Clean up finished animations BEFORE painting the overlay, so that
+        // the overlay is hidden on the exact frame the animation ends.
+        self.cleanup_finished_animations();
         let overlay_result = self.paint_animation_overlay();
         if !final_root.is_null() && !item_ptr.is_null() {
             match &overlay_result {
@@ -1507,9 +1520,6 @@ impl QQuickItem for SujianEditorItem {
                 }
             }
         }
-
-        // Clean up finished animations
-        self.cleanup_finished_animations();
 
         // If animation is still active, request next frame
         if self.has_active_animation() {

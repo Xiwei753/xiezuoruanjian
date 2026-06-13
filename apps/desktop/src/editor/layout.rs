@@ -24,6 +24,14 @@ cpp! {{
     };
     thread_local std::vector<EditorLayoutEntry> g_editor_layout_buf;
 
+    // Glyph entry for glyphRuns-based positioning
+    struct GlyphEntry {
+        int stringIndex;    // QChar index in the source string
+        double xPos;        // Left edge of the glyph
+        double width;       // Advance width of the glyph
+    };
+    thread_local std::vector<GlyphEntry> g_glyph_buf;
+
     double editor_layout_cursor_to_x(
         const QString& paraText, double fs, const QString& ff,
         const QString& textBeforeCursor
@@ -227,7 +235,7 @@ cpp! {{
         layout.setTextOption(option);
         layout.beginLayout();
 
-        g_editor_layout_buf.clear();
+        g_glyph_buf.clear();
         int cur_idx = 0;
         bool first = true;
         while (true) {
@@ -236,19 +244,69 @@ cpp! {{
             double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
-                int line_start = line.textStart();
-                int line_end = line_start + line.textLength();
-                int r_start = std::max(range_qchar_start, line_start);
-                int r_end = std::min(range_qchar_end, line_end);
-                for (int i = r_start; i < r_end; i++) {
-                    double x1 = line.cursorToX(i);
-                    double x2 = line.cursorToX(i + 1);
-                    EditorLayoutEntry e;
-                    e.qcharStart = i;
-                    e.width = std::abs(x2 - x1);
-                    e.xPos = x1;
-                    g_editor_layout_buf.push_back(e);
+                // Use glyphRuns() for accurate glyph positions.
+                // This handles emoji, combining characters, ligatures, etc.
+                // Qt 6.5+ supports GlyphRunRetrievalFlags for selective retrieval.
+                const auto glyphRuns = line.glyphRuns();
+
+                for (const auto& run : glyphRuns) {
+                    const auto& positions = run.positions();
+                    const auto& stringIndexes = run.stringIndexes();
+                    const auto& glyphIndexes = run.glyphIndexes();
+                    int count = positions.size();
+
+                    for (int i = 0; i < count; i++) {
+                        int strIdx = (i < stringIndexes.size())
+                            ? stringIndexes[i] : -1;
+
+                        // Skip glyphs outside the requested range
+                        if (strIdx < 0 || strIdx < range_qchar_start || strIdx >= range_qchar_end) {
+                            continue;
+                        }
+
+                        double x = positions[i].x();
+                        double w = 0.0;
+
+                        // Calculate width: use next glyph position or cursorToX fallback
+                        if (i + 1 < count) {
+                            int nextStrIdx = (i + 1 < stringIndexes.size())
+                                ? stringIndexes[i + 1] : -1;
+                            if (nextStrIdx >= range_qchar_start && nextStrIdx < range_qchar_end) {
+                                w = positions[i + 1].x() - x;
+                            } else {
+                                // Next glyph is outside range — use cursorToX for boundary
+                                w = line.cursorToX(strIdx + 1) - x;
+                            }
+                        } else {
+                            // Last glyph in run — use cursorToX for trailing edge
+                            w = line.cursorToX(strIdx + 1) - x;
+                        }
+
+                        if (w < 0) w = -w; // RTL text
+                        if (w < 0.01) w = line.cursorToX(strIdx + 1) - line.cursorToX(strIdx);
+
+                        GlyphEntry e;
+                        e.stringIndex = strIdx;
+                        e.xPos = x;
+                        e.width = w;
+                        g_glyph_buf.push_back(e);
+                    }
                 }
+
+                // Sort by string index to ensure consistent ordering
+                std::sort(g_glyph_buf.begin(), g_glyph_buf.end(),
+                    [](const GlyphEntry& a, const GlyphEntry& b) {
+                        return a.stringIndex < b.stringIndex;
+                    });
+
+                // Remove duplicates (same stringIndex can appear in different runs)
+                g_glyph_buf.erase(
+                    std::unique(g_glyph_buf.begin(), g_glyph_buf.end(),
+                        [](const GlyphEntry& a, const GlyphEntry& b) {
+                            return a.stringIndex == b.stringIndex;
+                        }),
+                    g_glyph_buf.end());
+
                 break;
             }
             first = false;
@@ -310,6 +368,7 @@ pub struct LayoutParams {
 
 #[derive(Clone, Debug)]
 pub struct LayoutSnapshot {
+    pub text_revision: u64,
     pub text_ptr: usize,
     pub text_len: usize,
     pub width: f64,
@@ -327,6 +386,7 @@ pub type LayoutCache = LayoutSnapshot;
 #[derive(Default)]
 pub struct EditorLayout {
     cache: Option<LayoutSnapshot>,
+    text_revision: u64,
 }
 
 impl EditorLayout {
@@ -334,16 +394,26 @@ impl EditorLayout {
         self.cache = None;
     }
 
+    /// Bump the text revision counter.  Must be called every time the text
+    /// content changes, regardless of whether the length changes.  This
+    /// ensures that same-length replacements (e.g. swapping one symbol for
+    /// another) correctly invalidate cached layout data.
+    pub fn bump_revision(&mut self) {
+        self.text_revision = self.text_revision.wrapping_add(1);
+        self.cache = None;
+    }
+
     pub fn cache(&self) -> Option<&LayoutSnapshot> {
         self.cache.as_ref()
     }
 
-    pub fn snapshot(&mut self, text: &str, params: LayoutParams) -> &LayoutSnapshot {
+    pub fn snapshot(&mut self, text: &str, params: LayoutParams, text_revision: u64) -> &LayoutSnapshot {
         let text_ptr = text.as_ptr() as usize;
         let text_len = text.len();
         let needs_refresh = match &self.cache {
             Some(c) => {
-                c.text_ptr != text_ptr
+                c.text_revision != text_revision
+                    || c.text_ptr != text_ptr
                     || c.text_len != text_len
                     || (c.width - params.width).abs() > 0.1
                     || (c.font_size - params.font_size).abs() > 0.1
@@ -371,6 +441,7 @@ impl EditorLayout {
                 .unwrap_or((params.font_size * params.line_spacing + params.padding * 2.0) as f32)
                 .max(1.0);
             self.cache = Some(LayoutSnapshot {
+                text_revision,
                 text_ptr,
                 text_len,
                 width: params.width,
@@ -1126,19 +1197,19 @@ pub fn qtextlayout_glyph_positions_on_line(
         editor_layout_glyph_positions_on_line(
             para, qchar_start, qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx
         );
-        return static_cast<int>(g_editor_layout_buf.size());
+        return static_cast<int>(g_glyph_buf.size());
     });
     let mut result = Vec::with_capacity(count as usize);
     for i in 0..count {
         let idx = i;
         let qchar_off = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
-            return static_cast<qulonglong>(g_editor_layout_buf[idx].qcharStart);
+            return static_cast<qulonglong>(g_glyph_buf[idx].stringIndex);
         });
         let w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_editor_layout_buf[idx].width;
+            return g_glyph_buf[idx].width;
         });
         let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_editor_layout_buf[idx].xPos;
+            return g_glyph_buf[idx].xPos;
         });
         let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off);
         let abs_byte = para_start + para_byte;
@@ -1310,7 +1381,7 @@ mod tests {
     fn snapshot_for(text: &str, width: f64) -> LayoutSnapshot {
         init_qt();
         let mut layout = EditorLayout::default();
-        layout.snapshot(text, params(width)).clone()
+        layout.snapshot(text, params(width), 1).clone()
     }
 
     fn assert_line_end_roundtrip(snapshot: &LayoutSnapshot) {
@@ -1467,6 +1538,7 @@ mod tests {
                 text_indent: 0.0,
                 padding: 16.0,
             },
+            1,
         ).clone();
         assert!(snapshot.lines.len() > 1, "text must wrap at fontSize=45");
         assert_line_end_roundtrip(&snapshot);
@@ -1487,6 +1559,7 @@ mod tests {
                 text_indent: 0.0,
                 padding: 16.0,
             },
+            1,
         ).clone();
         assert!(
             snapshot.lines.len() >= 3,
@@ -1548,7 +1621,7 @@ mod tests {
         init_qt();
         let text = "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。我们通过大量中文段落来测试自动换行后每一行的行尾光标定位是否准确。大字号下每行能容纳的字数更少，所以换行更频繁，这正是容易出问题的场景。";
         let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(text, params_large(820.0)).clone();
+        let snapshot = layout.snapshot(text, params_large(820.0), 1).clone();
         assert!(
             snapshot.lines.len() >= 3,
             "fontSize=45 must produce >= 3 wrapped lines, got {}",
@@ -1562,7 +1635,7 @@ mod tests {
         init_qt();
         let text = "第一段：这是大字号多段落测试，每一段都会独立换行。\n第二段：继续测试大字号下的多段落换行效果，确保段落之间的边界不会出错。\n第三段：最后一段，验证整个文档的换行一致性。";
         let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(text, params_large(820.0)).clone();
+        let snapshot = layout.snapshot(text, params_large(820.0), 1).clone();
         assert!(
             snapshot.lines.len() >= 4,
             "multi-paragraph fontSize=45 must produce >= 4 lines, got {}",
@@ -1576,7 +1649,7 @@ mod tests {
         init_qt();
         let text = "这是一个用来测试软换行后行尾点击定位的段落。当我们点击某个换行后的行尾位置时，光标的target_x不应该回到行首缩进位置。";
         let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(text, params_large(600.0)).clone();
+        let snapshot = layout.snapshot(text, params_large(600.0), 1).clone();
         assert!(snapshot.lines.len() >= 2, "must wrap at width=600 fontSize=45");
         for line in &snapshot.lines {
             if line.start == line.end || line.para_text.is_empty() {
@@ -1686,6 +1759,7 @@ mod tests {
                 text_indent: 32.0,
                 padding: 16.0,
             },
+            1,
         ).clone();
         assert!(snapshot.lines.len() >= 3);
         for line in &snapshot.lines {
@@ -1738,6 +1812,7 @@ mod tests {
                 text_indent: 0.0,
                 padding: 16.0,
             },
+            1,
         ).clone();
         assert!(snapshot.lines.len() >= 2);
         for line in &snapshot.lines {
