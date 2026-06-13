@@ -293,13 +293,13 @@ impl SujianEditorItem {
                     lines,
                     idx,
                     pc,
-                    self.current_cursor_affinity,
+                    self.cursor_ctrl.affinity,
                 ) {
                     let x = self.editor_layout.cursor_x_for_line(
                         &snapshot,
                         line,
                         pc,
-                        self.current_cursor_affinity,
+                        self.cursor_ctrl.affinity,
                     );
                     let baseline =
                         self.editor_layout
@@ -615,7 +615,7 @@ impl SujianEditorItem {
         let scroll_y = self.current_scroll_y as f64;
         let layout_res = self.editor_layout_cursor_rect(
             self.buffer.cursor,
-            self.current_cursor_affinity,
+            self.cursor_ctrl.affinity,
             scroll_y,
         );
 
@@ -624,129 +624,36 @@ impl SujianEditorItem {
         let cursor_h = layout_res.h;
         let visual_line_id = layout_res.visual_line_id;
 
-        let old_visual_line_id = self.current_visual_line_id;
-        self.current_visual_line_id = Some(visual_line_id);
-
-        let scroll_changed = (self.last_cursor_scroll_y - scroll_y).abs() > 0.01;
-        self.last_cursor_scroll_y = scroll_y;
-
-        let old_x = self.target_cursor_x;
-        let old_y = self.target_cursor_y;
-        let old_visible = self.cursor_visible;
-
-        self.target_cursor_x = cursor_x;
-        self.target_cursor_y = cursor_y;
-        self.ime_cursor_rect_h = cursor_h;
-        self.cursor_visual_h = cursor_h;
-
-        if (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01 {
-            self.cursor_rect_changed();
-            let obj_ptr = self.get_cpp_object();
-            cpp!(unsafe [obj_ptr as "QQuickItem*"] {
-                if (obj_ptr) {
-                    QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
-                }
-            });
-        }
-
         let vp_h = self.current_viewport_height.max(1.0) as f64;
-        let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < vp_h;
-        let new_visible = self.current_editor_enabled
-            && !self.buffer.has_selection()
-            && in_viewport
-            && !self.current_is_scrolling;
-        self.cursor_visible = new_visible;
-
-        if self.cursor_visible {
-            debug_assert!(
-                self.target_cursor_y + cursor_h > 0.0 && self.target_cursor_y < vp_h,
-                "Debug assert failed: cursor is visible but target_cursor_y ({:.2}) is outside viewport [0, {:.2}]",
-                self.target_cursor_y, vp_h
-            );
-        }
-
-        if !new_visible {
-            self.cursor_animation = None;
-            self.cursor_visual_x = cursor_x;
-            self.cursor_visual_y = cursor_y;
-            if old_visible {
-                self.cursor_dirty = true;
-                let item = self as &dyn QQuickItem;
-                item.update();
-            }
-            return;
-        }
-
-        let now = Instant::now();
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.preedit_text.is_empty();
 
-        let should_snap = self.current_is_scrolling
-            || is_selecting
-            || is_preediting
-            || !old_visible
-            || self.force_snap_next_cursor
-            || scroll_changed;
+        let result = self.cursor_ctrl.update(
+            cursor_x,
+            cursor_y,
+            cursor_h,
+            visual_line_id,
+            scroll_y,
+            self.current_smooth_cursor_enabled,
+            self.current_cursor_animation_duration_ms,
+            self.current_is_scrolling,
+            is_selecting,
+            is_preediting,
+            self.current_editor_enabled,
+            self.buffer.has_selection(),
+            vp_h,
+        );
 
-        let (visual_x, visual_y) = if let Some(ref anim) = self.cursor_animation {
-            if anim.is_finished(now) {
-                (anim.target_x, anim.target_y)
-            } else {
-                anim.current_position(now)
-            }
-        } else {
-            (old_x, old_y)
-        };
+        // If the controller says IME needs updating, set the pending flag.
+        // The actual inputMethod()->update() call is deferred to the GUI
+        // thread in update_paint_node.
+        if result.ime_needs_update {
+            self.cursor_ctrl.ime_update_pending = true;
+        }
 
-        let (final_x, final_y, new_animation) = if should_snap
-            || !self.current_smooth_cursor_enabled
-        {
-            (cursor_x, cursor_y, None)
-        } else if let Some(ref anim) = self.cursor_animation {
-            if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
-                let (cur_x, cur_y) = anim.current_position(now);
-                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-                let new_anim = CursorAnimationState {
-                    start_x: cur_x,
-                    start_y: cur_y,
-                    target_x: cursor_x,
-                    target_y: cursor_y,
-                    start_time: now,
-                    duration_ms: duration,
-                };
-                (cur_x, cur_y, Some(new_anim))
-            } else if anim.is_finished(now) {
-                (anim.target_x, anim.target_y, None)
-            } else {
-                let (cur_x, cur_y) = anim.current_position(now);
-                (cur_x, cur_y, Some(anim.clone()))
-            }
-        } else {
-            if (visual_x - cursor_x).abs() > 0.01 || (visual_y - cursor_y).abs() > 0.01 {
-                let duration = self.current_cursor_animation_duration_ms.max(30) as u64;
-                let new_anim = CursorAnimationState {
-                    start_x: visual_x,
-                    start_y: visual_y,
-                    target_x: cursor_x,
-                    target_y: cursor_y,
-                    start_time: now,
-                    duration_ms: duration,
-                };
-                (visual_x, visual_y, Some(new_anim))
-            } else {
-                (cursor_x, cursor_y, None)
-            }
-        };
-
-        self.cursor_animation = new_animation;
-        self.cursor_visual_x = final_x;
-        self.cursor_visual_y = final_y;
-        self.force_snap_next_cursor = false;
-
-        let pos_changed =
-            (final_x - old_x).abs() > 0.01 || (final_y - old_y).abs() > 0.01 || !old_visible;
-        if pos_changed {
-            self.cursor_dirty = true;
+        if result.needs_repaint {
+            let item = self as &dyn QQuickItem;
+            item.update();
         }
 
         if sujian_editor_debug_enabled() {
@@ -771,15 +678,13 @@ impl SujianEditorItem {
             }
             eprintln!(
                 "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, scroll_y={:.1}{}",
-                self.buffer.cursor, self.target_cursor_x, self.target_cursor_y, self.cursor_visual_x, self.cursor_visual_y, self.cursor_animation.is_some(), scroll_y, line_info
+                self.buffer.cursor, self.cursor_ctrl.target_x, self.cursor_ctrl.target_y, self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y, self.cursor_ctrl.animation.is_some(), scroll_y, line_info
             );
         }
 
-        if let Some(ref anim) = self.cursor_animation {
-            if !anim.is_finished(now) {
-                self.cursor_dirty = true;
-                self.request_frame_update();
-            }
+        if self.cursor_ctrl.animation.is_some() {
+            self.cursor_ctrl.dirty = true;
+            self.request_frame_update();
         }
     }
 }

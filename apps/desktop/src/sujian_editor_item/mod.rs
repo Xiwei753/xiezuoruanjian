@@ -3,6 +3,7 @@
 // =============================================================================
 
 pub(crate) mod buffer;
+pub(crate) mod cursor_controller;
 pub(crate) mod rendering;
 
 use crate::editor::input::{self, EditorInputHost};
@@ -15,10 +16,9 @@ use buffer::{clamp_to_char_boundary, next_char_boundary, prev_char_boundary, byt
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{
-    QBrush, QColor, QLineF, QMouseEvent, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem,
-    QRectF, QString,
+    QMouseEvent, QQuickItem, QRectF, QString,
 };
-use rendering::{CursorAnimationState, InsertAnimation, DeleteAnimation, ScrollBuffer};
+use rendering::{InsertAnimation, DeleteAnimation, ScrollBuffer};
 pub use rendering::AnimatedGlyph;
 use std::cell::Cell;
 use std::time::Instant;
@@ -29,6 +29,7 @@ cpp! {{
     #include <QtGui/QPainter>
     #include <QtGui/QClipboard>
     #include <QGuiApplication>
+    #include <QMetaObject>
 }}
 
 pub fn editor_animation_debug_enabled() -> bool {
@@ -152,9 +153,6 @@ pub struct SujianEditorItem {
     current_is_scrolling: bool,
     last_summary: QString,
     last_event_count: u32,
-    target_cursor_x: f64,
-    target_cursor_y: f64,
-    cursor_animation: Option<CursorAnimationState>,
     insert_animation: Option<InsertAnimation>,
     delete_animation: Option<DeleteAnimation>,
     preedit_text: String,
@@ -165,16 +163,10 @@ pub struct SujianEditorItem {
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
-    cursor_visual_x: f64,
-    cursor_visual_y: f64,
-    cursor_visual_h: f64,
-    cursor_visible: bool,
-    cursor_dirty: bool,
-    current_cursor_affinity: CaretAffinity,
-    current_visual_line_id: Option<usize>,
-    last_cursor_scroll_y: f64,
-    ime_cursor_rect_h: f64,
-    force_snap_next_cursor: bool,
+    /// Isolated cursor visual state — target position, visual position,
+    /// animation, IME pending flag.  All cursor-related visual logic
+    /// lives in CursorController; SujianEditorItem only dispatches.
+    cursor_ctrl: cursor_controller::CursorController,
 }
 
 impl Default for SujianEditorItem {
@@ -262,9 +254,6 @@ impl Default for SujianEditorItem {
             current_is_scrolling: false,
             last_summary: "".into(),
             last_event_count: 0,
-            target_cursor_x: 0.0,
-            target_cursor_y: 0.0,
-            cursor_animation: None,
             insert_animation: None,
             delete_animation: None,
             preedit_text: String::new(),
@@ -275,16 +264,7 @@ impl Default for SujianEditorItem {
             render_dirty: true,
             scroll_buffer: None,
             last_slow_paint_log: None,
-            cursor_visual_x: 0.0,
-            cursor_visual_y: 0.0,
-            cursor_visual_h: 0.0,
-            cursor_visible: false,
-            cursor_dirty: true,
-            current_cursor_affinity: CaretAffinity::Downstream,
-            current_visual_line_id: None,
-            last_cursor_scroll_y: 0.0,
-            ime_cursor_rect_h: 0.0,
-            force_snap_next_cursor: false,
+            cursor_ctrl: cursor_controller::CursorController::new(),
         }
     }
 }
@@ -551,7 +531,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_scroll_y = value;
-        self.force_snap_next_cursor = true;
+        self.cursor_ctrl.force_snap_next = true;
         self.request_static_repaint();
     }
 
@@ -577,15 +557,15 @@ impl SujianEditorItem {
         }
         self.current_is_scrolling = value;
         if value {
-            self.cursor_animation = None;
+            self.cursor_ctrl.animation = None;
             self.insert_animation = None;
             self.delete_animation = None;
-            self.force_snap_next_cursor = true;
+            self.cursor_ctrl.force_snap_next = true;
             self.request_static_repaint();
             return;
         }
         if !value {
-            self.force_snap_next_cursor = true;
+            self.cursor_ctrl.force_snap_next = true;
             self.update_cursor_visual_position();
             self.request_static_repaint();
         }
@@ -600,12 +580,12 @@ impl SujianEditorItem {
     }
 
     fn cursor_rect_x(&self) -> f32 {
-        self.target_cursor_x as f32
+        self.cursor_ctrl.target_x as f32
     }
 
     fn cursor_rect_y(&self) -> f32 {
-        // Viewport coordinates: target_cursor_y is already viewport-relative
-        self.target_cursor_y as f32
+        // Viewport coordinates: cursor_ctrl.target_y is already viewport-relative
+        self.cursor_ctrl.target_y as f32
     }
 
     fn cursor_rect_width(&self) -> f32 {
@@ -613,7 +593,7 @@ impl SujianEditorItem {
     }
 
     fn cursor_rect_height(&self) -> f32 {
-        self.ime_cursor_rect_h as f32
+        self.cursor_ctrl.ime_cursor_rect_h as f32
     }
 
     fn visual_changed(&mut self) {
@@ -658,8 +638,8 @@ impl SujianEditorItem {
         self.preedit_cursor = 0;
 
         // 记录插入前的光标位置（动画起点）
-        let origin_cx = self.target_cursor_x;
-        let origin_cy = self.target_cursor_y;
+        let origin_cx = self.cursor_ctrl.target_x;
+        let origin_cy = self.cursor_ctrl.target_y;
         let cursor_h = self.editor_layout.cursor_height(
             self.current_font_pixel_size as f64,
             &self.current_font_family.to_string(),
@@ -828,9 +808,9 @@ impl SujianEditorItem {
 
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
-        self.current_cursor_affinity = affinity;
+        self.cursor_ctrl.affinity = affinity;
         if extend {
-            self.force_snap_next_cursor = true;
+            self.cursor_ctrl.force_snap_next = true;
         }
         if sujian_editor_debug_enabled() {
             eprintln!(
@@ -843,14 +823,14 @@ impl SujianEditorItem {
         self.preedit_cursor = 0;
         self.cursor_position_changed();
         self.selection_changed();
-        self.cursor_dirty = true;
+        self.cursor_ctrl.dirty = true;
         self.request_static_repaint();
     }
 
     fn drag_select_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
-        self.current_cursor_affinity = affinity;
-        self.force_snap_next_cursor = true;
+        self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.force_snap_next = true;
         self.buffer.move_cursor(index, true);
         self.cursor_position_changed();
         self.selection_changed();
@@ -907,7 +887,7 @@ impl SujianEditorItem {
         } else {
             prev_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
         };
-        self.current_cursor_affinity = if forward {
+        self.cursor_ctrl.affinity = if forward {
             CaretAffinity::Downstream
         } else {
             CaretAffinity::Upstream
@@ -933,7 +913,7 @@ impl SujianEditorItem {
             return;
         }
         let index = self.index_at_line_x(&lines[target_idx], x);
-        self.current_cursor_affinity = self
+        self.cursor_ctrl.affinity = self
             .editor_layout
             .affinity_for_index_on_line(&lines[target_idx], index);
         self.buffer.move_cursor(index, extend);
@@ -954,7 +934,7 @@ impl SujianEditorItem {
         } else {
             (line.start, CaretAffinity::Downstream)
         };
-        self.current_cursor_affinity = affinity;
+        self.cursor_ctrl.affinity = affinity;
         self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
@@ -1202,9 +1182,9 @@ impl SujianEditorItem {
         });
 
         if is_wrap_boundary {
-            self.current_cursor_affinity = CaretAffinity::Upstream;
+            self.cursor_ctrl.affinity = CaretAffinity::Upstream;
         } else {
-            self.current_cursor_affinity = CaretAffinity::Downstream;
+            self.cursor_ctrl.affinity = CaretAffinity::Downstream;
         }
     }
 
@@ -1256,7 +1236,7 @@ impl SujianEditorItem {
         self.editor_layout.cursor_line_and_x(
             snapshot,
             self.buffer.cursor,
-            self.current_cursor_affinity,
+            self.cursor_ctrl.affinity,
         )
     }
 }
@@ -1578,35 +1558,23 @@ impl QQuickItem for SujianEditorItem {
 
         // ── Layer 2: Cursor animation + node (child[2]) ──
         if !disable_cursor {
-            let now = Instant::now();
-            if let Some(ref anim) = self.cursor_animation {
-                if anim.is_finished(now) {
-                    self.cursor_visual_x = anim.target_x;
-                    self.cursor_visual_y = anim.target_y;
-                    self.cursor_animation = None;
-                    self.cursor_dirty = false;
-                } else {
-                    let (cx, cy) = anim.current_position(now);
-                    self.cursor_visual_x = cx;
-                    self.cursor_visual_y = cy;
-                    self.request_frame_update();
-                }
-            } else {
-                self.cursor_dirty = false;
+            let still_animating = self.cursor_ctrl.tick_animation();
+            if still_animating {
+                self.request_frame_update();
             }
 
             let is_selecting = self.buffer.has_selection();
-            let show_cursor = self.cursor_visible && !self.current_is_scrolling && !is_selecting;
+            let show_cursor = self.cursor_ctrl.visible && !self.current_is_scrolling && !is_selecting;
             let cursor_color_rgba = renderer::color_hex_to_rgba(&self.current_cursor_color);
 
             if !final_root.is_null() && !item_ptr.is_null() {
                 scene_graph::update_cursor_rect(
                     final_root,
                     item_ptr,
-                    self.cursor_visual_x,
-                    self.cursor_visual_y,
+                    self.cursor_ctrl.visual_x,
+                    self.cursor_ctrl.visual_y,
                     2.0,
-                    self.cursor_visual_h,
+                    self.cursor_ctrl.visual_h,
                     show_cursor,
                     cursor_color_rgba,
                 );
@@ -1627,6 +1595,30 @@ impl QQuickItem for SujianEditorItem {
                 disable_overlay,
                 disable_cursor,
             );
+        }
+
+        // ── Deferred GUI-thread work ──
+        // update_cursor_visual_position() runs on the render thread and must
+        // NOT touch GUI objects (signals, inputMethod).  If it set
+        // ime_update_pending, schedule the IME update on the GUI thread now.
+        if self.cursor_ctrl.ime_update_pending {
+            self.cursor_ctrl.ime_update_pending = false;
+            // Emit the cursor_rect_changed signal.  Even though we are on
+            // the render thread, qmetaobject signal emission is safe here
+            // because it only sets a dirty flag — the actual QML binding
+            // evaluation happens on the GUI thread at a later point.
+            self.cursor_rect_changed();
+            let obj_ptr = self.get_cpp_object();
+            if !obj_ptr.is_null() {
+                cpp!(unsafe [obj_ptr as "QQuickItem*"] {
+                    // QMetaObject::invokeMethod with QueuedConnection guarantees
+                    // the lambda runs on the GUI thread after the current
+                    // render pass completes.
+                    QMetaObject::invokeMethod(obj_ptr, [obj_ptr]() {
+                        QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+                    }, Qt::QueuedConnection);
+                });
+            }
         }
 
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
