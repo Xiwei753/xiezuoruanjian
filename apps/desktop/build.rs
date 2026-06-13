@@ -35,6 +35,25 @@ impl Qt6BuildInfo {
     }
 }
 
+/// Recursively collect all files with the given extension under `dir`.
+fn walkdir(dir: &str, ext: &str) -> Result<Vec<String>, std::io::Error> {
+    let mut result = Vec::new();
+    fn visit(path: &Path, ext: &str, result: &mut Vec<String>) -> std::io::Result<()> {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, ext, result)?;
+            } else if path.extension().is_some_and(|e| e == ext) {
+                result.push(path.to_string_lossy().into_owned());
+            }
+        }
+        Ok(())
+    }
+    visit(Path::new(dir), ext, &mut result)?;
+    Ok(result)
+}
+
 fn format_paths(paths: &[PathBuf]) -> String {
     if paths.is_empty() {
         return "not detected".to_string();
@@ -325,6 +344,20 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed=resources/icons/sujian.svg");
+
+    // Recursively scan src/**/*.rs for files containing cpp! macros.
+    // rust-cpp's build.rs must re-scan these files whenever they change,
+    // otherwise the cpp! metadata becomes stale and causes
+    // "This cpp! macro is not found in the library's rust-cpp metadata" errors.
+    if let Ok(entries) = walkdir("src", "rs") {
+        for path in &entries {
+            if let Ok(content) = fs::read_to_string(path) {
+                if content.contains("cpp!") {
+                    println!("cargo:rerun-if-changed={}", path);
+                }
+            }
+        }
+    }
 
     let mut config = cpp_build::Config::new();
     configure_cpp_standard(&mut config);

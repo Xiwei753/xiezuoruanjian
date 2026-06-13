@@ -1,8 +1,10 @@
+use crate::editor::layout::CaretAffinity;
 use crate::editor::renderer;
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{
-    QBrush, QColor, QPainter, QPainterRenderHint, QQuickItem, QRectF, QString,
+    QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF,
+    QString,
 };
 use std::time::Instant;
 
