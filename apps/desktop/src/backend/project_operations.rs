@@ -715,7 +715,7 @@ impl AppBackend {
                     Vec::new(),
                     vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project_id.to_string()) }],
                 ),
-                Err(error) => ResultEnvelope::<writer_core::api::types::ProjectDto>::error(error),
+                Err(error) => ResultEnvelope::<bool>::error(error),
             }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
@@ -776,7 +776,7 @@ impl AppBackend {
                     Vec::new(),
                     vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume_id.to_string()) }],
                 ),
-                Err(error) => ResultEnvelope::<writer_core::api::types::VolumeDto>::error(error),
+                Err(error) => ResultEnvelope::<bool>::error(error),
             }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
@@ -842,7 +842,7 @@ impl AppBackend {
                     Vec::new(),
                     vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter_id.to_string()) }],
                 ),
-                Err(error) => ResultEnvelope::<writer_core::api::ChapterMetaDto>::error(error),
+                Err(error) => ResultEnvelope::<bool>::error(error),
             }.to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();

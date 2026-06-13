@@ -7,6 +7,26 @@ cpp! {{
     #include <QtQuick/QSGImageNode>
     #include <QtQuick/QSGRectangleNode>
 
+    // Qt 6.11 compatible helpers — QSGNode no longer has childAt() or
+    // insertChildNode(node, index).  Use childAtIndex() and
+    // insertChildNodeBefore() / appendChildNode() instead.
+
+    static QSGNode *child_at(QSGNode *root, int index) {
+        return root && index >= 0 && index < root->childCount()
+            ? root->childAtIndex(index)
+            : nullptr;
+    }
+
+    static void insert_child_at(QSGNode *root, QSGNode *node, int index) {
+        if (!root || !node) return;
+        QSGNode *before = child_at(root, index);
+        if (before) {
+            root->insertChildNodeBefore(node, before);
+        } else {
+            root->appendChildNode(node);
+        }
+    }
+
     // Three-layer scene graph layout:
     //   child[0] = QSGImageNode  — static text texture
     //   child[1] = QSGImageNode  — animation overlay texture
@@ -18,12 +38,12 @@ cpp! {{
         // Ensure child[0] is QSGImageNode (static text)
         QSGImageNode *staticNode = nullptr;
         if (root->childCount() > 0) {
-            staticNode = dynamic_cast<QSGImageNode*>(root->childAt(0));
+            staticNode = dynamic_cast<QSGImageNode*>(child_at(root,0));
         }
         if (!staticNode) {
             // Remove wrong-typed child[0] if present
             if (root->childCount() > 0) {
-                QSGNode *old = root->childAt(0);
+                QSGNode *old = child_at(root,0);
                 root->removeChildNode(old);
                 delete old;
             }
@@ -36,11 +56,11 @@ cpp! {{
         // Ensure child[1] is QSGImageNode (animation overlay)
         QSGImageNode *overlayNode = nullptr;
         if (root->childCount() > 1) {
-            overlayNode = dynamic_cast<QSGImageNode*>(root->childAt(1));
+            overlayNode = dynamic_cast<QSGImageNode*>(child_at(root,1));
         }
         if (!overlayNode) {
             if (root->childCount() > 1) {
-                QSGNode *old = root->childAt(1);
+                QSGNode *old = child_at(root,1);
                 root->removeChildNode(old);
                 delete old;
             }
@@ -48,23 +68,23 @@ cpp! {{
             overlayNode->setFiltering(QSGTexture::Nearest);
             overlayNode->setOwnsTexture(true);
             int insertIdx = qMin(1, root->childCount());
-            root->insertChildNode(overlayNode, insertIdx);
+            insert_child_at(root,overlayNode, insertIdx);
         }
 
         // Ensure child[2] is QSGRectangleNode (cursor)
         QSGRectangleNode *cursorNode = nullptr;
         if (root->childCount() > 2) {
-            cursorNode = dynamic_cast<QSGRectangleNode*>(root->childAt(2));
+            cursorNode = dynamic_cast<QSGRectangleNode*>(child_at(root,2));
         }
         if (!cursorNode) {
             if (root->childCount() > 2) {
-                QSGNode *old = root->childAt(2);
+                QSGNode *old = child_at(root,2);
                 root->removeChildNode(old);
                 delete old;
             }
             cursorNode = item->window()->createRectangleNode();
             int insertIdx = qMin(2, root->childCount());
-            root->insertChildNode(cursorNode, insertIdx);
+            insert_child_at(root,cursorNode, insertIdx);
         }
     }
 
@@ -78,7 +98,7 @@ cpp! {{
         // Ensure child[1] exists as QSGImageNode
         QSGImageNode *overlayNode = nullptr;
         if (root->childCount() > 1) {
-            overlayNode = dynamic_cast<QSGImageNode*>(root->childAt(1));
+            overlayNode = dynamic_cast<QSGImageNode*>(child_at(root,1));
         }
         if (!overlayNode) {
             overlayNode = item->window()->createImageNode();
@@ -86,7 +106,7 @@ cpp! {{
             overlayNode->setOwnsTexture(true);
             // Insert at position 1 (after static text child[0], before cursor child[2])
             int insertIdx = qMin(1, root->childCount());
-            root->insertChildNode(overlayNode, insertIdx);
+            insert_child_at(root,overlayNode, insertIdx);
         }
 
         if (!img_ptr || img_ptr->width() == 0 || img_ptr->height() == 0) {
@@ -127,7 +147,7 @@ cpp! {{
         QSGRectangleNode *cursorNode = nullptr;
         // Cursor is always child[2] in three-layer layout
         if (root->childCount() > 2) {
-            cursorNode = dynamic_cast<QSGRectangleNode*>(root->childAt(2));
+            cursorNode = dynamic_cast<QSGRectangleNode*>(child_at(root,2));
         }
         if (!cursorNode) {
             cursorNode = item->window()->createRectangleNode();

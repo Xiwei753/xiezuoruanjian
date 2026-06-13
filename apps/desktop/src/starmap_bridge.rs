@@ -172,6 +172,8 @@ pub fn create_starmap_edge(
         to_target: None,
         from_endpoint: None,
         to_endpoint: None,
+        from_endpoint_path: None,
+        to_endpoint_path: None,
         created_at: now,
         updated_at: now,
     };

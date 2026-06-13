@@ -261,7 +261,7 @@ impl AppBackend {
                     Vec::new(),
                     vec![writer_core::api::ChangedEntityDto { entity_type: "ChapterCleared".to_string(), entity_id: Some(c.clone()) }],
                 ),
-                Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
+                Err(error) => writer_core::api::ResultEnvelope::<writer_core::api::types::ChapterSaveReceiptDto>::error(error),
             }.to_json_string();
             match serde_json::from_str::<serde_json::Value>(&envelope) {
                 Ok(envelope) => {
