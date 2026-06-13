@@ -27,7 +27,7 @@ WHITELIST_FILENAMES = {
     'chapter.remote-conflict-YYYYMMDD-HHMMSS.md',
     'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
 
-    'settings.json'
+    'settings.json', 'graph.json', 'migration.json'
 }
 
 WHITELIST_PATHS = {
