@@ -1,0 +1,11 @@
+export default {
+  app: {
+    bundleName: 'com.writer.app',
+    vendor: 'Writer',
+    versionCode: 1000000,
+    versionName: '1.0.0',
+    icon: '$media:app_icon',
+    label: '$string:app_name',
+  },
+  deviceType: ['phone', 'tablet'],
+}
