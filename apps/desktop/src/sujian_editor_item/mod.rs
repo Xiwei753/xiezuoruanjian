@@ -39,6 +39,30 @@ pub fn sujian_editor_debug_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
 }
 
+/// SUJIAN_EDITOR_STATIC_ONLY=1 — 最小静态渲染模式：
+/// 只执行 render_to_image -> update_texture_node，
+/// 跳过 cursor 计算、overlay、cursor QSG 节点、三层节点结构。
+/// 用于隔离 QImage -> QSGTexture 链路是否稳定。
+pub fn sujian_editor_static_only() -> bool {
+    std::env::var("SUJIAN_EDITOR_STATIC_ONLY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// SUJIAN_EDITOR_DISABLE_QSG_OVERLAY=1 — 禁用动画 overlay 层 (Layer 1)
+pub fn sujian_editor_disable_qsg_overlay() -> bool {
+    std::env::var("SUJIAN_EDITOR_DISABLE_QSG_OVERLAY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// SUJIAN_EDITOR_DISABLE_QSG_CURSOR=1 — 禁用光标 QSG 节点 (Layer 2)
+pub fn sujian_editor_disable_qsg_cursor() -> bool {
+    std::env::var("SUJIAN_EDITOR_DISABLE_QSG_CURSOR")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 #[allow(dead_code)]
 #[derive(QObject)]
 pub struct SujianEditorItem {
@@ -1370,8 +1394,19 @@ impl QQuickItem for SujianEditorItem {
 
         let frame_start = Instant::now();
 
-        // 1. Update cursor visual position
-        self.update_cursor_visual_position();
+        // ── Debug switches ──
+        // SUJIAN_EDITOR_STATIC_ONLY=1  — 最小链路：只做 render_to_image -> update_texture_node
+        // SUJIAN_EDITOR_DISABLE_QSG_OVERLAY=1 — 禁用 Layer 1 (动画 overlay)
+        // SUJIAN_EDITOR_DISABLE_QSG_CURSOR=1  — 禁用 Layer 2 (光标 QSG 节点)
+        let static_only = sujian_editor_static_only();
+        let disable_overlay = static_only || sujian_editor_disable_qsg_overlay();
+        let disable_cursor = static_only || sujian_editor_disable_qsg_cursor();
+
+        // In static-only mode, skip cursor visual position update entirely
+        // to avoid IME side-effects and layout computation.
+        if !static_only {
+            self.update_cursor_visual_position();
+        }
 
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() {
@@ -1413,9 +1448,14 @@ impl QQuickItem for SujianEditorItem {
 
         let mut final_root = root_raw;
 
-        // Ensure three-layer scene graph structure is correct
+        // In static-only mode, only ensure a single QSGImageNode (Layer 0).
+        // Otherwise, ensure the full three-layer structure.
         if !root_raw.is_null() && !item_ptr.is_null() {
-            scene_graph::ensure_three_layer_nodes(root_raw, item_ptr);
+            if static_only {
+                scene_graph::ensure_single_image_node(root_raw, item_ptr);
+            } else {
+                scene_graph::ensure_three_layer_nodes(root_raw, item_ptr);
+            }
         }
 
         // ── Layer 0: Static text texture (child[0]) ──
@@ -1491,16 +1531,8 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // ── Layer 1: Animation overlay (child[1]) — SKIPPED in minimal render mode ──
-        // When SUJIAN_MINIMAL_STATIC_RENDER=1, overlay and cursor QSG updates are
-        // disabled so that only the static text texture (Layer 0) is active.
-        // This isolates crashes to the QImage -> QSGTexture path.
-        // See editor_engine_route.md "最小静态渲染链路" for the protocol.
-        let minimal_render = std::env::var("SUJIAN_MINIMAL_STATIC_RENDER")
-            .map(|v| v == "1" || v == "true")
-            .unwrap_or(false);
-
-        if !minimal_render {
+        // ── Layer 1: Animation overlay (child[1]) ──
+        if !disable_overlay {
             // Clean up finished animations BEFORE painting the overlay, so that
             // the overlay is hidden on the exact frame the animation ends.
             self.cleanup_finished_animations();
@@ -1537,12 +1569,15 @@ impl QQuickItem for SujianEditorItem {
         } else {
             self.cleanup_finished_animations();
             if sujian_editor_debug_enabled() {
-                eprintln!("sujian_update_paint_node: MINIMAL_STATIC_RENDER mode — overlay and cursor QSG updates skipped");
+                eprintln!(
+                    "sujian_update_paint_node: overlay QSG disabled (static_only={}, disable_overlay={})",
+                    static_only, disable_overlay
+                );
             }
         }
 
-        // ── Layer 2: Cursor animation + node (child[2]) — SKIPPED in minimal render mode ──
-        if !minimal_render {
+        // ── Layer 2: Cursor animation + node (child[2]) ──
+        if !disable_cursor {
             let now = Instant::now();
             if let Some(ref anim) = self.cursor_animation {
                 if anim.is_finished(now) {
@@ -1576,14 +1611,21 @@ impl QQuickItem for SujianEditorItem {
                     cursor_color_rgba,
                 );
             }
+        } else if sujian_editor_debug_enabled() {
+            eprintln!(
+                "sujian_update_paint_node: cursor QSG disabled (static_only={}, disable_cursor={})",
+                static_only, disable_cursor
+            );
         }
 
         let total_elapsed = frame_start.elapsed();
-        if total_elapsed.as_millis() > 4 {
+        if total_elapsed.as_millis() > 4 || static_only {
             eprintln!(
-                "sujian_update_paint_node: total_ms={}, minimal_render={}",
+                "sujian_update_paint_node: total_ms={}, static_only={}, disable_overlay={}, disable_cursor={}",
                 total_elapsed.as_millis(),
-                minimal_render,
+                static_only,
+                disable_overlay,
+                disable_cursor,
             );
         }
 

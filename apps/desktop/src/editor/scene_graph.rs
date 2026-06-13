@@ -32,6 +32,42 @@ cpp! {{
     //   child[1] = QSGImageNode  — animation overlay texture
     //   child[2] = QSGRectangleNode — cursor
 
+    // Three-layer scene graph layout:
+    //   child[0] = QSGImageNode  — static text texture
+    //   child[1] = QSGImageNode  — animation overlay texture
+    //   child[2] = QSGRectangleNode — cursor
+
+    void ensure_single_image_node(QSGTransformNode *root, QQuickItem *item) {
+        if (!root || !item) return;
+
+        // Remove any extra children beyond child[0] (overlay, cursor, etc.)
+        // This is for SUJIAN_EDITOR_STATIC_ONLY mode — only the static
+        // text texture node should exist.
+        while (root->childCount() > 1) {
+            QSGNode *extra = child_at(root, root->childCount() - 1);
+            root->removeChildNode(extra);
+            delete extra;
+        }
+
+        // Ensure child[0] is QSGImageNode (static text)
+        QSGImageNode *staticNode = nullptr;
+        if (root->childCount() > 0) {
+            staticNode = dynamic_cast<QSGImageNode*>(child_at(root,0));
+        }
+        if (!staticNode) {
+            // Remove wrong-typed child[0] if present
+            if (root->childCount() > 0) {
+                QSGNode *old = child_at(root,0);
+                root->removeChildNode(old);
+                delete old;
+            }
+            staticNode = item->window()->createImageNode();
+            staticNode->setFiltering(QSGTexture::Nearest);
+            staticNode->setOwnsTexture(true);
+            root->prependChildNode(staticNode);
+        }
+    }
+
     void ensure_three_layer_nodes(QSGTransformNode *root, QQuickItem *item) {
         if (!root || !item) return;
 
@@ -174,6 +210,22 @@ pub fn ensure_three_layer_nodes(
         item_ptr as "QQuickItem*"
     ] {
         ensure_three_layer_nodes(
+            static_cast<QSGTransformNode*>(root_raw), item_ptr
+        );
+    })
+}
+
+/// SUJIAN_EDITOR_STATIC_ONLY mode: only ensure a single QSGImageNode
+/// for the static text texture. No overlay or cursor nodes are created.
+pub fn ensure_single_image_node(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+) {
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*"
+    ] {
+        ensure_single_image_node(
             static_cast<QSGTransformNode*>(root_raw), item_ptr
         );
     })
