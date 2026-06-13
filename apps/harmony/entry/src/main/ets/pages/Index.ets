@@ -1,6 +1,8 @@
 import router from '@ohos.router'
-import WriterCoreBridge from '../bridge/WriterCoreBridge'
-import { Workspace, Project, RecentEdit } from '../model/CoreDtos'
+import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
+import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
+import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
+import { HarmonyThemeAdapter, ThemeConfig } from '../system/HarmonyThemeAdapter'
 
 @Entry
 @Component
@@ -8,13 +10,27 @@ struct Index {
   @State workspaceName: string = '我的写作空间'
   @State projects: Project[] = []
   @State recentEdits: RecentEdit[] = []
+  @State writingStats: WritingStats | null = null
   @State isLoading: boolean = true
   @State errorMessage: string = ''
+  @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
-  private bridge: WriterCoreBridge = WriterCoreBridge.getInstance()
+  private bridge: IWriterCoreBridge = new MockWriterCoreBridge()
+  private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
 
   aboutToAppear() {
+    this.themeAdapter.addObserver({
+      onThemeChanged: (theme) => {
+        this.themeConfig = theme
+      }
+    })
     this.loadWorkspace()
+  }
+
+  aboutToDisappear() {
+    this.themeAdapter.removeObserver({
+      onThemeChanged: () => {}
+    })
   }
 
   async loadWorkspace() {
@@ -22,13 +38,21 @@ struct Index {
     this.errorMessage = ''
 
     try {
-      const result = await this.bridge.openWorkspace('/mock/workspace')
-      if (result.success && result.data) {
-        this.workspaceName = result.data.workspace.name
-        this.projects = result.data.projects
-        this.recentEdits = result.data.recentEdits
+      const [workspaceResult, statsResult] = await Promise.all([
+        this.bridge.openWorkspace('/mock/workspace'),
+        this.bridge.getWritingStats()
+      ])
+
+      if (workspaceResult.success && workspaceResult.data) {
+        this.workspaceName = workspaceResult.data.workspace.name
+        this.projects = workspaceResult.data.projects
+        this.recentEdits = workspaceResult.data.recentEdits
       } else {
-        this.errorMessage = result.userMessage || '加载工作区失败'
+        this.errorMessage = workspaceResult.userMessage || '加载工作区失败'
+      }
+
+      if (statsResult.success && statsResult.data) {
+        this.writingStats = statsResult.data
       }
     } catch (err) {
       this.errorMessage = '加载工作区时发生错误'
@@ -44,13 +68,22 @@ struct Index {
         Text('写作软件')
           .fontSize(24)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#333333')
+          .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
-        Text(this.workspaceName)
-          .fontSize(14)
-          .fontColor('#666666')
+        Column() {
+          Text(this.workspaceName)
+            .fontSize(14)
+            .fontColor(this.themeConfig.colors.textSecondary)
+
+          if (this.writingStats) {
+            Text(`今日: ${this.writingStats.todayChars} 字`)
+              .fontSize(12)
+              .fontColor(this.themeConfig.colors.textHint)
+          }
+        }
+        .alignItems(HorizontalAlign.End)
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 16, bottom: 12 })
@@ -60,9 +93,10 @@ struct Index {
           LoadingProgress()
             .width(48)
             .height(48)
+            .color(this.themeConfig.colors.primary)
           Text('加载中...')
             .fontSize(14)
-            .fontColor('#999999')
+            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
         }
         .width('100%')
@@ -72,11 +106,12 @@ struct Index {
         Column() {
           Text(this.errorMessage)
             .fontSize(16)
-            .fontColor('#E74C3C')
+            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
           Button('重试')
             .onClick(() => this.loadWorkspace())
+            .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -84,6 +119,11 @@ struct Index {
       } else {
         Scroll() {
           Column() {
+            // Writing stats card
+            if (this.writingStats) {
+              this.WritingStatsCard()
+            }
+
             // Recent edits section
             if (this.recentEdits.length > 0) {
               this.RecentEditsSection()
@@ -92,8 +132,8 @@ struct Index {
             // Projects section
             this.ProjectsSection()
 
-            // StarMap entry
-            this.StarMapEntry()
+            // Quick actions
+            this.QuickActions()
           }
           .width('100%')
           .padding({ left: 16, right: 16, bottom: 24 })
@@ -104,40 +144,135 @@ struct Index {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#F5F5F5')
+    .backgroundColor(this.themeConfig.colors.background)
+  }
+
+  @Builder
+  WritingStatsCard() {
+    Row() {
+      Column() {
+        Text('今日写作')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ bottom: 8 })
+
+        Text(`${this.writingStats?.todayChars || 0}`)
+          .fontSize(32)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.themeConfig.colors.primary)
+
+        Text('字')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Center)
+
+      Divider()
+        .vertical(true)
+        .height(40)
+        .color(this.themeConfig.colors.divider)
+
+      Column() {
+        Text('连续天数')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ bottom: 8 })
+
+        Text(`${this.writingStats?.currentStreak || 0}`)
+          .fontSize(32)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.themeConfig.colors.secondary)
+
+        Text('天')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Center)
+
+      Divider()
+        .vertical(true)
+        .height(40)
+        .color(this.themeConfig.colors.divider)
+
+      Column() {
+        Text('总字数')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ bottom: 8 })
+
+        Text(`${this.writingStats?.totalWords || 0}`)
+          .fontSize(32)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.themeConfig.colors.success)
+
+        Text('字')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Center)
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(this.themeConfig.colors.surface)
+    .borderRadius(12)
+    .margin({ bottom: 16 })
   }
 
   @Builder
   RecentEditsSection() {
     Column() {
-      Text('最近编辑')
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#333333')
-        .margin({ bottom: 12 })
+      Row() {
+        Text('最近编辑')
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.themeConfig.colors.textPrimary)
+
+        Blank()
+
+        Text('查看全部')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.primary)
+          .onClick(() => {
+            // TODO: Navigate to full recent edits list
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 12 })
 
       ForEach(this.recentEdits, (edit: RecentEdit) => {
         Row() {
           Column() {
             Text(edit.chapterTitle)
               .fontSize(16)
-              .fontColor('#333333')
+              .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 4 })
 
-            Text(edit.projectTitle)
-              .fontSize(12)
-              .fontColor('#999999')
+            Row() {
+              Text(edit.projectTitle)
+                .fontSize(12)
+                .fontColor(this.themeConfig.colors.textSecondary)
+                .margin({ right: 12 })
+
+              if (edit.wordCount) {
+                Text(`${edit.wordCount} 字`)
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.textHint)
+              }
+            }
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
           Text(this.formatTime(edit.editedAt))
             .fontSize(12)
-            .fontColor('#999999')
+            .fontColor(this.themeConfig.colors.textHint)
         }
         .width('100%')
         .padding(12)
-        .backgroundColor('#FFFFFF')
+        .backgroundColor(this.themeConfig.colors.surface)
         .borderRadius(8)
         .margin({ bottom: 8 })
         .onClick(() => {
@@ -162,14 +297,14 @@ struct Index {
         Text('我的作品')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor('#333333')
+          .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
         Button('+ 新建作品')
           .fontSize(14)
           .height(32)
-          .backgroundColor('#4A90D9')
+          .backgroundColor(this.themeConfig.colors.primary)
           .onClick(async () => {
             const result = await this.bridge.createProject('新作品')
             if (result.success) {
@@ -186,18 +321,25 @@ struct Index {
             Text(project.name)
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
-              .fontColor('#333333')
+              .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 4 })
 
             Row() {
               Text(`${project.volumeCount} 卷`)
                 .fontSize(12)
-                .fontColor('#666666')
+                .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ right: 12 })
 
               Text(`${project.chapterCount} 章`)
                 .fontSize(12)
-                .fontColor('#666666')
+                .fontColor(this.themeConfig.colors.textSecondary)
+                .margin({ right: 12 })
+
+              if (project.totalWordCount) {
+                Text(`${project.totalWordCount} 字`)
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.textHint)
+              }
             }
           }
           .layoutWeight(1)
@@ -206,11 +348,11 @@ struct Index {
           Image($r('sys.media.ohos_ic_public_arrow_right'))
             .width(16)
             .height(16)
-            .fillColor('#CCCCCC')
+            .fillColor(this.themeConfig.colors.textHint)
         }
         .width('100%')
         .padding(16)
-        .backgroundColor('#FFFFFF')
+        .backgroundColor(this.themeConfig.colors.surface)
         .borderRadius(8)
         .margin({ bottom: 8 })
         .onClick(() => {
@@ -229,47 +371,116 @@ struct Index {
   }
 
   @Builder
-  StarMapEntry() {
+  QuickActions() {
     Column() {
-      Text('星图')
+      Text('快捷操作')
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
-        .fontColor('#333333')
+        .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 12 })
         .width('100%')
 
-      Row() {
-        Column() {
-          Text('人物关系图')
-            .fontSize(16)
-            .fontColor('#333333')
-            .margin({ bottom: 4 })
+      Grid() {
+        GridItem() {
+          Column() {
+            Image($r('sys.media.ohos_ic_public_add'))
+              .width(32)
+              .height(32)
+              .fillColor(this.themeConfig.colors.primary)
+              .margin({ bottom: 8 })
 
-          Text('8 个节点 · 12 条连线')
-            .fontSize(12)
-            .fontColor('#999999')
+            Text('新建章节')
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textPrimary)
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(this.themeConfig.colors.surface)
+          .borderRadius(12)
         }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
+        .onClick(() => {
+          // TODO: Quick create chapter
+        })
 
-        Button('查看')
-          .fontSize(14)
-          .height(32)
-          .backgroundColor('#7B68EE')
-          .onClick(() => {
-            router.pushUrl({
-              url: 'pages/StarMapPage',
-              params: {
-                starmapId: 'starmap-001',
-                starmapTitle: '人物关系图'
-              }
-            })
+        GridItem() {
+          Column() {
+            Image($r('sys.media.ohos_ic_public_star'))
+              .width(32)
+              .height(32)
+              .fillColor(this.themeConfig.colors.secondary)
+              .margin({ bottom: 8 })
+
+            Text('星图')
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textPrimary)
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(this.themeConfig.colors.surface)
+          .borderRadius(12)
+        }
+        .onClick(() => {
+          router.pushUrl({
+            url: 'pages/StarMapPage',
+            params: {
+              starmapId: 'starmap-001',
+              starmapTitle: '人物关系图'
+            }
           })
+        })
+
+        GridItem() {
+          Column() {
+            Image($r('sys.media.ohos_ic_public_setting'))
+              .width(32)
+              .height(32)
+              .fillColor(this.themeConfig.colors.textSecondary)
+              .margin({ bottom: 8 })
+
+            Text('设置')
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textPrimary)
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(this.themeConfig.colors.surface)
+          .borderRadius(12)
+        }
+        .onClick(() => {
+          router.pushUrl({ url: 'pages/SettingsPage' })
+        })
+
+        GridItem() {
+          Column() {
+            Image($r('sys.media.ohos_ic_public_refresh'))
+              .width(32)
+              .height(32)
+              .fillColor(this.themeConfig.colors.success)
+              .margin({ bottom: 8 })
+
+            Text('同步')
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textPrimary)
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(this.themeConfig.colors.surface)
+          .borderRadius(12)
+        }
+        .onClick(() => {
+          router.pushUrl({ url: 'pages/SettingsPage' })
+        })
       }
+      .columnsTemplate('1fr 1fr')
+      .rowsTemplate('1fr 1fr')
+      .columnsGap(12)
+      .rowsGap(12)
+      .height(200)
       .width('100%')
-      .padding(16)
-      .backgroundColor('#FFFFFF')
-      .borderRadius(8)
     }
     .width('100%')
   }

@@ -1,0 +1,9 @@
+{
+  "src": [
+    "pages/Index",
+    "pages/WorkspacePage",
+    "pages/WritingPage",
+    "pages/StarMapPage",
+    "pages/SettingsPage"
+  ]
+}

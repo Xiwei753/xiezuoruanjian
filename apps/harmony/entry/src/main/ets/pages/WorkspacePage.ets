@@ -1,6 +1,8 @@
 import router from '@ohos.router'
-import WriterCoreBridge from '../bridge/WriterCoreBridge'
-import { ProjectTree, VolumeTree, Chapter } from '../model/CoreDtos'
+import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
+import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
+import { ProjectTree, VolumeTree, Chapter, Project } from '../model/CoreDtos'
+import { HarmonyThemeAdapter, ThemeConfig } from '../system/HarmonyThemeAdapter'
 
 interface WorkspacePageParams {
   projectId: string
@@ -12,12 +14,15 @@ interface WorkspacePageParams {
 struct WorkspacePage {
   @State projectId: string = ''
   @State projectName: string = ''
+  @State project: Project | null = null
   @State volumeTrees: VolumeTree[] = []
   @State isLoading: boolean = true
   @State errorMessage: string = ''
   @State expandedVolumes: Set<string> = new Set()
+  @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
-  private bridge: WriterCoreBridge = WriterCoreBridge.getInstance()
+  private bridge: IWriterCoreBridge = new MockWriterCoreBridge()
+  private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
 
   aboutToAppear() {
     const params = router.getParams() as WorkspacePageParams
@@ -26,6 +31,18 @@ struct WorkspacePage {
       this.projectName = params.projectName
       this.loadProjectTree()
     }
+
+    this.themeAdapter.addObserver({
+      onThemeChanged: (theme) => {
+        this.themeConfig = theme
+      }
+    })
+  }
+
+  aboutToDisappear() {
+    this.themeAdapter.removeObserver({
+      onThemeChanged: () => {}
+    })
   }
 
   async loadProjectTree() {
@@ -35,6 +52,7 @@ struct WorkspacePage {
     try {
       const result = await this.bridge.getProjectTree(this.projectId)
       if (result.success && result.data) {
+        this.project = result.data.project
         this.volumeTrees = result.data.volumes
         // Expand first volume by default
         if (this.volumeTrees.length > 0) {
@@ -58,6 +76,52 @@ struct WorkspacePage {
     }
   }
 
+  async createVolume() {
+    try {
+      const result = await this.bridge.createVolume(this.projectId, '新卷')
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to create volume:', err)
+    }
+  }
+
+  async createChapter(volumeId: string) {
+    try {
+      const result = await this.bridge.createChapter(volumeId, '新章节')
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to create chapter:', err)
+    }
+  }
+
+  async deleteVolume(volumeId: string) {
+    // TODO: Show confirmation dialog
+    try {
+      const result = await this.bridge.deleteVolume(this.projectId, volumeId)
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to delete volume:', err)
+    }
+  }
+
+  async deleteChapter(chapterId: string) {
+    // TODO: Show confirmation dialog
+    try {
+      const result = await this.bridge.deleteChapter(chapterId)
+      if (result.success) {
+        this.loadProjectTree()
+      }
+    } catch (err) {
+      console.error('Failed to delete chapter:', err)
+    }
+  }
+
   build() {
     Column() {
       // Header
@@ -65,27 +129,30 @@ struct WorkspacePage {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
           .width(24)
           .height(24)
-          .fillColor('#333333')
+          .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(() => router.back())
 
         Text(this.projectName)
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#333333')
+          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ left: 12 })
 
         Blank()
 
+        // Project stats
+        if (this.project) {
+          Text(`${this.project.volumeCount} 卷 · ${this.project.chapterCount} 章`)
+            .fontSize(12)
+            .fontColor(this.themeConfig.colors.textSecondary)
+            .margin({ right: 12 })
+        }
+
         Button('+ 新卷')
           .fontSize(14)
           .height(32)
-          .backgroundColor('#4A90D9')
-          .onClick(async () => {
-            const result = await this.bridge.createVolume(this.projectId, '新卷')
-            if (result.success) {
-              this.loadProjectTree()
-            }
-          })
+          .backgroundColor(this.themeConfig.colors.primary)
+          .onClick(() => this.createVolume())
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 16, bottom: 12 })
@@ -95,9 +162,10 @@ struct WorkspacePage {
           LoadingProgress()
             .width(48)
             .height(48)
+            .color(this.themeConfig.colors.primary)
           Text('加载中...')
             .fontSize(14)
-            .fontColor('#999999')
+            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
         }
         .width('100%')
@@ -107,11 +175,12 @@ struct WorkspacePage {
         Column() {
           Text(this.errorMessage)
             .fontSize(16)
-            .fontColor('#E74C3C')
+            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
           Button('重试')
             .onClick(() => this.loadProjectTree())
+            .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -119,9 +188,13 @@ struct WorkspacePage {
       } else {
         Scroll() {
           Column() {
-            ForEach(this.volumeTrees, (volumeTree: VolumeTree) => {
-              this.VolumeSection(volumeTree)
-            }, (volumeTree: VolumeTree) => volumeTree.volume.id)
+            if (this.volumeTrees.length === 0) {
+              this.EmptyState()
+            } else {
+              ForEach(this.volumeTrees, (volumeTree: VolumeTree) => {
+                this.VolumeSection(volumeTree)
+              }, (volumeTree: VolumeTree) => volumeTree.volume.id)
+            }
           }
           .width('100%')
           .padding({ left: 16, right: 16, bottom: 24 })
@@ -132,7 +205,30 @@ struct WorkspacePage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#F5F5F5')
+    .backgroundColor(this.themeConfig.colors.background)
+  }
+
+  @Builder
+  EmptyState() {
+    Column() {
+      Image($r('sys.media.ohos_ic_public_add'))
+        .width(64)
+        .height(64)
+        .fillColor(this.themeConfig.colors.textHint)
+        .margin({ bottom: 16 })
+
+      Text('还没有卷和章节')
+        .fontSize(16)
+        .fontColor(this.themeConfig.colors.textSecondary)
+        .margin({ bottom: 8 })
+
+      Text('点击上方"新卷"开始创作')
+        .fontSize(14)
+        .fontColor(this.themeConfig.colors.textHint)
+    }
+    .width('100%')
+    .padding(48)
+    .justifyContent(FlexAlign.Center)
   }
 
   @Builder
@@ -145,87 +241,120 @@ struct WorkspacePage {
           : $r('sys.media.ohos_ic_public_arrow_right'))
           .width(16)
           .height(16)
-          .fillColor('#666666')
+          .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
         Text(volumeTree.volume.name)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
-          .fontColor('#333333')
-
-        Blank()
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
 
         Text(`${volumeTree.chapters.length} 章`)
           .fontSize(12)
-          .fontColor('#999999')
+          .fontColor(this.themeConfig.colors.textHint)
+          .margin({ right: 8 })
 
-        Button('+ 新章')
-          .fontSize(12)
+        Button('+')
+          .fontSize(14)
+          .width(28)
           .height(28)
-          .backgroundColor('#7B68EE')
-          .margin({ left: 8 })
-          .onClick(async () => {
-            const result = await this.bridge.createChapter(volumeTree.volume.id, '新章节')
-            if (result.success) {
-              this.loadProjectTree()
-            }
-          })
+          .backgroundColor(this.themeConfig.colors.secondary)
+          .onClick(() => this.createChapter(volumeTree.volume.id))
+
+        Button('×')
+          .fontSize(14)
+          .width(28)
+          .height(28)
+          .backgroundColor(this.themeConfig.colors.error)
+          .margin({ left: 4 })
+          .onClick(() => this.deleteVolume(volumeTree.volume.id))
       }
       .width('100%')
       .padding(12)
-      .backgroundColor('#FFFFFF')
+      .backgroundColor(this.themeConfig.colors.surface)
       .borderRadius({ topLeft: 8, topRight: 8 })
       .onClick(() => this.toggleVolume(volumeTree.volume.id))
 
       // Chapters list
       if (this.expandedVolumes.has(volumeTree.volume.id)) {
-        ForEach(volumeTree.chapters, (chapter: Chapter) => {
-          Row() {
-            Column() {
-              Text(chapter.name)
-                .fontSize(15)
-                .fontColor('#333333')
-                .margin({ bottom: 4 })
-
-              Row() {
-                Text(`${chapter.wordCount} 字`)
-                  .fontSize(12)
-                  .fontColor('#999999')
-                  .margin({ right: 12 })
-
-                Text(this.formatTime(chapter.updatedAt))
-                  .fontSize(12)
-                  .fontColor('#999999')
-              }
-            }
-            .layoutWeight(1)
-            .alignItems(HorizontalAlign.Start)
-
-            Image($r('sys.media.ohos_ic_public_arrow_right'))
-              .width(16)
-              .height(16)
-              .fillColor('#CCCCCC')
+        if (volumeTree.chapters.length === 0) {
+          Column() {
+            Text('暂无章节')
+              .fontSize(14)
+              .fontColor(this.themeConfig.colors.textHint)
+              .padding(16)
           }
           .width('100%')
-          .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-          .backgroundColor('#FFFFFF')
-          .borderRadius(0)
-          .onClick(() => {
-            router.pushUrl({
-              url: 'pages/WritingPage',
-              params: {
-                chapterId: chapter.id,
-                chapterTitle: chapter.name
+          .backgroundColor(this.themeConfig.colors.surface)
+        } else {
+          ForEach(volumeTree.chapters, (chapter: Chapter) => {
+            Row() {
+              Column() {
+                Text(chapter.name)
+                  .fontSize(15)
+                  .fontColor(this.themeConfig.colors.textPrimary)
+                  .margin({ bottom: 4 })
+
+                Row() {
+                  Text(`${chapter.wordCount} 字`)
+                    .fontSize(12)
+                    .fontColor(this.themeConfig.colors.textSecondary)
+                    .margin({ right: 12 })
+
+                  Text(this.formatTime(chapter.updatedAt))
+                    .fontSize(12)
+                    .fontColor(this.themeConfig.colors.textHint)
+
+                  if (chapter.status) {
+                    Text(chapter.status === 'draft' ? '草稿' : chapter.status === 'published' ? '已发布' : '已归档')
+                      .fontSize(11)
+                      .fontColor(this.themeConfig.colors.primary)
+                      .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                      .backgroundColor(this.themeConfig.colors.background)
+                      .borderRadius(4)
+                      .margin({ left: 8 })
+                  }
+                }
               }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              Button('×')
+                .fontSize(14)
+                .width(24)
+                .height(24)
+                .backgroundColor('transparent')
+                .fontColor(this.themeConfig.colors.textHint)
+                .onClick(() => this.deleteChapter(chapter.id))
+
+              Image($r('sys.media.ohos_ic_public_arrow_right'))
+                .width(16)
+                .height(16)
+                .fillColor(this.themeConfig.colors.textHint)
+                .margin({ left: 8 })
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .backgroundColor(this.themeConfig.colors.surface)
+            .onClick(() => {
+              router.pushUrl({
+                url: 'pages/WritingPage',
+                params: {
+                  chapterId: chapter.id,
+                  chapterTitle: chapter.name
+                }
+              })
             })
-          })
-        }, (chapter: Chapter) => chapter.id)
+          }, (chapter: Chapter) => chapter.id)
+        }
       }
     }
     .width('100%')
     .margin({ bottom: 12 })
     .borderRadius(8)
     .clip(true)
+    .shadow({ radius: 2, color: '#1A000000', offsetX: 0, offsetY: 1 })
   }
 
   formatTime(isoString: string): string {

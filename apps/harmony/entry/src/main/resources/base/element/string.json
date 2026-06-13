@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "写作软件鸿蒙客户端"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "写作软件"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "写作软件"
+    },
+    {
+      "name": "app_name",
+      "value": "写作软件"
+    }
+  ]
+}

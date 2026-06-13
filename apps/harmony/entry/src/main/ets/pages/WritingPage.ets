@@ -1,6 +1,9 @@
 import router from '@ohos.router'
-import WriterCoreBridge from '../bridge/WriterCoreBridge'
+import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
+import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
 import { ChapterData, SaveReceipt, LocalSettings } from '../model/CoreDtos'
+import { HarmonyThemeAdapter, ThemeConfig } from '../system/HarmonyThemeAdapter'
+import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 
 interface WritingPageParams {
   chapterId: string
@@ -26,13 +29,21 @@ struct WritingPage {
     autoSave: true,
     autoSaveInterval: 30,
     autoIndent: true,
-    showWordCount: true
+    showWordCount: true,
+    showLineNumbers: false,
+    wordWrap: true,
+    spellCheck: false
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
+  @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  @State sessionStartTime: number = Date.now()
+  @State sessionCharsAdded: number = 0
 
-  private bridge: WriterCoreBridge = WriterCoreBridge.getInstance()
-  private autoSaveTimer: number = -1
+  private bridge: IWriterCoreBridge = new MockWriterCoreBridge()
+  private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
+  private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
+  private autoSaveObserver: AutoSaveLifecycleObserver | null = null
 
   aboutToAppear() {
     const params = router.getParams() as WritingPageParams
@@ -42,10 +53,40 @@ struct WritingPage {
       this.loadChapter()
       this.loadSettings()
     }
+
+    this.themeAdapter.addObserver({
+      onThemeChanged: (theme) => {
+        this.themeConfig = theme
+      }
+    })
+
+    // Setup auto-save lifecycle observer
+    this.autoSaveObserver = new AutoSaveLifecycleObserver(
+      () => this.saveChapter(),
+      this.settings.autoSaveInterval * 1000
+    )
+    this.lifecycle.addObserver(this.autoSaveObserver)
   }
 
   aboutToDisappear() {
-    this.stopAutoSave()
+    // Record writing session
+    const durationSeconds = Math.floor((Date.now() - this.sessionStartTime) / 1000)
+    if (this.sessionCharsAdded > 0 && durationSeconds > 10) {
+      this.bridge.processWritingEvent(this.sessionCharsAdded, durationSeconds)
+    }
+
+    // Save if unsaved changes
+    if (this.hasUnsavedChanges) {
+      this.saveChapter()
+    }
+
+    // Cleanup
+    if (this.autoSaveObserver) {
+      this.lifecycle.removeObserver(this.autoSaveObserver)
+    }
+    this.themeAdapter.removeObserver({
+      onThemeChanged: () => {}
+    })
   }
 
   async loadChapter() {
@@ -74,8 +115,21 @@ struct WritingPage {
       const result = await this.bridge.getLocalSettings()
       if (result.success && result.data) {
         this.settings = result.data
-        if (this.settings.autoSave) {
-          this.startAutoSave()
+        this.themeAdapter.updateFromSettings({
+          theme: result.data.theme,
+          fontSize: result.data.fontSize,
+          fontFamily: result.data.fontFamily,
+          lineHeight: result.data.lineHeight
+        })
+
+        // Update auto-save interval
+        if (this.autoSaveObserver) {
+          this.lifecycle.removeObserver(this.autoSaveObserver)
+          this.autoSaveObserver = new AutoSaveLifecycleObserver(
+            () => this.saveChapter(),
+            this.settings.autoSaveInterval * 1000
+          )
+          this.lifecycle.addObserver(this.autoSaveObserver)
         }
       }
     } catch (err) {
@@ -83,24 +137,8 @@ struct WritingPage {
     }
   }
 
-  startAutoSave() {
-    this.stopAutoSave()
-    this.autoSaveTimer = setInterval(() => {
-      if (this.hasUnsavedChanges && !this.isSaving) {
-        this.saveChapter()
-      }
-    }, this.settings.autoSaveInterval * 1000)
-  }
-
-  stopAutoSave() {
-    if (this.autoSaveTimer !== -1) {
-      clearInterval(this.autoSaveTimer)
-      this.autoSaveTimer = -1
-    }
-  }
-
   async saveChapter() {
-    if (this.isSaving) return
+    if (this.isSaving || !this.hasUnsavedChanges) return
 
     this.isSaving = true
     this.saveMessage = ''
@@ -126,11 +164,42 @@ struct WritingPage {
   }
 
   onContentChange(text: string) {
+    const oldLength = this.content.length
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
+
+    // Track characters added
+    const lengthDiff = text.length - oldLength
+    if (lengthDiff > 0) {
+      this.sessionCharsAdded += lengthDiff
+    }
+
+    // Update word count
     this.bridge.calculateWordCount(text).then(count => {
       this.wordCount = count
     })
+  }
+
+  async clearContent() {
+    // TODO: Show confirmation dialog
+    this.isSaving = true
+    try {
+      const result = await this.bridge.clearChapter(this.chapterId)
+      if (result.success && result.data) {
+        this.content = ''
+        this.lastSavedContent = ''
+        this.hasUnsavedChanges = false
+        this.wordCount = 0
+        this.saveMessage = '已清空'
+        setTimeout(() => {
+          this.saveMessage = ''
+        }, 2000)
+      }
+    } catch (err) {
+      this.saveMessage = '清空失败'
+    } finally {
+      this.isSaving = false
+    }
   }
 
   build() {
@@ -140,7 +209,7 @@ struct WritingPage {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
           .width(24)
           .height(24)
-          .fillColor('#333333')
+          .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(() => {
             if (this.hasUnsavedChanges) {
               this.saveChapter().then(() => router.back())
@@ -152,28 +221,31 @@ struct WritingPage {
         Text(this.chapterTitle)
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
-          .fontColor('#333333')
+          .fontColor(this.themeConfig.colors.textPrimary)
           .margin({ left: 12 })
           .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         if (this.saveMessage) {
           Text(this.saveMessage)
             .fontSize(12)
-            .fontColor(this.saveMessage === '已保存' ? '#2ECC71' : '#E74C3C')
+            .fontColor(this.saveMessage === '已保存' ? this.themeConfig.colors.success : this.themeConfig.colors.error)
             .margin({ right: 8 })
         }
 
         if (this.settings.showWordCount) {
           Text(`${this.wordCount} 字`)
             .fontSize(12)
-            .fontColor('#999999')
+            .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 8 })
         }
 
         Button('保存')
           .fontSize(14)
           .height(32)
-          .backgroundColor(this.hasUnsavedChanges ? '#4A90D9' : '#CCCCCC')
+          .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
+          .fontColor(this.hasUnsavedChanges ? '#FFFFFF' : this.themeConfig.colors.textSecondary)
           .enabled(!this.isSaving && this.hasUnsavedChanges)
           .onClick(() => this.saveChapter())
       }
@@ -185,9 +257,10 @@ struct WritingPage {
           LoadingProgress()
             .width(48)
             .height(48)
+            .color(this.themeConfig.colors.primary)
           Text('加载中...')
             .fontSize(14)
-            .fontColor('#999999')
+            .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
         }
         .width('100%')
@@ -197,11 +270,12 @@ struct WritingPage {
         Column() {
           Text(this.errorMessage)
             .fontSize(16)
-            .fontColor('#E74C3C')
+            .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
           Button('重试')
             .onClick(() => this.loadChapter())
+            .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
         .layoutWeight(1)
@@ -212,18 +286,38 @@ struct WritingPage {
           .fontSize(this.settings.fontSize)
           .fontFamily(this.settings.fontFamily)
           .lineHeight(this.settings.lineHeight)
-          .backgroundColor('#FFFFFF')
+          .backgroundColor(this.themeConfig.colors.surface)
           .padding(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .placeholderColor(this.themeConfig.colors.textHint)
           .onChange((value: string) => this.onContentChange(value))
-          .onSubmit(() => {
-            if (this.settings.autoIndent) {
-              // Auto-indent logic would go here
-            }
-          })
       }
+
+      // Bottom toolbar
+      Row() {
+        if (this.settings.autoSave) {
+          Text('自动保存')
+            .fontSize(12)
+            .fontColor(this.themeConfig.colors.textHint)
+        }
+
+        Blank()
+
+        Text(`会话: ${this.sessionCharsAdded} 字`)
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textHint)
+          .margin({ right: 16 })
+
+        Text(this.hasUnsavedChanges ? '未保存' : '已保存')
+          .fontSize(12)
+          .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.secondary : this.themeConfig.colors.success)
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .backgroundColor(this.themeConfig.colors.background)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#F5F5F5')
+    .backgroundColor(this.themeConfig.colors.background)
   }
 }
