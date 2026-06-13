@@ -130,7 +130,7 @@ pub fn glyph_rects_for_range(
             if abs_byte >= buffer_text.len() {
                 continue;
             }
-            let ch = buffer_text[abs_byte..].chars().next().unwrap();
+            let ch = buffer_text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
             let ch_str = ch.to_string();
             result.push(AnimatedGlyph {
                 byte_start: abs_byte,

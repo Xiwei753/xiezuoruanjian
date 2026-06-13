@@ -1038,7 +1038,7 @@ impl SujianEditorItem {
                 if abs_byte >= self.buffer.text.len() {
                     continue;
                 }
-                let ch = self.buffer.text[abs_byte..].chars().next().unwrap();
+                let ch = self.buffer.text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
                 let ch_str = ch.to_string();
                 glyphs.push(AnimatedGlyph {
                     byte_start: abs_byte,
@@ -1102,7 +1102,7 @@ impl SujianEditorItem {
                 if abs_byte >= old_text.len() {
                     continue;
                 }
-                let ch = old_text[abs_byte..].chars().next().unwrap();
+                let ch = old_text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
                 let ch_str = ch.to_string();
                 glyphs.push(AnimatedGlyph {
                     byte_start: abs_byte,

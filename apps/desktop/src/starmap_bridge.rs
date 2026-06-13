@@ -34,7 +34,7 @@ fn parse_edge_kind(kind: &str) -> StarMapEdgeKindDto {
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or(std::time::Duration::ZERO)
         .as_millis() as u64
 }
 

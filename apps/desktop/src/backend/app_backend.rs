@@ -592,7 +592,7 @@ mod workspace_flow_tests {
         let mut app = AppBackend::default();
         assert!(!app.has_workspace());
 
-        let dir = tempdir().unwrap();
+        let dir = tempdir().expect("tempdir creation failed");
         let path_str = dir.path().to_string_lossy().to_string();
 
         // Test creating a new workspace
