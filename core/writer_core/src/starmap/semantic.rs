@@ -263,11 +263,15 @@ pub struct StarMapDeepTarget {
     pub target: StarMapTargetDetail,
 }
 
+/// 路径段：描述一次层级穿越。
+///
+/// 路径中间层只允许进入子星图空间，节点是原子，不能作为路径段"进入"。
+/// 节点只能作为路径终点的 `target`（`StarMapTargetDetail::Node` / `Anchor`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum StarMapPathSegment {
+    /// 进入子星图空间。`starmap_id` 是目标子星图的 ID。
     EnterChild { starmap_id: String },
-    EnterNode { node_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -349,4 +353,117 @@ pub fn resolve_target_display_status(
     }
 
     StarMapTargetDisplayStatus::TitleOnly
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // StarMapPathSegment 只有 EnterChild，没有 EnterNode
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_path_segment_only_enter_child() {
+        // StarMapPathSegment 只有 EnterChild 变体，节点是原子不能作为路径段
+        let segment = StarMapPathSegment::EnterChild {
+            starmap_id: "sm_child".to_string(),
+        };
+
+        // 序列化/反序列化 roundtrip
+        let json = serde_json::to_string(&segment).unwrap();
+        let deserialized: StarMapPathSegment = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, segment);
+    }
+
+    #[test]
+    fn test_path_segment_rejects_enter_node_json() {
+        // 旧格式的 enterNode JSON 不应该被反序列化为有效的 StarMapPathSegment
+        // 因为 StarMapPathSegment 现在只有 EnterChild 变体，
+        // serde 的 #[serde(tag = "type")] 会拒绝未知变体
+        let old_enter_node_json = r#"{"type": "enterNode", "nodeId": "n1"}"#;
+        let result: Result<StarMapPathSegment, _> = serde_json::from_str(old_enter_node_json);
+        assert!(result.is_err(), "enterNode should not deserialize as a valid StarMapPathSegment");
+    }
+
+    // -----------------------------------------------------------------------
+    // 多层 child starmap -> node 合法
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_deep_target_multi_layer_child_to_node() {
+        // 合法路径：工具星图 -> AI工具星图 -> 大模型星图 -> GPT节点
+        // 前面几层是 EnterChild，最后的 GPT 是 endpoint (StarMapTargetDetail::Node)
+        let dt = StarMapDeepTarget {
+            starmap_id: "sm_tools".to_string(),
+            path: vec![
+                StarMapPathSegment::EnterChild {
+                    starmap_id: "sm_ai_tools".to_string(),
+                },
+                StarMapPathSegment::EnterChild {
+                    starmap_id: "sm_llm".to_string(),
+                },
+            ],
+            target: StarMapTargetDetail::Node {
+                node_id: "gpt_node".to_string(),
+            },
+        };
+
+        // 验证路径结构：中间层只有 EnterChild
+        assert_eq!(dt.path.len(), 2);
+        for seg in &dt.path {
+            match seg {
+                StarMapPathSegment::EnterChild { .. } => {} // 合法
+            }
+        }
+
+        // 验证终点是 Node
+        match &dt.target {
+            StarMapTargetDetail::Node { node_id } => {
+                assert_eq!(node_id, "gpt_node");
+            }
+            _ => panic!("Expected Node target"),
+        }
+
+        // 序列化/反序列化 roundtrip
+        let json = serde_json::to_string(&dt).unwrap();
+        let deserialized: StarMapDeepTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, dt);
+    }
+
+    #[test]
+    fn test_deep_target_empty_path_to_node() {
+        // 直接指向当前星图的节点，无中间层
+        let dt = StarMapDeepTarget {
+            starmap_id: "sm_1".to_string(),
+            path: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n1".to_string(),
+            },
+        };
+
+        assert!(dt.path.is_empty());
+        let json = serde_json::to_string(&dt).unwrap();
+        let deserialized: StarMapDeepTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, dt);
+    }
+
+    #[test]
+    fn test_deep_target_multi_layer_to_anchor() {
+        // 多层 child starmap -> anchor 合法
+        let dt = StarMapDeepTarget {
+            starmap_id: "sm_root".to_string(),
+            path: vec![
+                StarMapPathSegment::EnterChild {
+                    starmap_id: "sm_child".to_string(),
+                },
+            ],
+            target: StarMapTargetDetail::Anchor {
+                node_id: "n1".to_string(),
+                anchor_id: "a1".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string(&dt).unwrap();
+        let deserialized: StarMapDeepTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, dt);
+    }
 }

@@ -539,7 +539,8 @@ impl SujianEditorItem {
         let width = self.bounding_width();
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let scroll_y = self.current_scroll_y as f64;
-        let snapshot = self.layout_snapshot_for_text(&self.buffer.text, width);
+        let text = self.buffer.text.clone();
+        let snapshot = self.layout_snapshot_for_text(&text, width);
         let content_h = snapshot.lines.last().map(|l| l.y + l.height + self.current_padding as f64).unwrap_or(vp_h);
 
         let overscan = vp_h * 2.5;

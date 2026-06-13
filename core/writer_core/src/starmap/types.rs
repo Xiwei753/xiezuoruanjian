@@ -81,11 +81,17 @@ pub struct StarMapDocument {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    /// 关联的项目 ID。这是快捷入口/默认绑定，不是所有权。
+    /// 星图是独立文档，创建就是创建，链接就是链接。
+    /// project_id 表示"这个星图默认服务于哪个项目"，不表示"星图属于项目"。
     #[serde(default)]
     pub project_id: Option<String>,
     /// Legacy: 仅作为遗留兼容组织字段，不表示拥有关系。
     #[serde(default)]
     pub parent_starmap_id: Option<String>,
+    /// 是否为关联项目的主星图（快捷入口/默认视图）。
+    /// 这是"默认绑定"语义，不是所有权：一个项目可以有多个星图，
+    /// is_main_for_project 只是标记"打开项目时默认跳到哪个星图"。
     #[serde(default)]
     pub is_main_for_project: bool,
     #[serde(default = "default_accent_color")]

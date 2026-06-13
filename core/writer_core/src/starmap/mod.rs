@@ -446,7 +446,6 @@ fn deep_target_references_starmap(
         crate::starmap::semantic::StarMapPathSegment::EnterChild { starmap_id: s } => {
             s == target_starmap_id
         }
-        _ => false,
     })
 }
 

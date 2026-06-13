@@ -985,27 +985,6 @@ pub fn resolve_deep_target(
                     return MissingStarmap;
                 }
             }
-            crate::starmap::semantic::StarMapPathSegment::EnterNode { node_id } => {
-                let target_graph_path =
-                    crate::starmap::starmap_graph_path(workspace, &current_starmap_id);
-                if target_graph_path.exists() {
-                    if let Ok(json_str) = std::fs::read_to_string(&target_graph_path) {
-                        if let Ok(target_graph) =
-                            serde_json::from_str::<crate::starmap::types::StarMapGraph>(&json_str)
-                        {
-                            if !target_graph.nodes.iter().any(|n| &n.id == node_id) {
-                                return MissingNode;
-                            }
-                        } else {
-                            return Unresolved;
-                        }
-                    } else {
-                        return Unresolved;
-                    }
-                } else {
-                    return MissingNode;
-                }
-            }
         }
     }
 
@@ -2009,8 +1988,8 @@ mod tests {
         let dt_too_deep = crate::starmap::semantic::StarMapDeepTarget {
             starmap_id: meta_a.starmap_id.clone(),
             path: vec![
-                crate::starmap::semantic::StarMapPathSegment::EnterNode {
-                    node_id: "n1".to_string()
+                crate::starmap::semantic::StarMapPathSegment::EnterChild {
+                    starmap_id: "dummy".to_string()
                 };
                 33
             ],
