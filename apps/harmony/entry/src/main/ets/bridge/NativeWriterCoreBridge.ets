@@ -22,6 +22,8 @@ import {
   RecentEdit
 } from '../model/CoreDtos'
 
+import nativeModule from 'libwriter_core.so'
+
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
   private isInitialized: boolean = false
@@ -214,7 +216,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async calculateWordCount(text: string): Promise<number> {
-    throw new Error('calculateWordCount must be delegated to Core')
+    try {
+      return nativeModule.nativeCalculateWordCount(text)
+    } catch (e) {
+      return -1
+    }
   }
 
   async processWritingEvent(charsAdded: number, durationSeconds: number): Promise<ResultEnvelope<boolean>> {
@@ -227,9 +233,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   // Native Status
   async getNativeLoadStatus(): Promise<ResultEnvelope<string>> {
-    return {
-      success: true,
-      data: 'not_loaded'
+    try {
+      const status = nativeModule.nativeGetLoadStatus()
+      return { success: true, data: status }
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
   }
 
