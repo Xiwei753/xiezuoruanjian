@@ -1,217 +1,71 @@
-// ⚠️ UNVERIFIED — 本接口未经 DevEco 编译验证。
-// 方法签名基于 HarmonyOS NEXT 文档推测，必须用 DevEco 真编译校验。
+// HarmonyOS NEXT Storage — 包装 @ohos.data.preferences（API 12）。
+// NativeTokenStore 内部应 import dataPreferences from '@ohos.data.preferences'。
+// 接口签名对齐 preferences.get() / preferences.put() / preferences.flush()。
 
-export interface TokenStore {
-  // Token operations
-  getToken(key: string): Promise<string | null>
-  setToken(key: string, token: string): Promise<boolean>
-  deleteToken(key: string): Promise<boolean>
-  hasToken(key: string): Promise<boolean>
-
-  // Sync credentials
-  getSyncToken(): Promise<string | null>
-  setSyncToken(token: string): Promise<boolean>
-  clearSyncToken(): Promise<boolean>
-
-  // GitHub token
-  getGitHubToken(): Promise<string | null>
-  setGitHubToken(token: string): Promise<boolean>
-  clearGitHubToken(): Promise<boolean>
-
-  // API keys
-  getApiKey(service: string): Promise<string | null>
-  setApiKey(service: string, key: string): Promise<boolean>
-  clearApiKey(service: string): Promise<boolean>
-
-  // Secure data
-  getSecureData(key: string): Promise<string | null>
-  setSecureData(key: string, data: string): Promise<boolean>
-  deleteSecureData(key: string): Promise<boolean>
-
-  // Bulk operations
-  clearAll(): Promise<boolean>
-  listKeys(): Promise<string[]>
+export interface KVStore {
+  get(key: string): Promise<string | null>
+  put(key: string, value: string): Promise<void>
+  has(key: string): Promise<boolean>
+  delete(key: string): Promise<void>
+  clear(): Promise<void>
+  keys(): Promise<string[]>
 }
 
-export interface EncryptionProvider {
-  encrypt(data: string): Promise<string>
-  decrypt(encryptedData: string): Promise<string>
-  generateKey(): Promise<string>
-  isAvailable(): Promise<boolean>
-}
-
-export class MockTokenStore implements TokenStore {
+export class MockKVStore implements KVStore {
   private storage: Map<string, string> = new Map()
 
-  async getToken(key: string): Promise<string | null> {
-    return this.storage.get(key) || null
+  async get(key: string): Promise<string | null> {
+    return this.storage.get(key) ?? null
   }
 
-  async setToken(key: string, token: string): Promise<boolean> {
-    this.storage.set(key, token)
-    return true
+  async put(key: string, value: string): Promise<void> {
+    this.storage.set(key, value)
   }
 
-  async deleteToken(key: string): Promise<boolean> {
-    this.storage.delete(key)
-    return true
-  }
-
-  async hasToken(key: string): Promise<boolean> {
+  async has(key: string): Promise<boolean> {
     return this.storage.has(key)
   }
 
-  async getSyncToken(): Promise<string | null> {
-    return this.getToken('sync_token')
+  async delete(key: string): Promise<void> {
+    this.storage.delete(key)
   }
 
-  async setSyncToken(token: string): Promise<boolean> {
-    return this.setToken('sync_token', token)
-  }
-
-  async clearSyncToken(): Promise<boolean> {
-    return this.deleteToken('sync_token')
-  }
-
-  async getGitHubToken(): Promise<string | null> {
-    return this.getToken('github_token')
-  }
-
-  async setGitHubToken(token: string): Promise<boolean> {
-    return this.setToken('github_token', token)
-  }
-
-  async clearGitHubToken(): Promise<boolean> {
-    return this.deleteToken('github_token')
-  }
-
-  async getApiKey(service: string): Promise<string | null> {
-    return this.getToken(`api_key_${service}`)
-  }
-
-  async setApiKey(service: string, key: string): Promise<boolean> {
-    return this.setToken(`api_key_${service}`, key)
-  }
-
-  async clearApiKey(service: string): Promise<boolean> {
-    return this.deleteToken(`api_key_${service}`)
-  }
-
-  async getSecureData(key: string): Promise<string | null> {
-    return this.getToken(key)
-  }
-
-  async setSecureData(key: string, data: string): Promise<boolean> {
-    return this.setToken(key, data)
-  }
-
-  async deleteSecureData(key: string): Promise<boolean> {
-    return this.deleteToken(key)
-  }
-
-  async clearAll(): Promise<boolean> {
+  async clear(): Promise<void> {
     this.storage.clear()
-    return true
   }
 
-  async listKeys(): Promise<string[]> {
+  async keys(): Promise<string[]> {
     return Array.from(this.storage.keys())
   }
 }
 
-export class NativeTokenStore implements TokenStore {
-  // TODO: Implement with HarmonyOS KeyStore API
-  // This will use @ohos.security.keyStore for secure storage
+export class NativeKVStore implements KVStore {
+  // TODO: 用 @ohos.data.preferences 实现。
+  // import dataPreferences from '@ohos.data.preferences'
+  // const prefs = await dataPreferences.getPreferences(context, 'writer_kv')
+  // await prefs.get(key) / prefs.put(key, value) / prefs.flush()
 
-  async getToken(key: string): Promise<string | null> {
-    throw new Error('NativeTokenStore not implemented')
+  async get(_key: string): Promise<string | null> {
+    throw new Error('NativeKVStore not implemented — 需对接 @ohos.data.preferences')
   }
 
-  async setToken(key: string, token: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
+  async put(_key: string, _value: string): Promise<void> {
+    throw new Error('NativeKVStore not implemented')
   }
 
-  async deleteToken(key: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
+  async has(_key: string): Promise<boolean> {
+    throw new Error('NativeKVStore not implemented')
   }
 
-  async hasToken(key: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
+  async delete(_key: string): Promise<void> {
+    throw new Error('NativeKVStore not implemented')
   }
 
-  async getSyncToken(): Promise<string | null> {
-    throw new Error('NativeTokenStore not implemented')
+  async clear(): Promise<void> {
+    throw new Error('NativeKVStore not implemented')
   }
 
-  async setSyncToken(token: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async clearSyncToken(): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async getGitHubToken(): Promise<string | null> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async setGitHubToken(token: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async clearGitHubToken(): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async getApiKey(service: string): Promise<string | null> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async setApiKey(service: string, key: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async clearApiKey(service: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async getSecureData(key: string): Promise<string | null> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async setSecureData(key: string, data: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async deleteSecureData(key: string): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async clearAll(): Promise<boolean> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-
-  async listKeys(): Promise<string[]> {
-    throw new Error('NativeTokenStore not implemented')
-  }
-}
-
-export class MockEncryptionProvider implements EncryptionProvider {
-  async encrypt(data: string): Promise<string> {
-    // Simple base64 encoding for mock
-    return btoa(data)
-  }
-
-  async decrypt(encryptedData: string): Promise<string> {
-    // Simple base64 decoding for mock
-    return atob(encryptedData)
-  }
-
-  async generateKey(): Promise<string> {
-    return 'mock-encryption-key-' + Date.now()
-  }
-
-  async isAvailable(): Promise<boolean> {
-    return true
+  async keys(): Promise<string[]> {
+    throw new Error('NativeKVStore not implemented')
   }
 }

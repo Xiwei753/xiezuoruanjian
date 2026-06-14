@@ -1,5 +1,6 @@
-// ⚠️ UNVERIFIED — 本接口未经 DevEco 编译验证。
-// 方法签名基于 HarmonyOS NEXT 文档推测，必须用 DevEco 真编译校验。
+// HarmonyOS NEXT Lifecycle — 包装 UIAbility 生命周期回调（API 12）。
+// EntryAbility.ets 的 onForeground/onBackground/onWindowStageDestroy 调用 notifyXxx()。
+// 对齐 UIAbility 的 onCreate / onDestroy / onForeground / onBackground。
 
 export type LifecycleEvent = 'create' | 'destroy' | 'foreground' | 'background' | 'focus' | 'blur'
 

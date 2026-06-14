@@ -2,7 +2,7 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
 import { WorkspaceFileAccess, MockFileAccess, NativeFileAccess } from '../system/HarmonyFileAccess'
-import { TokenStore, MockTokenStore, NativeTokenStore, EncryptionProvider, MockEncryptionProvider } from '../system/HarmonySecureStorage'
+import { KVStore, MockKVStore, NativeKVStore } from '../system/HarmonySecureStorage'
 import { NetworkManager, MockNetworkManager, NativeNetworkManager } from '../system/HarmonyNetworkState'
 import { HarmonyLifecycle } from '../system/HarmonyLifecycle'
 import { HarmonyThemeAdapter } from '../system/HarmonyThemeAdapter'
@@ -22,8 +22,7 @@ export class AppContext {
   private config: AppContextConfig
   private bridge: IWriterCoreBridge
   private fileAccess: WorkspaceFileAccess
-  private tokenStore: TokenStore
-  private encryptionProvider: EncryptionProvider
+  private kvStore: KVStore
   private networkManager: NetworkManager
   private lifecycle: HarmonyLifecycle
   private themeAdapter: HarmonyThemeAdapter
@@ -37,14 +36,12 @@ export class AppContext {
     if (config.environment === 'mock') {
       this.bridge = new MockWriterCoreBridge()
       this.fileAccess = new MockFileAccess()
-      this.tokenStore = new MockTokenStore()
-      this.encryptionProvider = new MockEncryptionProvider()
+      this.kvStore = new MockKVStore()
       this.networkManager = new MockNetworkManager()
     } else {
       this.bridge = NativeWriterCoreBridge.getInstance()
       this.fileAccess = new NativeFileAccess()
-      this.tokenStore = new NativeTokenStore()
-      this.encryptionProvider = new MockEncryptionProvider() // TODO: Native encryption
+      this.kvStore = new NativeKVStore()
       this.networkManager = new NativeNetworkManager()
     }
   }
@@ -83,12 +80,8 @@ export class AppContext {
     return this.fileAccess
   }
 
-  getTokenStore(): TokenStore {
-    return this.tokenStore
-  }
-
-  getEncryptionProvider(): EncryptionProvider {
-    return this.encryptionProvider
+  getKVStore(): KVStore {
+    return this.kvStore
   }
 
   getNetworkManager(): NetworkManager {
@@ -123,7 +116,7 @@ export class AppContext {
     this.config.environment = 'native'
     this.bridge = NativeWriterCoreBridge.getInstance()
     this.fileAccess = new NativeFileAccess()
-    this.tokenStore = new NativeTokenStore()
+    this.kvStore = new NativeKVStore()
     this.networkManager = new NativeNetworkManager()
   }
 
@@ -135,7 +128,7 @@ export class AppContext {
     this.config.environment = 'mock'
     this.bridge = new MockWriterCoreBridge()
     this.fileAccess = new MockFileAccess()
-    this.tokenStore = new MockTokenStore()
+    this.kvStore = new MockKVStore()
     this.networkManager = new MockNetworkManager()
   }
 
@@ -144,7 +137,6 @@ export class AppContext {
   }
 }
 
-// Global convenience functions
 export function getAppContext(): AppContext {
   return AppContext.getInstance()
 }
@@ -157,8 +149,8 @@ export function getFileAccess(): WorkspaceFileAccess {
   return getAppContext().getFileAccess()
 }
 
-export function getTokenStore(): TokenStore {
-  return getAppContext().getTokenStore()
+export function getKVStore(): KVStore {
+  return getAppContext().getKVStore()
 }
 
 export function getNetworkManager(): NetworkManager {

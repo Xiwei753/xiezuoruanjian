@@ -1,198 +1,75 @@
-// ⚠️ UNVERIFIED — 本接口未经 DevEco 编译验证。
-// 方法签名基于 HarmonyOS NEXT 文档推测，必须用 DevEco 真编译校验。
+// HarmonyOS NEXT Network — 包装 @ohos.net.connection（API 12）。
+// NativeNetworkManager 内部应 import connection from '@ohos.net.connection'。
+// 接口签名对齐 connection.getDefaultNet() / connection.on('netAvailable')。
 
-export type NetworkType = 'wifi' | 'cellular' | 'ethernet' | 'none' | 'unknown'
-export type ConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'unknown'
+export type NetBearType = 'cellular' | 'wifi' | 'ethernet' | 'none'
 
-export interface NetworkState {
-  type: NetworkType
-  status: ConnectionStatus
-  isMetered: boolean
+export interface NetStatusInfo {
+  bearType: NetBearType
   isAvailable: boolean
-  strength: number // 0-100
-  ssid?: string
-  ipAddress?: string
-}
-
-export interface ProxyConfig {
-  enabled: boolean
-  host: string
-  port: number
-  username?: string
-  password?: string
-  noProxy: string[]
-  protocol: 'http' | 'https' | 'socks5'
+  isMetered: boolean
 }
 
 export interface NetworkManager {
-  // State queries
-  getCurrentState(): Promise<NetworkState>
+  getCurrentStatus(): Promise<NetStatusInfo>
   isConnected(): Promise<boolean>
-  getConnectionType(): Promise<NetworkType>
 
-  // Monitoring
-  onStateChange(callback: (state: NetworkState) => void): void
-  offStateChange(callback: (state: NetworkState) => void): void
-
-  // Proxy
-  getProxyConfig(): Promise<ProxyConfig>
-  setProxyConfig(config: ProxyConfig): Promise<boolean>
-  clearProxyConfig(): Promise<boolean>
-
-  // Diagnostics
-  getNetworkDiagnostics(): Promise<NetworkDiagnostics>
-  testConnectivity(url: string): Promise<ConnectivityTestResult>
-}
-
-export interface NetworkDiagnostics {
-  dnsResolution: boolean
-  internetReachable: boolean
-  latencyMs: number
-  bandwidthKbps: number
-  lastChecked: number
-}
-
-export interface ConnectivityTestResult {
-  success: boolean
-  url: string
-  statusCode?: number
-  latencyMs: number
-  error?: string
+  onStatusChange(callback: (info: NetStatusInfo) => void): void
+  offStatusChange(callback: (info: NetStatusInfo) => void): void
 }
 
 export class MockNetworkManager implements NetworkManager {
-  private listeners: Set<(state: NetworkState) => void> = new Set()
-  private currentState: NetworkState = {
-    type: 'wifi',
-    status: 'connected',
-    isMetered: false,
+  private listeners: Set<(info: NetStatusInfo) => void> = new Set()
+  private current: NetStatusInfo = {
+    bearType: 'wifi',
     isAvailable: true,
-    strength: 85,
-    ssid: 'MockWiFi',
-    ipAddress: '192.168.1.100'
+    isMetered: false
   }
 
-  async getCurrentState(): Promise<NetworkState> {
-    return { ...this.currentState }
+  async getCurrentStatus(): Promise<NetStatusInfo> {
+    return { ...this.current }
   }
 
   async isConnected(): Promise<boolean> {
-    return this.currentState.status === 'connected'
+    return this.current.isAvailable
   }
 
-  async getConnectionType(): Promise<NetworkType> {
-    return this.currentState.type
-  }
-
-  onStateChange(callback: (state: NetworkState) => void): void {
+  onStatusChange(callback: (info: NetStatusInfo) => void): void {
     this.listeners.add(callback)
   }
 
-  offStateChange(callback: (state: NetworkState) => void): void {
+  offStatusChange(callback: (info: NetStatusInfo) => void): void {
     this.listeners.delete(callback)
   }
 
-  async getProxyConfig(): Promise<ProxyConfig> {
-    return {
-      enabled: false,
-      host: '',
-      port: 0,
-      noProxy: [],
-      protocol: 'http'
-    }
-  }
-
-  async setProxyConfig(config: ProxyConfig): Promise<boolean> {
-    return true
-  }
-
-  async clearProxyConfig(): Promise<boolean> {
-    return true
-  }
-
-  async getNetworkDiagnostics(): Promise<NetworkDiagnostics> {
-    return {
-      dnsResolution: true,
-      internetReachable: true,
-      latencyMs: 25,
-      bandwidthKbps: 50000,
-      lastChecked: Date.now()
-    }
-  }
-
-  async testConnectivity(url: string): Promise<ConnectivityTestResult> {
-    return {
-      success: true,
-      url,
-      statusCode: 200,
-      latencyMs: 30
-    }
-  }
-
-  // Mock helper methods
-  simulateStateChange(state: Partial<NetworkState>): void {
-    this.currentState = { ...this.currentState, ...state }
-    this.listeners.forEach(cb => cb(this.currentState))
-  }
-
   simulateOffline(): void {
-    this.simulateStateChange({
-      status: 'disconnected',
-      isAvailable: false,
-      type: 'none'
-    })
+    this.current = { bearType: 'none', isAvailable: false, isMetered: false }
+    this.listeners.forEach(cb => cb(this.current))
   }
 
   simulateOnline(): void {
-    this.simulateStateChange({
-      status: 'connected',
-      isAvailable: true,
-      type: 'wifi'
-    })
+    this.current = { bearType: 'wifi', isAvailable: true, isMetered: false }
+    this.listeners.forEach(cb => cb(this.current))
   }
 }
 
 export class NativeNetworkManager implements NetworkManager {
-  // TODO: Implement with HarmonyOS Network Kit
-  // This will use @ohos.net.connection for real network state
+  // TODO: 用 connection.getDefaultNet() + connection.on('netAvailable') / 'netUnavailable' 实现。
+  // import connection from '@ohos.net.connection'
 
-  async getCurrentState(): Promise<NetworkState> {
-    throw new Error('NativeNetworkManager not implemented')
+  async getCurrentStatus(): Promise<NetStatusInfo> {
+    throw new Error('NativeNetworkManager not implemented — 需对接 @ohos.net.connection')
   }
 
   async isConnected(): Promise<boolean> {
     throw new Error('NativeNetworkManager not implemented')
   }
 
-  async getConnectionType(): Promise<NetworkType> {
-    throw new Error('NativeNetworkManager not implemented')
+  onStatusChange(_callback: (info: NetStatusInfo) => void): void {
+    throw new Error('NativeNetworkManager not implemented — 需对接 connection.on()')
   }
 
-  onStateChange(callback: (state: NetworkState) => void): void {
-    throw new Error('NativeNetworkManager not implemented')
-  }
-
-  offStateChange(callback: (state: NetworkState) => void): void {
-    throw new Error('NativeNetworkManager not implemented')
-  }
-
-  async getProxyConfig(): Promise<ProxyConfig> {
-    throw new Error('NativeNetworkManager not implemented')
-  }
-
-  async setProxyConfig(config: ProxyConfig): Promise<boolean> {
-    throw new Error('NativeNetworkManager not implemented')
-  }
-
-  async clearProxyConfig(): Promise<boolean> {
-    throw new Error('NativeNetworkManager not implemented')
-  }
-
-  async getNetworkDiagnostics(): Promise<NetworkDiagnostics> {
-    throw new Error('NativeNetworkManager not implemented')
-  }
-
-  async testConnectivity(url: string): Promise<ConnectivityTestResult> {
-    throw new Error('NativeNetworkManager not implemented')
+  offStatusChange(_callback: (info: NetStatusInfo) => void): void {
+    throw new Error('NativeNetworkManager not implemented — 需对接 connection.off()')
   }
 }

@@ -88,13 +88,13 @@ IWriterCoreBridge (接口)
 └── NativeWriterCoreBridge (Native 空壳，待实现)
 ```
 
-### 系统服务
+### 系统服务（对齐 HarmonyOS NEXT API 12）
 
-- **HarmonyFileAccess**: 文件系统访问接口
-- **HarmonySecureStorage**: 安全存储接口（Token、密钥）
-- **HarmonyNetworkState**: 网络状态监控
-- **HarmonyLifecycle**: 应用生命周期管理
-- **HarmonyThemeAdapter**: 主题适配（深色/浅色模式）
+- **HarmonyFileAccess**: 文件系统访问 → 包装 `@ohos.file.fs`
+- **HarmonySecureStorage**: KV 存储 → 包装 `@ohos.data.preferences`
+- **HarmonyNetworkState**: 网络状态 → 包装 `@ohos.net.connection`
+- **HarmonyLifecycle**: 生命周期 → 对齐 UIAbility 回调
+- **HarmonyThemeAdapter**: 主题适配（内部逻辑，不依赖系统 API）
 
 ### 应用上下文
 
