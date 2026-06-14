@@ -11,11 +11,14 @@ export type Environment = 'mock' | 'native'
 
 export interface AppContextConfig {
   environment: Environment
+  workspacePath: string
   enableAutoSave: boolean
   autoSaveIntervalMs: number
   enableSync: boolean
   enableLogging: boolean
 }
+
+const DEFAULT_WORKSPACE_PATH = '/data/storage/el2/base/files/writer-workspace'
 
 export class AppContext {
   private static instance: AppContext
@@ -50,7 +53,8 @@ export class AppContext {
     if (!AppContext.instance) {
       if (!config) {
         config = {
-          environment: 'mock',
+          environment: 'native',
+          workspacePath: DEFAULT_WORKSPACE_PATH,
           enableAutoSave: true,
           autoSaveIntervalMs: 30000,
           enableSync: false,
@@ -70,6 +74,10 @@ export class AppContext {
 
   getConfig(): AppContextConfig {
     return { ...this.config }
+  }
+
+  getWorkspacePath(): string {
+    return this.config.workspacePath
   }
 
   getBridge(): IWriterCoreBridge {
@@ -108,12 +116,15 @@ export class AppContext {
     return this.isInitialized
   }
 
-  async switchToNative(): Promise<void> {
+  async switchToNative(workspacePath?: string): Promise<void> {
     if (this.config.environment === 'native') {
       return
     }
 
     this.config.environment = 'native'
+    if (workspacePath) {
+      this.config.workspacePath = workspacePath
+    }
     this.bridge = NativeWriterCoreBridge.getInstance()
     this.fileAccess = new NativeFileAccess()
     this.kvStore = new NativeKVStore()
@@ -143,6 +154,10 @@ export function getAppContext(): AppContext {
 
 export function getBridge(): IWriterCoreBridge {
   return getAppContext().getBridge()
+}
+
+export function getWorkspacePath(): string {
+  return getAppContext().getWorkspacePath()
 }
 
 export function getFileAccess(): WorkspaceFileAccess {

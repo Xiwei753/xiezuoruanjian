@@ -2,7 +2,8 @@ import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
-import { getBridge } from '../common/AppContext'
+import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
+import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
 
 @Entry
 @Component
@@ -14,6 +15,7 @@ struct Index {
   @State isLoading: boolean = true
   @State errorMessage: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  @State nativeStatus: string = ''
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -25,11 +27,38 @@ struct Index {
 
   aboutToAppear() {
     this.themeAdapter.addObserver(this.themeObserver)
-    this.loadWorkspace()
+    this.initAndLoad()
   }
 
   aboutToDisappear() {
     this.themeAdapter.removeObserver(this.themeObserver)
+  }
+
+  async initAndLoad() {
+    this.isLoading = true
+    this.errorMessage = ''
+
+    try {
+      const ctx = getAppContext()
+      if (ctx.isNativeEnvironment()) {
+        const nativeBridge = NativeWriterCoreBridge.getInstance()
+        const workspacePath = getWorkspacePath()
+        const initOk = await nativeBridge.initialize(workspacePath)
+        if (!initOk) {
+          this.errorMessage = 'Native 核心初始化失败'
+          this.isLoading = false
+          return
+        }
+
+        const statusResult = await nativeBridge.getNativeLoadStatus()
+        this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'
+      }
+
+      await this.loadWorkspace()
+    } catch (err) {
+      this.errorMessage = `初始化时发生错误: ${err}`
+      this.isLoading = false
+    }
   }
 
   async loadWorkspace() {
@@ -37,8 +66,9 @@ struct Index {
     this.errorMessage = ''
 
     try {
+      const workspacePath = getWorkspacePath()
       const [workspaceResult, statsResult] = await Promise.all([
-        this.bridge.openWorkspace('/mock/workspace'),
+        this.bridge.openWorkspace(workspacePath),
         this.bridge.getWritingStats()
       ])
 
@@ -81,6 +111,12 @@ struct Index {
               .fontSize(12)
               .fontColor(this.themeConfig.colors.textHint)
           }
+
+          if (this.nativeStatus) {
+            Text(`Native: ${this.nativeStatus}`)
+              .fontSize(10)
+              .fontColor(this.themeConfig.colors.textHint)
+          }
         }
         .alignItems(HorizontalAlign.End)
       }
@@ -109,7 +145,7 @@ struct Index {
             .margin({ bottom: 16 })
 
           Button('重试')
-            .onClick(() => this.loadWorkspace())
+            .onClick(() => this.initAndLoad())
             .backgroundColor(this.themeConfig.colors.primary)
         }
         .width('100%')
@@ -235,7 +271,6 @@ struct Index {
           .fontSize(14)
           .fontColor(this.themeConfig.colors.primary)
           .onClick(() => {
-            // TODO: Navigate to full recent edits list
           })
       }
       .width('100%')
@@ -399,7 +434,6 @@ struct Index {
           .borderRadius(12)
         }
         .onClick(() => {
-          // TODO: Quick create chapter
         })
 
         GridItem() {
