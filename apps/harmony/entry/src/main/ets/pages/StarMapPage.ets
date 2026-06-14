@@ -18,11 +18,11 @@ struct StarMapPage {
   @State allStarMaps: StarMapMeta[] = []
   @State isLoading: boolean = true
   @State errorMessage: string = ''
-  @State selectedNodeId: string = ''
+  @State @Watch('onTransformChange') selectedNodeId: string = ''
   @State selectedNode: StarMapNode | null = null
-  @State scale: number = 1
-  @State offsetX: number = 0
-  @State offsetY: number = 0
+  @State @Watch('onTransformChange') scale: number = 1
+  @State @Watch('onTransformChange') offsetX: number = 0
+  @State @Watch('onTransformChange') offsetY: number = 0
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
   private bridge: IWriterCoreBridge = getBridge()
@@ -127,6 +127,10 @@ struct StarMapPage {
   deselectNode() {
     this.selectedNodeId = ''
     this.selectedNode = null
+  }
+
+  onTransformChange() {
+    this.drawEdges()
   }
 
   build() {
@@ -244,7 +248,7 @@ struct StarMapPage {
             .height('100%')
             .backgroundColor(this.themeConfig.colors.background)
             .onReady(() => {
-              // Canvas is ready
+              this.drawEdges()
             })
 
           // Nodes layer
@@ -292,6 +296,10 @@ struct StarMapPage {
         }
         .layoutWeight(1)
         .width('100%')
+        .onPan((event: PanEvent) => {
+          this.offsetX += event.deltaX
+          this.offsetY += event.deltaY
+        })
       }
     }
     .width('100%')
@@ -465,10 +473,84 @@ struct StarMapPage {
     .position({ x: 'right', y: 'bottom' })
   }
 
+  private canvasCtx: CanvasRenderingContext2D | null = null
+
   buildCanvasContext(): CanvasRenderingContext2D {
-    const ctx = new CanvasRenderingContext2D(new RenderingContextSettings(true))
-    // In a real implementation, we would draw edges here
-    // For mock purposes, we'll leave the canvas empty
-    return ctx
+    this.canvasCtx = new CanvasRenderingContext2D(new RenderingContextSettings(true))
+    return this.canvasCtx
+  }
+
+  drawEdges() {
+    if (!this.canvasCtx || !this.graph) return
+    const ctx = this.canvasCtx
+
+    ctx.clearRect(0, 0, ctx.width, ctx.height)
+
+    const nodeMap = new Map<string, StarMapNode>()
+    for (const node of this.graph.nodes) {
+      nodeMap.set(node.id, node)
+    }
+
+    for (const edge of this.graph.edges) {
+      const src = nodeMap.get(edge.sourceId)
+      const tgt = nodeMap.get(edge.targetId)
+      if (!src || !tgt) continue
+
+      const x1 = (src.x * this.scale) + this.offsetX
+      const y1 = (src.y * this.scale) + this.offsetY
+      const x2 = (tgt.x * this.scale) + this.offsetX
+      const y2 = (tgt.y * this.scale) + this.offsetY
+
+      const isSelected = this.selectedNodeId === edge.sourceId || this.selectedNodeId === edge.targetId
+
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.lineTo(x2, y2)
+      ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
+      ctx.lineWidth = isSelected ? 2.5 : 1.5
+      if (edge.type === 'dependency' || edge.type === 'conflict') {
+        ctx.setLineDash([6, 4])
+      } else {
+        ctx.setLineDash([])
+      }
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      this.drawArrow(ctx, x1, y1, x2, y2, isSelected)
+
+      if (edge.label) {
+        const mx = (x1 + x2) / 2
+        const my = (y1 + y2) / 2
+        ctx.font = '11px HarmonyOS Sans'
+        ctx.fillStyle = isSelected ? this.themeConfig.colors.textPrimary : this.themeConfig.colors.textHint
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'bottom'
+        ctx.fillText(edge.label, mx, my - 6)
+      }
+    }
+  }
+
+  drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, highlight: boolean) {
+    const angle = Math.atan2(y2 - y1, x2 - x1)
+    const arrowLen = 10
+    const arrowAngle = Math.PI / 7
+
+    const tipX = x2 - Math.cos(angle) * 30
+    const tipY = y2 - Math.sin(angle) * 30
+
+    ctx.beginPath()
+    ctx.moveTo(tipX, tipY)
+    ctx.lineTo(
+      tipX - arrowLen * Math.cos(angle - arrowAngle),
+      tipY - arrowLen * Math.sin(angle - arrowAngle)
+    )
+    ctx.moveTo(tipX, tipY)
+    ctx.lineTo(
+      tipX - arrowLen * Math.cos(angle + arrowAngle),
+      tipY - arrowLen * Math.sin(angle + arrowAngle)
+    )
+    ctx.strokeStyle = highlight ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
+    ctx.lineWidth = highlight ? 2.5 : 1.5
+    ctx.stroke()
   }
 }
