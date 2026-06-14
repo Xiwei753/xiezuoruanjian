@@ -167,6 +167,13 @@ pub struct SujianEditorItem {
     /// animation, IME pending flag.  All cursor-related visual logic
     /// lives in CursorController; SujianEditorItem only dispatches.
     cursor_ctrl: cursor_controller::CursorController,
+    /// Snapshot of cursor state for the render thread.
+    /// Written on the GUI thread, read-only on the render thread.
+    cursor_render_snapshot: cursor_controller::CursorRenderSnapshot,
+    /// Flag set by the render thread to request a frame update via
+    /// QueuedConnection.  The render thread cannot call item.update()
+    /// directly, so it sets this flag and the deferred handler picks it up.
+    needs_frame_update: bool,
 }
 
 impl Default for SujianEditorItem {
@@ -265,6 +272,8 @@ impl Default for SujianEditorItem {
             scroll_buffer: None,
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
+            cursor_render_snapshot: cursor_controller::CursorRenderSnapshot::default(),
+            needs_frame_update: false,
         }
     }
 }
@@ -273,8 +282,76 @@ impl SujianEditorItem {
 
     fn request_static_repaint(&mut self) {
         self.render_dirty = true;
+        // Update cursor render snapshot on the GUI thread before scheduling
+        // a repaint.  The render thread reads only the snapshot.
+        // update_cursor_snapshot() does NOT call request_static_repaint(),
+        // so there is no recursion risk.
+        self.update_cursor_snapshot();
         let item = self as &dyn QQuickItem;
         item.update();
+    }
+
+    /// Update cursor render snapshot on the GUI thread.
+    /// Call this after any change that affects cursor visual state
+    /// (cursor position, scroll, viewport, editor enabled, etc.)
+    /// but BEFORE calling request_static_repaint().
+    fn update_cursor_snapshot(&mut self) {
+        if sujian_editor_static_only() {
+            return;
+        }
+        let scroll_y = self.current_scroll_y as f64;
+        let layout_res = self.editor_layout_cursor_rect(
+            self.buffer.cursor,
+            self.cursor_ctrl.affinity,
+            scroll_y,
+        );
+
+        let cursor_x = layout_res.x;
+        let cursor_y = layout_res.y;
+        let cursor_h = layout_res.h;
+        let visual_line_id = layout_res.visual_line_id;
+
+        let vp_h = self.current_viewport_height.max(1.0) as f64;
+        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
+        let is_preediting = !self.preedit_text.is_empty();
+
+        let result = self.cursor_ctrl.update(
+            cursor_x,
+            cursor_y,
+            cursor_h,
+            visual_line_id,
+            scroll_y,
+            self.current_smooth_cursor_enabled,
+            self.current_cursor_animation_duration_ms,
+            self.current_is_scrolling,
+            is_selecting,
+            is_preediting,
+            self.current_editor_enabled,
+            self.buffer.has_selection(),
+            vp_h,
+        );
+
+        // Write the render snapshot so the render thread can read it.
+        self.cursor_render_snapshot = self.cursor_ctrl.snapshot();
+
+        // Emit cursor_rect_changed and update IME on the GUI thread.
+        if result.ime_needs_update {
+            self.cursor_rect_changed();
+            let obj_ptr = self.get_cpp_object();
+            if !obj_ptr.is_null() {
+                cpp!(unsafe [obj_ptr as "QQuickItem*"] {
+                    QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+                });
+            }
+        }
+
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "update_cursor_snapshot: cursor={}, visual_x={:.1}, visual_y={:.1}, visible={}, is_animating={}",
+                self.buffer.cursor, self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y,
+                self.cursor_ctrl.visible, self.cursor_ctrl.animation.is_some()
+            );
+        }
     }
 
     fn request_frame_update(&mut self) {
@@ -566,7 +643,8 @@ impl SujianEditorItem {
         }
         if !value {
             self.cursor_ctrl.force_snap_next = true;
-            self.update_cursor_visual_position();
+            // request_static_repaint() will call update_cursor_snapshot()
+            // which picks up the force_snap_next flag.
             self.request_static_repaint();
         }
     }
@@ -1382,11 +1460,18 @@ impl QQuickItem for SujianEditorItem {
         let disable_overlay = static_only || sujian_editor_disable_qsg_overlay();
         let disable_cursor = static_only || sujian_editor_disable_qsg_cursor();
 
-        // In static-only mode, skip cursor visual position update entirely
-        // to avoid IME side-effects and layout computation.
-        if !static_only {
-            self.update_cursor_visual_position();
-        }
+        // ── RENDER THREAD BOUNDARY ──
+        // update_paint_node runs on the QSG render thread.
+        // We must NOT:
+        //   - Call update_cursor_visual_position() (layout computation)
+        //   - Call cursor_ctrl.tick_animation() (mutates controller state)
+        //   - Emit cursor_rect_changed() (QML signal)
+        //   - Call item.update() / request_frame_update() (QQuickItem method)
+        //   - Call inputMethod()->update() (GUI thread object)
+        //
+        // Instead, we ONLY read the cursor_render_snapshot that was written
+        // on the GUI thread.  All cursor computation, animation ticking,
+        // and signal emission happen on the GUI thread.
 
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() {
@@ -1542,9 +1627,10 @@ impl QQuickItem for SujianEditorItem {
                 }
             }
 
-            // If animation is still active, request next frame
+            // If animation is still active, schedule next frame on GUI thread.
+            // We cannot call item.update() here on the render thread.
             if self.has_active_animation() {
-                self.request_frame_update();
+                self.needs_frame_update = true;
             }
         } else {
             self.cleanup_finished_animations();
@@ -1556,28 +1642,31 @@ impl QQuickItem for SujianEditorItem {
             }
         }
 
-        // ── Layer 2: Cursor animation + node (child[2]) ──
+        // ── Layer 2: Cursor node (child[2]) ──
+        // Read ONLY from cursor_render_snapshot — no cursor_ctrl access,
+        // no tick_animation(), no layout computation, no signal emission.
         if !disable_cursor {
-            let still_animating = self.cursor_ctrl.tick_animation();
-            if still_animating {
-                self.request_frame_update();
-            }
-
+            let snap = &self.cursor_render_snapshot;
             let is_selecting = self.buffer.has_selection();
-            let show_cursor = self.cursor_ctrl.visible && !self.current_is_scrolling && !is_selecting;
+            let show_cursor = snap.visible && !self.current_is_scrolling && !is_selecting;
             let cursor_color_rgba = renderer::color_hex_to_rgba(&self.current_cursor_color);
 
             if !final_root.is_null() && !item_ptr.is_null() {
                 scene_graph::update_cursor_rect(
                     final_root,
                     item_ptr,
-                    self.cursor_ctrl.visual_x,
-                    self.cursor_ctrl.visual_y,
+                    snap.visual_x,
+                    snap.visual_y,
                     2.0,
-                    self.cursor_ctrl.visual_h,
+                    snap.visual_h,
                     show_cursor,
                     cursor_color_rgba,
                 );
+            }
+
+            // If cursor animation is still active, schedule next frame on GUI thread.
+            if self.cursor_ctrl.animation.is_some() {
+                self.needs_frame_update = true;
             }
         } else if sujian_editor_debug_enabled() {
             eprintln!(
@@ -1598,24 +1687,21 @@ impl QQuickItem for SujianEditorItem {
         }
 
         // ── Deferred GUI-thread work ──
-        // update_cursor_visual_position() runs on the render thread and must
-        // NOT touch GUI objects (signals, inputMethod).  If it set
-        // ime_update_pending, schedule the IME update on the GUI thread now.
-        if self.cursor_ctrl.ime_update_pending {
-            self.cursor_ctrl.ime_update_pending = false;
-            // Emit the cursor_rect_changed signal.  Even though we are on
-            // the render thread, qmetaobject signal emission is safe here
-            // because it only sets a dirty flag — the actual QML binding
-            // evaluation happens on the GUI thread at a later point.
-            self.cursor_rect_changed();
+        // IME updates and cursor_rect_changed signals are already handled
+        // on the GUI thread by update_cursor_snapshot() (called from
+        // request_static_repaint).  The render thread does NOT emit signals
+        // or call inputMethod().
+
+        // If we need a frame update (cursor animation or overlay animation),
+        // schedule it via QueuedConnection — we cannot call item.update()
+        // on the render thread.
+        if self.needs_frame_update {
+            self.needs_frame_update = false;
             let obj_ptr = self.get_cpp_object();
             if !obj_ptr.is_null() {
                 cpp!(unsafe [obj_ptr as "QQuickItem*"] {
-                    // QMetaObject::invokeMethod with QueuedConnection guarantees
-                    // the lambda runs on the GUI thread after the current
-                    // render pass completes.
                     QMetaObject::invokeMethod(obj_ptr, [obj_ptr]() {
-                        QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+                        obj_ptr->update();
                     }, Qt::QueuedConnection);
                 });
             }
