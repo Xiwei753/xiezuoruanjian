@@ -28,25 +28,25 @@ $WRITER_DEBUG_LEVEL_DEFAULT = "info"
 if ($Modules -ne "") {
     $env:WRITER_DEBUG_MODULES = $Modules
 } else {
-    $env:WRITER_DEBUG_MODULES = $env:WRITER_DEBUG_MODULES ?? $WRITER_DEBUG_MODULES_DEFAULT
+    if (-not $env:WRITER_DEBUG_MODULES) { $env:WRITER_DEBUG_MODULES = $WRITER_DEBUG_MODULES_DEFAULT }
 }
 
 if ($Level -ne "") {
     $env:WRITER_DEBUG_LEVEL = $Level
 } else {
-    $env:WRITER_DEBUG_LEVEL = $env:WRITER_DEBUG_LEVEL ?? $WRITER_DEBUG_LEVEL_DEFAULT
+    if (-not $env:WRITER_DEBUG_LEVEL) { $env:WRITER_DEBUG_LEVEL = $WRITER_DEBUG_LEVEL_DEFAULT }
 }
 
 if ($QtVerbose) {
     $env:WRITER_DEBUG_QT_VERBOSE = "1"
 } else {
-    $env:WRITER_DEBUG_QT_VERBOSE = $env:WRITER_DEBUG_QT_VERBOSE ?? "0"
+    if (-not $env:WRITER_DEBUG_QT_VERBOSE) { $env:WRITER_DEBUG_QT_VERBOSE = "0" }
 }
 
 $env:WRITER_DEBUG = "1"
 $env:WRITER_DEBUG_QML = "1"
 $env:RUST_BACKTRACE = "full"
-$env:RUST_LOG = $env:RUST_LOG ?? "warn"
+if (-not $env:RUST_LOG) { $env:RUST_LOG = "warn" }
 
 if (-not $env:QT_LOGGING_RULES) {
     if ($env:WRITER_DEBUG_QT_VERBOSE -eq "1") {
@@ -118,11 +118,11 @@ $qtVerboseLabel = if ($env:WRITER_DEBUG_QT_VERBOSE -eq "1") { "enabled" } else {
 Write-Host "Qt verbose: $qtVerboseLabel"
 Write-Host "QT_LOGGING_RULES: $env:QT_LOGGING_RULES"
 Write-Host "Qt version detected: $QT_VERSION_DETECTED"
-Write-Host "QMAKE: $($env:QMAKE ?? 'not found')"
-Write-Host "QT_INCLUDE_PATH: $($env:QT_INCLUDE_PATH ?? '')"
-Write-Host "QT_LIBRARY_PATH: $($env:QT_LIBRARY_PATH ?? '')"
-Write-Host "QML2_IMPORT_PATH: $($env:QML2_IMPORT_PATH ?? '')"
-Write-Host "QT_PLUGIN_PATH: $($env:QT_PLUGIN_PATH ?? '')"
+Write-Host "QMAKE: $(if ($env:QMAKE) { $env:QMAKE } else { 'not found' })"
+Write-Host "QT_INCLUDE_PATH: $(if ($env:QT_INCLUDE_PATH) { $env:QT_INCLUDE_PATH } else { '' })"
+Write-Host "QT_LIBRARY_PATH: $(if ($env:QT_LIBRARY_PATH) { $env:QT_LIBRARY_PATH } else { '' })"
+Write-Host "QML2_IMPORT_PATH: $(if ($env:QML2_IMPORT_PATH) { $env:QML2_IMPORT_PATH } else { '' })"
+Write-Host "QT_PLUGIN_PATH: $(if ($env:QT_PLUGIN_PATH) { $env:QT_PLUGIN_PATH } else { '' })"
 Write-Host "Log file path: $logFile"
 if ($env:WRITER_DEBUG_QT_VERBOSE -eq "0") {
     Write-Host "Tip: Qt verbose logging is disabled by default. Use -QtVerbose to enable it."

@@ -100,11 +100,11 @@ if ($qtArchDir) {
 }
 
 Write-Host "[start] Qt version detected: $QT_VERSION_DETECTED"
-Write-Host "[start] QMAKE: $($env:QMAKE ?? 'not found')"
-Write-Host "[start] QT_INCLUDE_PATH: $($env:QT_INCLUDE_PATH ?? '')"
-Write-Host "[start] QT_LIBRARY_PATH: $($env:QT_LIBRARY_PATH ?? '')"
-Write-Host "[start] QML2_IMPORT_PATH: $($env:QML2_IMPORT_PATH ?? '')"
-Write-Host "[start] QT_PLUGIN_PATH: $($env:QT_PLUGIN_PATH ?? '')"
+Write-Host "[start] QMAKE: $(if ($env:QMAKE) { $env:QMAKE } else { 'not found' })"
+Write-Host "[start] QT_INCLUDE_PATH: $(if ($env:QT_INCLUDE_PATH) { $env:QT_INCLUDE_PATH } else { '' })"
+Write-Host "[start] QT_LIBRARY_PATH: $(if ($env:QT_LIBRARY_PATH) { $env:QT_LIBRARY_PATH } else { '' })"
+Write-Host "[start] QML2_IMPORT_PATH: $(if ($env:QML2_IMPORT_PATH) { $env:QML2_IMPORT_PATH } else { '' })"
+Write-Host "[start] QT_PLUGIN_PATH: $(if ($env:QT_PLUGIN_PATH) { $env:QT_PLUGIN_PATH } else { '' })"
 
 Write-Host "[start] Building sujian-desktop package..."
 cargo build -p sujian-desktop
