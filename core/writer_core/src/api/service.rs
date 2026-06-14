@@ -1229,7 +1229,7 @@ mod tests {
 
         assert_eq!(value["success"], true);
         assert!(value["data"].is_object());
-        assert_eq!(value["data"]["contentLen"], 11u32);
+        assert_eq!(value["data"]["content_len"], 11u32);
         assert!(value["changedEntities"].is_array());
         assert_eq!(value["changedEntities"][0]["entityType"], "ChapterSaved");
         assert_eq!(value["changedEntities"][0]["entityId"], chapter.id);
