@@ -129,30 +129,21 @@ if ($env:WRITER_DEBUG_QT_VERBOSE -eq "0") {
 }
 Write-Host "==========================="
 
-# 构建
+# 构建（实时输出到控制台，同时记录日志）
 Write-Host "[start-debug] Building sujian-desktop package..."
-$buildProc = Start-Process -FilePath "cargo" -ArgumentList "build", "-p", "sujian-desktop" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$logsDir\build-stdout.log" -RedirectStandardError "$logsDir\build-stderr.log"
-$buildStdout = Get-Content "$logsDir\build-stdout.log" -Raw
-$buildStderr = Get-Content "$logsDir\build-stderr.log" -Raw
-$buildStdout | Out-File $logFile -Append -Encoding utf8
-$buildStderr | Out-File $logFile -Append -Encoding utf8
-Write-Host $buildStdout
-Write-Host $buildStderr
-
-if ($buildProc.ExitCode -ne 0) {
-    Write-Host "[start-debug] Build failed with exit code $($buildProc.ExitCode)" -ForegroundColor Red
-    exit $buildProc.ExitCode
+$cargoBuildLog = Join-Path $logsDir "build-output.log"
+cargo build -p sujian-desktop 2>&1 | Tee-Object -FilePath $cargoBuildLog
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[start-debug] Build failed with exit code $LASTEXITCODE" -ForegroundColor Red
+    exit $LASTEXITCODE
 }
+Get-Content $cargoBuildLog | Out-File $logFile -Append -Encoding utf8
 
-# 运行
+# 运行（实时输出到控制台，同时记录日志）
 Write-Host "[start-debug] Running 素笺写作 with tracing..."
-$runProc = Start-Process -FilePath "cargo" -ArgumentList "run", "-p", "sujian-desktop" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$logsDir\run-stdout.log" -RedirectStandardError "$logsDir\run-stderr.log"
-$runStdout = Get-Content "$logsDir\run-stdout.log" -Raw
-$runStderr = Get-Content "$logsDir\run-stderr.log" -Raw
-$runStdout | Out-File $logFile -Append -Encoding utf8
-$runStderr | Out-File $logFile -Append -Encoding utf8
-Write-Host $runStdout
-Write-Host $runStderr
+$cargoRunLog = Join-Path $logsDir "run-output.log"
+cargo run -p sujian-desktop 2>&1 | Tee-Object -FilePath $cargoRunLog
+Get-Content $cargoRunLog | Out-File $logFile -Append -Encoding utf8
 
 # 生成摘要
 $summaryFile = Join-Path $logsDir "latest-summary.txt"
