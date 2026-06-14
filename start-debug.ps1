@@ -18,7 +18,7 @@ param(
     [switch]$QtVerbose
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $env:QT_QUICK_CONTROLS_STYLE = "Basic"
 
@@ -133,9 +133,9 @@ Write-Host "==========================="
 Write-Host "[start-debug] Building sujian-desktop package..."
 $cargoBuildLog = Join-Path $logsDir "build-output.log"
 cargo build -p sujian-desktop 2>&1 | Tee-Object -FilePath $cargoBuildLog
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[start-debug] Build failed with exit code $LASTEXITCODE" -ForegroundColor Red
-    exit $LASTEXITCODE
+if (-not $?) {
+    Write-Host "[start-debug] Build failed." -ForegroundColor Red
+    exit 1
 }
 Get-Content $cargoBuildLog | Out-File $logFile -Append -Encoding utf8
 
