@@ -5,8 +5,8 @@
 // buffer, layout, or QSG nodes.
 //
 // The controller only computes target positions and animation state.
-// The QML signal emission and inputMethod()->update() are deferred
-// to the GUI thread by the caller (update_paint_node).
+// The QML signal emission and inputMethod()->update() are performed
+// directly on the GUI thread by the caller (update_cursor_visual_position).
 
 use crate::editor::layout::CaretAffinity;
 use super::rendering::CursorAnimationState;
@@ -16,8 +16,8 @@ use super::rendering::CursorAnimationState;
 /// Invariants:
 /// - `target_cursor_x/y` are the layout-computed cursor positions (document coords).
 /// - `visual_x/y` are the positions actually rendered (may lag due to animation).
-/// - `ime_update_pending` is set when the cursor moves; the caller must
-///   consume it on the GUI thread to emit signals and update IME.
+/// - `CursorUpdateResult.ime_needs_update` indicates when the cursor position
+///   changed and IME needs updating (performed on the GUI thread by the caller).
 pub struct CursorController {
     // Target position (from layout)
     pub target_x: f64,
@@ -41,7 +41,7 @@ pub struct CursorController {
 
     // IME
     pub ime_cursor_rect_h: f64,
-    pub ime_update_pending: bool,
+
 
     // Animation
     pub animation: Option<CursorAnimationState>,
@@ -64,7 +64,7 @@ impl CursorController {
             current_visual_line_id: None,
             last_scroll_y: 0.0,
             ime_cursor_rect_h: 0.0,
-            ime_update_pending: false,
+
             animation: None,
             force_snap_next: false,
         }
@@ -75,7 +75,7 @@ impl CursorController {
     /// Returns `CursorUpdateResult` indicating what deferred work the caller
     /// needs to do on the GUI thread.
     ///
-    /// **IMPORTANT**: This method may be called from the render thread.
+    /// **IMPORTANT**: This method MUST only be called from the GUI thread.
     /// It must NOT touch any GUI objects (signals, inputMethod, QML bindings).
     pub fn update(
         &mut self,
@@ -225,7 +225,7 @@ impl CursorController {
 /// GUI-thread work is needed.
 pub struct CursorUpdateResult {
     /// True if the cursor position changed and IME needs updating
-    /// (must be done on the GUI thread via QueuedConnection).
+    /// (performed directly on the GUI thread by the caller).
     pub ime_needs_update: bool,
     /// True if a repaint is needed.
     pub needs_repaint: bool,

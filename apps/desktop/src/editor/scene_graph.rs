@@ -41,7 +41,7 @@ cpp! {{
         if (!root || !item) return;
 
         // Remove any extra children beyond child[0] (overlay, cursor, etc.)
-        // This is for SUJIAN_EDITOR_STATIC_ONLY mode — only the static
+        // Default scene graph layout — only the static
         // text texture node should exist.
         while (root->childCount() > 1) {
             QSGNode *extra = child_at(root, root->childCount() - 1);
@@ -215,7 +215,7 @@ pub fn ensure_three_layer_nodes(
     })
 }
 
-/// SUJIAN_EDITOR_STATIC_ONLY mode: only ensure a single QSGImageNode
+/// Default scene graph layout: only ensure a single QSGImageNode
 /// for the static text texture. No overlay or cursor nodes are created.
 pub fn ensure_single_image_node(
     root_raw: *mut std::ffi::c_void,

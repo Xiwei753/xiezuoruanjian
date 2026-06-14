@@ -40,29 +40,6 @@ pub fn sujian_editor_debug_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
 }
 
-/// SUJIAN_EDITOR_STATIC_ONLY=1 — 最小静态渲染模式：
-/// 只执行 render_to_image -> update_texture_node，
-/// 跳过 cursor 计算、overlay、cursor QSG 节点、三层节点结构。
-/// 用于隔离 QImage -> QSGTexture 链路是否稳定。
-pub fn sujian_editor_static_only() -> bool {
-    std::env::var("SUJIAN_EDITOR_STATIC_ONLY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
-/// SUJIAN_EDITOR_DISABLE_QSG_OVERLAY=1 — 禁用动画 overlay 层 (Layer 1)
-pub fn sujian_editor_disable_qsg_overlay() -> bool {
-    std::env::var("SUJIAN_EDITOR_DISABLE_QSG_OVERLAY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
-/// SUJIAN_EDITOR_DISABLE_QSG_CURSOR=1 — 禁用光标 QSG 节点 (Layer 2)
-pub fn sujian_editor_disable_qsg_cursor() -> bool {
-    std::env::var("SUJIAN_EDITOR_DISABLE_QSG_CURSOR")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
 
 #[allow(dead_code)]
 #[derive(QObject)]
@@ -96,6 +73,7 @@ pub struct SujianEditorItem {
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
+    cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
 
     plain_text_changed: qt_signal!(),
     text_changed: qt_signal!(),
@@ -210,6 +188,7 @@ impl Default for SujianEditorItem {
             cursor_rect_y: Default::default(),
             cursor_rect_width: Default::default(),
             cursor_rect_height: Default::default(),
+            cursor_visible: Default::default(),
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
             reload_plain_text: Default::default(),
@@ -596,6 +575,10 @@ impl SujianEditorItem {
         self.cursor_ctrl.ime_cursor_rect_h as f32
     }
 
+    fn cursor_visible(&self) -> bool {
+        self.cursor_ctrl.visible
+    }
+
     fn visual_changed(&mut self) {
         self.invalidate_layout_cache();
         self.recalculate_content_height_quiet();
@@ -693,15 +676,16 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            for event in &events {
-                if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, &new_text);
-                    self.delete_animation = Some(anim);
-                    break;
-                }
-            }
-        }
+        // 动画创建已禁用 — update_cursor_visual_position 在 GUI 线程入口点调用
+        // if self.current_typing_animation_enabled && !self.current_is_scrolling {
+        //     for event in &events {
+        //         if event.kind == EditorAnimationKind::Delete {
+        //             let anim = self.create_delete_animation(event, &old_text, &new_text);
+        //             self.delete_animation = Some(anim);
+        //             break;
+        //         }
+        //     }
+        // }
 
         self.emit_content_changed();
     }
@@ -726,15 +710,16 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            for event in &events {
-                if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, &new_text);
-                    self.delete_animation = Some(anim);
-                    break;
-                }
-            }
-        }
+        // 动画创建已禁用 — update_cursor_visual_position 在 GUI 线程入口点调用
+        // if self.current_typing_animation_enabled && !self.current_is_scrolling {
+        //     for event in &events {
+        //         if event.kind == EditorAnimationKind::Delete {
+        //             let anim = self.create_delete_animation(event, &old_text, &new_text);
+        //             self.delete_animation = Some(anim);
+        //             break;
+        //         }
+        //     }
+        // }
 
         self.emit_content_changed();
     }
@@ -759,15 +744,16 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            for event in &events {
-                if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, &new_text);
-                    self.delete_animation = Some(anim);
-                    break;
-                }
-            }
-        }
+        // 动画创建已禁用 — update_cursor_visual_position 在 GUI 线程入口点调用
+        // if self.current_typing_animation_enabled && !self.current_is_scrolling {
+        //     for event in &events {
+        //         if event.kind == EditorAnimationKind::Delete {
+        //             let anim = self.create_delete_animation(event, &old_text, &new_text);
+        //             self.delete_animation = Some(anim);
+        //             break;
+        //         }
+        //     }
+        // }
 
         self.emit_content_changed();
     }
@@ -824,6 +810,7 @@ impl SujianEditorItem {
         self.cursor_position_changed();
         self.selection_changed();
         self.cursor_ctrl.dirty = true;
+        let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -834,6 +821,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, true);
         self.cursor_position_changed();
         self.selection_changed();
+        let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -1374,20 +1362,6 @@ impl QQuickItem for SujianEditorItem {
 
         let frame_start = Instant::now();
 
-        // ── Debug switches ──
-        // SUJIAN_EDITOR_STATIC_ONLY=1  — 最小链路：只做 render_to_image -> update_texture_node
-        // SUJIAN_EDITOR_DISABLE_QSG_OVERLAY=1 — 禁用 Layer 1 (动画 overlay)
-        // SUJIAN_EDITOR_DISABLE_QSG_CURSOR=1  — 禁用 Layer 2 (光标 QSG 节点)
-        let static_only = sujian_editor_static_only();
-        let disable_overlay = static_only || sujian_editor_disable_qsg_overlay();
-        let disable_cursor = static_only || sujian_editor_disable_qsg_cursor();
-
-        // In static-only mode, skip cursor visual position update entirely
-        // to avoid IME side-effects and layout computation.
-        if !static_only {
-            self.update_cursor_visual_position();
-        }
-
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() {
             renderer::sujian_item_dpr(item_ptr)
@@ -1428,17 +1402,12 @@ impl QQuickItem for SujianEditorItem {
 
         let mut final_root = root_raw;
 
-        // In static-only mode, only ensure a single QSGImageNode (Layer 0).
-        // Otherwise, ensure the full three-layer structure.
+        // 单层场景图：仅 Layer 0 静态正文 texture
         if !root_raw.is_null() && !item_ptr.is_null() {
-            if static_only {
-                scene_graph::ensure_single_image_node(root_raw, item_ptr);
-            } else {
-                scene_graph::ensure_three_layer_nodes(root_raw, item_ptr);
-            }
+            scene_graph::ensure_single_image_node(root_raw, item_ptr);
         }
 
-        // ── Layer 0: Static text texture (child[0]) ──
+        // ── Layer 0: Static text texture ──
         if self.render_dirty {
             match self.render_to_image() {
                 Some((image, buf_scroll_y, _buf_h)) => {
@@ -1449,25 +1418,9 @@ impl QQuickItem for SujianEditorItem {
                     };
                     let logical_img_w = image.size().width as f64 / dpr;
                     final_root = scene_graph::update_texture_node(
-                        root_raw,
-                        item_ptr,
-                        &image,
-                        0.0,
-                        src_y,
-                        logical_img_w,
-                        src_h,
-                        0.0,
-                        vp_h,
-                        dpr,
+                        root_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
                     );
                     self.render_dirty = false;
-                    let total_elapsed = frame_start.elapsed();
-                    if total_elapsed.as_millis() > 4 {
-                        eprintln!(
-                            "sujian_update_paint_node: total_ms={}, new_texture=true, buf={:.0}..{:.0}",
-                            total_elapsed.as_millis(), buf_scroll_y, buf_scroll_y + _buf_h,
-                        );
-                    }
                 }
                 None => {
                     if !root_raw.is_null() {
@@ -1475,15 +1428,7 @@ impl QQuickItem for SujianEditorItem {
                             let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
                             let logical_img_w = buf.image.size().width as f64 / dpr;
                             scene_graph::update_source_rect(
-                                root_raw,
-                                item_ptr,
-                                0.0,
-                                src_y,
-                                logical_img_w,
-                                src_h,
-                                0.0,
-                                vp_h,
-                                dpr,
+                                root_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
                             );
                         }
                     }
@@ -1496,129 +1441,22 @@ impl QQuickItem for SujianEditorItem {
                     let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
                     let logical_img_w = buf.image.size().width as f64 / dpr;
                     scene_graph::update_source_rect(
-                        root_raw,
-                        item_ptr,
-                        0.0,
-                        src_y,
-                        logical_img_w,
-                        src_h,
-                        0.0,
-                        vp_h,
-                        dpr,
+                        root_raw, item_ptr, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,
                     );
                 }
             }
             final_root = root_raw;
         }
 
-        // ── Layer 1: Animation overlay (child[1]) ──
-        if !disable_overlay {
-            // Clean up finished animations BEFORE painting the overlay, so that
-            // the overlay is hidden on the exact frame the animation ends.
-            self.cleanup_finished_animations();
-            let overlay_result = self.paint_animation_overlay();
-            if !final_root.is_null() && !item_ptr.is_null() {
-                match &overlay_result {
-                    Some((image, buf_scroll_y, buf_h)) => {
-                        scene_graph::update_animation_overlay(
-                            final_root,
-                            item_ptr,
-                            Some(image),
-                            *buf_scroll_y,
-                            *buf_h,
-                            dpr,
-                        );
-                    }
-                    None => {
-                        scene_graph::update_animation_overlay(
-                            final_root,
-                            item_ptr,
-                            None,
-                            0.0,
-                            0.0,
-                            dpr,
-                        );
-                    }
-                }
-            }
-
-            // If animation is still active, request next frame
-            if self.has_active_animation() {
-                self.request_frame_update();
-            }
-        } else {
-            self.cleanup_finished_animations();
-            if sujian_editor_debug_enabled() {
-                eprintln!(
-                    "sujian_update_paint_node: overlay QSG disabled (static_only={}, disable_overlay={})",
-                    static_only, disable_overlay
-                );
-            }
-        }
-
-        // ── Layer 2: Cursor animation + node (child[2]) ──
-        if !disable_cursor {
-            let still_animating = self.cursor_ctrl.tick_animation();
-            if still_animating {
-                self.request_frame_update();
-            }
-
-            let is_selecting = self.buffer.has_selection();
-            let show_cursor = self.cursor_ctrl.visible && !self.current_is_scrolling && !is_selecting;
-            let cursor_color_rgba = renderer::color_hex_to_rgba(&self.current_cursor_color);
-
-            if !final_root.is_null() && !item_ptr.is_null() {
-                scene_graph::update_cursor_rect(
-                    final_root,
-                    item_ptr,
-                    self.cursor_ctrl.visual_x,
-                    self.cursor_ctrl.visual_y,
-                    2.0,
-                    self.cursor_ctrl.visual_h,
-                    show_cursor,
-                    cursor_color_rgba,
-                );
-            }
-        } else if sujian_editor_debug_enabled() {
-            eprintln!(
-                "sujian_update_paint_node: cursor QSG disabled (static_only={}, disable_cursor={})",
-                static_only, disable_cursor
-            );
-        }
+        // 清理已完成的动画状态（不渲染 overlay）
+        self.cleanup_finished_animations();
 
         let total_elapsed = frame_start.elapsed();
-        if total_elapsed.as_millis() > 4 || static_only {
+        if total_elapsed.as_millis() > 4 {
             eprintln!(
-                "sujian_update_paint_node: total_ms={}, static_only={}, disable_overlay={}, disable_cursor={}",
+                "sujian_update_paint_node: total_ms={}, layer0_only=true",
                 total_elapsed.as_millis(),
-                static_only,
-                disable_overlay,
-                disable_cursor,
             );
-        }
-
-        // ── Deferred GUI-thread work ──
-        // update_cursor_visual_position() runs on the render thread and must
-        // NOT touch GUI objects (signals, inputMethod).  If it set
-        // ime_update_pending, schedule the IME update on the GUI thread now.
-        if self.cursor_ctrl.ime_update_pending {
-            self.cursor_ctrl.ime_update_pending = false;
-            // Emit the cursor_rect_changed signal.  Even though we are on
-            // the render thread, qmetaobject signal emission is safe here
-            // because it only sets a dirty flag — the actual QML binding
-            // evaluation happens on the GUI thread at a later point.
-            self.cursor_rect_changed();
-            let obj_ptr = self.get_cpp_object();
-            if !obj_ptr.is_null() {
-                cpp!(unsafe [obj_ptr as "QQuickItem*"] {
-                    // QMetaObject::invokeMethod with QueuedConnection guarantees
-                    // the lambda runs on the GUI thread after the current
-                    // render pass completes.
-                    QMetaObject::invokeMethod(obj_ptr, [obj_ptr]() {
-                        QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
-                    }, Qt::QueuedConnection);
-                });
-            }
         }
 
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }

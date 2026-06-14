@@ -798,6 +798,22 @@ Rectangle {
                         onExplicit_clear_requested: editorController.markPotentialExplicitClear()
                     }
 
+                    // QML 光标 — 绑定 Rust 暴露的 cursor property，GUI 线程渲染
+                    Rectangle {
+                        id: sujianCursorRect
+                        x: sujianEditor.cursor_rect_x
+                        y: sujianEditor.cursor_rect_y
+                        width: 2
+                        height: sujianEditor.cursor_rect_height
+                        color: sujianEditor.cursor_color
+                        visible: root.useSujianEditorItem
+                                 && sujianEditor.cursor_visible
+                                 && sujianEditor.editor_enabled
+                                 && !sujianEditor.has_selection
+                                 && !editorScroll.editorAnimationSuppressed
+                        radius: 1
+                    }
+
                     EditorWheelScroller {
                         id: editorWheelScroller
                         anchors.fill: editorScroll

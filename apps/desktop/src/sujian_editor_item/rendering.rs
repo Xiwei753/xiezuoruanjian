@@ -9,6 +9,7 @@ use qmetaobject::{
 use std::time::Instant;
 
 use super::{sujian_editor_debug_enabled, SujianEditorItem};
+use super::cursor_controller::CursorUpdateResult;
 
 pub struct ScrollBuffer {
     pub image: qmetaobject::QImage,
@@ -611,7 +612,11 @@ impl SujianEditorItem {
         Some((image, min_y, buffer_h))
     }
 
-    pub(crate) fn update_cursor_visual_position(&mut self) {
+    /// Update cursor visual position from layout-computed position.
+    ///
+    /// **IMPORTANT**: This method MUST only be called from the GUI thread.
+    /// It directly emits signals and calls inputMethod()->update().
+    pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
         let scroll_y = self.current_scroll_y as f64;
         let layout_res = self.editor_layout_cursor_rect(
             self.buffer.cursor,
@@ -644,16 +649,20 @@ impl SujianEditorItem {
             vp_h,
         );
 
-        // If the controller says IME needs updating, set the pending flag.
-        // The actual inputMethod()->update() call is deferred to the GUI
-        // thread in update_paint_node.
-        if result.ime_needs_update {
-            self.cursor_ctrl.ime_update_pending = true;
-        }
-
         if result.needs_repaint {
             let item = self as &dyn QQuickItem;
             item.update();
+        }
+
+        // GUI 线程直接 IME 更新
+        if result.ime_needs_update {
+            self.cursor_rect_changed();
+            let obj_ptr = self.get_cpp_object();
+            if !obj_ptr.is_null() {
+                cpp!(unsafe [obj_ptr as "QQuickItem*"] {
+                    QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+                });
+            }
         }
 
         if sujian_editor_debug_enabled() {
@@ -686,6 +695,8 @@ impl SujianEditorItem {
             self.cursor_ctrl.dirty = true;
             self.request_frame_update();
         }
+
+        result
     }
 }
 
