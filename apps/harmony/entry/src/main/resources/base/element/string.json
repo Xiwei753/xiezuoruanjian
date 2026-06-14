@@ -15,6 +15,10 @@
     {
       "name": "app_name",
       "value": "写作软件"
+    },
+    {
+      "name": "permission_file_reason",
+      "value": "用于读写本地写作作品文件"
     }
   ]
 }

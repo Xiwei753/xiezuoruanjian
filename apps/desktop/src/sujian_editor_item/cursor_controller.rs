@@ -6,45 +6,18 @@
 //
 // The controller only computes target positions and animation state.
 // The QML signal emission and inputMethod()->update() are deferred
-// to the GUI thread by the caller.
-//
-// THREAD MODEL:
-//   - CursorController.update() is called ONLY on the GUI thread
-//     (from property setters, input events, etc.).
-//   - After update(), the caller writes a CursorRenderSnapshot.
-//   - update_paint_node() (render thread) ONLY reads the snapshot.
-//     It never calls update(), never emits signals, never touches
-//     QQuickItem, and never calls item.update().
+// to the GUI thread by the caller (update_paint_node).
 
 use crate::editor::layout::CaretAffinity;
 use super::rendering::CursorAnimationState;
 
-/// Immutable snapshot of cursor visual state for the render thread.
-///
-/// The render thread reads this and ONLY this — it never computes
-/// cursor layout, never emits signals, and never calls QQuickItem
-/// methods.  The snapshot is written on the GUI thread after
-/// CursorController.update() completes.
-///
-/// NOTE: IME updates and cursor_rect_changed signals are handled
-/// entirely on the GUI thread (in update_cursor_snapshot).  The
-/// render thread never touches IME or signals.
-#[derive(Clone, Default)]
-pub struct CursorRenderSnapshot {
-    pub visual_x: f64,
-    pub visual_y: f64,
-    pub visual_h: f64,
-    pub visible: bool,
-}
-
 /// Isolated cursor visual state — no buffer, no layout, no QSG.
 ///
 /// Invariants:
-/// - `target_x/y` are the layout-computed cursor positions in **viewport
-///   coordinates** (i.e. layout_y - scroll_y, already offset by scroll).
+/// - `target_cursor_x/y` are the layout-computed cursor positions (document coords).
 /// - `visual_x/y` are the positions actually rendered (may lag due to animation).
-/// - QML cursor.y = target_y (viewport coords, no further scroll subtraction needed).
-/// - IME cursor rect = mapToGlobal(target_x, target_y).
+/// - `ime_update_pending` is set when the cursor moves; the caller must
+///   consume it on the GUI thread to emit signals and update IME.
 pub struct CursorController {
     // Target position (from layout)
     pub target_x: f64,
@@ -68,6 +41,7 @@ pub struct CursorController {
 
     // IME
     pub ime_cursor_rect_h: f64,
+    pub ime_update_pending: bool,
 
     // Animation
     pub animation: Option<CursorAnimationState>,
@@ -90,6 +64,7 @@ impl CursorController {
             current_visual_line_id: None,
             last_scroll_y: 0.0,
             ime_cursor_rect_h: 0.0,
+            ime_update_pending: false,
             animation: None,
             force_snap_next: false,
         }
@@ -100,9 +75,8 @@ impl CursorController {
     /// Returns `CursorUpdateResult` indicating what deferred work the caller
     /// needs to do on the GUI thread.
     ///
-    /// **IMPORTANT**: This method is called ONLY on the GUI thread
-    /// (from update_cursor_snapshot).  It must NOT be called from the
-    /// render thread.
+    /// **IMPORTANT**: This method may be called from the render thread.
+    /// It must NOT touch any GUI objects (signals, inputMethod, QML bindings).
     pub fn update(
         &mut self,
         cursor_x: f64,
@@ -222,20 +196,8 @@ impl CursorController {
         }
     }
 
-    /// Produce a snapshot for the render thread.
-    /// Call this on the GUI thread after update().
-    pub fn snapshot(&self) -> CursorRenderSnapshot {
-        CursorRenderSnapshot {
-            visual_x: self.visual_x,
-            visual_y: self.visual_y,
-            visual_h: self.visual_h,
-            visible: self.visible,
-        }
-    }
-
     /// Advance cursor animation by one frame.
     /// Returns true if the animation is still active (needs another frame).
-    /// Called on the GUI thread; the result is written to a new snapshot.
     pub fn tick_animation(&mut self) -> bool {
         use std::time::Instant;
         let now = Instant::now();

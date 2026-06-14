@@ -1,7 +1,7 @@
 {
   "app": {
-    "bundleName": "com.writer.app",
-    "vendor": "Writer",
+    "bundleName": "com.xiwei.sujian",
+    "vendor": "Xiwei",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "icon": "$media:app_icon",

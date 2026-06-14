@@ -406,10 +406,12 @@ impl SujianEditorItem {
 
         let miss_reason = self.scroll_buffer_miss_reason(scroll_y, vp_h, content_h, dpr);
 
-        let Some(miss_reason) = miss_reason else {
+        if miss_reason.is_none() {
             self.render_dirty = false;
             return None;
-        };
+        }
+
+        let miss_reason = miss_reason.unwrap();
 
         if sujian_editor_debug_enabled() {
             eprintln!(
@@ -609,6 +611,82 @@ impl SujianEditorItem {
         Some((image, min_y, buffer_h))
     }
 
+    pub(crate) fn update_cursor_visual_position(&mut self) {
+        let scroll_y = self.current_scroll_y as f64;
+        let layout_res = self.editor_layout_cursor_rect(
+            self.buffer.cursor,
+            self.cursor_ctrl.affinity,
+            scroll_y,
+        );
+
+        let cursor_x = layout_res.x;
+        let cursor_y = layout_res.y;
+        let cursor_h = layout_res.h;
+        let visual_line_id = layout_res.visual_line_id;
+
+        let vp_h = self.current_viewport_height.max(1.0) as f64;
+        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
+        let is_preediting = !self.preedit_text.is_empty();
+
+        let result = self.cursor_ctrl.update(
+            cursor_x,
+            cursor_y,
+            cursor_h,
+            visual_line_id,
+            scroll_y,
+            self.current_smooth_cursor_enabled,
+            self.current_cursor_animation_duration_ms,
+            self.current_is_scrolling,
+            is_selecting,
+            is_preediting,
+            self.current_editor_enabled,
+            self.buffer.has_selection(),
+            vp_h,
+        );
+
+        // If the controller says IME needs updating, set the pending flag.
+        // The actual inputMethod()->update() call is deferred to the GUI
+        // thread in update_paint_node.
+        if result.ime_needs_update {
+            self.cursor_ctrl.ime_update_pending = true;
+        }
+
+        if result.needs_repaint {
+            let item = self as &dyn QQuickItem;
+            item.update();
+        }
+
+        if sujian_editor_debug_enabled() {
+            let mut line_info = String::new();
+            if let Some(snapshot) = self.editor_layout.cache() {
+                if let Some(line) = snapshot.lines.iter().find(|l| l.id == visual_line_id) {
+                    let font_size = snapshot.font_size as f64;
+                    let font_family = &snapshot.font_family;
+                    let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { crate::editor::layout::get_font_ascent(font_family, snapshot.font_size) };
+                    let descent = if line.qt_descent > 0.0 { line.qt_descent } else { crate::editor::layout::get_font_descent(font_family, snapshot.font_size) };
+                    let baseline = crate::editor::layout::text_baseline_y(line, font_size, font_family);
+                    let cursor_top_doc = cursor_y + scroll_y;
+                    let cursor_top_to_baseline = baseline - cursor_top_doc;
+                    let cursor_bottom_to_baseline = cursor_top_doc + cursor_h - baseline;
+                    line_info = format!(
+                        ", line.y={:.1}, line.height={:.1}, visual_line_id={}, font_ascent={:.1}, font_descent={:.1}, text_baseline_y={:.1}, cursor_top_to_baseline={:.1}, cursor_bottom_to_baseline={:.1}, cursor_h={:.1}, qt_ascent={:.1}, qt_descent={:.1}",
+                        line.y, line.height, line.id, ascent, descent, baseline,
+                        cursor_top_to_baseline, cursor_bottom_to_baseline, cursor_h,
+                        line.qt_ascent, line.qt_descent
+                    );
+                }
+            }
+            eprintln!(
+                "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, scroll_y={:.1}{}",
+                self.buffer.cursor, self.cursor_ctrl.target_x, self.cursor_ctrl.target_y, self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y, self.cursor_ctrl.animation.is_some(), scroll_y, line_info
+            );
+        }
+
+        if self.cursor_ctrl.animation.is_some() {
+            self.cursor_ctrl.dirty = true;
+            self.request_frame_update();
+        }
+    }
 }
 
 // compute_visible_segments and related helpers removed — the static layer
