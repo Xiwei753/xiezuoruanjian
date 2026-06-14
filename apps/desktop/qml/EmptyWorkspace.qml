@@ -27,7 +27,8 @@ Item {
         id: createWorkspaceDialog
         title: qsTr("选择或创建空文件夹作为新工作区")
         onAccepted: {
-            var path = String(folder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
+            var path = String(folder).replace(/^(file:\/{2,3})|(qrc:\/{2})|(http:\/{2})/, "");
+            if (/^\/[A-Za-z]:/.test(path)) path = path.substring(1);
             path = decodeURIComponent(path);
             root.createWorkspaceWithPath(path);
         }
@@ -37,7 +38,8 @@ Item {
         id: openWorkspaceDialog
         title: qsTr("选择已有工作区文件夹")
         onAccepted: {
-            var path = String(folder).replace(/^(file:\/{2})|(qrc:\/{2})|(http:\/{2})/, "");
+            var path = String(folder).replace(/^(file:\/{2,3})|(qrc:\/{2})|(http:\/{2})/, "");
+            if (/^\/[A-Za-z]:/.test(path)) path = path.substring(1);
             path = decodeURIComponent(path);
             root.openWorkspaceWithPath(path);
         }
