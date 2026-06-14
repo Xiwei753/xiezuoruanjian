@@ -1,3 +1,4 @@
+#include <cstring>
 #include <napi/native_api.h>
 #include <hilog/log.h>
 #include "writer_core_bridge.h"

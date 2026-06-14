@@ -68,6 +68,7 @@ pub mod trash;
 pub mod volume;
 pub mod workspace;
 pub mod writing_stats;
+#[cfg(feature = "harmony-ffi")]
 pub mod ffi;
 
 pub use api::*;

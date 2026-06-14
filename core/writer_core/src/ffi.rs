@@ -22,6 +22,13 @@ where
 
 /// # Safety
 /// `path` must be a valid null-terminated UTF-8 C string.
+///
+/// Return codes:
+///   0  = success
+///  -1  = null pointer
+///  -2  = invalid UTF-8
+///  -3  = mutex poisoned
+///  -4  = create_workspace failed
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     if path.is_null() {
@@ -32,7 +39,9 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
         Err(_) => return -2,
     };
     let core = WriterCore::new(c_str);
-    let _ = core.create_workspace();
+    if let Err(_) = core.create_workspace() {
+        return -4;
+    }
     let m = CORE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = m.lock() {
         *guard = Some(core);

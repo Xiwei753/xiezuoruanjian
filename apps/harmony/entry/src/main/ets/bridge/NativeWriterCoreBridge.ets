@@ -43,6 +43,24 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     }
   }
 
+  async initialize(workspacePath: string): Promise<boolean> {
+    if (this.isInitialized) {
+      return true
+    }
+    try {
+      const result = nativeModule.nativeInit(workspacePath)
+      if (result === 0) {
+        this.isInitialized = true
+        return true
+      }
+      console.error(`nativeInit failed with code: ${result}`)
+      return false
+    } catch (e) {
+      console.error(`nativeInit exception: ${e}`)
+      return false
+    }
+  }
+
   // Workspace
   async listWorkspaces(): Promise<ResultEnvelope<Workspace[]>> {
     return this.notImplemented()
@@ -216,6 +234,9 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async calculateWordCount(text: string): Promise<number> {
+    if (!this.isInitialized) {
+      return -1
+    }
     try {
       return nativeModule.nativeCalculateWordCount(text)
     } catch (e) {

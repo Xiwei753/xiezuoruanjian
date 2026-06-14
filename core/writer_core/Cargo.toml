@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 ai = []
+harmony-ffi = ["once_cell"]
 legacy-mind-map = []
 
 [dependencies]
@@ -21,7 +22,7 @@ chrono = { version = "0.4", features = ["serde"] }
 md5 = '0.7'
 tempfile = '3.8'
 aho-corasick = "1.1.4"
-once_cell = "1.19"
+once_cell = { version = "1.19", optional = true }
 git2 = { version = "0.20.4", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 base64 = "0.22.1"
