@@ -1,0 +1,7 @@
+{
+  "name": "writer-harmony",
+  "private": true,
+  "scripts": {
+    "validate": "node validate.mjs"
+  }
+}
