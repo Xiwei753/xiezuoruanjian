@@ -1,3 +1,6 @@
+// ⚠️ UNVERIFIED — 本接口未经 DevEco 编译验证。
+// 方法签名基于 HarmonyOS NEXT 文档推测，必须用 DevEco 真编译校验。
+
 export type NetworkType = 'wifi' | 'cellular' | 'ethernet' | 'none' | 'unknown'
 export type ConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'unknown'
 
