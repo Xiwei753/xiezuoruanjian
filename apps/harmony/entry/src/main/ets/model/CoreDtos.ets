@@ -175,6 +175,11 @@ export interface StarMapLayout {
   seed?: number
 }
 
+// ⚠️ DO NOT EXPAND StarMap DTOs below until Core's StarMap contracts are finalized.
+// These types are transitional mock-only placeholders.
+// sourceId/targetId will be replaced by EndpointPath; parentId/childIds will be replaced by ChildMapPlacement.
+// Hyperlink and ChildMapPlacement DTOs are blocked on Core stabilization.
+
 // TODO: Add Hyperlink DTO when Core stabilizes
 // export interface StarMapHyperlink { ... }
 

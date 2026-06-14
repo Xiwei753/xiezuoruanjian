@@ -1,8 +1,8 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
 import { ProjectTree, VolumeTree, Chapter, Project } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
+import { getBridge } from '../common/AppContext'
 
 interface WorkspacePageParams {
   projectId: string
@@ -21,8 +21,13 @@ struct WorkspacePage {
   @State expandedVolumes: Set<string> = new Set()
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
-  private bridge: IWriterCoreBridge = new MockWriterCoreBridge()
+  private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
+  private themeObserver: ThemeObserver = {
+    onThemeChanged: (theme: ThemeConfig) => {
+      this.themeConfig = theme
+    }
+  }
 
   aboutToAppear() {
     const params = router.getParams() as WorkspacePageParams
@@ -32,17 +37,11 @@ struct WorkspacePage {
       this.loadProjectTree()
     }
 
-    this.themeAdapter.addObserver({
-      onThemeChanged: (theme) => {
-        this.themeConfig = theme
-      }
-    })
+    this.themeAdapter.addObserver(this.themeObserver)
   }
 
   aboutToDisappear() {
-    this.themeAdapter.removeObserver({
-      onThemeChanged: () => {}
-    })
+    this.themeAdapter.removeObserver(this.themeObserver)
   }
 
   async loadProjectTree() {

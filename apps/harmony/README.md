@@ -66,7 +66,7 @@ apps/harmony/
           MockWriterCoreBridge.ets Mock 实现
           NativeWriterCoreBridge.ets Native 空壳
         model/
-          CoreDts.ets             数据传输对象
+          CoreDtos.ets            数据传输对象
         system/
           HarmonyFileAccess.ets   文件访问接口
           HarmonySecureStorage.ets 安全存储接口

@@ -24,11 +24,16 @@ export interface WorkspaceFileAccess {
   renameFile(oldPath: string, newPath: string): Promise<boolean>
   fileExists(path: string): Promise<boolean>
 
-  // Project structure
+  // Project structure (legacy/mock-only — will be removed when Core owns all path logic)
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getProjectPath(projectId: string): string
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getVolumePath(projectId: string, volumeId: string): string
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getChapterPath(projectId: string, volumeId: string, chapterId: string): string
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getSettingsPath(): string
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getStarMapPath(starmapId: string): string
 
   // Metadata
@@ -94,22 +99,27 @@ export class MockFileAccess implements WorkspaceFileAccess {
     return true
   }
 
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getProjectPath(projectId: string): string {
     return `${this.basePath}/projects/${projectId}`
   }
 
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getVolumePath(projectId: string, volumeId: string): string {
     return `${this.getProjectPath(projectId)}/volumes/${volumeId}`
   }
 
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getChapterPath(projectId: string, volumeId: string, chapterId: string): string {
     return `${this.getVolumePath(projectId, volumeId)}/chapters/${chapterId}.md`
   }
 
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getSettingsPath(): string {
     return `${this.basePath}/settings.json`
   }
 
+  /** @legacy Mock-only. Production path resolution must go through Core. */
   getStarMapPath(starmapId: string): string {
     return `${this.basePath}/starmaps/${starmapId}`
   }

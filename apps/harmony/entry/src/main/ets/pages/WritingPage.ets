@@ -1,9 +1,9 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
 import { ChapterData, SaveReceipt, LocalSettings } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
+import { getBridge } from '../common/AppContext'
 
 interface WritingPageParams {
   chapterId: string
@@ -40,10 +40,15 @@ struct WritingPage {
   @State sessionStartTime: number = Date.now()
   @State sessionCharsAdded: number = 0
 
-  private bridge: IWriterCoreBridge = new MockWriterCoreBridge()
+  private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
+  private themeObserver: ThemeObserver = {
+    onThemeChanged: (theme: ThemeConfig) => {
+      this.themeConfig = theme
+    }
+  }
 
   aboutToAppear() {
     const params = router.getParams() as WritingPageParams
@@ -54,11 +59,7 @@ struct WritingPage {
       this.loadSettings()
     }
 
-    this.themeAdapter.addObserver({
-      onThemeChanged: (theme) => {
-        this.themeConfig = theme
-      }
-    })
+    this.themeAdapter.addObserver(this.themeObserver)
 
     // Setup auto-save lifecycle observer
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
@@ -84,9 +85,7 @@ struct WritingPage {
     if (this.autoSaveObserver) {
       this.lifecycle.removeObserver(this.autoSaveObserver)
     }
-    this.themeAdapter.removeObserver({
-      onThemeChanged: () => {}
-    })
+    this.themeAdapter.removeObserver(this.themeObserver)
   }
 
   async loadChapter() {

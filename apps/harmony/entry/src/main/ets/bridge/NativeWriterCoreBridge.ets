@@ -214,7 +214,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async calculateWordCount(text: string): Promise<number> {
-    return text.replace(/\s/g, '').length
+    throw new Error('calculateWordCount must be delegated to Core')
   }
 
   async processWritingEvent(charsAdded: number, durationSeconds: number): Promise<ResultEnvelope<boolean>> {

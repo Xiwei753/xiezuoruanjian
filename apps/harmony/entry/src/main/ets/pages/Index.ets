@@ -1,8 +1,8 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
 import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
+import { getBridge } from '../common/AppContext'
 
 @Entry
 @Component
@@ -15,22 +15,21 @@ struct Index {
   @State errorMessage: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
-  private bridge: IWriterCoreBridge = new MockWriterCoreBridge()
+  private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
+  private themeObserver: ThemeObserver = {
+    onThemeChanged: (theme: ThemeConfig) => {
+      this.themeConfig = theme
+    }
+  }
 
   aboutToAppear() {
-    this.themeAdapter.addObserver({
-      onThemeChanged: (theme) => {
-        this.themeConfig = theme
-      }
-    })
+    this.themeAdapter.addObserver(this.themeObserver)
     this.loadWorkspace()
   }
 
   aboutToDisappear() {
-    this.themeAdapter.removeObserver({
-      onThemeChanged: () => {}
-    })
+    this.themeAdapter.removeObserver(this.themeObserver)
   }
 
   async loadWorkspace() {
