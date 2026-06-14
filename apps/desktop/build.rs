@@ -307,6 +307,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/SmoothCursor.qml");
     println!("cargo:rerun-if-changed=qml/EditorWheelScroller.qml");
     println!("cargo:rerun-if-changed=qml/EditorTypingAnimator.qml");
+    println!("cargo:rerun-if-changed=qml/EditorAnimationOverlay.qml");
+    println!("cargo:rerun-if-changed=qml/EditorAnimationHighlight.qml");
     println!("cargo:rerun-if-changed=qml/TopWritingToolbar.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
     println!("cargo:rerun-if-changed=qml/HubPageFrame.qml");

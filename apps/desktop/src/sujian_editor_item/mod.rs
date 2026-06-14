@@ -66,6 +66,7 @@ pub struct SujianEditorItem {
     typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
+    animation_events_json: qt_property!(QString; READ animation_events_json NOTIFY animation_events_changed),
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
@@ -85,6 +86,7 @@ pub struct SujianEditorItem {
     transaction_created: qt_signal!(),
     cursor_rect_changed: qt_signal!(),
     explicit_clear_requested: qt_signal!(),
+    animation_events_changed: qt_signal!(),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
@@ -107,6 +109,7 @@ pub struct SujianEditorItem {
     commit_preedit: qt_method!(fn(&mut self, text: QString)),
     cancel_preedit: qt_method!(fn(&mut self)),
     flush_content_height: qt_method!(fn(&mut self)),
+    tick_cursor_animation: qt_method!(fn(&mut self)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -131,6 +134,7 @@ pub struct SujianEditorItem {
     current_is_scrolling: bool,
     last_summary: QString,
     last_event_count: u32,
+    last_animation_events_json: QString,
     insert_animation: Option<InsertAnimation>,
     delete_animation: Option<DeleteAnimation>,
     preedit_text: String,
@@ -171,6 +175,7 @@ impl Default for SujianEditorItem {
             typing_animation_duration_ms: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
+            animation_events_json: Default::default(),
             scroll_y: Default::default(),
             viewport_height: Default::default(),
             is_scrolling: Default::default(),
@@ -184,6 +189,7 @@ impl Default for SujianEditorItem {
             transaction_created: Default::default(),
             cursor_rect_changed: Default::default(),
             explicit_clear_requested: Default::default(),
+            animation_events_changed: Default::default(),
             cursor_rect_x: Default::default(),
             cursor_rect_y: Default::default(),
             cursor_rect_width: Default::default(),
@@ -210,6 +216,7 @@ impl Default for SujianEditorItem {
             commit_preedit: Default::default(),
             cancel_preedit: Default::default(),
             flush_content_height: Default::default(),
+            tick_cursor_animation: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -233,6 +240,7 @@ impl Default for SujianEditorItem {
             current_is_scrolling: false,
             last_summary: "".into(),
             last_event_count: 0,
+            last_animation_events_json: "".into(),
             insert_animation: None,
             delete_animation: None,
             preedit_text: String::new(),
@@ -558,13 +566,24 @@ impl SujianEditorItem {
         self.last_event_count
     }
 
+    fn animation_events_json(&self) -> QString {
+        self.last_animation_events_json.clone()
+    }
+
     fn cursor_rect_x(&self) -> f32 {
-        self.cursor_ctrl.target_x as f32
+        if self.current_smooth_cursor_enabled && self.cursor_ctrl.animation.is_some() {
+            self.cursor_ctrl.visual_x as f32
+        } else {
+            self.cursor_ctrl.target_x as f32
+        }
     }
 
     fn cursor_rect_y(&self) -> f32 {
-        // Viewport coordinates: cursor_ctrl.target_y is already viewport-relative
-        self.cursor_ctrl.target_y as f32
+        if self.current_smooth_cursor_enabled && self.cursor_ctrl.animation.is_some() {
+            self.cursor_ctrl.visual_y as f32
+        } else {
+            self.cursor_ctrl.target_y as f32
+        }
     }
 
     fn cursor_rect_width(&self) -> f32 {
@@ -601,6 +620,17 @@ impl SujianEditorItem {
         if self.content_height_dirty.get() {
             self.content_height_dirty.set(false);
             self.content_height_changed();
+        }
+    }
+
+    fn tick_cursor_animation(&mut self) {
+        if self.cursor_ctrl.animation.is_none() {
+            return;
+        }
+        let still_animating = self.cursor_ctrl.tick_animation();
+        self.cursor_rect_changed();
+        if still_animating {
+            self.request_frame_update();
         }
     }
 
@@ -959,8 +989,24 @@ impl SujianEditorItem {
             transaction.should_animate
         )
         .into();
+        if !events.is_empty() {
+            match serde_json::to_string(&events) {
+                Ok(json) => {
+                    self.last_animation_events_json = json.into();
+                }
+                Err(e) => {
+                    eprintln!("record_transaction: failed to serialize animation events: {}", e);
+                    self.last_animation_events_json = "[]".into();
+                }
+            }
+        } else {
+            self.last_animation_events_json = "[]".into();
+        }
         if emit {
             self.transaction_created();
+            if !events.is_empty() {
+                self.animation_events_changed();
+            }
         }
         events
     }

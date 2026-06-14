@@ -814,6 +814,49 @@ Rectangle {
                         radius: 1
                     }
 
+                    // 光标闪烁 Timer
+                    Timer {
+                        id: cursorBlinkTimer
+                        interval: 530
+                        running: root.useSujianEditorItem
+                                 && sujianEditor.cursor_visible
+                                 && sujianEditor.editor_enabled
+                                 && !sujianEditor.has_selection
+                                 && !editorScroll.editorAnimationSuppressed
+                                 && sujianEditor.focus
+                        repeat: true
+                        onTriggered: {
+                            sujianCursorRect.opacity = sujianCursorRect.opacity > 0.5 ? 0.0 : 1.0
+                        }
+                    }
+
+                    // 光标平滑动画 tick — 驱动 Rust 侧 CursorController 的 visual_x/y 更新
+                    Timer {
+                        id: cursorAnimationTick
+                        interval: 16
+                        running: root.useSujianEditorItem
+                                 && sujianEditor.smooth_cursor_enabled
+                                 && sujianEditor.editor_enabled
+                        repeat: true
+                        onTriggered: {
+                            sujianEditor.tick_cursor_animation()
+                        }
+                    }
+
+                    // QML overlay 动画层 — 消费 Core animation events，画短生命周期动画
+                    EditorAnimationOverlay {
+                        id: sujianAnimationOverlay
+                        anchors.fill: editorScroll
+                        editorItem: sujianEditor
+                        dt: root.dt
+                        animationEnabled: sujianEditor.typing_animation_enabled
+                        suppressed: editorController.isLoadingChapter
+                                    || editorController.isApplyingFormat
+                                    || editorController.isApplyingSettings
+                                    || editorScroll.editorAnimationSuppressed
+                        visible: root.useSujianEditorItem
+                    }
+
                     EditorWheelScroller {
                         id: editorWheelScroller
                         anchors.fill: editorScroll
