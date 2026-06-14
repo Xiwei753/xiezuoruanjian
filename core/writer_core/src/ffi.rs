@@ -556,3 +556,605 @@ pub unsafe extern "C" fn writer_core_save_local_settings(settings_json: *const c
         Err(e) => err_json("SETTINGS_INVALID", &e),
     }
 }
+
+// ── Project mutations ──
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_rename_project(project_id: *const c_char, new_name: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let title = match c_str_to_rust(new_name) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid new_name: error {}", e)),
+    };
+    match with_core(|core| {
+        core.rename_project(&pid, &title).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("PROJECT_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_delete_project(project_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    match with_core(|core| {
+        core.delete_project(&pid).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("PROJECT_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_project_stats(project_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    match with_core(|core| {
+        let stats = core.get_project_stats(&pid).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "totalWordCount": stats.total_word_count,
+            "volumeCount": stats.volume_count,
+            "chapterCount": stats.chapter_count
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("PROJECT_NOT_FOUND", &e),
+    }
+}
+
+// ── Volume mutations ──
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_rename_volume(project_id: *const c_char, volume_id: *const c_char, new_name: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid volume_id: error {}", e)),
+    };
+    let title = match c_str_to_rust(new_name) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid new_name: error {}", e)),
+    };
+    match with_core(|core| {
+        core.rename_volume(&pid, &vid, &title).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("VOLUME_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_delete_volume(project_id: *const c_char, volume_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid volume_id: error {}", e)),
+    };
+    match with_core(|core| {
+        core.delete_volume(&pid, &vid).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("VOLUME_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_reorder_volumes(project_id: *const c_char, ordered_ids_json: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let json_str = match c_str_to_rust(ordered_ids_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid ordered_ids_json: error {}", e)),
+    };
+    match with_core(|core| {
+        let ids: Vec<String> = serde_json::from_str(&json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        core.reorder_volumes(&pid, &ids).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("VOLUME_NOT_FOUND", &e),
+    }
+}
+
+// ── Chapter mutations ──
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_rename_chapter(project_id: *const c_char, volume_id: *const c_char, chapter_id: *const c_char, new_name: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid volume_id: error {}", e)),
+    };
+    let cid = match c_str_to_rust(chapter_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter_id: error {}", e)),
+    };
+    let title = match c_str_to_rust(new_name) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid new_name: error {}", e)),
+    };
+    match with_core(|core| {
+        core.rename_chapter(&pid, &vid, &cid, &title).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("CHAPTER_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_delete_chapter(project_id: *const c_char, volume_id: *const c_char, chapter_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid volume_id: error {}", e)),
+    };
+    let cid = match c_str_to_rust(chapter_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter_id: error {}", e)),
+    };
+    match with_core(|core| {
+        core.delete_chapter(&pid, &vid, &cid).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("CHAPTER_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_reorder_chapters(project_id: *const c_char, volume_id: *const c_char, ordered_ids_json: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid volume_id: error {}", e)),
+    };
+    let json_str = match c_str_to_rust(ordered_ids_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid ordered_ids_json: error {}", e)),
+    };
+    match with_core(|core| {
+        let ids: Vec<String> = serde_json::from_str(&json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        core.reorder_chapters(&pid, &vid, &ids).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("CHAPTER_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_clear_chapter(project_id: *const c_char, volume_id: *const c_char, chapter_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid volume_id: error {}", e)),
+    };
+    let cid = match c_str_to_rust(chapter_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid chapter_id: error {}", e)),
+    };
+    match with_core(|core| {
+        let receipt = core.clear_chapter_content_verified(&pid, &vid, &cid).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "success": true,
+            "wordCount": receipt.word_count,
+            "savedAt": receipt.updated_at
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("CHAPTER_NOT_FOUND", &e),
+    }
+}
+
+// ── StarMap ──
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_list_starmaps() -> *mut c_char {
+    match with_core(|core| {
+        let starmaps = core.list_starmaps().map_err(|e| format!("{}", e))?;
+        let json_arr: Vec<serde_json::Value> = starmaps.iter().map(|sm| {
+            serde_json::json!({
+                "id": sm.starmap_id,
+                "title": sm.title,
+                "description": sm.description,
+                "nodeCount": sm.node_count,
+                "edgeCount": sm.edge_count,
+                "projectId": sm.project_id,
+                "createdAt": sm.created_at,
+                "updatedAt": sm.updated_at,
+                "accentColor": sm.accent_color
+            })
+        }).collect();
+        Ok(json_arr)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_list_starmaps_for_project(project_id: *const c_char) -> *mut c_char {
+    let pid = match c_str_to_rust(project_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid project_id: error {}", e)),
+    };
+    match with_core(|core| {
+        let starmaps = core.list_starmaps_for_project(&pid).map_err(|e| format!("{}", e))?;
+        let json_arr: Vec<serde_json::Value> = starmaps.iter().map(|sm| {
+            serde_json::json!({
+                "id": sm.starmap_id,
+                "title": sm.title,
+                "description": sm.description,
+                "nodeCount": sm.node_count,
+                "edgeCount": sm.edge_count,
+                "projectId": sm.project_id,
+                "createdAt": sm.created_at,
+                "updatedAt": sm.updated_at,
+                "accentColor": sm.accent_color
+            })
+        }).collect();
+        Ok(json_arr)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_starmap(starmap_id: *const c_char) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    match with_core(|core| {
+        let sm = core.get_starmap(&sid).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "id": sm.starmap_id,
+            "title": sm.title,
+            "description": sm.description,
+            "nodeCount": sm.node_count,
+            "edgeCount": sm.edge_count,
+            "projectId": sm.project_id,
+            "createdAt": sm.created_at,
+            "updatedAt": sm.updated_at,
+            "accentColor": sm.accent_color
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_starmap_graph(starmap_id: *const c_char) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    match with_core(|core| {
+        let graph = core.get_starmap_graph(&sid).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&graph).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_create_starmap(title: *const c_char, description: *const c_char) -> *mut c_char {
+    let t = match c_str_to_rust(title) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid title: error {}", e)),
+    };
+    let d = match c_str_to_rust(description) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid description: error {}", e)),
+    };
+    match with_core(|core| {
+        let sm = core.create_starmap(&t, &d, None).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "id": sm.starmap_id,
+            "title": sm.title,
+            "description": sm.description,
+            "nodeCount": sm.node_count,
+            "edgeCount": sm.edge_count,
+            "projectId": sm.project_id,
+            "createdAt": sm.created_at,
+            "updatedAt": sm.updated_at,
+            "accentColor": sm.accent_color
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ALREADY_EXISTS", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_delete_starmap(starmap_id: *const c_char) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    match with_core(|core| {
+        core.delete_starmap(&sid).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_rename_starmap(starmap_id: *const c_char, new_title: *const c_char) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    let t = match c_str_to_rust(new_title) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid new_title: error {}", e)),
+    };
+    match with_core(|core| {
+        let sm = core.rename_starmap(&sid, &t).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "id": sm.starmap_id,
+            "title": sm.title,
+            "description": sm.description,
+            "nodeCount": sm.node_count,
+            "edgeCount": sm.edge_count,
+            "projectId": sm.project_id,
+            "createdAt": sm.created_at,
+            "updatedAt": sm.updated_at,
+            "accentColor": sm.accent_color
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+// ── Syncable Settings ──
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_syncable_settings() -> *mut c_char {
+    match with_core(|core| {
+        let settings = core.load_syncable_settings().map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "fontSize": settings.font_size,
+            "lineHeight": settings.line_spacing_multiplier,
+            "fontFamily": settings.font_family,
+            "theme": settings.theme_mode,
+            "autoIndent": settings.auto_indent_enabled,
+            "showWordCount": settings.show_word_count,
+            "showLineNumbers": settings.show_line_numbers,
+            "wordWrap": settings.word_wrap,
+            "uiLanguage": settings.ui_language
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_syncable_settings(settings_json: *const c_char) -> *mut c_char {
+    let json_str = match c_str_to_rust(settings_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid settings_json: error {}", e)),
+    };
+    match with_core(|core| {
+        let mut settings = core.load_syncable_settings().map_err(|e| format!("{}", e))?;
+        let val: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        if let Some(v) = val.get("fontSize").and_then(|v| v.as_f64()) {
+            settings.font_size = v as f32;
+        }
+        if let Some(v) = val.get("lineHeight").and_then(|v| v.as_f64()) {
+            settings.line_spacing_multiplier = v as f32;
+        }
+        if let Some(v) = val.get("fontFamily").and_then(|v| v.as_str()) {
+            settings.font_family = v.to_string();
+        }
+        if let Some(v) = val.get("theme").and_then(|v| v.as_str()) {
+            settings.theme_mode = v.to_string();
+        }
+        if let Some(v) = val.get("autoIndent").and_then(|v| v.as_bool()) {
+            settings.auto_indent_enabled = v;
+        }
+        if let Some(v) = val.get("showWordCount").and_then(|v| v.as_bool()) {
+            settings.show_word_count = v;
+        }
+        if let Some(v) = val.get("showLineNumbers").and_then(|v| v.as_bool()) {
+            settings.show_line_numbers = v;
+        }
+        if let Some(v) = val.get("wordWrap").and_then(|v| v.as_bool()) {
+            settings.word_wrap = v;
+        }
+        if let Some(v) = val.get("uiLanguage").and_then(|v| v.as_str()) {
+            settings.ui_language = v.to_string();
+        }
+        core.save_syncable_settings(&settings).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_INVALID", &e),
+    }
+}
+
+// ── Sync ──
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!({
+            "enabled": config.enabled,
+            "provider": format!("{:?}", config.backend_type).to_lowercase(),
+            "remoteUrl": config.remote_url,
+            "branch": config.branch,
+            "autoSync": config.auto_sync,
+            "conflictStrategy": "manual"
+        }))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_NOT_FOUND", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char) -> *mut c_char {
+    let json_str = match c_str_to_rust(config_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid config_json: error {}", e)),
+    };
+    match with_core(|core| {
+        let mut config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let val: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
+            config.enabled = v;
+        }
+        if let Some(v) = val.get("remoteUrl").and_then(|v| v.as_str()) {
+            config.remote_url = v.to_string();
+        }
+        if let Some(v) = val.get("branch").and_then(|v| v.as_str()) {
+            config.branch = v.to_string();
+        }
+        if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
+            config.auto_sync = v;
+        }
+        core.save_sync_config(&config).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SETTINGS_INVALID", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_sync_dry_run() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let plan = core.perform_sync_dry_run(&config).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&plan).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_sync_diagnostics() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let diag = core.perform_sync_diagnostics(&config).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&diag).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_perform_sync() -> *mut c_char {
+    match with_core(|core| {
+        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+        let result = core.perform_sync(&config).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&result).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+    }
+}
+
+// ── Writing Stats ──
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_writing_stats() -> *mut c_char {
+    match with_core(|core| {
+        let now = chrono::Utc::now();
+        let end = now.format("%Y-%m-%d").to_string();
+        let start = (now - chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
+        let summary = core.get_writing_stats_summary(&start, &end).map_err(|e| format!("{}", e))?;
+        Ok(summary)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_process_writing_event(event_json: *const c_char) -> *mut c_char {
+    let json_str = match c_str_to_rust(event_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid event_json: error {}", e)),
+    };
+    match with_core(|core| {
+        let val: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|e| format!("JSON parse error: {}", e))?;
+        let device_id = val.get("deviceId").and_then(|v| v.as_str()).unwrap_or("harmony");
+        let platform = val.get("platform").and_then(|v| v.as_str()).unwrap_or("harmony");
+        let project_id = val.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
+        let volume_id = val.get("volumeId").and_then(|v| v.as_str()).unwrap_or("");
+        let chapter_id = val.get("chapterId").and_then(|v| v.as_str()).unwrap_or("");
+        let chars_added = val.get("charsAdded").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
+        let duration_seconds = val.get("durationSeconds").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let session_id = val.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
+
+        let old_text = "";
+        let new_text_len = chars_added as usize;
+        let new_text = if new_text_len > 0 { "x".repeat(new_text_len) } else { String::new() };
+
+        core.process_writing_event(
+            device_id, platform, project_id, volume_id, chapter_id,
+            &old_text, &new_text, session_id,
+        ).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
+    match with_core(|core| Ok(core.ai_available() as i32)) {
+        Ok(v) => v,
+        Err(_) => 0,
+    }
+}

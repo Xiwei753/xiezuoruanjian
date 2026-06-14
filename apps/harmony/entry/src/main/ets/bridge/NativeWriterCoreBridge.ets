@@ -222,15 +222,30 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async renameProject(projectId: string, newName: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeRenameProject(projectId, newName)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async deleteProject(projectId: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeDeleteProject(projectId)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async getProjectStats(projectId: string): Promise<ResultEnvelope<WritingStats>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeGetProjectStats(projectId)
+      return this.parseEnvelope<WritingStats>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   // ── Volume ──
@@ -264,15 +279,30 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async renameVolume(projectId: string, volumeId: string, newName: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeRenameVolume(projectId, volumeId, newName)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async deleteVolume(projectId: string, volumeId: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeDeleteVolume(projectId, volumeId)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async reorderVolumes(projectId: string, orderedVolumeIds: string[]): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeReorderVolumes(projectId, JSON.stringify(orderedVolumeIds))
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   // ── Chapter ──
@@ -328,7 +358,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
     try {
-      const jsonStr: string = nativeModule.nativeSaveChapter(loc.projectId, loc.volumeId, chapterId, '')
+      const jsonStr: string = nativeModule.nativeClearChapter(loc.projectId, loc.volumeId, chapterId)
       return this.parseEnvelope<SaveReceipt>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -350,45 +380,106 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    await this.ensureChapterIndex()
+    const loc = this.resolveChapter(chapterId)
+    if (!loc) {
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
+    }
+    try {
+      const jsonStr: string = nativeModule.nativeRenameChapter(loc.projectId, loc.volumeId, chapterId, newName)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    await this.ensureChapterIndex()
+    const loc = this.resolveChapter(chapterId)
+    if (!loc) {
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
+    }
+    try {
+      const jsonStr: string = nativeModule.nativeDeleteChapter(loc.projectId, loc.volumeId, chapterId)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async reorderChapters(volumeId: string, orderedChapterIds: string[]): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    const projectId = this.volumeProjectIndex.get(volumeId) || ''
+    try {
+      const jsonStr: string = nativeModule.nativeReorderChapters(projectId, volumeId, JSON.stringify(orderedChapterIds))
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   // ── StarMap ──
 
   async listStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>> {
-    return { success: true, data: [] }
+    try {
+      const jsonStr: string = nativeModule.nativeListStarMaps()
+      return this.parseEnvelope<StarMapMeta[]>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
-    return { success: true, data: [] }
+    try {
+      const jsonStr: string = nativeModule.nativeListStarMapsForProject(projectId)
+      return this.parseEnvelope<StarMapMeta[]>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async getStarMap(starmapId: string): Promise<ResultEnvelope<StarMapMeta>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeGetStarMap(starmapId)
+      return this.parseEnvelope<StarMapMeta>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async getStarMapGraph(starmapId: string): Promise<ResultEnvelope<StarMapGraph>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeGetStarMapGraph(starmapId)
+      return this.parseEnvelope<StarMapGraph>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeCreateStarMap(title, description)
+      return this.parseEnvelope<StarMapMeta>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async deleteStarMap(starmapId: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeDeleteStarMap(starmapId)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeRenameStarMap(starmapId, newTitle)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   // ── Settings ──
@@ -412,11 +503,21 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeLoadSyncableSettings()
+      return this.parseEnvelope<SyncableSettings>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeSaveSyncableSettings(JSON.stringify(settings))
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async getEffectiveSettings(): Promise<ResultEnvelope<EffectiveSettings>> {
@@ -436,46 +537,58 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   // ── Sync ──
 
   async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
-    return {
-      success: true,
-      data: {
-        enabled: false,
-        provider: 'none',
-        autoSync: false,
-        conflictStrategy: 'manual'
-      }
+    try {
+      const jsonStr: string = nativeModule.nativeLoadSyncConfig()
+      return this.parseEnvelope<SyncConfig>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
   }
 
   async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeSaveSyncConfig(JSON.stringify(config))
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async syncDryRun(): Promise<ResultEnvelope<SyncReport>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeSyncDryRun()
+      return this.parseEnvelope<SyncReport>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnostics>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativeSyncDiagnostics()
+      return this.parseEnvelope<SyncDiagnostics>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async performSync(): Promise<ResultEnvelope<SyncResult>> {
-    return this.notImplemented()
+    try {
+      const jsonStr: string = nativeModule.nativePerformSync()
+      return this.parseEnvelope<SyncResult>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   // ── Stats ──
 
   async getWritingStats(): Promise<ResultEnvelope<WritingStats>> {
-    return {
-      success: true,
-      data: {
-        totalChars: 0,
-        totalWords: 0,
-        totalChapters: 0,
-        todayChars: 0,
-        todayDuration: 0,
-        averageSpeed: 0
-      }
+    try {
+      const jsonStr: string = nativeModule.nativeGetWritingStats()
+      return this.parseEnvelope<WritingStats>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
   }
 
@@ -491,7 +604,18 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async processWritingEvent(charsAdded: number, durationSeconds: number): Promise<ResultEnvelope<boolean>> {
-    return { success: true, data: true }
+    try {
+      const eventJson = JSON.stringify({
+        charsAdded: charsAdded,
+        durationSeconds: durationSeconds,
+        platform: 'harmony',
+        sessionId: `hm-${Date.now()}`
+      })
+      const jsonStr: string = nativeModule.nativeProcessWritingEvent(eventJson)
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
@@ -524,6 +648,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async isAiAvailable(): Promise<ResultEnvelope<boolean>> {
-    return { success: true, data: false }
+    try {
+      const available = nativeModule.nativeIsAiAvailable()
+      return { success: true, data: available === 1 }
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
   }
 }
