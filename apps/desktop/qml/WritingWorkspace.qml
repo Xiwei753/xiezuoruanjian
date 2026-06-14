@@ -798,6 +798,19 @@ Rectangle {
                         onExplicit_clear_requested: editorController.markPotentialExplicitClear()
                     }
 
+                    // QML Rectangle cursor for SujianEditorItem — rendered on the
+                    // GUI thread, avoiding render-thread crashes from QSG cursor nodes.
+                    Rectangle {
+                        id: sujianCursorRect
+                        visible: root.useSujianEditorItem && sujianEditor.cursor_rect_visible
+                        x: sujianEditor.cursor_rect_x
+                        y: sujianEditor.cursor_rect_y
+                        width: sujianEditor.cursor_rect_width
+                        height: sujianEditor.cursor_rect_height
+                        color: sujianEditor.cursor_color
+                        radius: 1
+                    }
+
                     EditorWheelScroller {
                         id: editorWheelScroller
                         anchors.fill: editorScroll

@@ -96,6 +96,7 @@ pub struct SujianEditorItem {
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
+    cursor_rect_visible: qt_property!(bool; READ cursor_rect_visible NOTIFY cursor_rect_changed),
 
     plain_text_changed: qt_signal!(),
     text_changed: qt_signal!(),
@@ -217,6 +218,7 @@ impl Default for SujianEditorItem {
             cursor_rect_y: Default::default(),
             cursor_rect_width: Default::default(),
             cursor_rect_height: Default::default(),
+            cursor_rect_visible: Default::default(),
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
             reload_plain_text: Default::default(),
@@ -299,6 +301,12 @@ impl SujianEditorItem {
         if sujian_editor_static_only() {
             return;
         }
+        // Guard: skip cursor update when viewport is not yet laid out.
+        // A tiny viewport_height produces bogus in_viewport checks and
+        // visual_y values (e.g. 0.4) that corrupt the cursor position.
+        if self.current_viewport_height < 10.0 {
+            return;
+        }
         let scroll_y = self.current_scroll_y as f64;
         let layout_res = self.editor_layout_cursor_rect(
             self.buffer.cursor,
@@ -335,12 +343,16 @@ impl SujianEditorItem {
         self.cursor_render_snapshot = self.cursor_ctrl.snapshot();
 
         // Emit cursor_rect_changed and update IME on the GUI thread.
+        // Use QQuickItem::updateInputMethod() instead of the global
+        // QGuiApplication::inputMethod()->update() — this is the
+        // official Qt API for notifying the input method that query
+        // values have changed.
         if result.ime_needs_update {
             self.cursor_rect_changed();
             let obj_ptr = self.get_cpp_object();
             if !obj_ptr.is_null() {
                 cpp!(unsafe [obj_ptr as "QQuickItem*"] {
-                    QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
+                    obj_ptr->updateInputMethod(Qt::ImQueryInput);
                 });
             }
         }
@@ -672,6 +684,10 @@ impl SujianEditorItem {
 
     fn cursor_rect_height(&self) -> f32 {
         self.cursor_ctrl.ime_cursor_rect_h as f32
+    }
+
+    fn cursor_rect_visible(&self) -> bool {
+        self.cursor_ctrl.visible && !self.current_is_scrolling && !self.buffer.has_selection()
     }
 
     fn visual_changed(&mut self) {
@@ -1457,8 +1473,10 @@ impl QQuickItem for SujianEditorItem {
         // SUJIAN_EDITOR_DISABLE_QSG_OVERLAY=1 — 禁用 Layer 1 (动画 overlay)
         // SUJIAN_EDITOR_DISABLE_QSG_CURSOR=1  — 禁用 Layer 2 (光标 QSG 节点)
         let static_only = sujian_editor_static_only();
-        let disable_overlay = static_only || sujian_editor_disable_qsg_overlay();
-        let disable_cursor = static_only || sujian_editor_disable_qsg_cursor();
+        // HOTFIX: 强制关闭 overlay 和 cursor QSG，止血段错误。
+        // 光标改用 QML Rectangle 渲染，overlay 暂时禁用。
+        let disable_overlay = true;
+        let disable_cursor = true;
 
         // ── RENDER THREAD BOUNDARY ──
         // update_paint_node runs on the QSG render thread.
@@ -1513,10 +1531,10 @@ impl QQuickItem for SujianEditorItem {
 
         let mut final_root = root_raw;
 
-        // In static-only mode, only ensure a single QSGImageNode (Layer 0).
-        // Otherwise, ensure the full three-layer structure.
+        // Only ensure a single QSGImageNode (Layer 0) when overlay and cursor
+        // are both disabled.  Otherwise, ensure the full three-layer structure.
         if !root_raw.is_null() && !item_ptr.is_null() {
-            if static_only {
+            if static_only || (disable_overlay && disable_cursor) {
                 scene_graph::ensure_single_image_node(root_raw, item_ptr);
             } else {
                 scene_graph::ensure_three_layer_nodes(root_raw, item_ptr);

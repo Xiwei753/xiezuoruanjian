@@ -40,8 +40,11 @@ pub struct CursorRenderSnapshot {
 /// Isolated cursor visual state — no buffer, no layout, no QSG.
 ///
 /// Invariants:
-/// - `target_cursor_x/y` are the layout-computed cursor positions (document coords).
+/// - `target_x/y` are the layout-computed cursor positions in **viewport
+///   coordinates** (i.e. layout_y - scroll_y, already offset by scroll).
 /// - `visual_x/y` are the positions actually rendered (may lag due to animation).
+/// - QML cursor.y = target_y (viewport coords, no further scroll subtraction needed).
+/// - IME cursor rect = mapToGlobal(target_x, target_y).
 pub struct CursorController {
     // Target position (from layout)
     pub target_x: f64,
