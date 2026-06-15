@@ -1,0 +1,11 @@
+{
+  "ui": {
+    "pages": [
+      "pages/Index",
+      "pages/WorkspacePage",
+      "pages/WritingPage",
+      "pages/StarMapPage",
+      "pages/SettingsPage"
+    ]
+  }
+}

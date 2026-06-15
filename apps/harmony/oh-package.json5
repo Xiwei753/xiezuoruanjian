@@ -6,7 +6,9 @@
   "main": "",
   "author": "",
   "license": "Apache-2.0",
-  "dependencies": {},
+  "dependencies": {
+    "@ohos/hvigor-ohos-arkui-x": "5.0.0"
+  },
   "devDependencies": {
     "@ohos/hypium": "1.0.18"
   }
