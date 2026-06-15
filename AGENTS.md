@@ -261,7 +261,18 @@ cd apps/desktop && cargo check && cargo test
 - 顺序执行用 `;`，条件执行用 `if ($?) { cmd2 }`。
 - 不要使用 `cd <dir> && <command>` 模式，改用 Bash 工具的 `workdir` 参数。
 
-### 11.3 本地依赖
+### 11.3 查询 GitHub 信息必须用 GitHub API
+
+- **查询 GitHub Actions 构建状态、日志、PR、Issue 等信息时，必须使用 `GitHub_*` 系列 API 工具或 `webfetch` 调用 `https://api.github.com/...` REST API**。
+- **禁止使用 `gh` CLI 命令**：本机未安装 GitHub CLI（`gh.exe`），PATH 中的 `gh` 是一个无关的 Python 脚本，无法执行 GitHub 操作。
+- 示例：
+  - 查询 Actions 运行列表：`webfetch` → `https://api.github.com/repos/{owner}/{repo}/actions/runs`
+  - 查询某个 job 的步骤和结果：`webfetch` → `https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs`
+  - 查询 check-run annotations：`webfetch` → `https://api.github.com/repos/{owner}/{repo}/check-runs/{check_run_id}/annotations`
+  - 下载日志需要认证 token，从项目根目录 `.github-token` 文件读取（已加入 `.gitignore`，不会提交）。
+  - 用法：`$token = Get-Content .github-token; Invoke-WebRequest -Headers @{ Authorization = "Bearer $token" } ...`
+
+### 11.4 本地依赖
 
 - Rust 工具链：`cargo`、`rustc` 已在 PATH 中。
 - Qt6：本地开发环境需自行安装，Linux 二进制不应链接 Qt5。

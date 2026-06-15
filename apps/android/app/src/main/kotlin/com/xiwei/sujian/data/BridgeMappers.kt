@@ -56,6 +56,7 @@ import uniffi.writer_core.SyncStateDto
 import uniffi.writer_core.SyncableSettingsDto
 import uniffi.writer_core.VolumeDto
 import uniffi.writer_core.WriterException
+import uniffi.writer_core.WritingStatsSummaryDto
 
 internal fun WriterException.toWireErrorCode(): String = when (this) {
     is WriterException.Io -> "IO_ERROR"
