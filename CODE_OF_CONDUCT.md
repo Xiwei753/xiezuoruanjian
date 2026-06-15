@@ -44,7 +44,7 @@
 
 ---
 
-以下英文由机器翻译
+The following English content is machine-translated
 
 # Contributor Covenant Code of Conduct
 

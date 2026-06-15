@@ -123,7 +123,7 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 
 ---
 
-以下英文由机器翻译
+The following English content is machine-translated
 
 # Sujian Writer
 

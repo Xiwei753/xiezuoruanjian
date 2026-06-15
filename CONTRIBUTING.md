@@ -95,7 +95,7 @@ cargo run -p sujian-desktop
 
 ---
 
-以下英文由机器翻译
+The following English content is machine-translated
 
 # Contributing Guide
 
