@@ -1,19 +1,43 @@
 # 素笺写作
 
-Status: active
-Last verified: 2026-06-11
-Truth source: product decision / code
-Supersedes: None
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
+[![Linux Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml)
+[![Android Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml)
+[![Windows Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml)
 
-![素笺写作应用图标](packaging/web/icon-192.png)
+<!-- 截图占位：替换为实际应用截图 -->
+<!--
+![素笺写作 - 写作界面](docs/screenshots/writing.png)
+![素笺写作 - 星图](docs/screenshots/starmap.png)
+-->
 
-本仓库包含“素笺写作”的源代码，目前已过渡到“Rust 核心 + 各平台轻量客户端”的单仓库架构。
+一款面向小说创作者的跨平台写作工具，采用 Rust 核心 + 各平台原生客户端架构，确保数据安全与写作体验。
+
+## 特性
+
+- 纯文本写作，数据永远属于你
+- 项目 / 卷 / 章节三级组织结构
+- 自动保存，安心创作
+- 一键排版，规范格式
+- 星图（StarMap）角色关系可视化
+- AI 写作辅助
+- 云同步（Beta）
+- 跨平台：Android / Linux / HarmonyOS
 
 ## 架构
 
+```
+core/writer_core/     Rust 核心库（唯一业务逻辑层）
+apps/android/         Kotlin Android 客户端
+apps/desktop/         Qt6/QML Linux 客户端
+apps/harmony/         ArkTS HarmonyOS NEXT 客户端
+bindings/             跨平台绑定代码
+```
+
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
-- `apps/android`: 原生 Kotlin Android 客户端。作为当前的主客户端。主业务入口为 `AppServiceBridge + UniFFI`，`BridgeProvider` 只暴露领域 Bridge 给 Repository/ViewModel/UI 做平台适配；旧 `NativeCoreBridge` 类已不再作为 Android 应用源码入口，`bindings/android` 中残留的 JNI 符号名只是历史 ABI 兼容细节，不是 UI 契约。
+- `apps/android`: 原生 Kotlin Android 客户端。主业务入口为 `AppServiceBridge + UniFFI`，`BridgeProvider` 只暴露领域 Bridge 给 Repository/ViewModel/UI 做平台适配。
 - `apps/desktop`: 原生 Rust + Qt6/QML Linux 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则。
+- `apps/harmony`: 原生 ArkTS HarmonyOS NEXT 客户端。通过 NAPI C++ 桥接层调用 Rust Core FFI，ArkTS 侧通过 `IWriterCoreBridge` 接口解耦。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 
 > 注：原有的 Flutter 客户端由于其架构冲突已彻底移除。
@@ -63,6 +87,18 @@ If you encounter rendering issues (such as double UI or black screen misalignmen
 ```bash
 QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 ```
+
+### HarmonyOS 客户端
+
+使用 DevEco Studio 打开 `apps/harmony/` 目录。需要先构建预编译 Rust FFI 库：
+
+```bash
+./tools/build_harmony.sh
+```
+
+要求：
+- Rust 工具链添加 `aarch64-unknown-linux-ohos` target
+- 设置 `OHOS_NDK_HOME` 环境变量
 
 ### 实机测试验证步骤
 
