@@ -55,14 +55,12 @@ struct Index {
           } else {
             const errCode = nativeBridge.getLastInitErrorCode()
             const rustError = await nativeBridge.getLastError()
-            const errMap: Record<number, string> = {
-              [-1]: '路径为空',
-              [-2]: '路径编码无效',
-              [-3]: '内部状态异常',
-              [-4]: '工作区目录创建失败',
-              [-999]: 'NAPI调用异常(SO加载失败?)'
-            }
-            const errDesc = errMap[errCode] || `未知错误(${errCode})`
+            let errDesc = `未知错误(${errCode})`
+            if (errCode === -1) { errDesc = '路径为空' }
+            else if (errCode === -2) { errDesc = '路径编码无效' }
+            else if (errCode === -3) { errDesc = '内部状态异常' }
+            else if (errCode === -4) { errDesc = '工作区目录创建失败' }
+            else if (errCode === -999) { errDesc = 'NAPI调用异常(SO加载失败?)' }
             this.errorMessage = `Native 核心初始化失败: ${errDesc}\n路径: ${workspacePath}\n详情: ${rustError}`
             this.isLoading = false
             return
