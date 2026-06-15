@@ -41,3 +41,51 @@
 - 一键排版功能
 - 本地设置与可同步设置
 - 写作统计
+
+---
+
+以下英文由机器翻译
+
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+- HarmonyOS NEXT client (ArkTS + NAPI bridge to Rust Core)
+- HarmonyOS NAPI native module: covers all Project/Volume/Chapter/StarMap/Sync/Stats interfaces
+- HarmonyOS ArkTS bridge layer: IWriterCoreBridge interface + NativeWriterCoreBridge + MockWriterCoreBridge
+- HarmonyOS pages: Index / WorkspacePage / WritingPage / StarMapPage / SettingsPage
+- HarmonyOS platform adapters: file access, lifecycle, network state, secure storage, theme adaptation
+- Custom editor route: SujianEditorItem + QTextLayout
+- StarMap feature: independent objects and reference safety semantics
+- AI writing assistant
+- Sync feature (Beta)
+
+### Changed
+- Architecture migrated from Flutter to Rust Core + native clients per platform
+- Android migrated from JNI to UniFFI bridge
+- Desktop editor migrated from QTextDocument route to SujianEditorItem + QTextLayout
+- HarmonyOS prebuilt .so moved from `prebuilt/` to `cpp/libs/` (compliant with Huawei NAPI standard)
+- HarmonyOS removed handwritten types/ declarations, using oh-package.json5 official dependencies instead
+
+### Removed
+- Flutter client (removed due to architectural conflicts)
+- HarmonyOS handwritten `@ohos.*.d.ts` type declarations (replaced by official dependencies)
+- Legacy `mind_map` module (replaced by StarMap)
+
+## [1.0.0] - 2026-06-01
+
+### Added
+- Rust core library (core/writer_core)
+- Android native client (Kotlin)
+- Linux desktop client (Rust + Qt6/QML)
+- Project management: CRUD for projects, volumes, and chapters
+- Auto-save feature
+- One-click formatting
+- Local settings and syncable settings
+- Writing statistics

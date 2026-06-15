@@ -44,3 +44,54 @@
 ## 致谢
 
 感谢所有负责任地报告安全漏洞的研究者。你的贡献让素笺写作更安全。
+
+---
+
+以下英文由机器翻译
+
+# Security Policy
+
+## Reporting Security Vulnerabilities
+
+If you discover a security vulnerability, **please do not report it in a public GitHub Issue**.
+
+Please report it privately through one of the following methods:
+
+1. Use GitHub's [Security Advisory feature](https://github.com/Xiwei753/xiezuoruanjian/security/advisories/new)
+2. Or email the project maintainers
+
+## What to Include
+
+Please include the following information:
+
+- Vulnerability type (e.g. XSS, injection, privilege bypass, etc.)
+- Affected versions and platforms
+- Steps to reproduce
+- Potential impact
+- Fix suggestions, if possible
+
+## Response Time
+
+- We will **acknowledge receipt within 48 hours**
+- We will **provide an initial assessment and fix plan within 7 days**
+- After the fix is complete, we will publish details in a GitHub Security Advisory
+
+## Security Considerations
+
+Sujian Writer handles user-created content. Please pay special attention to:
+
+- **Do not upload novel content in Issues, PRs, or public discussions**
+- **Do not expose API Keys (e.g. DeepSeek Key) in logs or screenshots**
+- **Do not expose GitHub Tokens or other credentials**
+- Diagnostic packages are automatically sanitized by the app; do not directly package your workspace directory
+
+## Supported Versions
+
+| Version | Supported |
+|---------|-----------|
+| Latest on main branch | ✅ Supported |
+| 1.0.0 | ✅ Supported |
+
+## Acknowledgments
+
+Thank you to all researchers who responsibly report security vulnerabilities. Your contributions make Sujian Writer safer.

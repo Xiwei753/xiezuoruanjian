@@ -92,3 +92,102 @@ cargo run -p sujian-desktop
 ## 许可证
 
 本项目采用 [GPL-3.0](LICENSE) 许可证。提交代码即表示你同意在该许可证下贡献你的代码。
+
+---
+
+以下英文由机器翻译
+
+# Contributing Guide
+
+Thank you for your interest in Sujian Writer! This document will help you understand how to contribute to the project.
+
+## Quick Start
+
+1. Fork this repository
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Commit your changes: `git commit -m "Add some feature"`
+4. Push the branch: `git push origin feature/my-feature`
+5. Create a Pull Request
+
+## Architecture Constraints
+
+**Before writing code, please read the following core principles:**
+
+- **Rust Core is the sole business layer**: All file I/O, project management, sync, formatting, and settings rules must be implemented in `core/writer_core`.
+- **Thin clients**: Clients (Android / Desktop / HarmonyOS) are only responsible for UI rendering, navigation, IME interaction, and theming. Implementing business logic in clients is not allowed.
+- **Content is always plain text**: Saving HTML is not allowed. Inserting spaces for first-line indentation is not allowed.
+- **Workspace format is immutable**: `docs/workspace_format.md` is the single source of truth and must not be compromised for UI.
+
+For the full rules, see [AGENTS.md](AGENTS.md) and the [Technical Route document](docs/TECHNICAL_ROUTE.md).
+
+## Development Environment
+
+### Rust Core
+
+```bash
+cd core/writer_core
+cargo fmt
+cargo check
+cargo test
+```
+
+### Android Client
+
+```bash
+./tools/build_android.sh
+```
+
+Only `arm64-v8a` builds are supported.
+
+### Linux Client (Qt6/QML)
+
+```bash
+cargo run -p sujian-desktop
+```
+
+### HarmonyOS Client
+
+Open the `apps/harmony/` directory in DevEco Studio. You need to build the prebuilt Rust FFI library first via `tools/build_harmony.sh`.
+
+## Code Standards
+
+### Rust
+
+- Run `cargo fmt` and `cargo test` after modifications
+- New features must have corresponding test coverage
+- Follow the existing module organization in `core/writer_core`
+
+### QML (Desktop)
+
+- QML only binds data, no business logic
+- Use DesignTokens like `dt.sp16`, `dt.sp20` instead of hardcoded numbers
+- Avoid duplicate scroll layers and duplicate UI containers
+
+### ArkTS (HarmonyOS)
+
+- C FFI functions use `snake_case` (e.g. `writer_core_init`)
+- NAPI wrapper functions use `PascalCase` (e.g. `NativeInit`)
+- Business logic is called through the `IWriterCoreBridge` interface; pages must not directly operate NAPI
+
+### Kotlin (Android)
+
+- Business rules and disk I/O must go through the `writer_core` Facade
+- Hardcoding T9 candidates, pinyin paths, or dictionary results is not allowed
+
+## Commit Guidelines
+
+- Commit messages in Chinese, describing what was changed and why
+- Do not commit build artifacts (`target/`, `build/`, `*.o`, `*.so`)
+- Do not commit temporary logs or test junk files
+- Each change should focus on one clear goal; do not "incidentally" modify unrelated modules
+- Do not commit secrets, tokens, or other sensitive information
+
+## Reporting Issues
+
+- Bug reports: Use the [Bug Report template](https://github.com/Xiwei753/xiezuoruanjian/issues/new?template=bug_report.md)
+- Feature requests: Use the [Feature Request template](https://github.com/Xiwei753/xiezuoruanjian/issues/new?template=feature_request.md)
+- Security vulnerabilities: See [SECURITY.md](SECURITY.md); do not report in public Issues
+
+## License
+
+This project is licensed under [GPL-3.0](LICENSE). By submitting code, you agree to contribute your code under this license.

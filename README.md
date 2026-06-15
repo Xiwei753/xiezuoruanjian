@@ -120,3 +120,130 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 - `docs/starmap_semantics.md`: 星图语义地基 (独立对象与引用安全)
 - `docs/editor_engine_route.md`: 自绘编辑器与统一事件层路线
 - `docs/desktop_ime_notes.md`: Desktop (Linux) 输入法笔记
+
+---
+
+以下英文由机器翻译
+
+# Sujian Writer
+
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
+[![Linux Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml)
+[![Android Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml)
+[![Windows Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml)
+
+<!-- Screenshot placeholder: replace with actual app screenshots -->
+<!--
+![Sujian Writer - Writing View](docs/screenshots/writing.png)
+![Sujian Writer - StarMap](docs/screenshots/starmap.png)
+-->
+
+A cross-platform writing tool for novel creators, built with a Rust core + native client architecture to ensure data safety and writing experience.
+
+## Features
+
+- Plain text writing — your data always belongs to you
+- Project / Volume / Chapter three-level organization
+- Auto-save for peace of mind
+- One-click formatting
+- StarMap character relationship visualization
+- AI writing assistant
+- Cloud sync (Beta)
+- Cross-platform: Android / Linux / HarmonyOS
+
+## Architecture
+
+```
+core/writer_core/     Rust core library (sole business logic layer)
+apps/android/         Kotlin Android client
+apps/desktop/         Qt6/QML Linux client
+apps/harmony/         ArkTS HarmonyOS NEXT client
+bindings/             Cross-platform binding code
+```
+
+- `core/writer_core`: The **sole** business logic core library written in Rust. Handles all file I/O, project management, sync, formatting, and settings rules. Strictly excludes UI logic.
+- `apps/android`: Native Kotlin Android client. Main business entry point is `AppServiceBridge + UniFFI`. `BridgeProvider` only exposes domain Bridges to Repository/ViewModel/UI for platform adaptation.
+- `apps/desktop`: Native Rust + Qt6/QML Linux client. UI calls Rust Core through the QObject backend adapter layer. Implementing workspace, save, or sync rules in QML is not allowed.
+- `apps/harmony`: Native ArkTS HarmonyOS NEXT client. Calls Rust Core FFI through the NAPI C++ bridge layer. The ArkTS side is decoupled via the `IWriterCoreBridge` interface.
+- `bindings`: Code for connecting the Rust core with native clients.
+
+> Note: The previous Flutter client has been completely removed due to architectural conflicts.
+
+For details, see the [Technical Route & Architecture Constraints](docs/TECHNICAL_ROUTE.md).
+
+## Core Principles
+
+- **Single Business Layer**: The Rust core (`core/writer_core`) is the sole entry point for file and data logic. Clients are not allowed to assemble paths or handle Workspace rules on their own.
+- **Single Source of Truth**: `docs/workspace_format.md` defines the workspace format. It is maintained and operated by Rust Core.
+- **Thin Clients**: Clients are only responsible for UI rendering, navigation, IME interaction, and theming. They should not contain any persistence or data logic.
+
+## Development
+
+### Tools
+
+- `tools/build_core.sh`: Build the Rust core library.
+- `scripts/generate_icons.py`: Generate app icon assets for each platform from `assets/brand/icon/source`.
+
+### Rust Core
+
+```bash
+cd core/writer_core
+cargo fmt
+cargo check
+cargo test
+```
+
+### Android Client
+
+```bash
+./tools/build_android.sh
+```
+
+**Supported targets**: Only `arm64-v8a` builds are officially supported. `x86_64` Android devices or emulators are not supported. To add `x86_64` support, open-source users can modify `tools/build_android.sh` and `apps/android/app/build.gradle.kts` to add the corresponding ABI.
+
+### Linux Client
+
+The Linux client uses Qt6 exclusively. CI, `apps/desktop/build.rs`, and the directory README all use Qt6 as the sole build pipeline; do not mix in Qt5 QML/plugin paths.
+
+```bash
+cargo run -p sujian-desktop
+```
+
+If you encounter rendering issues (such as double UI or black screen misalignment under Wayland), try running with basic render loop and enabling debug logs:
+
+```bash
+QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
+```
+
+### HarmonyOS Client
+
+Open the `apps/harmony/` directory in DevEco Studio. You need to build the prebuilt Rust FFI library first:
+
+```bash
+./tools/build_harmony.sh
+```
+
+Requirements:
+- Add `aarch64-unknown-linux-ohos` target to your Rust toolchain
+- Set the `OHOS_NDK_HOME` environment variable
+
+### Manual Testing Steps
+
+- Create a new project.
+- Enter the project and confirm that "Volume 1" appears automatically.
+- Click to create a new chapter and type some content.
+- Confirm auto-save works.
+- Exit and re-enter the chapter, confirm the content is still there.
+
+## Documentation
+
+- `docs/TECHNICAL_ROUTE.md`: Global technical route and architecture constraints
+- `docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md`: Cross-platform capability contract and Core-first architecture constraints
+- `docs/API_CONTRACTS.md`: Interface boundaries and interaction contracts (Bridge, Backend, QML)
+- `docs/PRODUCT_DESIGN.md`: Product design and visual contract (product positioning, Monet colors, StarMap, settings design)
+- `docs/workspace_format.md`: Single source of truth for document structure on disk
+- `docs/settings_schema.md`: Local and syncable settings definitions
+- `docs/sync_rules.md`: Sync rules
+- `docs/starmap_semantics.md`: StarMap semantic foundation (independent objects and reference safety)
+- `docs/editor_engine_route.md`: Custom editor engine and unified event layer route
+- `docs/desktop_ime_notes.md`: Desktop (Linux) IME notes
