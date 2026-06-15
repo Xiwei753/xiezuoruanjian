@@ -10,6 +10,7 @@ extern "C" {
 // ── Core lifecycle ──
 int32_t writer_core_init(const char* path);
 char*  writer_core_get_load_status(void);
+char*  writer_core_get_last_error(void);
 int32_t writer_core_calculate_word_count(const char* text);
 void    writer_core_free_string(char* ptr);
 

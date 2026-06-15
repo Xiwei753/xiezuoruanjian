@@ -1,3 +1,4 @@
+import { common } from '@kit.AbilityKit'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
@@ -18,7 +19,7 @@ export interface AppContextConfig {
   enableLogging: boolean
 }
 
-const DEFAULT_WORKSPACE_PATH = '/data/storage/el2/base/files/writer-workspace'
+const DEFAULT_WORKSPACE_DIR_NAME = 'writer-workspace'
 
 export class AppContext {
   private static instance: AppContext
@@ -30,6 +31,7 @@ export class AppContext {
   private lifecycle: HarmonyLifecycle
   private themeAdapter: HarmonyThemeAdapter
   private isInitialized: boolean = false
+  private abilityContext: common.UIAbilityContext | null = null
 
   private constructor(config: AppContextConfig) {
     this.config = config
@@ -49,12 +51,18 @@ export class AppContext {
     }
   }
 
+  setAbilityContext(context: common.UIAbilityContext): void {
+    this.abilityContext = context
+    const filesDir = context.filesDir
+    this.config.workspacePath = `${filesDir}/${DEFAULT_WORKSPACE_DIR_NAME}`
+  }
+
   static getInstance(config?: AppContextConfig): AppContext {
     if (!AppContext.instance) {
       if (!config) {
         config = {
           environment: 'native',
-          workspacePath: DEFAULT_WORKSPACE_PATH,
+          workspacePath: DEFAULT_WORKSPACE_DIR_NAME,
           enableAutoSave: true,
           autoSaveIntervalMs: 30000,
           enableSync: false,
@@ -65,6 +73,7 @@ export class AppContext {
     }
     return AppContext.instance
   }
+
 
   static initialize(config: AppContextConfig): AppContext {
     AppContext.instance = new AppContext(config)

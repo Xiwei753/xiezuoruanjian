@@ -4,12 +4,14 @@ import AbilityConstant from '@ohos.app.ability.AbilityConstant'
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../system/HarmonyLifecycle'
+import { getAppContext } from '../common/AppContext'
 
 export default class EntryAbility extends UIAbility {
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
+    getAppContext().setAbilityContext(this.context)
     this.lifecycle.notifyCreate()
   }
 

@@ -114,6 +114,8 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     }
   }
 
+  private lastInitErrorCode: number = 0
+
   async initialize(workspacePath: string): Promise<boolean> {
     if (this.isInitialized) {
       return true
@@ -125,11 +127,26 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
         this.workspacePath = workspacePath
         return true
       }
-      console.error(`nativeInit failed with code: ${result}`)
+      this.lastInitErrorCode = result
+      console.error(`nativeInit failed with code: ${result}, path: ${workspacePath}`)
       return false
     } catch (e) {
+      this.lastInitErrorCode = -999
       console.error(`nativeInit exception: ${e}`)
       return false
+    }
+  }
+
+  getLastInitErrorCode(): number {
+    return this.lastInitErrorCode
+  }
+
+  async getLastError(): Promise<string> {
+    try {
+      const err: string = nativeModule.nativeGetLastError() as string
+      return err
+    } catch (e) {
+      return String(e)
     }
   }
 

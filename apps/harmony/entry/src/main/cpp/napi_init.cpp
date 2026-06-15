@@ -22,6 +22,7 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     if (argc < 1) {
+        OH_LOG_ERROR(LOG_APP, "NativeInit: expected 1 argument (path), got %{public}zu", argc);
         napi_throw_error(env, nullptr, "Expected 1 argument: path");
         return nullptr;
     }
@@ -30,7 +31,13 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
     size_t path_len = 0;
     napi_get_value_string_utf8(env, args[0], path, sizeof(path), &path_len);
 
+    OH_LOG_INFO(LOG_APP, "NativeInit: calling writer_core_init with path='%{public}s'", path);
     int32_t result = writer_core_init(path);
+    OH_LOG_INFO(LOG_APP, "NativeInit: writer_core_init returned %{public}d", result);
+
+    if (result != 0) {
+        OH_LOG_ERROR(LOG_APP, "NativeInit: FAILED with code %{public}d (path='%{public}s')", result, path);
+    }
 
     napi_value ret;
     napi_create_int32(env, result, &ret);
@@ -48,6 +55,20 @@ static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
     napi_value result;
     napi_create_string_utf8(env, status, strlen(status), &result);
     writer_core_free_string(status);
+    return result;
+}
+
+static napi_value NativeGetLastError(napi_env env, napi_callback_info info) {
+    char* err = writer_core_get_last_error();
+    if (err == nullptr) {
+        napi_value empty;
+        napi_create_string_utf8(env, "", 0, &empty);
+        return empty;
+    }
+
+    napi_value result;
+    napi_create_string_utf8(env, err, strlen(err), &result);
+    writer_core_free_string(err);
     return result;
 }
 
@@ -639,6 +660,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         // Lifecycle
         {"nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLoadStatus", nullptr, NativeGetLoadStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetLastError", nullptr, NativeGetLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},
         // Workspace
         {"nativeValidateWorkspace", nullptr, NativeValidateWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -26,6 +26,15 @@ use once_cell::sync::OnceCell;
 use crate::facade::WriterCore;
 
 static CORE: OnceCell<Mutex<Option<WriterCore>>> = OnceCell::new();
+static LAST_ERROR: OnceCell<Mutex<String>> = OnceCell::new();
+
+pub(crate) fn set_last_error(msg: &str) {
+    if let Some(m) = LAST_ERROR.get() {
+        if let Ok(mut guard) = m.lock() {
+            *guard = msg.to_string();
+        }
+    }
+}
 
 pub(crate) fn with_core<F, R>(f: F) -> Result<R, String>
 where
@@ -79,12 +88,18 @@ pub(crate) fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 ///  -4  = create_workspace failed
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
+    let _ = LAST_ERROR.get_or_init(|| Mutex::new(String::new()));
     let c_str = match c_str_to_rust(path) {
         Ok(s) => s,
-        Err(e) => return e,
+        Err(e) => {
+            set_last_error("path is null or invalid UTF-8");
+            return e;
+        }
     };
     let core = WriterCore::new(&c_str);
-    if core.create_workspace().is_err() {
+    if let Err(e) = core.create_workspace() {
+        let msg = format!("create_workspace failed: {}", e);
+        set_last_error(&msg);
         return -4;
     }
     let m = CORE.get_or_init(|| Mutex::new(None));
@@ -92,8 +107,19 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
         *guard = Some(core);
         0
     } else {
+        set_last_error("mutex poisoned");
         -3
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_last_error() -> *mut c_char {
+    let msg = LAST_ERROR
+        .get()
+        .and_then(|m| m.lock().ok())
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    CString::new(msg).unwrap_or_default().into_raw()
 }
 
 /// # Safety
