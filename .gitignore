@@ -73,6 +73,7 @@ logs/
 tmp/
 
 # Secrets & Local Config
+.github-token
 .env*
 secrets.json
 api_keys.json

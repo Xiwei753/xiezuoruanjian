@@ -64,14 +64,10 @@ internal class SyncSettingsHelper(
 
     fun loadSyncState() {
         currentSyncConfig = ErrorUtil.safeRun(activity, SyncConfig()) {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.loadSyncConfig()
-            } else SyncConfig()
+            settingsRepository.loadSyncConfig()
         }
         currentSyncSecrets = ErrorUtil.safeRun(activity, SyncSecrets()) {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.loadSyncSecrets()
-            } else SyncSecrets()
+            settingsRepository.loadSyncSecrets()
         }
     }
 
@@ -105,10 +101,8 @@ internal class SyncSettingsHelper(
         } else currentSyncSecrets
 
         ErrorUtil.safeRun(activity) {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.saveSyncConfig(uiConfig)
-                settingsRepository.saveSyncSecrets(uiSecrets)
-            }
+            settingsRepository.saveSyncConfig(uiConfig)
+            settingsRepository.saveSyncSecrets(uiSecrets)
         }
         currentSyncConfig = uiConfig
         currentSyncSecrets = uiSecrets

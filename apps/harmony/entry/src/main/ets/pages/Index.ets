@@ -438,7 +438,7 @@ struct Index {
 
         GridItem() {
           Column() {
-            Image($r('sys.media.ohos_ic_public_star'))
+            Image($r('app.media.ic_star'))
               .width(32)
               .height(32)
               .fillColor(this.themeConfig.colors.secondary)
@@ -488,7 +488,7 @@ struct Index {
 
         GridItem() {
           Column() {
-            Image($r('sys.media.ohos_ic_public_refresh'))
+            Image($r('app.media.ic_refresh'))
               .width(32)
               .height(32)
               .fillColor(this.themeConfig.colors.success)

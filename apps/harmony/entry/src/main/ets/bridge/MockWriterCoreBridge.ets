@@ -11,6 +11,8 @@ import {
   StarMapGraph,
   StarMapNode,
   StarMapEdge,
+  StarMapEmbed,
+  StarMapLink,
   StarMapViewport,
   StarMapLayout,
   LocalSettings,
@@ -120,14 +122,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     rotation: 0
   } as StarMapViewport
 
-  private mockStarMapLayoutParams: Record<string, number> = {
-    gravity: 0.1,
-    linkDistance: 100
-  } as Record<string, number>
-
   private mockStarMapLayout: StarMapLayout = {
     type: 'force',
-    params: this.mockStarMapLayoutParams
+    params: undefined
   } as StarMapLayout
 
   private mockStarMapGraph: StarMapGraph = {
