@@ -1,4 +1,5 @@
 {
+  "modelVersion": "26.0.0",
   "name": "writer-harmony",
   "version": "1.0.0",
   "description": "Writing software HarmonyOS NEXT client",

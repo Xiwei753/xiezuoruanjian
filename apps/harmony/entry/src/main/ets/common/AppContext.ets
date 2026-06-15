@@ -73,7 +73,15 @@ export class AppContext {
   }
 
   getConfig(): AppContextConfig {
-    return { ...this.config }
+    const c: AppContextConfig = {
+      environment: this.config.environment,
+      workspacePath: this.config.workspacePath,
+      enableAutoSave: this.config.enableAutoSave,
+      autoSaveIntervalMs: this.config.autoSaveIntervalMs,
+      enableSync: this.config.enableSync,
+      enableLogging: this.config.enableLogging
+    }
+    return c
   }
 
   getWorkspacePath(): string {

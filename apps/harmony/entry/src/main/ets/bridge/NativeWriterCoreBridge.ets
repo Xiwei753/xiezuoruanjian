@@ -20,7 +20,8 @@ import {
   SyncReport,
   SyncDiagnostics,
   SyncResult,
-  RecentEdit
+  RecentEdit,
+  ErrorCode
 } from '../model/CoreDtos'
 
 import nativeModule from 'libwriter_core.so'
@@ -32,7 +33,7 @@ interface ChapterLocation {
 
 interface NativeJsonEnvelope {
   success: boolean
-  data?: Object
+  data?: Record<string, Object>
   errorCode?: string
   userMessage?: string
 }
@@ -53,19 +54,21 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   private parseEnvelope<T>(jsonStr: string): ResultEnvelope<T> {
     try {
-      const obj: NativeJsonEnvelope = JSON.parse(jsonStr)
-      return {
+      const obj: NativeJsonEnvelope = JSON.parse(jsonStr) as NativeJsonEnvelope
+      const result: ResultEnvelope<T> = {
         success: obj.success,
         data: obj.data as T | undefined,
-        errorCode: obj.errorCode,
+        errorCode: obj.errorCode as ErrorCode | undefined,
         userMessage: obj.userMessage
       }
+      return result
     } catch (e) {
-      return {
+      const errResult: ResultEnvelope<T> = {
         success: false,
         errorCode: 'PARSE_ERROR',
         userMessage: `JSON parse error: ${e}`
       }
+      return errResult
     }
   }
 
@@ -116,7 +119,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return true
     }
     try {
-      const result = nativeModule.nativeInit(workspacePath)
+      const result: number = nativeModule.nativeInit(workspacePath) as number
       if (result === 0) {
         this.isInitialized = true
         this.workspacePath = workspacePath
@@ -523,13 +526,26 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async getEffectiveSettings(): Promise<ResultEnvelope<EffectiveSettings>> {
     const local = await this.getLocalSettings()
     if (local.success && local.data) {
-      return {
-        success: true,
-        data: {
-          ...local.data,
-          isSynced: false
-        }
+      const data: EffectiveSettings = {
+        fontSize: local.data.fontSize,
+        lineHeight: local.data.lineHeight,
+        fontFamily: local.data.fontFamily,
+        theme: local.data.theme,
+        autoSave: local.data.autoSave,
+        autoSaveInterval: local.data.autoSaveInterval,
+        autoIndent: local.data.autoIndent,
+        showWordCount: local.data.showWordCount,
+        showLineNumbers: local.data.showLineNumbers,
+        wordWrap: local.data.wordWrap,
+        spellCheck: local.data.spellCheck,
+        lastWorkspacePath: local.data.lastWorkspacePath,
+        lastProjectId: local.data.lastProjectId,
+        lastChapterId: local.data.lastChapterId,
+        editorWidth: local.data.editorWidth,
+        uiLanguage: local.data.uiLanguage,
+        isSynced: false
       }
+      return { success: true, data: data }
     }
     return this.notImplemented()
   }
@@ -631,7 +647,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getNativeLoadStatus(): Promise<ResultEnvelope<string>> {
     try {
-      const status = nativeModule.nativeGetLoadStatus()
+      const status: string = nativeModule.nativeGetLoadStatus() as string
       return { success: true, data: status }
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -640,7 +656,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async isWorkspaceValid(): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeValidateWorkspace()
+      const jsonStr: string = nativeModule.nativeValidateWorkspace() as string
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -649,7 +665,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async isAiAvailable(): Promise<ResultEnvelope<boolean>> {
     try {
-      const available = nativeModule.nativeIsAiAvailable()
+      const available: number = nativeModule.nativeIsAiAvailable() as number
       return { success: true, data: available === 1 }
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }

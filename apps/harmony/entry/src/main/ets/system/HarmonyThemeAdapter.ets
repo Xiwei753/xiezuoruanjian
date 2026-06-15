@@ -54,6 +54,13 @@ export interface ThemeObserver {
   onThemeChanged(theme: ThemeConfig): void
 }
 
+export interface ThemeUpdateParams {
+  theme: ThemeMode
+  fontSize: number
+  fontFamily: string
+  lineHeight: number
+}
+
 export class HarmonyThemeAdapter {
   private static instance: HarmonyThemeAdapter
   private currentTheme: ThemeConfig = {
@@ -74,11 +81,31 @@ export class HarmonyThemeAdapter {
   }
 
   getCurrentTheme(): ThemeConfig {
-    return { ...this.currentTheme }
+    const c: ThemeConfig = {
+      mode: this.currentTheme.mode,
+      colors: this.currentTheme.colors,
+      fontSize: this.currentTheme.fontSize,
+      fontFamily: this.currentTheme.fontFamily,
+      lineHeight: this.currentTheme.lineHeight
+    }
+    return c
   }
 
   getColors(): ThemeColors {
-    return { ...this.currentTheme.colors }
+    const c: ThemeColors = {
+      primary: this.currentTheme.colors.primary,
+      secondary: this.currentTheme.colors.secondary,
+      background: this.currentTheme.colors.background,
+      surface: this.currentTheme.colors.surface,
+      textPrimary: this.currentTheme.colors.textPrimary,
+      textSecondary: this.currentTheme.colors.textSecondary,
+      textHint: this.currentTheme.colors.textHint,
+      error: this.currentTheme.colors.error,
+      success: this.currentTheme.colors.success,
+      divider: this.currentTheme.colors.divider,
+      overlay: this.currentTheme.colors.overlay
+    }
+    return c
   }
 
   getMode(): ThemeMode {
@@ -106,7 +133,7 @@ export class HarmonyThemeAdapter {
     this.notifyObservers()
   }
 
-  updateFromSettings(settings: { theme: ThemeMode; fontSize: number; fontFamily: string; lineHeight: number }): void {
+  updateFromSettings(settings: ThemeUpdateParams): void {
     this.currentTheme.mode = settings.theme
     this.currentTheme.fontSize = settings.fontSize
     this.currentTheme.fontFamily = settings.fontFamily
@@ -158,15 +185,28 @@ export class HarmonyThemeAdapter {
   }
 }
 
+export class ThemeObserverImpl implements ThemeObserver {
+  private callback: (theme: ThemeConfig) => void
+
+  constructor(callback: (theme: ThemeConfig) => void) {
+    this.callback = callback
+  }
+
+  onThemeChanged(theme: ThemeConfig): void {
+    this.callback(theme)
+  }
+}
+
 export class ThemeAwareComponent {
   protected themeAdapter: HarmonyThemeAdapter
   private themeObserver: ThemeObserver
 
   constructor() {
     this.themeAdapter = HarmonyThemeAdapter.getInstance()
-    this.themeObserver = {
-      onThemeChanged: (theme) => this.onThemeChanged(theme)
-    }
+    const self = this
+    this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
+      self.onThemeChanged(theme)
+    })
   }
 
   attachTheme(): void {

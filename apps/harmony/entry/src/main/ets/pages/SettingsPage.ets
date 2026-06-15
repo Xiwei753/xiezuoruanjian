@@ -7,10 +7,17 @@ import {
   SyncDiagnostics,
   SyncResult,
   ThemeMode,
-  ResultEnvelope
+  ResultEnvelope,
+  SyncProvider,
+  ConflictStrategy
 } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
+
+interface SettingsSelectOption {
+  value: string
+  icon: string
+}
 
 @Entry
 @Component
@@ -39,29 +46,29 @@ struct SettingsPage {
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
-  private themeObserver: ThemeObserver = {
-    onThemeChanged: (theme: ThemeConfig) => {
-      this.themeConfig = theme
-    }
-  }
+  private themeObserver: ThemeObserver | null = null
 
   aboutToAppear() {
-    this.themeAdapter.addObserver(this.themeObserver)
+    const self = this
+    this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
+      self.themeConfig = theme
+    })
+    this.themeAdapter.addObserver(this.themeObserver!)
     this.loadSettings()
   }
 
   aboutToDisappear() {
-    this.themeAdapter.removeObserver(this.themeObserver)
+    if (this.themeObserver) {
+      this.themeAdapter.removeObserver(this.themeObserver)
+    }
   }
 
   async loadSettings() {
     this.isLoading = true
 
     try {
-      const [settingsResult, syncConfigResult] = await Promise.all([
-        this.bridge.getLocalSettings(),
-        this.bridge.loadSyncConfig()
-      ])
+      const settingsResult = await this.bridge.getLocalSettings()
+      const syncConfigResult = await this.bridge.loadSyncConfig()
 
       if (settingsResult.success && settingsResult.data) {
         this.settings = settingsResult.data
@@ -70,7 +77,7 @@ struct SettingsPage {
           fontSize: settingsResult.data.fontSize,
           fontFamily: settingsResult.data.fontFamily,
           lineHeight: settingsResult.data.lineHeight
-        })
+        } as ThemeUpdateParams)
       }
 
       if (syncConfigResult.success && syncConfigResult.data) {
@@ -96,7 +103,7 @@ struct SettingsPage {
           fontSize: this.settings.fontSize,
           fontFamily: this.settings.fontFamily,
           lineHeight: this.settings.lineHeight
-        })
+        } as ThemeUpdateParams)
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
@@ -437,7 +444,7 @@ struct SettingsPage {
           { value: '浅色', icon: '' },
           { value: '深色', icon: '' },
           { value: '跟随系统', icon: '' }
-        ])
+        ] as SettingsSelectOption[])
           .selected(this.getThemeIndex())
           .value(this.getThemeName())
           .onSelect((index: number) => {
@@ -459,7 +466,7 @@ struct SettingsPage {
         Select([
           { value: 'HarmonyOS Sans', icon: '' },
           { value: '系统默认', icon: '' }
-        ])
+        ] as SettingsSelectOption[])
           .selected(0)
           .value(this.settings.fontFamily)
           .onSelect((index: number) => {
@@ -525,13 +532,13 @@ struct SettingsPage {
             { value: 'GitLab', icon: '' },
             { value: 'Gitea', icon: '' },
             { value: '自定义', icon: '' }
-          ])
+          ] as SettingsSelectOption[])
             .selected(this.getSyncProviderIndex())
             .value(this.getSyncProviderName())
             .onSelect((index: number) => {
               if (this.syncConfig) {
                 const providers = ['github', 'gitlab', 'gitea', 'custom']
-                this.syncConfig.provider = providers[index] as any
+                this.syncConfig.provider = providers[index] as SyncProvider
               }
             })
         }
@@ -567,13 +574,13 @@ struct SettingsPage {
             { value: '保留远程', icon: '' },
             { value: '手动处理', icon: '' },
             { value: '自动合并', icon: '' }
-          ])
+          ] as SettingsSelectOption[])
             .selected(this.getConflictStrategyIndex())
             .value(this.getConflictStrategyName())
             .onSelect((index: number) => {
               if (this.syncConfig) {
                 const strategies = ['keep_local', 'keep_remote', 'manual', 'auto_merge']
-                this.syncConfig.conflictStrategy = strategies[index] as any
+                this.syncConfig.conflictStrategy = strategies[index] as ConflictStrategy
               }
             })
         }
@@ -683,27 +690,34 @@ struct SettingsPage {
   }
 
   getThemeName(): string {
-    const names = { light: '浅色', dark: '深色', system: '跟随系统' }
-    return names[this.settings.theme] || '跟随系统'
+    if (this.settings.theme === 'light') return '浅色'
+    if (this.settings.theme === 'dark') return '深色'
+    return '跟随系统'
   }
 
   getSyncProviderIndex(): number {
-    const providers = ['github', 'gitlab', 'gitea', 'custom']
+    const providers: string[] = ['github', 'gitlab', 'gitea', 'custom']
     return providers.indexOf(this.syncConfig?.provider || 'github')
   }
 
   getSyncProviderName(): string {
-    const names = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea', custom: '自定义' }
-    return names[this.syncConfig?.provider || 'github'] || 'GitHub'
+    const p: SyncProvider = this.syncConfig?.provider || 'github'
+    if (p === 'github') return 'GitHub'
+    if (p === 'gitlab') return 'GitLab'
+    if (p === 'gitea') return 'Gitea'
+    return '自定义'
   }
 
   getConflictStrategyIndex(): number {
-    const strategies = ['keep_local', 'keep_remote', 'manual', 'auto_merge']
+    const strategies: string[] = ['keep_local', 'keep_remote', 'manual', 'auto_merge']
     return strategies.indexOf(this.syncConfig?.conflictStrategy || 'manual')
   }
 
   getConflictStrategyName(): string {
-    const names = { keep_local: '保留本地', keep_remote: '保留远程', manual: '手动处理', auto_merge: '自动合并' }
-    return names[this.syncConfig?.conflictStrategy || 'manual'] || '手动处理'
+    const s: ConflictStrategy = this.syncConfig?.conflictStrategy || 'manual'
+    if (s === 'keep_local') return '保留本地'
+    if (s === 'keep_remote') return '保留远程'
+    if (s === 'auto_merge') return '自动合并'
+    return '手动处理'
   }
 }

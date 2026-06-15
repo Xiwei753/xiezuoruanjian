@@ -3,7 +3,7 @@ project(writer_core_napi)
 
 set(CMAKE_CXX_STANDARD 17)
 
-set(PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../prebuilt/${OHOS_ARCH}")
+set(PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../prebuilt/${OHOS_ARCH}")
 set(PREBUILT_SO "${PREBUILT_DIR}/libwriter_core_ffi.so")
 
 if(EXISTS "${PREBUILT_SO}")

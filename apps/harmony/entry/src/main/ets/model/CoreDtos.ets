@@ -455,3 +455,5 @@ export type ErrorCode =
   | 'OPERATION_CANCELLED'
   | 'TIMEOUT'
   | 'UNKNOWN_ERROR'
+  | 'PARSE_ERROR'
+  | 'NATIVE_ERROR'

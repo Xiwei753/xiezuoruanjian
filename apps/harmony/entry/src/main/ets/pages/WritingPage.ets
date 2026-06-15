@@ -1,7 +1,7 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { ChapterData, SaveReceipt, LocalSettings } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
 
@@ -44,11 +44,7 @@ struct WritingPage {
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
-  private themeObserver: ThemeObserver = {
-    onThemeChanged: (theme: ThemeConfig) => {
-      this.themeConfig = theme
-    }
-  }
+  private themeObserver: ThemeObserver | null = null
 
   aboutToAppear() {
     const params = router.getParams() as WritingPageParams
@@ -59,11 +55,15 @@ struct WritingPage {
       this.loadSettings()
     }
 
-    this.themeAdapter.addObserver(this.themeObserver)
+    const self = this
+    this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
+      self.themeConfig = theme
+    })
+    this.themeAdapter.addObserver(this.themeObserver!)
 
     // Setup auto-save lifecycle observer
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      () => this.saveChapter(),
+      (): Promise<void> => this.saveChapter(),
       this.settings.autoSaveInterval * 1000
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
@@ -85,7 +85,9 @@ struct WritingPage {
     if (this.autoSaveObserver) {
       this.lifecycle.removeObserver(this.autoSaveObserver)
     }
-    this.themeAdapter.removeObserver(this.themeObserver)
+    if (this.themeObserver) {
+      this.themeAdapter.removeObserver(this.themeObserver)
+    }
   }
 
   async loadChapter() {
@@ -119,13 +121,13 @@ struct WritingPage {
           fontSize: result.data.fontSize,
           fontFamily: result.data.fontFamily,
           lineHeight: result.data.lineHeight
-        })
+        } as ThemeUpdateParams)
 
         // Update auto-save interval
         if (this.autoSaveObserver) {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            () => this.saveChapter(),
+            (): Promise<void> => this.saveChapter(),
             this.settings.autoSaveInterval * 1000
           )
           this.lifecycle.addObserver(this.autoSaveObserver)

@@ -1,7 +1,7 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
 
@@ -19,19 +19,21 @@ struct Index {
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
-  private themeObserver: ThemeObserver = {
-    onThemeChanged: (theme: ThemeConfig) => {
-      this.themeConfig = theme
-    }
-  }
+  private themeObserver: ThemeObserver | null = null
 
   aboutToAppear() {
-    this.themeAdapter.addObserver(this.themeObserver)
+    const self = this
+    this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
+      self.themeConfig = theme
+    })
+    this.themeAdapter.addObserver(this.themeObserver!)
     this.initAndLoad()
   }
 
   aboutToDisappear() {
-    this.themeAdapter.removeObserver(this.themeObserver)
+    if (this.themeObserver) {
+      this.themeAdapter.removeObserver(this.themeObserver)
+    }
   }
 
   async initAndLoad() {
@@ -67,10 +69,8 @@ struct Index {
 
     try {
       const workspacePath = getWorkspacePath()
-      const [workspaceResult, statsResult] = await Promise.all([
-        this.bridge.openWorkspace(workspacePath),
-        this.bridge.getWritingStats()
-      ])
+      const workspaceResult = await this.bridge.openWorkspace(workspacePath)
+      const statsResult = await this.bridge.getWritingStats()
 
       if (workspaceResult.success && workspaceResult.data) {
         this.workspaceName = workspaceResult.data.workspace.name
@@ -466,7 +466,7 @@ struct Index {
 
         GridItem() {
           Column() {
-            Image($r('sys.media.ohos_ic_public_setting'))
+            Image($r('sys.media.ohos_ic_public_more'))
               .width(32)
               .height(32)
               .fillColor(this.themeConfig.colors.textSecondary)

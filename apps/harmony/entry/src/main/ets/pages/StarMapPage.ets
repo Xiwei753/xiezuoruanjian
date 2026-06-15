@@ -1,12 +1,17 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
 
 interface StarMapPageParams {
   starmapId: string
   starmapTitle: string
+}
+
+interface SelectOption {
+  value: string
+  icon: string
 }
 
 @Entry
@@ -20,18 +25,14 @@ struct StarMapPage {
   @State errorMessage: string = ''
   @State @Watch('onTransformChange') selectedNodeId: string = ''
   @State selectedNode: StarMapNode | null = null
-  @State @Watch('onTransformChange') scale: number = 1
+  @State @Watch('onTransformChange') zoomScale: number = 1
   @State @Watch('onTransformChange') offsetX: number = 0
   @State @Watch('onTransformChange') offsetY: number = 0
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
-  private themeObserver: ThemeObserver = {
-    onThemeChanged: (theme: ThemeConfig) => {
-      this.themeConfig = theme
-    }
-  }
+  private themeObserver: ThemeObserver | null = null
 
   aboutToAppear() {
     const params = router.getParams() as StarMapPageParams
@@ -42,11 +43,17 @@ struct StarMapPage {
       this.loadAllStarMaps()
     }
 
-    this.themeAdapter.addObserver(this.themeObserver)
+    const self = this
+    this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
+      self.themeConfig = theme
+    })
+    this.themeAdapter.addObserver(this.themeObserver!)
   }
 
   aboutToDisappear() {
-    this.themeAdapter.removeObserver(this.themeObserver)
+    if (this.themeObserver) {
+      this.themeAdapter.removeObserver(this.themeObserver)
+    }
   }
 
   async loadStarMap() {
@@ -153,7 +160,7 @@ struct StarMapPage {
 
         // Star map selector
         if (this.allStarMaps.length > 1) {
-          Select(this.allStarMaps.map(sm => ({ value: sm.title, icon: '' })))
+          Select(this.allStarMaps.map((sm: StarMapMeta): SelectOption => ({ value: sm.title, icon: '' })))
             .selected(this.allStarMaps.findIndex(sm => sm.id === this.starmapId))
             .value(this.starmapTitle)
             .width(150)
@@ -177,10 +184,10 @@ struct StarMapPage {
             .backgroundColor(this.themeConfig.colors.surface)
             .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
-              this.scale = Math.max(0.3, this.scale - 0.1)
+              this.zoomScale = Math.max(0.3, this.zoomScale - 0.1)
             })
 
-          Text(`${Math.round(this.scale * 100)}%`)
+          Text(`${Math.round(this.zoomScale * 100)}%`)
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textSecondary)
             .width(50)
@@ -193,7 +200,7 @@ struct StarMapPage {
             .backgroundColor(this.themeConfig.colors.surface)
             .fontColor(this.themeConfig.colors.textPrimary)
             .onClick(() => {
-              this.scale = Math.min(3, this.scale + 0.1)
+              this.zoomScale = Math.min(3, this.zoomScale + 0.1)
             })
 
           Button('重置')
@@ -203,7 +210,7 @@ struct StarMapPage {
             .fontColor(this.themeConfig.colors.textPrimary)
             .margin({ left: 8 })
             .onClick(() => {
-              this.scale = 1
+              this.zoomScale = 1
               this.offsetX = 0
               this.offsetY = 0
             })
@@ -275,8 +282,8 @@ struct StarMapPage {
                 .width(80)
             }
             .position({
-              x: (node.x * this.scale) + this.offsetX - 40,
-              y: (node.y * this.scale) + this.offsetY - 40
+              x: (node.x * this.zoomScale) + this.offsetX - 40,
+              y: (node.y * this.zoomScale) + this.offsetY - 40
             })
             .onClick(() => {
               this.selectNode(node.id)
@@ -296,10 +303,13 @@ struct StarMapPage {
         }
         .layoutWeight(1)
         .width('100%')
-        .onPan((event: PanEvent) => {
-          this.offsetX += event.deltaX
-          this.offsetY += event.deltaY
-        })
+        .gesture(
+          PanGesture()
+            .onActionUpdate((event: GestureEvent) => {
+              this.offsetX += event.offsetX
+              this.offsetY += event.offsetY
+            })
+        )
       }
     }
     .width('100%')
@@ -496,10 +506,10 @@ struct StarMapPage {
       const tgt = nodeMap.get(edge.targetId)
       if (!src || !tgt) continue
 
-      const x1 = (src.x * this.scale) + this.offsetX
-      const y1 = (src.y * this.scale) + this.offsetY
-      const x2 = (tgt.x * this.scale) + this.offsetX
-      const y2 = (tgt.y * this.scale) + this.offsetY
+      const x1 = (src.x * this.zoomScale) + this.offsetX
+      const y1 = (src.y * this.zoomScale) + this.offsetY
+      const x2 = (tgt.x * this.zoomScale) + this.offsetX
+      const y2 = (tgt.y * this.zoomScale) + this.offsetY
 
       const isSelected = this.selectedNodeId === edge.sourceId || this.selectedNodeId === edge.targetId
 

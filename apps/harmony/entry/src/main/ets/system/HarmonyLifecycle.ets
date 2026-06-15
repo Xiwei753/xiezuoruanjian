@@ -60,7 +60,14 @@ export class HarmonyLifecycle {
   }
 
   getState(): LifecycleState {
-    return { ...this.state }
+    const s: LifecycleState = {
+      isForeground: this.state.isForeground,
+      isFocused: this.state.isFocused,
+      createdAt: this.state.createdAt,
+      lastForegroundAt: this.state.lastForegroundAt,
+      lastBackgroundAt: this.state.lastBackgroundAt
+    }
+    return s
   }
 
   isForeground(): boolean {

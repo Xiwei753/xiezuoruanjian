@@ -27,7 +27,12 @@ export class MockNetworkManager implements NetworkManager {
   }
 
   async getCurrentStatus(): Promise<NetStatusInfo> {
-    return { ...this.current }
+    const info: NetStatusInfo = {
+      bearType: this.current.bearType,
+      isAvailable: this.current.isAvailable,
+      isMetered: this.current.isMetered
+    }
+    return info
   }
 
   async isConnected(): Promise<boolean> {
