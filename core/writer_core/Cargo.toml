@@ -7,10 +7,11 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["git-https"]
 ai = []
 harmony-ffi = ["once_cell"]
 legacy-mind-map = []
+git-https = ["git2/https", "git2/vendored-openssl"]
 
 [dependencies]
 walkdir = "2.3"
@@ -23,7 +24,7 @@ md5 = '0.7'
 tempfile = '3.8'
 aho-corasick = "1.1.4"
 once_cell = { version = "1.19", optional = true }
-git2 = { version = "0.20.4", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
+git2 = { version = "0.20.4", default-features = false, features = ["vendored-libgit2"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 base64 = "0.22.1"
 

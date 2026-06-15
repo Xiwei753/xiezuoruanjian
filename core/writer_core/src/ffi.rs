@@ -108,7 +108,7 @@ pub unsafe extern "C" fn writer_core_calculate_word_count(text: *const c_char) -
         Ok(s) => s,
         Err(e) => return e,
     };
-    match with_core(|core| Ok(core.calculate_word_count(text_str) as i32)) {
+    match with_core(|core| Ok(core.calculate_word_count(&text_str) as i32)) {
         Ok(count) => count,
         Err(_) => -3,
     }
@@ -956,14 +956,8 @@ pub unsafe extern "C" fn writer_core_load_syncable_settings() -> *mut c_char {
         let settings = core.load_syncable_settings().map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "fontSize": settings.font_size,
-            "lineHeight": settings.line_spacing_multiplier,
-            "fontFamily": settings.font_family,
             "theme": settings.theme_mode,
-            "autoIndent": settings.auto_indent_enabled,
-            "showWordCount": settings.show_word_count,
-            "showLineNumbers": settings.show_line_numbers,
-            "wordWrap": settings.word_wrap,
-            "uiLanguage": settings.ui_language
+            "monetColor": settings.monet_color
         }))
     }) {
         Ok(data) => ok_json(data),
@@ -982,31 +976,13 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(settings_json: *cons
         let val: serde_json::Value = serde_json::from_str(&json_str)
             .map_err(|e| format!("JSON parse error: {}", e))?;
         if let Some(v) = val.get("fontSize").and_then(|v| v.as_f64()) {
-            settings.font_size = v as f32;
-        }
-        if let Some(v) = val.get("lineHeight").and_then(|v| v.as_f64()) {
-            settings.line_spacing_multiplier = v as f32;
-        }
-        if let Some(v) = val.get("fontFamily").and_then(|v| v.as_str()) {
-            settings.font_family = v.to_string();
+            settings.font_size = v;
         }
         if let Some(v) = val.get("theme").and_then(|v| v.as_str()) {
             settings.theme_mode = v.to_string();
         }
-        if let Some(v) = val.get("autoIndent").and_then(|v| v.as_bool()) {
-            settings.auto_indent_enabled = v;
-        }
-        if let Some(v) = val.get("showWordCount").and_then(|v| v.as_bool()) {
-            settings.show_word_count = v;
-        }
-        if let Some(v) = val.get("showLineNumbers").and_then(|v| v.as_bool()) {
-            settings.show_line_numbers = v;
-        }
-        if let Some(v) = val.get("wordWrap").and_then(|v| v.as_bool()) {
-            settings.word_wrap = v;
-        }
-        if let Some(v) = val.get("uiLanguage").and_then(|v| v.as_str()) {
-            settings.ui_language = v.to_string();
+        if let Some(v) = val.get("monetColor").and_then(|v| v.as_str()) {
+            settings.monet_color = v.to_string();
         }
         core.save_syncable_settings(&settings).map_err(|e| format!("{}", e))?;
         Ok(true)
