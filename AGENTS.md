@@ -248,7 +248,28 @@ cd apps/desktop && cargo check && cargo test
 
 ---
 
-## 11. DeepSeek Thinking Mode + Tool Calls 注意事项
+## 11. Windows 本地开发注意事项
+
+### 11.1 文件删除必须用 deleteFile 工具
+
+- **删除文件时必须调用 `deleteFile` 工具**，绝对不要在终端里使用 `del`、`rm`、`Remove-Item` 等命令。
+- 原因：`deleteFile` 走已授权的静默通道，不会触发终端高危拦截弹窗；而终端 `del`/`rm` 会弹出确认弹窗，阻塞自动化流程。
+
+### 11.2 PowerShell 语法
+
+- Windows 环境下 Shell 为 PowerShell 5.1，`&&` 不是有效语句分隔符。
+- 顺序执行用 `;`，条件执行用 `if ($?) { cmd2 }`。
+- 不要使用 `cd <dir> && <command>` 模式，改用 Bash 工具的 `workdir` 参数。
+
+### 11.3 本地依赖
+
+- Rust 工具链：`cargo`、`rustc` 已在 PATH 中。
+- Qt6：本地开发环境需自行安装，Linux 二进制不应链接 Qt5。
+- Android：仅支持 `arm64-v8a` 构建。
+
+---
+
+## 12. DeepSeek Thinking Mode + Tool Calls 注意事项
 
 由于 DeepSeek API 在使用 Thinking Mode（深度思考模式）时，对工具调用（Tool Calls）有特殊要求，本项目在底层做做出特定的兼容处理：
 

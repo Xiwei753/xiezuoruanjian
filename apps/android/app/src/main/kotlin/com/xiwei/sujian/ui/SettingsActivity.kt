@@ -3,7 +3,6 @@ package com.xiwei.sujian.ui
 import android.os.Bundle
 import com.google.android.material.slider.Slider
 import android.widget.ArrayAdapter
-
 import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -11,46 +10,16 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.CoreSettingsEvents
-import com.xiwei.sujian.data.ResultEnvelope
 import com.xiwei.sujian.model.LocalSettings
-import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.textfield.TextInputEditText
-import com.xiwei.sujian.model.SyncConfig
-import com.xiwei.sujian.model.SyncTransport
-import com.xiwei.sujian.model.SyncSecrets
-import com.xiwei.sujian.model.FirstSyncMode
-import com.xiwei.sujian.data.SyncSession
-
-/**
- * SettingsActivity — 设置页面
- *
- * 提供编辑器设置、同步设置和应用信息的配置界面。
- *
- * ## 架构定位
- * - 通过 SettingsRepository 读写设置
- * - 通过 SettingsRepository 执行同步操作
- *
- * ## 职责边界
- * - **做**：设置展示、保存、同步配置、同步诊断、同步执行
- * - **不做**：业务逻辑（由 Rust Core 负责）
- *
- * ## 使用场景
- * - 用户点击设置按钮进入
- * - 配置编辑器参数（字号、行距、自动保存等）
- * - 配置同步参数（GitHub 仓库、Token 等）
- * - 执行同步诊断和手动同步
- */
-
 
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var currentSettings: LocalSettings
+    private lateinit var syncHelper: SyncSettingsHelper
 
     private lateinit var sbFontSize: Slider
     private lateinit var sbLineSpacing: Slider
@@ -59,15 +28,6 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var spinnerTheme: Spinner
     private lateinit var tvWorkspacePath: TextView
     private lateinit var tvVersionInfo: TextView
-
-    // Sync Views
-    private lateinit var switchEnableSync: MaterialSwitch
-    private lateinit var etGithubRepo: TextInputEditText
-    private lateinit var etBranch: TextInputEditText
-    private lateinit var etHttpsToken: TextInputEditText
-    private lateinit var tvTokenStatus: TextView
-    private lateinit var switchAutoSync: MaterialSwitch
-    private lateinit var sbSyncInterval: Slider
 
     private lateinit var tvFontSizeValue: TextView
     private lateinit var tvLineSpacingValue: TextView
@@ -88,13 +48,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var tvAiSection: TextView
     private lateinit var switchAiEnabled: MaterialSwitch
 
-    private lateinit var btnDryRun: MaterialButton
-    private lateinit var btnTestConnection: MaterialButton
-    private lateinit var btnPerformSync: MaterialButton
     private lateinit var btnActionRegistry: MaterialButton
-
-    private lateinit var currentSyncConfig: SyncConfig
-    private lateinit var currentSyncSecrets: SyncSecrets
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,7 +74,9 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
-        loadSyncState()
+        syncHelper = SyncSettingsHelper(this, settingsRepository)
+        syncHelper.initViews()
+        syncHelper.loadSyncState()
 
         val toolbar: MaterialToolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -155,25 +111,6 @@ class SettingsActivity : AppCompatActivity() {
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
         tvVersionInfo = findViewById(R.id.tvVersionInfo)
 
-        switchEnableSync = findViewById(R.id.switchEnableSync)
-        etGithubRepo = findViewById(R.id.etGithubRepo)
-        etBranch = findViewById(R.id.etBranch)
-        etHttpsToken = findViewById(R.id.etHttpsToken)
-        tvTokenStatus = findViewById(R.id.tvTokenStatus)
-        switchAutoSync = findViewById(R.id.switchAutoSync)
-        sbSyncInterval = findViewById(R.id.sbSyncInterval)
-
-        etHttpsToken.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                updateTokenStatusUI()
-            }
-            override fun afterTextChanged(s: android.text.Editable?) {}
-        })
-
-        btnDryRun = findViewById(R.id.btnDryRun)
-        btnTestConnection = findViewById(R.id.btnTestConnection)
-        btnPerformSync = findViewById(R.id.btnPerformSync)
         btnActionRegistry = findViewById(R.id.btnActionRegistry)
 
 
@@ -186,9 +123,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         sbAutoSaveDelay.addOnChangeListener { _, value, _ ->
             tvAutoSaveDelayValue.text = "${value.toInt()}秒"
-        }
-        sbSyncInterval.addOnChangeListener { _, value, _ ->
-            tvSyncIntervalValue.text = formatSyncIntervalText(value.toInt())
         }
         sbAutoIndentWidth.addOnChangeListener { _, value, _ ->
             tvAutoIndentWidthValue.text = "${value}字符"
@@ -210,7 +144,6 @@ class SettingsActivity : AppCompatActivity() {
         sbFontSize.addOnSliderTouchListener(saveSettingsListener)
         sbLineSpacing.addOnSliderTouchListener(saveSettingsListener)
         sbAutoSaveDelay.addOnSliderTouchListener(saveSettingsListener)
-        sbSyncInterval.addOnSliderTouchListener(saveSettingsListener)
         sbAutoIndentWidth.addOnSliderTouchListener(saveSettingsListener)
         sbTypingAnimationDuration.addOnSliderTouchListener(saveSettingsListener)
         sbSmoothCursorDuration.addOnSliderTouchListener(saveSettingsListener)
@@ -325,15 +258,14 @@ class SettingsActivity : AppCompatActivity() {
             tvVersionInfo.text = "Android Native 客户端"
         }
 
-        btnDryRun.setOnClickListener {
-            handleDryRun()
+        syncHelper.btnDryRun.setOnClickListener {
+            syncHelper.handleDryRun()
         }
-        btnTestConnection.setOnClickListener {
-            handleTestConnection()
+        syncHelper.btnTestConnection.setOnClickListener {
+            syncHelper.handleTestConnection()
         }
-
-        btnPerformSync.setOnClickListener {
-            handlePerformSync()
+        syncHelper.btnPerformSync.setOnClickListener {
+            syncHelper.handlePerformSync()
         }
 
         btnActionRegistry.setOnClickListener {
@@ -341,383 +273,11 @@ class SettingsActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
-
         // Bind Sync Settings
-        switchEnableSync.isChecked = currentSyncConfig.enabled ?: false
-        etGithubRepo.setText(currentSyncConfig.remoteUrl ?: "")
-        etBranch.setText(currentSyncConfig.branch ?: "main")
-        switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
-        sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
-        tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
-
-
-
-        updateTokenStatusUI()
-
+        syncHelper.bindSyncSettings()
     }
 
 
-
-    private fun getUIConfig(): SyncConfig {
-        return currentSyncConfig.copy(
-            enabled = switchEnableSync.isChecked,
-            backendType = com.xiwei.sujian.model.BackendType.GithubApi,
-            remoteUrl = etGithubRepo.text?.toString() ?: "",
-            transport = currentSyncConfig.transport ?: com.xiwei.sujian.model.SyncTransport.HttpsToken,
-            branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
-            autoSync = switchAutoSync.isChecked,
-            syncIntervalSeconds = sbSyncInterval.value.toInt()
-        )
-    }
-
-    private fun saveCurrentState() {
-        val uiConfig = getUIConfig()
-        val tokenInput = etHttpsToken.text?.toString() ?: ""
-        val uiSecrets = if (tokenInput.isNotEmpty()) {
-            currentSyncSecrets.copy(token = tokenInput)
-        } else currentSyncSecrets
-
-        ErrorUtil.safeRun(this) {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.saveSyncConfig(uiConfig)
-                settingsRepository.saveSyncSecrets(uiSecrets)
-            }
-        }
-        currentSyncConfig = uiConfig
-        currentSyncSecrets = uiSecrets
-        updateTokenStatusUI()
-    }
-
-    private fun handleDryRun() {
-        if (!SyncSession.lock.compareAndSet(false, true)) return
-        val taskId = SyncSession.currentTaskId.incrementAndGet()
-        btnDryRun.text = "检查中..."
-        btnDryRun.isEnabled = false
-        btnPerformSync.isEnabled = false
-        btnTestConnection.isEnabled = false
-        saveCurrentState()
-
-        Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during dry run"))) {
-                settingsRepository.performSyncDryRun(currentSyncConfig)
-            }
-            if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
-                SyncSession.lock.set(false)
-                return@Thread
-            }
-            runOnUiThread {
-                if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
-                    SyncSession.lock.set(false)
-                    return@runOnUiThread
-                }
-                SyncSession.lock.set(false)
-                btnDryRun.text = "检查同步计划"
-                btnDryRun.isEnabled = true
-                btnPerformSync.isEnabled = true
-                btnTestConnection.isEnabled = true
-                when (result) {
-                    is BridgeResult.Success -> {
-                        val plan = result.data
-                        val msg = "同步计划检查完成: " + getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.filesToDeleteRemote.size, plan.filesToDeleteLocal.size, plan.ignoredFiles.size)
-                        Toast.makeText(this@SettingsActivity, msg, Toast.LENGTH_LONG).show()
-                    }
-                    is BridgeResult.Error -> {
-                        Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
-                    }
-                    BridgeResult.NotLoaded -> {
-                        Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }.start()
-    }
-
-
-    private fun handleTestConnection() {
-        if (!SyncSession.lock.compareAndSet(false, true)) return
-        val taskId = SyncSession.currentTaskId.incrementAndGet()
-        btnTestConnection.text = "检查中..."
-        btnTestConnection.isEnabled = false
-        btnDryRun.isEnabled = false
-        btnPerformSync.isEnabled = false
-        saveCurrentState()
-
-        Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during diagnostic run"))) {
-                settingsRepository.performSyncDiagnostics(currentSyncConfig)
-            }
-            if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
-                SyncSession.lock.set(false)
-                return@Thread
-            }
-            runOnUiThread {
-                if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
-                    SyncSession.lock.set(false)
-                    return@runOnUiThread
-                }
-                SyncSession.lock.set(false)
-                btnTestConnection.text = getString(R.string.btn_test_connection)
-                btnTestConnection.isEnabled = true
-                btnDryRun.isEnabled = true
-                btnPerformSync.isEnabled = true
-                when (result) {
-                    is BridgeResult.Success -> {
-                        val diag = result.data
-                        val msgBuilder = StringBuilder()
-                            val mapStatus = { s: String ->
-                                when (s) {
-                                    "ok" -> "正常"
-                                    "failed" -> "失败"
-                                    "skipped" -> "已跳过"
-                                    else -> if (s.startsWith("failed")) "失败 ($s)" else "未检查 ($s)"
-                                }
-                            }
-
-                            msgBuilder.append("=== 权限状态 ===\n")
-                            msgBuilder.append("INTERNET 权限: ${if (diag.androidHasInternetPermission) "已授予" else "缺失"}\n")
-                            msgBuilder.append("网络状态权限: ${if (diag.androidHasAccessNetworkStatePermission) "已授予" else "缺失"}\n")
-                            msgBuilder.append("网络状态: ${
-                                when (diag.androidNetworkState) {
-                                    "permission_granted" -> "权限已授予，可检测网络"
-                                    "unknown_no_permission" -> "未知（缺少 ACCESS_NETWORK_STATE 权限）"
-                                    "failed_no_internet_permission" -> "无 INTERNET 权限，无法联网"
-                                    else -> diag.androidNetworkState
-                                }
-                            }\n\n")
-
-                            if (!diag.androidHasInternetPermission) {
-                                msgBuilder.append("\n${diag.userMessage}")
-                                AlertDialog.Builder(this@SettingsActivity)
-                                    .setTitle("诊断失败")
-                                    .setMessage(msgBuilder.toString())
-                                    .setPositiveButton(getString(R.string.action_ok), null)
-                                    .show()
-                                return@runOnUiThread
-                            }
-
-                            msgBuilder.append("网络连接: ${mapStatus(diag.networkStatus)}\n")
-                            msgBuilder.append("身份认证: ${mapStatus(diag.authStatus)}\n")
-                            msgBuilder.append("仓库访问: ${mapStatus(diag.repoStatus)}\n")
-                            msgBuilder.append("分支存在: ${mapStatus(diag.branchStatus)}\n\n")
-
-                            if (!diag.networkProbeSummary.isNullOrEmpty()) {
-                                msgBuilder.append("=== 自动网络探测 ===\n")
-                                msgBuilder.append("最终选择模式: ${diag.chosenNetworkMode ?: "未知"}\n")
-                                diag.networkProbeSummary.forEach { probe ->
-                                    val mark = if (probe.success) "✅" else "❌"
-                                    msgBuilder.append("$mark ${probe.mode}: ${probe.message}\n")
-                                }
-                                msgBuilder.append("\n")
-                            }
-
-                            msgBuilder.append(diag.userMessage)
-
-                            if (diag.rawError != null && diag.rawError.isNotEmpty()) {
-                                msgBuilder.append("\n\n原始错误:\n${diag.rawError}")
-                            }
-
-                        AlertDialog.Builder(this@SettingsActivity)
-                            .setTitle(if (diag.success) "诊断成功" else "诊断失败")
-                            .setMessage(msgBuilder.toString())
-                            .setPositiveButton(getString(R.string.action_ok), null)
-                            .show()
-                    }
-                    is BridgeResult.Error -> {
-                        Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
-                    }
-                    BridgeResult.NotLoaded -> {
-                        Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }.start()
-    }
-
-    private fun handlePerformSync() {
-        if (!SyncSession.lock.compareAndSet(false, true)) return
-        val taskId = SyncSession.currentTaskId.incrementAndGet()
-        btnPerformSync.text = "同步中..."
-        btnPerformSync.isEnabled = false
-        btnDryRun.isEnabled = false
-        btnTestConnection.isEnabled = false
-        saveCurrentState()
-
-        if (currentSyncSecrets.token.isNullOrEmpty()) {
-            SyncSession.lock.set(false)
-            btnPerformSync.text = "立即同步"
-            btnPerformSync.isEnabled = true
-            btnDryRun.isEnabled = true
-            btnTestConnection.isEnabled = true
-            Toast.makeText(this, getString(R.string.sync_error_no_token), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        Thread {
-            val result = ErrorUtil.safeRun(this@SettingsActivity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during sync"))) {
-                settingsRepository.performSync(currentSyncConfig)
-            }
-            if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
-                SyncSession.lock.set(false)
-                return@Thread
-            }
-            runOnUiThread {
-                if (isDestroyed || isFinishing || SyncSession.currentTaskId.get() != taskId) {
-                    SyncSession.lock.set(false)
-                    return@runOnUiThread
-                }
-                SyncSession.lock.set(false)
-                btnPerformSync.text = "立即同步"
-                btnPerformSync.isEnabled = true
-                btnDryRun.isEnabled = true
-                btnTestConnection.isEnabled = true
-                when (result) {
-                    is BridgeResult.Success -> {
-                        val syncResult = result.data
-                        if (syncResult.status == com.xiwei.sujian.model.SyncStatus.Conflict || syncResult.status == com.xiwei.sujian.model.SyncStatus.PartialConflict) {
-                                val summary = syncResult.conflictSummary
-                                val settingConflicts = syncResult.settingsConflicts
-                                val msgBuilder = StringBuilder()
-                                
-                                if (summary != null) {
-                                    msgBuilder.append(summary.blockedReason).append("\n\n")
-                                    if (summary.conflictedFiles.isNotEmpty()) {
-                                        msgBuilder.append("冲突文件:\n")
-                                        for (file in summary.conflictedFiles) {
-                                            msgBuilder.append("  - ").append(file).append("\n")
-                                        }
-                                        msgBuilder.append("\n")
-                                    }
-                                } else {
-                                    msgBuilder.append("同步中检测到冲突。\n\n")
-                                    if (syncResult.conflicts.isNotEmpty()) {
-                                        msgBuilder.append("冲突文件:\n")
-                                        for (c in syncResult.conflicts) {
-                                            msgBuilder.append("  - ").append(c.localPath).append("\n")
-                                        }
-                                        msgBuilder.append("\n")
-                                    }
-                                }
-
-                                if (!settingConflicts.isNullOrEmpty()) {
-                                    msgBuilder.append("具体设置冲突:\n")
-                                    for (sc in settingConflicts) {
-                                        msgBuilder.append("  • 键名: ").append(sc.key)
-                                            .append(", 本地值: ").append(sc.localValue)
-                                            .append(", 远程值: ").append(sc.remoteValue).append("\n")
-                                    }
-                                    msgBuilder.append("\n")
-                                }
-
-                                if (summary != null && summary.safeNextSteps.isNotEmpty()) {
-                                    msgBuilder.append("安全建议:\n")
-                                    for (step in summary.safeNextSteps) {
-                                        msgBuilder.append("• ").append(step).append("\n")
-                                    }
-                                } else {
-                                    msgBuilder.append("安全建议:\n")
-                                    msgBuilder.append("• 备份当前工作区。\n")
-                                    msgBuilder.append("• 确认诊断状态或手动合并后重新同步。")
-                                }
-
-                                AlertDialog.Builder(this@SettingsActivity)
-                                    .setTitle("同步冲突")
-                                    .setMessage(msgBuilder.toString().trim())
-                                    .setPositiveButton(getString(R.string.action_ok), null)
-                                    .show()
-                            } else if (syncResult.status == com.xiwei.sujian.model.SyncStatus.Success ||
-                                       syncResult.status == com.xiwei.sujian.model.SyncStatus.BranchMissingRecovered ||
-                                       syncResult.status == com.xiwei.sujian.model.SyncStatus.NoChanges ||
-                                       syncResult.status == com.xiwei.sujian.model.SyncStatus.LatestWinsApplied) {
-                                val successMsg = syncResult.userMessage ?: if (syncResult.status == com.xiwei.sujian.model.SyncStatus.NoChanges) {
-                                    "同步完成：本地和远端均已是最新状态。"
-                                } else {
-                                    val title = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.BranchMissingRecovered) {
-                                        "同步成功 (已关联并恢复缺失的分支)"
-                                    } else {
-                                        getString(R.string.sync_success)
-                                    }
-                                    "$title\n上传: ${syncResult.uploadedFiles.size} 下载: ${syncResult.downloadedFiles.size} 本地删除: ${syncResult.localDeletes.size} 远端删除: ${syncResult.remoteDeletes.size} 覆盖: ${syncResult.overwrittenFiles.size}"
-                                }
-                                Toast.makeText(this@SettingsActivity, successMsg, Toast.LENGTH_LONG).show()
-                            } else if (syncResult.status == com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked) {
-                                AlertDialog.Builder(this@SettingsActivity)
-                                    .setTitle("同步被阻止")
-                                    .setMessage("同步被阻止：本地仓库有未提交的改动，且非安全设置文件，请先提交或备份改动后再试。")
-                                    .setPositiveButton(getString(R.string.action_ok), null)
-                                    .show()
-                            } else if (syncResult.status == com.xiwei.sujian.model.SyncStatus.RecoverableError || syncResult.status == com.xiwei.sujian.model.SyncStatus.FatalError || syncResult.status == com.xiwei.sujian.model.SyncStatus.Error) {
-                                val title = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.RecoverableError) "可恢复错误" else "同步失败"
-                                val errMsg = syncResult.userMessage ?: syncResult.error ?: "未知同步错误"
-                                AlertDialog.Builder(this@SettingsActivity)
-                                    .setTitle(title)
-                                    .setMessage(errMsg)
-                                    .setPositiveButton(getString(R.string.action_ok), null)
-                                    .show()
-                            } else if (syncResult.userMessage != null) {
-                                AlertDialog.Builder(this@SettingsActivity)
-                                    .setMessage(syncResult.userMessage)
-                                    .setPositiveButton(getString(R.string.action_ok), null)
-                                    .show()
-                            } else if (syncResult.firstSyncMode == FirstSyncMode.UnrelatedHistories || syncResult.firstSyncMode == FirstSyncMode.BlockedNonEmptyRemote) {
-                                AlertDialog.Builder(this@SettingsActivity)
-                                    .setMessage(getString(R.string.sync_error_unrelated))
-                                    .setPositiveButton(getString(R.string.action_ok), null)
-                                    .show()
-                            } else if (syncResult.error != null) {
-                                AlertDialog.Builder(this@SettingsActivity)
-                                    .setMessage(syncResult.error)
-                                    .setPositiveButton(getString(R.string.action_ok), null)
-                                    .show()
-                        }
-                    }
-                    is BridgeResult.Error -> {
-                        Toast.makeText(this@SettingsActivity, result.message, Toast.LENGTH_LONG).show()
-                    }
-                    BridgeResult.NotLoaded -> {
-                        Toast.makeText(this@SettingsActivity, getString(R.string.sync_error_not_loaded), Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }.start()
-    }
-
-    private fun formatSyncIntervalText(seconds: Int): String {
-        val minutes = seconds / 60
-        return if (minutes < 15) {
-            "${minutes}分钟 (有效后台间隔: 15分钟)"
-        } else {
-            "${minutes}分钟"
-        }
-    }
-
-    private fun updateTokenStatusUI() {
-        val input = etHttpsToken.text?.toString() ?: ""
-        if (input.isNotEmpty()) {
-            tvTokenStatus.text = getString(R.string.token_input_active)
-            tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.material_dynamic_primary40))
-        } else {
-            if (currentSyncSecrets.token.isNullOrEmpty()) {
-                tvTokenStatus.text = getString(R.string.token_not_configured)
-                tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
-            } else {
-                tvTokenStatus.text = getString(R.string.token_configured)
-                tvTokenStatus.setTextColor(getColor(com.google.android.material.R.color.material_dynamic_primary40))
-            }
-        }
-    }
-
-    private fun loadSyncState() {
-        currentSyncConfig = ErrorUtil.safeRun(this, SyncConfig()) {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.loadSyncConfig()
-            } else SyncConfig()
-        }
-        currentSyncSecrets = ErrorUtil.safeRun(this, SyncSecrets()) {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.loadSyncSecrets()
-            } else SyncSecrets()
-        }
-    }
 
     override fun onResume() {
         super.onResume()
@@ -760,14 +320,8 @@ class SettingsActivity : AppCompatActivity() {
             else -> spinnerTheme.setSelection(0, false)
         }
 
-        loadSyncState()
-        switchEnableSync.isChecked = currentSyncConfig.enabled ?: false
-        etGithubRepo.setText(currentSyncConfig.remoteUrl ?: "")
-        etBranch.setText(currentSyncConfig.branch ?: "main")
-        switchAutoSync.isChecked = currentSyncConfig.autoSync ?: false
-        sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
-        tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
-        updateTokenStatusUI()
+        syncHelper.loadSyncState()
+        syncHelper.bindSyncSettings()
     }
 
     override fun onBackPressed() {
@@ -815,20 +369,8 @@ class SettingsActivity : AppCompatActivity() {
 
 
         // Save Sync Config
-        val newSyncConfig = currentSyncConfig.copy(
-            enabled = switchEnableSync.isChecked,
-            backendType = com.xiwei.sujian.model.BackendType.GithubApi,
-            remoteUrl = etGithubRepo.text?.toString() ?: "",
-            transport = currentSyncConfig.transport ?: SyncTransport.HttpsToken,
-            branch = etBranch.text?.toString()?.ifEmpty { "main" } ?: "main",
-            autoSync = switchAutoSync.isChecked,
-            syncIntervalSeconds = sbSyncInterval.value.toInt()
-        )
-
-        val tokenInput = etHttpsToken.text?.toString() ?: ""
-        val newSyncSecrets = if (tokenInput.isNotEmpty()) {
-            currentSyncSecrets.copy(token = tokenInput)
-        } else currentSyncSecrets
+        val newSyncConfig = syncHelper.buildSaveSyncConfig()
+        val newSyncSecrets = syncHelper.buildSaveSyncSecrets()
 
         ErrorUtil.safeRun(this) {
             if (::settingsRepository.isInitialized) {
