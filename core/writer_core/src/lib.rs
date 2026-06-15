@@ -93,6 +93,8 @@ pub mod volume_tests;
 pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
+#[cfg(test)]
+pub mod dto_contract_tests;
 
 /// UniFFI 占位函数，用于跨平台绑定测试。
 pub fn perform_dummy_action() -> String {

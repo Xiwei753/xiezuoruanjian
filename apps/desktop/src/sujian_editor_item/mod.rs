@@ -233,7 +233,7 @@ impl Default for SujianEditorItem {
             current_cursor_color: "#006497".into(),
             current_smooth_cursor_enabled: true,
             current_cursor_animation_duration_ms: 160,
-            current_typing_animation_enabled: false,
+            current_typing_animation_enabled: true,
             current_typing_animation_duration_ms: 160,
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,

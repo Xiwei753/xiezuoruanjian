@@ -17,6 +17,7 @@ export interface AppContextConfig {
   autoSaveIntervalMs: number
   enableSync: boolean
   enableLogging: boolean
+  allowMockFallback: boolean
 }
 
 const DEFAULT_WORKSPACE_DIR_NAME = 'writer-workspace'
@@ -32,6 +33,7 @@ export class AppContext {
   private themeAdapter: HarmonyThemeAdapter
   private isInitialized: boolean = false
   private abilityContext: common.UIAbilityContext | null = null
+  private nativeInitFailed: boolean = false
 
   private constructor(config: AppContextConfig) {
     this.config = config
@@ -66,7 +68,8 @@ export class AppContext {
           enableAutoSave: true,
           autoSaveIntervalMs: 30000,
           enableSync: false,
-          enableLogging: true
+          enableLogging: true,
+          allowMockFallback: true
         }
       }
       AppContext.instance = new AppContext(config)
@@ -88,7 +91,8 @@ export class AppContext {
       enableAutoSave: this.config.enableAutoSave,
       autoSaveIntervalMs: this.config.autoSaveIntervalMs,
       enableSync: this.config.enableSync,
-      enableLogging: this.config.enableLogging
+      enableLogging: this.config.enableLogging,
+      allowMockFallback: this.config.allowMockFallback
     }
     return c
   }
@@ -127,6 +131,18 @@ export class AppContext {
 
   isNativeEnvironment(): boolean {
     return this.config.environment === 'native'
+  }
+
+  isNativeInitFailed(): boolean {
+    return this.nativeInitFailed
+  }
+
+  markNativeInitFailed(): void {
+    this.nativeInitFailed = true
+  }
+
+  canFallbackToMock(): boolean {
+    return this.config.allowMockFallback && this.nativeInitFailed
   }
 
   isReady(): boolean {

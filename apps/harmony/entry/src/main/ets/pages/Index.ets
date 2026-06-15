@@ -47,23 +47,30 @@ struct Index {
         const workspacePath = getWorkspacePath()
         const initOk = await nativeBridge.initialize(workspacePath)
         if (!initOk) {
-          const errCode = nativeBridge.getLastInitErrorCode()
-          const rustError = await nativeBridge.getLastError()
-          const errMap: Record<number, string> = {
-            [-1]: '路径为空',
-            [-2]: '路径编码无效',
-            [-3]: '内部状态异常',
-            [-4]: '工作区目录创建失败',
-            [-999]: 'NAPI调用异常(SO加载失败?)'
+          ctx.markNativeInitFailed()
+          if (ctx.canFallbackToMock()) {
+            await ctx.switchToMock()
+            this.bridge = getBridge()
+            this.nativeStatus = 'mock-fallback'
+          } else {
+            const errCode = nativeBridge.getLastInitErrorCode()
+            const rustError = await nativeBridge.getLastError()
+            const errMap: Record<number, string> = {
+              [-1]: '路径为空',
+              [-2]: '路径编码无效',
+              [-3]: '内部状态异常',
+              [-4]: '工作区目录创建失败',
+              [-999]: 'NAPI调用异常(SO加载失败?)'
+            }
+            const errDesc = errMap[errCode] || `未知错误(${errCode})`
+            this.errorMessage = `Native 核心初始化失败: ${errDesc}\n路径: ${workspacePath}\n详情: ${rustError}`
+            this.isLoading = false
+            return
           }
-          const errDesc = errMap[errCode] || `未知错误(${errCode})`
-          this.errorMessage = `Native 核心初始化失败: ${errDesc}\n路径: ${workspacePath}\n详情: ${rustError}`
-          this.isLoading = false
-          return
+        } else {
+          const statusResult = await nativeBridge.getNativeLoadStatus()
+          this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'
         }
-
-        const statusResult = await nativeBridge.getNativeLoadStatus()
-        this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'
       }
 
       await this.loadWorkspace()

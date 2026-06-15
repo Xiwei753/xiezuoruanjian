@@ -88,6 +88,38 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return null
   }
 
+  private invalidateChapterIndex(volumeId?: string): void {
+    if (volumeId) {
+      const entriesToRemove: string[] = []
+      this.chapterIndex.forEach((loc, chId) => {
+        if (loc.volumeId === volumeId) {
+          entriesToRemove.push(chId)
+        }
+      })
+      for (const chId of entriesToRemove) {
+        this.chapterIndex.delete(chId)
+      }
+    } else {
+      this.chapterIndex.clear()
+    }
+  }
+
+  private invalidateVolumeProjectIndex(projectId?: string): void {
+    if (projectId) {
+      const entriesToRemove: string[] = []
+      this.volumeProjectIndex.forEach((pid, volId) => {
+        if (pid === projectId) {
+          entriesToRemove.push(volId)
+        }
+      })
+      for (const volId of entriesToRemove) {
+        this.volumeProjectIndex.delete(volId)
+      }
+    } else {
+      this.volumeProjectIndex.clear()
+    }
+  }
+
   private async ensureChapterIndex(): Promise<void> {
     if (this.chapterIndex.size > 0) {
       return
@@ -253,7 +285,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async deleteProject(projectId: string): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = nativeModule.nativeDeleteProject(projectId)
-      return this.parseEnvelope<boolean>(jsonStr)
+      const result = this.parseEnvelope<boolean>(jsonStr)
+      if (result.success) {
+        this.invalidateVolumeProjectIndex(projectId)
+        this.invalidateChapterIndex()
+      }
+      return result
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
@@ -310,7 +347,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async deleteVolume(projectId: string, volumeId: string): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = nativeModule.nativeDeleteVolume(projectId, volumeId)
-      return this.parseEnvelope<boolean>(jsonStr)
+      const result = this.parseEnvelope<boolean>(jsonStr)
+      if (result.success) {
+        this.volumeProjectIndex.delete(volumeId)
+        this.invalidateChapterIndex(volumeId)
+      }
+      return result
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
@@ -319,7 +361,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async reorderVolumes(projectId: string, orderedVolumeIds: string[]): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = nativeModule.nativeReorderVolumes(projectId, JSON.stringify(orderedVolumeIds))
-      return this.parseEnvelope<boolean>(jsonStr)
+      const result = this.parseEnvelope<boolean>(jsonStr)
+      if (result.success) {
+        this.invalidateVolumeProjectIndex(projectId)
+        this.invalidateChapterIndex()
+      }
+      return result
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
@@ -421,7 +468,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     }
     try {
       const jsonStr: string = nativeModule.nativeDeleteChapter(loc.projectId, loc.volumeId, chapterId)
-      return this.parseEnvelope<boolean>(jsonStr)
+      const result = this.parseEnvelope<boolean>(jsonStr)
+      if (result.success) {
+        this.chapterIndex.delete(chapterId)
+      }
+      return result
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
@@ -431,7 +482,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     const projectId = this.volumeProjectIndex.get(volumeId) || ''
     try {
       const jsonStr: string = nativeModule.nativeReorderChapters(projectId, volumeId, JSON.stringify(orderedChapterIds))
-      return this.parseEnvelope<boolean>(jsonStr)
+      const result = this.parseEnvelope<boolean>(jsonStr)
+      if (result.success) {
+        this.invalidateChapterIndex(volumeId)
+      }
+      return result
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }
