@@ -106,26 +106,7 @@ use std::path::Path;
 pub fn init_workspace(path: String) -> std::result::Result<bool, WriterError> {
     let p = Path::new(&path);
     crate::workspace::create_workspace(p).map_err(WriterError::from)?;
-    
-    // Check if we need to create a default project
-    let projects = crate::project::list_projects(p).map_err(WriterError::from)?;
-    if projects.is_empty() {
-        let project = crate::project::create_project(p, "示例作品").map_err(WriterError::from)?;
-        let volumes = crate::volume::list_volumes(p, &project.id).map_err(WriterError::from)?;
-        if let Some(vol) = volumes.first() {
-            let chapter = crate::chapter::create_chapter(p, &project.id, &vol.id, "第一章：新的起点")
-                .map_err(WriterError::from)?;
-            let _ = crate::chapter::save_chapter(
-                p,
-                &project.id,
-                &vol.id,
-                &chapter.id,
-                "这是您的第一部作品。在这里开始您的写作之旅吧！",
-            )
-            .map_err(WriterError::from)?;
-        }
-    }
-    
+
     Ok(true)
 }
 

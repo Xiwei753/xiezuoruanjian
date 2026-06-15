@@ -214,21 +214,26 @@ mod tests {
         let dir = tempdir().unwrap();
         let path_str = dir.path().to_string_lossy().into_owned();
 
-        // 1. init_workspace should succeed and create default project/volume/chapter
+        // 1. init_workspace should succeed and create workspace
         crate::init_workspace(path_str.clone()).unwrap();
         assert!(crate::workspace::validate_workspace(dir.path()).unwrap());
 
-        // Check default project was created
+        // init_workspace no longer creates a default project
+        let projects = crate::project::list_projects(dir.path()).unwrap();
+        assert_eq!(projects.len(), 0);
+
+        // Manually create a project for the rest of the test
+        crate::project::create_project(dir.path(), "测试作品").unwrap();
         let projects = crate::project::list_projects(dir.path()).unwrap();
         assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].title, "示例作品");
+        assert_eq!(projects[0].title, "测试作品");
 
         // 2. load_workspace_summary should return correct values
         let summary = crate::load_workspace_summary(path_str.clone()).unwrap();
         assert_eq!(summary.path, path_str);
         assert!(summary.is_valid);
         assert_eq!(summary.projects.len(), 1);
-        assert_eq!(summary.projects[0].title, "示例作品");
+        assert_eq!(summary.projects[0].title, "测试作品");
 
         // 3. open_workspace should succeed and return WriterAppService
         let service = crate::open_workspace(path_str.clone()).unwrap();
@@ -258,18 +263,15 @@ mod tests {
         let path_str = dir.path().to_string_lossy().into_owned();
         crate::init_workspace(path_str.clone()).unwrap();
 
-        let service = crate::open_workspace(path_str.clone()).unwrap();
-        let projects = service.list_projects().unwrap();
-        let project_id = &projects[0].id;
+        let project = crate::project::create_project(dir.path(), "测试作品").unwrap();
 
-        let chapter = service.create_chapter_in_project(project_id.clone(), "新章：起锚".to_string()).unwrap();
+        let service = crate::open_workspace(path_str.clone()).unwrap();
+        let chapter = service.create_chapter_in_project(project.id.clone(), "新章：起锚".to_string()).unwrap();
         assert_eq!(chapter.title, "新章：起锚");
 
-        // Verify it was actually created in the project's first volume
-        let volumes = service.list_volumes(project_id.clone()).unwrap();
-        let chapters = service.list_chapters(project_id.clone(), volumes[0].id.clone()).unwrap();
-        // The first volume should now have 2 chapters (the default "第一章：新的起点" and the new "新章：起锚")
-        assert_eq!(chapters.len(), 2);
-        assert_eq!(chapters[1].title, "新章：起锚");
+        let volumes = service.list_volumes(project.id.clone()).unwrap();
+        let chapters = service.list_chapters(project.id.clone(), volumes[0].id.clone()).unwrap();
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "新章：起锚");
     }
 }

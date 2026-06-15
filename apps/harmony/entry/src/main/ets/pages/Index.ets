@@ -110,7 +110,7 @@ struct Index {
       // Header
       Row() {
         Text('写作软件')
-          .fontSize(24)
+          .fontSize(28)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
 
@@ -118,12 +118,12 @@ struct Index {
 
         Column() {
           Text(this.workspaceName)
-            .fontSize(14)
+            .fontSize(15)
             .fontColor(this.themeConfig.colors.textSecondary)
 
           if (this.writingStats) {
             Text(`今日: ${this.writingStats.todayChars} 字`)
-              .fontSize(12)
+              .fontSize(13)
               .fontColor(this.themeConfig.colors.textHint)
           }
 
@@ -136,7 +136,7 @@ struct Index {
         .alignItems(HorizontalAlign.End)
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+      .padding({ left: 20, right: 20, top: 20, bottom: 16 })
 
       if (this.isLoading) {
         Column() {
@@ -186,7 +186,7 @@ struct Index {
             this.QuickActions()
           }
           .width('100%')
-          .padding({ left: 16, right: 16, bottom: 24 })
+          .padding({ left: 20, right: 20, bottom: 32 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
@@ -265,10 +265,11 @@ struct Index {
       .alignItems(HorizontalAlign.Center)
     }
     .width('100%')
-    .padding(16)
+    .padding({ left: 20, right: 20, top: 20, bottom: 20 })
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
-    .margin({ bottom: 16 })
+    .borderRadius(16)
+    .margin({ bottom: 20 })
+    .shadow({ radius: 4, color: '#1A000000', offsetY: 2 })
   }
 
   @Builder
@@ -289,7 +290,7 @@ struct Index {
           })
       }
       .width('100%')
-      .margin({ bottom: 12 })
+      .margin({ bottom: 16 })
 
       ForEach(this.recentEdits, (edit: RecentEdit) => {
         Row() {
@@ -297,17 +298,17 @@ struct Index {
             Text(edit.chapterTitle)
               .fontSize(16)
               .fontColor(this.themeConfig.colors.textPrimary)
-              .margin({ bottom: 4 })
+              .margin({ bottom: 6 })
 
             Row() {
               Text(edit.projectTitle)
-                .fontSize(12)
+                .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
-                .margin({ right: 12 })
+                .margin({ right: 16 })
 
               if (edit.wordCount) {
                 Text(`${edit.wordCount} 字`)
-                  .fontSize(12)
+                  .fontSize(13)
                   .fontColor(this.themeConfig.colors.textHint)
               }
             }
@@ -316,14 +317,14 @@ struct Index {
           .alignItems(HorizontalAlign.Start)
 
           Text(this.formatTime(edit.editedAt))
-            .fontSize(12)
+            .fontSize(13)
             .fontColor(this.themeConfig.colors.textHint)
         }
         .width('100%')
-        .padding(12)
+        .padding({ left: 16, right: 16, top: 14, bottom: 14 })
         .backgroundColor(this.themeConfig.colors.surface)
-        .borderRadius(8)
-        .margin({ bottom: 8 })
+        .borderRadius(12)
+        .margin({ bottom: 10 })
         .onClick(() => {
           router.pushUrl({
             url: 'pages/WritingPage',
@@ -362,31 +363,31 @@ struct Index {
           })
       }
       .width('100%')
-      .margin({ bottom: 12 })
+      .margin({ bottom: 16 })
 
       ForEach(this.projects, (project: Project) => {
         Row() {
           Column() {
             Text(project.name)
-              .fontSize(16)
+              .fontSize(17)
               .fontWeight(FontWeight.Medium)
               .fontColor(this.themeConfig.colors.textPrimary)
-              .margin({ bottom: 4 })
+              .margin({ bottom: 6 })
 
             Row() {
               Text(`${project.volumeCount} 卷`)
-                .fontSize(12)
+                .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
-                .margin({ right: 12 })
+                .margin({ right: 16 })
 
               Text(`${project.chapterCount} 章`)
-                .fontSize(12)
+                .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
-                .margin({ right: 12 })
+                .margin({ right: 16 })
 
               if (project.totalWordCount) {
                 Text(`${project.totalWordCount} 字`)
-                  .fontSize(12)
+                  .fontSize(13)
                   .fontColor(this.themeConfig.colors.textHint)
               }
             }
@@ -395,15 +396,15 @@ struct Index {
           .alignItems(HorizontalAlign.Start)
 
           Image($r('sys.media.ohos_ic_public_arrow_right'))
-            .width(16)
-            .height(16)
+            .width(18)
+            .height(18)
             .fillColor(this.themeConfig.colors.textHint)
         }
         .width('100%')
-        .padding(16)
+        .padding({ left: 16, right: 16, top: 16, bottom: 16 })
         .backgroundColor(this.themeConfig.colors.surface)
-        .borderRadius(8)
-        .margin({ bottom: 8 })
+        .borderRadius(12)
+        .margin({ bottom: 10 })
         .onClick(() => {
           router.pushUrl({
             url: 'pages/WorkspacePage',
@@ -426,17 +427,17 @@ struct Index {
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
-        .margin({ bottom: 12 })
+        .margin({ bottom: 16 })
         .width('100%')
 
       Grid() {
         GridItem() {
           Column() {
             Image($r('sys.media.ohos_ic_public_add'))
-              .width(32)
-              .height(32)
+              .width(36)
+              .height(36)
               .fillColor(this.themeConfig.colors.primary)
-              .margin({ bottom: 8 })
+              .margin({ bottom: 10 })
 
             Text('新建章节')
               .fontSize(14)
@@ -446,7 +447,7 @@ struct Index {
           .height('100%')
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(12)
+          .borderRadius(16)
         }
         .onClick(() => {
         })
@@ -454,10 +455,10 @@ struct Index {
         GridItem() {
           Column() {
             Image($r('app.media.ic_star'))
-              .width(32)
-              .height(32)
+              .width(36)
+              .height(36)
               .fillColor(this.themeConfig.colors.secondary)
-              .margin({ bottom: 8 })
+              .margin({ bottom: 10 })
 
             Text('星图')
               .fontSize(14)
@@ -467,7 +468,7 @@ struct Index {
           .height('100%')
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(12)
+          .borderRadius(16)
         }
         .onClick(() => {
           router.pushUrl({
@@ -482,10 +483,10 @@ struct Index {
         GridItem() {
           Column() {
             Image($r('sys.media.ohos_ic_public_more'))
-              .width(32)
-              .height(32)
+              .width(36)
+              .height(36)
               .fillColor(this.themeConfig.colors.textSecondary)
-              .margin({ bottom: 8 })
+              .margin({ bottom: 10 })
 
             Text('设置')
               .fontSize(14)
@@ -495,7 +496,7 @@ struct Index {
           .height('100%')
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(12)
+          .borderRadius(16)
         }
         .onClick(() => {
           router.pushUrl({ url: 'pages/SettingsPage' })
@@ -504,10 +505,10 @@ struct Index {
         GridItem() {
           Column() {
             Image($r('app.media.ic_refresh'))
-              .width(32)
-              .height(32)
+              .width(36)
+              .height(36)
               .fillColor(this.themeConfig.colors.success)
-              .margin({ bottom: 8 })
+              .margin({ bottom: 10 })
 
             Text('同步')
               .fontSize(14)
@@ -517,7 +518,7 @@ struct Index {
           .height('100%')
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(12)
+          .borderRadius(16)
         }
         .onClick(() => {
           router.pushUrl({ url: 'pages/SettingsPage' })
@@ -525,9 +526,9 @@ struct Index {
       }
       .columnsTemplate('1fr 1fr')
       .rowsTemplate('1fr 1fr')
-      .columnsGap(12)
-      .rowsGap(12)
-      .height(200)
+      .columnsGap(16)
+      .rowsGap(16)
+      .height(220)
       .width('100%')
     }
     .width('100%')

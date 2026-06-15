@@ -251,7 +251,7 @@ struct WritingPage {
           .onClick(() => this.saveChapter())
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+      .padding({ left: 20, right: 20, top: 20, bottom: 14 })
 
       if (this.isLoading) {
         Column() {
@@ -282,16 +282,22 @@ struct WritingPage {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        TextArea({ text: this.content, placeholder: '开始写作...' })
-          .layoutWeight(1)
-          .fontSize(this.settings.fontSize)
-          .fontFamily(this.settings.fontFamily)
-          .lineHeight(this.settings.lineHeight)
-          .backgroundColor(this.themeConfig.colors.surface)
-          .padding(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .placeholderColor(this.themeConfig.colors.textHint)
-          .onChange((value: string) => this.onContentChange(value))
+        Scroll() {
+          TextArea({ text: this.content, placeholder: '开始写作...' })
+            .width('100%')
+            .minHeight('100%')
+            .fontSize(this.settings.fontSize)
+            .fontFamily(this.settings.fontFamily)
+            .lineHeight(this.settings.lineHeight * this.settings.fontSize)
+            .backgroundColor(this.themeConfig.colors.surface)
+            .padding({ left: 24, right: 24, top: 20, bottom: 20 })
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .placeholderColor(this.themeConfig.colors.textHint)
+            .onChange((value: string) => this.onContentChange(value))
+        }
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
 
       // Bottom toolbar
@@ -314,7 +320,7 @@ struct WritingPage {
           .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.secondary : this.themeConfig.colors.success)
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .padding({ left: 20, right: 20, top: 10, bottom: 10 })
       .backgroundColor(this.themeConfig.colors.background)
     }
     .width('100%')
