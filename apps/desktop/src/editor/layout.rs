@@ -4,6 +4,7 @@ use qmetaobject::QString;
 use crate::sujian_editor_item::sujian_editor_debug_enabled;
 
 cpp! {{
+    #include <QtGlobal>
     #include <QtGui/QFont>
     #include <QtGui/QFontMetricsF>
     #include <QtGui/QTextLayout>
@@ -246,13 +247,13 @@ cpp! {{
             if (cur_idx == qtextline_idx) {
                 // Use glyphRuns() for accurate glyph positions.
                 // This handles emoji, combining characters, ligatures, etc.
-                // Qt 6.5+ supports GlyphRunRetrievalFlags for selective retrieval.
                 const auto glyphRuns = line.glyphRuns();
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+                // Qt 6.5+: stringIndexes() provides precise glyph→string index mapping
                 for (const auto& run : glyphRuns) {
                     const auto& positions = run.positions();
                     const auto& stringIndexes = run.stringIndexes();
-                    const auto& glyphIndexes = run.glyphIndexes();
                     int count = positions.size();
 
                     for (int i = 0; i < count; i++) {
@@ -292,6 +293,28 @@ cpp! {{
                         g_glyph_buf.push_back(e);
                     }
                 }
+#else
+                // Qt < 6.5: stringIndexes() unavailable, use cursorToX per character
+                // This is simpler but equally effective — directly compute each QChar's
+                // x position and width from QTextLine::cursorToX().
+                int line_start = line.textStart();
+                int line_end = line_start + line.textLength();
+                int range_start = (range_qchar_start > line_start) ? range_qchar_start : line_start;
+                int range_end = (range_qchar_end < line_end) ? range_qchar_end : line_end;
+
+                for (int idx = range_start; idx < range_end; idx++) {
+                    double x = line.cursorToX(idx, QTextLine::Leading);
+                    double x_next = line.cursorToX(idx + 1, QTextLine::Leading);
+                    double w = x_next - x;
+                    if (w < 0) w = -w; // RTL text
+
+                    GlyphEntry e;
+                    e.stringIndex = idx;
+                    e.xPos = x;
+                    e.width = w;
+                    g_glyph_buf.push_back(e);
+                }
+#endif
 
                 // Sort by string index to ensure consistent ordering
                 std::sort(g_glyph_buf.begin(), g_glyph_buf.end(),

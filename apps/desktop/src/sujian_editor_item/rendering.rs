@@ -3,7 +3,7 @@ use crate::editor::renderer;
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{
-    QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF,
+    QImage, QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF,
     QString,
 };
 use std::time::Instant;
@@ -12,7 +12,7 @@ use super::{sujian_editor_debug_enabled, SujianEditorItem};
 use super::cursor_controller::CursorUpdateResult;
 
 pub struct ScrollBuffer {
-    pub image: qmetaobject::QImage,
+    pub image: QImage,
     pub buffer_scroll_y: f64,
     pub buffer_content_h: f64,
     pub buffer_logical_h: f64,
@@ -386,7 +386,7 @@ impl SujianEditorItem {
         None
     }
 
-    pub(crate) fn render_to_image(&mut self) -> Option<(qmetaobject::QImage, f64, f64)> {
+    pub(crate) fn render_to_image(&mut self) -> Option<(QImage, f64, f64)> {
         let render_start = Instant::now();
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() {
@@ -421,7 +421,7 @@ impl SujianEditorItem {
 
         let phys_w = ((img_w as f64 * dpr) as i32).max(1);
         let phys_h = ((buffer_h * dpr) as i32).max(1);
-        let mut image = qmetaobject::QImage::new(
+        let mut image = QImage::new(
             qmetaobject::QSize {
                 width: phys_w as u32,
                 height: phys_h as u32,
@@ -480,7 +480,7 @@ impl SujianEditorItem {
 
     /// 渲染动画 overlay（插入/删除 ghost 字）到独立的 painter。
     /// 返回 Some(image) 如果有活跃动画，None 表示没有动画需要绘制。
-    pub(crate) fn paint_animation_overlay(&mut self) -> Option<(qmetaobject::QImage, f64, f64)> {
+    pub(crate) fn paint_animation_overlay(&mut self) -> Option<(QImage, f64, f64)> {
         let now = Instant::now();
         let has_insert = self.insert_animation.as_ref().is_some_and(|a| !a.is_finished(now));
         let has_delete = self.delete_animation.as_ref().is_some_and(|a| !a.is_finished(now));
@@ -510,7 +510,7 @@ impl SujianEditorItem {
         let img_w = (width as i32).max(1);
         let phys_w = ((img_w as f64 * dpr) as i32).max(1);
         let phys_h = ((buffer_h * dpr) as i32).max(1);
-        let mut image = qmetaobject::QImage::new(
+        let mut image = QImage::new(
             qmetaobject::QSize {
                 width: phys_w as u32,
                 height: phys_h as u32,
