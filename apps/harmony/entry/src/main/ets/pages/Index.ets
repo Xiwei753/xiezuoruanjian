@@ -1,6 +1,6 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
+import { Project, RecentEdit, WritingStats, WorkspaceSummary } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
@@ -10,7 +10,7 @@ import { WidthClass, ShellMode } from '../model/CoreDtos'
 @Entry
 @Component
 struct Index {
-  @State workspaceName: string = '我的写作空间'
+  @State workspacePath: string = ''
   @State projects: Project[] = []
   @State recentEdits: RecentEdit[] = []
   @State writingStats: WritingStats | null = null
@@ -61,27 +61,21 @@ struct Index {
         const initOk = await nativeBridge.initialize(workspacePath)
         if (!initOk) {
           ctx.markNativeInitFailed()
-          if (ctx.canFallbackToMock()) {
-            await ctx.switchToMock()
-            this.bridge = getBridge()
-            this.nativeStatus = 'mock-fallback'
-          } else {
-            const errCode = nativeBridge.getLastInitErrorCode()
-            const rustError = await nativeBridge.getLastError()
-            let errDesc = `未知错误(${errCode})`
-            if (errCode === -1) { errDesc = '路径为空' }
-            else if (errCode === -2) { errDesc = '路径编码无效' }
-            else if (errCode === -3) { errDesc = '内部状态异常' }
-            else if (errCode === -4) { errDesc = '工作区目录创建失败' }
-            else if (errCode === -999) { errDesc = 'NAPI调用异常(SO加载失败?)' }
-            this.errorMessage = `Native 核心初始化失败: ${errDesc}\n路径: ${workspacePath}\n详情: ${rustError}`
-            this.isLoading = false
-            return
-          }
-        } else {
-          const statusResult = await nativeBridge.getNativeLoadStatus()
-          this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'
+          // Fail-fast：native 初始化失败直接报错，不降级到 mock
+          const errCode = nativeBridge.getLastInitErrorCode()
+          const rustError = await nativeBridge.getLastError()
+          let errDesc = `未知错误(${errCode})`
+          if (errCode === -1) { errDesc = '路径为空' }
+          else if (errCode === -2) { errDesc = '路径编码无效' }
+          else if (errCode === -3) { errDesc = '内部状态异常' }
+          else if (errCode === -4) { errDesc = '工作区目录创建失败' }
+          else if (errCode === -999) { errDesc = 'NAPI调用异常(SO加载失败?)' }
+          this.errorMessage = `Native 核心初始化失败: ${errDesc}\n路径: ${workspacePath}\n详情: ${rustError}`
+          this.isLoading = false
+          return
         }
+        const statusResult = await nativeBridge.getNativeLoadStatus()
+        this.nativeStatus = statusResult.success ? (statusResult.data || 'unknown') : 'error'
       }
 
       await this.loadWorkspace()
@@ -101,7 +95,7 @@ struct Index {
       const statsResult = await this.bridge.getWritingStats()
 
       if (workspaceResult.success && workspaceResult.data) {
-        this.workspaceName = workspaceResult.data.workspace.name
+        this.workspacePath = workspaceResult.data.path
         this.projects = workspaceResult.data.projects
         this.recentEdits = workspaceResult.data.recentEdits
       } else {
@@ -130,9 +124,9 @@ struct Index {
         Blank()
 
         Column() {
-          Text(this.workspaceName)
-            .fontSize(15)
-            .fontColor(this.themeConfig.colors.textSecondary)
+           Text(this.workspacePath ? this.extractWorkspaceName(this.workspacePath) : '我的写作空间')
+             .fontSize(15)
+             .fontColor(this.themeConfig.colors.textSecondary)
 
           if (this.writingStats) {
             Text(`今日: ${this.writingStats.todayChars} 字`)
@@ -240,17 +234,17 @@ struct Index {
         .color(this.themeConfig.colors.divider)
 
       Column() {
-        Text('连续天数')
+        Text('今日时长')
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
 
-        Text(`${this.writingStats?.currentStreak || 0}`)
+        Text(`${Math.floor((this.writingStats?.todayDuration || 0) / 60)}`)
           .fontSize(32)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.secondary)
 
-        Text('天')
+        Text('分钟')
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
       }
@@ -312,28 +306,22 @@ struct Index {
       ForEach(this.recentEdits, (edit: RecentEdit) => {
         Row() {
           Column() {
-            Text(edit.chapterTitle)
+            Text(`章节 ${edit.chapterId}`)
               .fontSize(16)
               .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 6 })
 
             Row() {
-              Text(edit.projectTitle)
+              Text(`作品 ${edit.projectId}`)
                 .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ right: 16 })
-
-              if (edit.wordCount) {
-                Text(`${edit.wordCount} 字`)
-                  .fontSize(13)
-                  .fontColor(this.themeConfig.colors.textHint)
-              }
             }
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
-          Text(this.formatTime(edit.editedAt))
+          Text(this.formatTime(edit.timestamp))
             .fontSize(13)
             .fontColor(this.themeConfig.colors.textHint)
         }
@@ -347,7 +335,7 @@ struct Index {
             url: 'pages/WritingPage',
             params: {
               chapterId: edit.chapterId,
-              chapterTitle: edit.chapterTitle
+              chapterTitle: `章节 ${edit.chapterId}`
             }
           })
         })
@@ -385,29 +373,11 @@ struct Index {
       ForEach(this.projects, (project: Project) => {
         Row() {
           Column() {
-            Text(project.name)
+            Text(project.title)
               .fontSize(17)
               .fontWeight(FontWeight.Medium)
               .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 6 })
-
-            Row() {
-              Text(`${project.volumeCount} 卷`)
-                .fontSize(13)
-                .fontColor(this.themeConfig.colors.textSecondary)
-                .margin({ right: 16 })
-
-              Text(`${project.chapterCount} 章`)
-                .fontSize(13)
-                .fontColor(this.themeConfig.colors.textSecondary)
-                .margin({ right: 16 })
-
-              if (project.totalWordCount) {
-                Text(`${project.totalWordCount} 字`)
-                  .fontSize(13)
-                  .fontColor(this.themeConfig.colors.textHint)
-              }
-            }
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
@@ -427,7 +397,7 @@ struct Index {
             url: 'pages/WorkspacePage',
             params: {
               projectId: project.id,
-              projectName: project.name
+              projectName: project.title
             }
           })
         })
@@ -562,5 +532,14 @@ struct Index {
     } else {
       return `${date.getMonth() + 1}/${date.getDate()}`
     }
+  }
+
+  extractWorkspaceName(path: string): string {
+    if (!path) {
+      return '我的写作空间'
+    }
+    const segments = path.replace(/\\/g, '/').split('/')
+    const last = segments[segments.length - 1]
+    return last || '我的写作空间'
   }
 }

@@ -1,6 +1,6 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { ChapterData, SaveReceipt, LocalSettings } from '../model/CoreDtos'
+import { ChapterContent, ChapterSaveReceipt, LocalSettings } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
@@ -24,17 +24,22 @@ struct WritingPage {
   @State errorMessage: string = ''
   @State saveMessage: string = ''
   @State settings: LocalSettings = {
-    fontSize: 16,
-    lineHeight: 1.8,
-    fontFamily: 'HarmonyOS Sans',
-    theme: 'system',
-    autoSave: true,
-    autoSaveInterval: 30,
-    autoIndent: true,
-    showWordCount: true,
-    showLineNumbers: false,
-    wordWrap: true,
-    spellCheck: false
+    editorFontSize: 16,
+    editorLineSpacingMultiplier: 1.8,
+    themeMode: 'system',
+    autoSaveEnabled: true,
+    autoSaveDelayMs: 30000,
+    autoIndentEnabled: true,
+    autoIndentWidth: 2,
+    windowWidth: 0,
+    windowHeight: 0,
+    editorTypingAnimationEnabled: false,
+    editorSmoothCursorEnabled: false,
+    editorTypingAnimationDurationMs: 0,
+    editorSmoothCursorDurationMs: 0,
+    aiEnabled: false,
+    desktopSidebarWidth: 0,
+    desktopEditorWidth: 0
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
@@ -74,7 +79,7 @@ struct WritingPage {
     // Setup auto-save lifecycle observer
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
       (): Promise<void> => this.saveChapter(),
-      this.settings.autoSaveInterval * 1000
+      this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
   }
@@ -112,7 +117,7 @@ struct WritingPage {
       if (result.success && result.data) {
         this.content = result.data.content
         this.lastSavedContent = result.data.content
-        this.wordCount = result.data.wordCount
+        this.wordCount = result.data.meta.wordCount
         this.hasUnsavedChanges = false
       } else {
         this.errorMessage = result.userMessage || '加载章节失败'
@@ -130,10 +135,9 @@ struct WritingPage {
       if (result.success && result.data) {
         this.settings = result.data
         this.themeAdapter.updateFromSettings({
-          theme: result.data.theme,
-          fontSize: result.data.fontSize,
-          fontFamily: result.data.fontFamily,
-          lineHeight: result.data.lineHeight
+          theme: result.data.themeMode,
+          fontSize: result.data.editorFontSize,
+          lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
         // Update auto-save interval
@@ -141,7 +145,7 @@ struct WritingPage {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
             (): Promise<void> => this.saveChapter(),
-            this.settings.autoSaveInterval * 1000
+            this.settings.autoSaveDelayMs
           )
           this.lifecycle.addObserver(this.autoSaveObserver)
         }
@@ -248,12 +252,10 @@ struct WritingPage {
             .margin({ right: 8 })
         }
 
-        if (this.settings.showWordCount) {
-          Text(`${this.wordCount} 字`)
-            .fontSize(12)
-            .fontColor(this.themeConfig.colors.textSecondary)
-            .margin({ right: 8 })
-        }
+        Text(`${this.wordCount} 字`)
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 8 })
 
         Button('保存')
           .fontSize(14)
@@ -301,9 +303,8 @@ struct WritingPage {
             TextArea({ text: this.content, placeholder: '开始写作...' })
               .width('100%')
               .constraintSize({ minHeight: '100%' })
-              .fontSize(this.settings.fontSize)
-              .fontFamily(this.settings.fontFamily)
-              .lineHeight(this.settings.lineHeight * this.settings.fontSize)
+              .fontSize(this.settings.editorFontSize)
+              .lineHeight(this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize)
               .backgroundColor(this.themeConfig.colors.surface)
               .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 20 })
               .fontColor(this.themeConfig.colors.textPrimary)
@@ -320,7 +321,7 @@ struct WritingPage {
 
       // Bottom toolbar
       Row() {
-        if (this.settings.autoSave) {
+        if (this.settings.autoSaveEnabled) {
           Text('自动保存')
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textHint)

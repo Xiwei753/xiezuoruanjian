@@ -1,12 +1,11 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import {
-  Workspace,
-  WorkspaceState,
+  WorkspaceSummary,
   Project,
   Volume,
-  Chapter,
-  ChapterData,
-  SaveReceipt,
+  ChapterMeta,
+  ChapterContent,
+  ChapterSaveReceipt,
   StarMapMeta,
   StarMapGraph,
   StarMapNode,
@@ -17,29 +16,22 @@ import {
   StarMapLayout,
   LocalSettings,
   SyncableSettings,
-  EffectiveSettings,
   ResultEnvelope,
   ProjectTree,
   VolumeTree,
   ProjectStats,
   WritingStats,
-  DailyStats,
   SyncConfig,
-  SyncReport,
-  SyncDiagnostics,
   SyncResult,
   RecentEdit,
   SyncState,
+  SyncConflict,
+  ChangedEntity,
   ErrorCode,
   WindowMetrics,
-  LayoutPlan,
-  FoldPosture,
-  WidthClass,
-  HeightClass,
-  ShellMode,
-  EditorMode,
-  NavigationMode
+  LayoutPlan
 } from '../model/CoreDtos'
+import { resolveLayoutFromMetrics } from '../common/LayoutPolicyHelper'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
   private currentWorkspacePath: string = '/mock/workspace'
@@ -47,7 +39,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   private mockVolumes: Map<string, Volume[]> = new Map<string, Volume[]>()
 
-  private mockChapters: Map<string, Chapter[]> = new Map<string, Chapter[]>()
+  private mockChapters: Map<string, ChapterMeta[]> = new Map<string, ChapterMeta[]>()
 
   private mockChapterContents: Map<string, string> = new Map<string, string>()
 
@@ -78,27 +70,41 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   private mockSettings: LocalSettings = {
-    fontSize: 16,
-    lineHeight: 1.8,
-    fontFamily: 'HarmonyOS Sans',
-    theme: 'system',
-    autoSave: true,
-    autoSaveInterval: 30,
-    autoIndent: true,
-    showWordCount: true,
-    showLineNumbers: false,
-    wordWrap: true,
-    spellCheck: false,
-    lastWorkspacePath: '',
-    lastProjectId: '',
-    lastChapterId: ''
+    themeMode: 'system',
+    locale: 'zh-CN',
+    autoSaveEnabled: true,
+    editorFontSize: 16,
+    editorLineSpacingMultiplier: 1.8,
+    windowWidth: 720,
+    windowHeight: 1280,
+    autoSaveDelayMs: 3000,
+    autoIndentEnabled: true,
+    autoIndentWidth: 2,
+    editorTypingAnimationEnabled: true,
+    editorSmoothCursorEnabled: true,
+    editorTypingAnimationDurationMs: 80,
+    editorSmoothCursorDurationMs: 120,
+    aiEnabled: false,
+    statsDeviceId: undefined,
+    desktopSidebarWidth: 280,
+    desktopEditorWidth: 820
   } as LocalSettings
 
   private mockSyncConfig: SyncConfig = {
     enabled: false,
-    provider: 'github',
+    backendType: 'github',
+    remoteUrl: '',
+    transport: 'https',
+    branch: 'main',
     autoSync: false,
-    conflictStrategy: 'manual'
+    syncIntervalSeconds: 300,
+    proxyEnabled: false,
+    proxyType: 'http',
+    proxyHost: '',
+    proxyPort: 0,
+    username: '',
+    androidHasInternetPermission: false,
+    androidHasAccessNetworkStatePermission: false
   } as SyncConfig
 
   private delay(ms: number): Promise<void> {
@@ -109,7 +115,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const result: ResultEnvelope<T> = {
       success: true,
       data,
-      timestamp: Date.now()
+      warnings: [] as string[],
+      changedPaths: [] as string[],
+      changedEntities: [] as ChangedEntity[]
     }
     return result
   }
@@ -119,32 +127,36 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       success: false,
       errorCode: errorCode,
       userMessage,
-      timestamp: Date.now()
+      warnings: [] as string[],
+      changedPaths: [] as string[],
+      changedEntities: [] as ChangedEntity[]
     }
     return result
   }
 
   // Workspace methods
-  async listWorkspaces(): Promise<ResultEnvelope<Workspace[]>> {
+  async listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>> {
     await this.delay(100)
     return this.success([
-      { path: '/mock/workspace', name: '我的写作空间', isValid: true, lockState: 'unlocked' } as Workspace
-    ] as Workspace[])
+      {
+        path: '/mock/workspace',
+        isValid: true,
+        projects: this.mockProjects,
+        recentEdits: [] as RecentEdit[]
+      } as WorkspaceSummary
+    ] as WorkspaceSummary[])
   }
 
-  async openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceState>> {
+  async openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceSummary>> {
     await this.delay(200)
     this.currentWorkspacePath = path
-    const state: WorkspaceState = {
-      workspace: { path, name: '我的写作空间', isValid: true, lockState: 'unlocked' } as Workspace,
+    const summary: WorkspaceSummary = {
+      path,
+      isValid: true,
       projects: this.mockProjects,
-      recentEdits: [] as RecentEdit[],
-      syncState: {
-        status: 'idle',
-        lastSyncAt: '2026-06-14T00:00:00Z'
-      } as SyncState
+      recentEdits: [] as RecentEdit[]
     }
-    return this.success(state)
+    return this.success(summary)
   }
 
   async validateWorkspace(path: string): Promise<ResultEnvelope<boolean>> {
@@ -152,7 +164,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success(true)
   }
 
-  async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceState>> {
+  async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>> {
     return this.openWorkspace(this.currentWorkspacePath)
   }
 
@@ -173,17 +185,15 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const volumeTrees: VolumeTree[] = volumes.map((vol: Volume): VolumeTree => {
       const vt: VolumeTree = {
         volume: vol,
-        chapters: this.mockChapters.get(vol.id) || [] as Chapter[]
+        chapters: this.mockChapters.get(vol.id) || [] as ChapterMeta[]
       }
       return vt
     })
 
     const stats: ProjectStats = {
-      totalChapters: volumeTrees.reduce((sum: number, vt: VolumeTree) => sum + vt.chapters.length, 0),
-      totalVolumes: volumes.length,
-      totalWordCount: project.totalWordCount || 0,
-      averageChapterLength: 2500,
-      lastUpdatedAt: project.updatedAt
+      totalWordCount: 0,
+      volumeCount: volumes.length,
+      chapterCount: volumeTrees.reduce((sum: number, vt: VolumeTree) => sum + vt.chapters.length, 0)
     }
     const tree: ProjectTree = {
       project,
@@ -197,10 +207,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(200)
     const newProject: Project = {
       id: `proj-${Date.now()}`,
-      name,
-      volumeCount: 0,
-      chapterCount: 0,
-      totalWordCount: 0,
+      title: name,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
@@ -215,7 +222,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     if (!project) {
       return this.error('PROJECT_NOT_FOUND', '项目不存在')
     }
-    project.name = newName
+    project.title = newName
     project.updatedAt = new Date().toISOString()
     return this.success(true)
   }
@@ -237,14 +244,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       totalChars: 25600,
       totalWords: 18200,
       totalChapters: 8,
-      totalProjects: 2,
       todayChars: 1200,
       todayDuration: 45,
-      todaySessions: 3,
-      averageSpeed: 800,
-      longestStreak: 15,
-      currentStreak: 7,
-      weeklyStats: [] as DailyStats[]
+      averageSpeed: 800
     }
     return this.success(stats)
   }
@@ -260,11 +262,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const volumes = this.mockVolumes.get(projectId) || [] as Volume[]
     const newVolume: Volume = {
       id: `vol-${Date.now()}`,
-      projectId,
-      name,
+      title: name,
       order: volumes.length + 1,
-      chapterCount: 0,
-      totalWordCount: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
@@ -280,7 +279,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     if (!volume) {
       return this.error('VOLUME_NOT_FOUND', '卷不存在')
     }
-    volume.name = newName
+    volume.title = newName
     volume.updatedAt = new Date().toISOString()
     return this.success(true)
   }
@@ -310,24 +309,28 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   // Chapter methods
-  async listChapters(volumeId: string): Promise<ResultEnvelope<Chapter[]>> {
+  async listChapters(volumeId: string): Promise<ResultEnvelope<ChapterMeta[]>> {
     await this.delay(100)
-    return this.success(this.mockChapters.get(volumeId) || [] as Chapter[])
+    return this.success(this.mockChapters.get(volumeId) || [] as ChapterMeta[])
   }
 
-  async loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterData>> {
+  async loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterContent>> {
     await this.delay(200)
     const content = this.mockChapterContents.get(chapterId)
     if (content !== undefined) {
-      const data: ChapterData = {
+      const meta: ChapterMeta = {
         id: chapterId,
         title: '第一章 初遇',
-        content,
-        wordCount: content.length,
-        volumeId: 'vol-001',
-        projectId: 'proj-001',
+        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        status: 'draft'
+        order: 1,
+        wordCount: content.replace(/\s/g, '').length,
+        hash: 'mock-hash-' + chapterId,
+        note: undefined
+      }
+      const data: ChapterContent = {
+        meta,
+        content
       }
       return this.success(data)
     }
@@ -335,18 +338,13 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const volKeys: string[] = Array.from(this.mockChapters.keys())
     for (let i = 0; i < volKeys.length; i++) {
       const volId: string = volKeys[i]
-      const chapters: Chapter[] = this.mockChapters.get(volId) || [] as Chapter[]
+      const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
       const chapter = chapters.find(ch => ch.id === chapterId)
       if (chapter) {
-        const data: ChapterData = {
-          id: chapter.id,
-          title: chapter.name,
-          content: `这是《${chapter.name}》的示例内容。\n\n在此处开始写作...\n\n鸿蒙端当前使用 mock 数据，后续将对接真实 Rust Core。`,
-          wordCount: chapter.wordCount,
-          volumeId: chapter.volumeId,
-          projectId: 'proj-001',
-          updatedAt: chapter.updatedAt,
-          status: chapter.status
+        const sampleContent = `这是《${chapter.title}》的示例内容。\n\n在此处开始写作...\n\n鸿蒙端当前使用 mock 数据，后续将对接真实 Rust Core。`
+        const data: ChapterContent = {
+          meta: chapter,
+          content: sampleContent
         }
         return this.success(data)
       }
@@ -355,58 +353,58 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.error('CHAPTER_NOT_FOUND', '章节不存在')
   }
 
-  async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<SaveReceipt>> {
+  async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     await this.delay(300)
     if (!text || text.trim().length === 0) {
-      const errorReceipt: SaveReceipt = {
-        success: false,
-        wordCount: 0,
-        savedAt: new Date().toISOString(),
-        errorCode: 'EMPTY_OVERWRITE_BLOCKED',
-        errorMessage: '不能保存空内容'
-      }
-      const result: ResultEnvelope<SaveReceipt> = {
+      const result: ResultEnvelope<ChapterSaveReceipt> = {
         success: false,
         errorCode: 'EMPTY_OVERWRITE_BLOCKED',
         userMessage: '不能保存空内容',
-        data: errorReceipt,
-        timestamp: Date.now()
+        warnings: [] as string[],
+        changedPaths: [] as string[],
+        changedEntities: [] as ChangedEntity[]
       }
       return result
     }
 
     this.mockChapterContents.set(chapterId, text)
-    const receipt: SaveReceipt = {
-      success: true,
-      wordCount: text.replace(/\s/g, '').length,
-      savedAt: new Date().toISOString()
+    const receipt: ChapterSaveReceipt = {
+      chapterRelativePath: `chapters/${chapterId}.md`,
+      contentLen: text.length,
+      contentHash: 'mock-hash-content-' + Date.now(),
+      metaHash: 'mock-hash-meta-' + Date.now(),
+      updatedAt: new Date().toISOString(),
+      wordCount: text.replace(/\s/g, '').length
     }
     return this.success(receipt)
   }
 
-  async clearChapter(chapterId: string): Promise<ResultEnvelope<SaveReceipt>> {
+  async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     await this.delay(200)
     this.mockChapterContents.set(chapterId, '')
-    const receipt: SaveReceipt = {
-      success: true,
-      wordCount: 0,
-      savedAt: new Date().toISOString()
+    const receipt: ChapterSaveReceipt = {
+      chapterRelativePath: `chapters/${chapterId}.md`,
+      contentLen: 0,
+      contentHash: 'mock-hash-empty',
+      metaHash: 'mock-hash-meta-' + Date.now(),
+      updatedAt: new Date().toISOString(),
+      wordCount: 0
     }
     return this.success(receipt)
   }
 
-  async createChapter(volumeId: string, name: string): Promise<ResultEnvelope<Chapter>> {
+  async createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>> {
     await this.delay(150)
-    const chapters = this.mockChapters.get(volumeId) || [] as Chapter[]
-    const newChapter: Chapter = {
+    const chapters = this.mockChapters.get(volumeId) || [] as ChapterMeta[]
+    const newChapter: ChapterMeta = {
       id: `ch-${Date.now()}`,
-      volumeId,
-      name,
+      title: name,
       wordCount: 0,
       order: chapters.length + 1,
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
-      status: 'draft'
+      hash: 'mock-hash-new',
+      note: undefined
     }
     chapters.push(newChapter)
     this.mockChapters.set(volumeId, chapters)
@@ -418,10 +416,10 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const volKeys: string[] = Array.from(this.mockChapters.keys())
     for (let i = 0; i < volKeys.length; i++) {
       const volId: string = volKeys[i]
-      const chapters: Chapter[] = this.mockChapters.get(volId) || [] as Chapter[]
+      const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
       const chapter = chapters.find(ch => ch.id === chapterId)
       if (chapter) {
-        chapter.name = newName
+        chapter.title = newName
         chapter.updatedAt = new Date().toISOString()
         return this.success(true)
       }
@@ -434,7 +432,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const volKeys: string[] = Array.from(this.mockChapters.keys())
     for (let i = 0; i < volKeys.length; i++) {
       const volId: string = volKeys[i]
-      const chapters: Chapter[] = this.mockChapters.get(volId) || [] as Chapter[]
+      const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
       const index = chapters.findIndex(ch => ch.id === chapterId)
       if (index !== -1) {
         chapters.splice(index, 1)
@@ -447,7 +445,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async reorderChapters(volumeId: string, orderedChapterIds: string[]): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const chapters = this.mockChapters.get(volumeId) || [] as Chapter[]
+    const chapters = this.mockChapters.get(volumeId) || [] as ChapterMeta[]
     orderedChapterIds.forEach((id, index) => {
       const chapter = chapters.find(ch => ch.id === id)
       if (chapter) {
@@ -465,7 +463,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
     await this.delay(100)
-    return this.success(this.mockStarMaps.filter(sm => sm.projectId === projectId))
+    // StarMapMeta 当前无 projectId 字段，mock 暂返回全部
+    return this.success(this.mockStarMaps)
   }
 
   async getStarMap(starmapId: string): Promise<ResultEnvelope<StarMapMeta>> {
@@ -493,10 +492,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       description,
       nodeCount: 0,
       edgeCount: 0,
-      projectId: '',
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      layoutType: 'force'
+      updatedAt: new Date().toISOString()
     }
     this.mockStarMaps.push(newStarMap)
     return this.success(newStarMap)
@@ -527,20 +524,24 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {
     await this.delay(100)
     const copy: LocalSettings = {
-      fontSize: this.mockSettings.fontSize,
-      lineHeight: this.mockSettings.lineHeight,
-      fontFamily: this.mockSettings.fontFamily,
-      theme: this.mockSettings.theme,
-      autoSave: this.mockSettings.autoSave,
-      autoSaveInterval: this.mockSettings.autoSaveInterval,
-      autoIndent: this.mockSettings.autoIndent,
-      showWordCount: this.mockSettings.showWordCount,
-      showLineNumbers: this.mockSettings.showLineNumbers,
-      wordWrap: this.mockSettings.wordWrap,
-      spellCheck: this.mockSettings.spellCheck,
-      lastWorkspacePath: this.mockSettings.lastWorkspacePath,
-      lastProjectId: this.mockSettings.lastProjectId,
-      lastChapterId: this.mockSettings.lastChapterId
+      themeMode: this.mockSettings.themeMode,
+      locale: this.mockSettings.locale,
+      autoSaveEnabled: this.mockSettings.autoSaveEnabled,
+      editorFontSize: this.mockSettings.editorFontSize,
+      editorLineSpacingMultiplier: this.mockSettings.editorLineSpacingMultiplier,
+      windowWidth: this.mockSettings.windowWidth,
+      windowHeight: this.mockSettings.windowHeight,
+      autoSaveDelayMs: this.mockSettings.autoSaveDelayMs,
+      autoIndentEnabled: this.mockSettings.autoIndentEnabled,
+      autoIndentWidth: this.mockSettings.autoIndentWidth,
+      editorTypingAnimationEnabled: this.mockSettings.editorTypingAnimationEnabled,
+      editorSmoothCursorEnabled: this.mockSettings.editorSmoothCursorEnabled,
+      editorTypingAnimationDurationMs: this.mockSettings.editorTypingAnimationDurationMs,
+      editorSmoothCursorDurationMs: this.mockSettings.editorSmoothCursorDurationMs,
+      aiEnabled: this.mockSettings.aiEnabled,
+      statsDeviceId: this.mockSettings.statsDeviceId,
+      desktopSidebarWidth: this.mockSettings.desktopSidebarWidth,
+      desktopEditorWidth: this.mockSettings.desktopEditorWidth
     }
     return this.success(copy)
   }
@@ -548,20 +549,24 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   async saveLocalSettings(settings: LocalSettings): Promise<ResultEnvelope<boolean>> {
     await this.delay(200)
     this.mockSettings = {
-      fontSize: settings.fontSize,
-      lineHeight: settings.lineHeight,
-      fontFamily: settings.fontFamily,
-      theme: settings.theme,
-      autoSave: settings.autoSave,
-      autoSaveInterval: settings.autoSaveInterval,
-      autoIndent: settings.autoIndent,
-      showWordCount: settings.showWordCount,
-      showLineNumbers: settings.showLineNumbers,
-      wordWrap: settings.wordWrap,
-      spellCheck: settings.spellCheck,
-      lastWorkspacePath: settings.lastWorkspacePath,
-      lastProjectId: settings.lastProjectId,
-      lastChapterId: settings.lastChapterId
+      themeMode: settings.themeMode,
+      locale: settings.locale,
+      autoSaveEnabled: settings.autoSaveEnabled,
+      editorFontSize: settings.editorFontSize,
+      editorLineSpacingMultiplier: settings.editorLineSpacingMultiplier,
+      windowWidth: settings.windowWidth,
+      windowHeight: settings.windowHeight,
+      autoSaveDelayMs: settings.autoSaveDelayMs,
+      autoIndentEnabled: settings.autoIndentEnabled,
+      autoIndentWidth: settings.autoIndentWidth,
+      editorTypingAnimationEnabled: settings.editorTypingAnimationEnabled,
+      editorSmoothCursorEnabled: settings.editorSmoothCursorEnabled,
+      editorTypingAnimationDurationMs: settings.editorTypingAnimationDurationMs,
+      editorSmoothCursorDurationMs: settings.editorSmoothCursorDurationMs,
+      aiEnabled: settings.aiEnabled,
+      statsDeviceId: settings.statsDeviceId,
+      desktopSidebarWidth: settings.desktopSidebarWidth,
+      desktopEditorWidth: settings.desktopEditorWidth
     }
     return this.success(true)
   }
@@ -569,53 +574,18 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
     await this.delay(100)
     const result: SyncableSettings = {
-      fontSize: this.mockSettings.fontSize,
-      lineHeight: this.mockSettings.lineHeight,
-      fontFamily: this.mockSettings.fontFamily,
-      theme: this.mockSettings.theme,
-      autoIndent: this.mockSettings.autoIndent,
-      showWordCount: this.mockSettings.showWordCount,
-      showLineNumbers: this.mockSettings.showLineNumbers,
-      wordWrap: this.mockSettings.wordWrap,
-      uiLanguage: this.mockSettings.uiLanguage
+      fontSize: this.mockSettings.editorFontSize,
+      themeMode: this.mockSettings.themeMode || 'system',
+      monetColor: 'default'
     }
     return this.success(result)
   }
 
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
     await this.delay(200)
-    if (settings.fontSize !== undefined) this.mockSettings.fontSize = settings.fontSize
-    if (settings.lineHeight !== undefined) this.mockSettings.lineHeight = settings.lineHeight
-    if (settings.fontFamily !== undefined) this.mockSettings.fontFamily = settings.fontFamily
-    if (settings.theme !== undefined) this.mockSettings.theme = settings.theme
-    if (settings.autoIndent !== undefined) this.mockSettings.autoIndent = settings.autoIndent
-    if (settings.showWordCount !== undefined) this.mockSettings.showWordCount = settings.showWordCount
-    if (settings.showLineNumbers !== undefined) this.mockSettings.showLineNumbers = settings.showLineNumbers
-    if (settings.wordWrap !== undefined) this.mockSettings.wordWrap = settings.wordWrap
-    if (settings.uiLanguage !== undefined) this.mockSettings.uiLanguage = settings.uiLanguage
+    if (settings.fontSize !== undefined) this.mockSettings.editorFontSize = settings.fontSize
+    if (settings.themeMode !== undefined) this.mockSettings.themeMode = settings.themeMode
     return this.success(true)
-  }
-
-  async getEffectiveSettings(): Promise<ResultEnvelope<EffectiveSettings>> {
-    await this.delay(100)
-    const result: EffectiveSettings = {
-      fontSize: this.mockSettings.fontSize,
-      lineHeight: this.mockSettings.lineHeight,
-      fontFamily: this.mockSettings.fontFamily,
-      theme: this.mockSettings.theme,
-      autoSave: this.mockSettings.autoSave,
-      autoSaveInterval: this.mockSettings.autoSaveInterval,
-      autoIndent: this.mockSettings.autoIndent,
-      showWordCount: this.mockSettings.showWordCount,
-      showLineNumbers: this.mockSettings.showLineNumbers,
-      wordWrap: this.mockSettings.wordWrap,
-      spellCheck: this.mockSettings.spellCheck,
-      lastWorkspacePath: this.mockSettings.lastWorkspacePath,
-      lastProjectId: this.mockSettings.lastProjectId,
-      lastChapterId: this.mockSettings.lastChapterId,
-      isSynced: false
-    }
-    return this.success(result)
   }
 
   // Sync methods
@@ -623,14 +593,19 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(100)
     const copy: SyncConfig = {
       enabled: this.mockSyncConfig.enabled,
-      provider: this.mockSyncConfig.provider,
+      backendType: this.mockSyncConfig.backendType,
       remoteUrl: this.mockSyncConfig.remoteUrl,
+      transport: this.mockSyncConfig.transport,
       branch: this.mockSyncConfig.branch,
       autoSync: this.mockSyncConfig.autoSync,
-      autoSyncInterval: this.mockSyncConfig.autoSyncInterval,
-      conflictStrategy: this.mockSyncConfig.conflictStrategy,
-      lastSyncAt: this.mockSyncConfig.lastSyncAt,
-      syncPath: this.mockSyncConfig.syncPath
+      syncIntervalSeconds: this.mockSyncConfig.syncIntervalSeconds,
+      proxyEnabled: this.mockSyncConfig.proxyEnabled,
+      proxyType: this.mockSyncConfig.proxyType,
+      proxyHost: this.mockSyncConfig.proxyHost,
+      proxyPort: this.mockSyncConfig.proxyPort,
+      username: this.mockSyncConfig.username,
+      androidHasInternetPermission: this.mockSyncConfig.androidHasInternetPermission,
+      androidHasAccessNetworkStatePermission: this.mockSyncConfig.androidHasAccessNetworkStatePermission
     }
     return this.success(copy)
   }
@@ -639,56 +614,52 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(200)
     this.mockSyncConfig = {
       enabled: config.enabled,
-      provider: config.provider,
+      backendType: config.backendType,
       remoteUrl: config.remoteUrl,
+      transport: config.transport,
       branch: config.branch,
       autoSync: config.autoSync,
-      autoSyncInterval: config.autoSyncInterval,
-      conflictStrategy: config.conflictStrategy,
-      lastSyncAt: config.lastSyncAt,
-      syncPath: config.syncPath
+      syncIntervalSeconds: config.syncIntervalSeconds,
+      proxyEnabled: config.proxyEnabled,
+      proxyType: config.proxyType,
+      proxyHost: config.proxyHost,
+      proxyPort: config.proxyPort,
+      username: config.username,
+      androidHasInternetPermission: config.androidHasInternetPermission,
+      androidHasAccessNetworkStatePermission: config.androidHasAccessNetworkStatePermission
     }
     return this.success(true)
   }
 
-  async syncDryRun(): Promise<ResultEnvelope<SyncReport>> {
+  async syncDryRun(): Promise<ResultEnvelope<SyncResult>> {
     await this.delay(300)
-    const report: SyncReport = {
-      filesToAdd: [] as string[],
-      filesToModify: ['projects/proj-001/volumes/vol-001/chapters/ch-001.md'] as string[],
-      filesToDelete: [] as string[],
-      conflicts: [] as string[],
-      warnings: [] as string[],
-      estimatedDuration: 5
+    const result: SyncResult = {
+      status: 'dry-run',
+      uploadedFiles: [] as string[],
+      downloadedFiles: [] as string[],
+      localDeletes: [] as string[],
+      remoteDeletes: [] as string[],
+      overwrittenFiles: [] as string[],
+      ignoredFiles: [] as string[],
+      conflicts: [] as SyncConflict[],
+      firstSyncMode: 'none'
     }
-    return this.success(report)
-  }
-
-  async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnostics>> {
-    await this.delay(200)
-    const diag: SyncDiagnostics = {
-      isGitRepository: true,
-      hasRemote: true,
-      remoteUrl: 'https://github.com/example/writer-data.git',
-      branch: 'main',
-      isClean: false,
-      lastCommit: 'abc123',
-      lastCommitDate: '2026-06-14T00:00:00Z',
-      errors: [] as string[],
-      warnings: ['有 1 个未提交的更改'] as string[]
-    }
-    return this.success(diag)
+    return this.success(result)
   }
 
   async performSync(): Promise<ResultEnvelope<SyncResult>> {
     await this.delay(1000)
     const result: SyncResult = {
-      success: true,
-      filesAdded: 0,
-      filesModified: 1,
-      filesDeleted: 0,
-      conflicts: [] as string[],
-      duration: 1200
+      status: 'success',
+      uploadedFiles: ['projects/proj-001/volumes/vol-001/chapters/ch-001.md'] as string[],
+      downloadedFiles: [] as string[],
+      localDeletes: [] as string[],
+      remoteDeletes: [] as string[],
+      overwrittenFiles: [] as string[],
+      ignoredFiles: [] as string[],
+      conflicts: [] as SyncConflict[],
+      commitHash: 'abc123',
+      firstSyncMode: 'none'
     }
     return this.success(result)
   }
@@ -700,22 +671,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       totalChars: 25600,
       totalWords: 18200,
       totalChapters: 8,
-      totalProjects: 2,
       todayChars: 1200,
       todayDuration: 45,
-      todaySessions: 3,
-      averageSpeed: 800,
-      longestStreak: 15,
-      currentStreak: 7,
-      weeklyStats: [
-        { date: '2026-06-14', charsAdded: 1200, durationSeconds: 2700, sessionsCount: 3 } as DailyStats,
-        { date: '2026-06-13', charsAdded: 2500, durationSeconds: 5400, sessionsCount: 5 } as DailyStats,
-        { date: '2026-06-12', charsAdded: 1800, durationSeconds: 3600, sessionsCount: 4 } as DailyStats,
-        { date: '2026-06-11', charsAdded: 3200, durationSeconds: 7200, sessionsCount: 6 } as DailyStats,
-        { date: '2026-06-10', charsAdded: 800, durationSeconds: 1800, sessionsCount: 2 } as DailyStats,
-        { date: '2026-06-09', charsAdded: 2100, durationSeconds: 4500, sessionsCount: 4 } as DailyStats,
-        { date: '2026-06-08', charsAdded: 1500, durationSeconds: 3000, sessionsCount: 3 } as DailyStats
-      ] as DailyStats[]
+      averageSpeed: 800
     }
     return this.success(stats)
   }
@@ -734,95 +692,15 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success([] as RecentEdit[])
   }
 
-  // Layout Policy methods
+  // Layout Policy methods — 委托给 LayoutPolicyHelper 纯函数
   resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>> {
-    const widthVp = metrics.widthVp
-    const heightVp = metrics.heightVp
-
-    let widthClass: WidthClass
-    if (widthVp < 600) {
-      widthClass = WidthClass.Compact
-    } else if (widthVp < 840) {
-      widthClass = WidthClass.Medium
-    } else {
-      widthClass = WidthClass.Expanded
-    }
-
-    let heightClass: HeightClass
-    if (heightVp < 480) {
-      heightClass = HeightClass.Compact
-    } else if (heightVp < 900) {
-      heightClass = HeightClass.Medium
-    } else {
-      heightClass = HeightClass.Expanded
-    }
-
-    let shellMode: ShellMode
-    let navigationMode: NavigationMode
-    let editorMode: EditorMode
-    let contentMaxWidthVp: number
-    let pagePaddingVp: number
-    let gridColumns: number
-    let showSidePanel: boolean
-    let showBottomBar: boolean
-
-    switch (widthClass) {
-      case WidthClass.Compact:
-        shellMode = ShellMode.SinglePane
-        navigationMode = NavigationMode.Stack
-        editorMode = EditorMode.FullWidth
-        contentMaxWidthVp = 0
-        pagePaddingVp = 16
-        gridColumns = 2
-        showSidePanel = false
-        showBottomBar = true
-        break
-      case WidthClass.Medium:
-        shellMode = ShellMode.SupportingPane
-        navigationMode = NavigationMode.Stack
-        editorMode = EditorMode.CenteredPaper
-        contentMaxWidthVp = 720
-        pagePaddingVp = 24
-        gridColumns = 3
-        showSidePanel = false
-        showBottomBar = true
-        break
-      case WidthClass.Expanded:
-        shellMode = ShellMode.TwoPane
-        navigationMode = NavigationMode.ListDetail
-        editorMode = EditorMode.CenteredPaper
-        contentMaxWidthVp = 840
-        pagePaddingVp = 32
-        gridColumns = 4
-        showSidePanel = true
-        showBottomBar = false
-        break
-    }
-
-    if (metrics.foldPosture === FoldPosture.HalfOpened) {
-      shellMode = ShellMode.SupportingPane
-    }
-
-    if (metrics.keyboardVisible) {
-      showBottomBar = false
-    }
-
-    const plan: LayoutPlan = {
-      widthClass,
-      heightClass,
-      shellMode,
-      editorMode,
-      navigationMode,
-      contentMaxWidthVp,
-      pagePaddingVp,
-      gridColumns,
-      showSidePanel,
-      showBottomBar
-    }
-
+    const plan = resolveLayoutFromMetrics(metrics)
     return Promise.resolve({
       success: true,
-      data: plan
+      data: plan,
+      warnings: [] as string[],
+      changedPaths: [] as string[],
+      changedEntities: [] as ChangedEntity[]
     } as ResultEnvelope<LayoutPlan>)
   }
 

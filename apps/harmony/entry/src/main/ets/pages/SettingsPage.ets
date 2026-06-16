@@ -4,12 +4,9 @@ import {
   LocalSettings,
   SyncableSettings,
   SyncConfig,
-  SyncDiagnostics,
   SyncResult,
   ThemeMode,
-  ResultEnvelope,
-  SyncProvider,
-  ConflictStrategy
+  ResultEnvelope
 } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
@@ -25,20 +22,24 @@ interface SettingsSelectOption {
 @Component
 struct SettingsPage {
   @State settings: LocalSettings = {
-    fontSize: 16,
-    lineHeight: 1.8,
-    fontFamily: 'HarmonyOS Sans',
-    theme: 'system',
-    autoSave: true,
-    autoSaveInterval: 30,
-    autoIndent: true,
-    showWordCount: true,
-    showLineNumbers: false,
-    wordWrap: true,
-    spellCheck: false
+    themeMode: 'system',
+    autoSaveEnabled: true,
+    editorFontSize: 16,
+    editorLineSpacingMultiplier: 1.8,
+    windowWidth: 0,
+    windowHeight: 0,
+    autoSaveDelayMs: 30000,
+    autoIndentEnabled: true,
+    autoIndentWidth: 2,
+    editorTypingAnimationEnabled: true,
+    editorSmoothCursorEnabled: true,
+    editorTypingAnimationDurationMs: 80,
+    editorSmoothCursorDurationMs: 120,
+    aiEnabled: false,
+    desktopSidebarWidth: 280,
+    desktopEditorWidth: 820
   }
   @State syncConfig: SyncConfig | null = null
-  @State syncDiagnostics: SyncDiagnostics | null = null
   @State isLoading: boolean = true
   @State isSaving: boolean = false
   @State isSyncing: boolean = false
@@ -89,10 +90,10 @@ struct SettingsPage {
       if (settingsResult.success && settingsResult.data) {
         this.settings = settingsResult.data
         this.themeAdapter.updateFromSettings({
-          theme: settingsResult.data.theme,
-          fontSize: settingsResult.data.fontSize,
-          fontFamily: settingsResult.data.fontFamily,
-          lineHeight: settingsResult.data.lineHeight
+          theme: settingsResult.data.themeMode || 'system',
+          fontSize: settingsResult.data.editorFontSize,
+          fontFamily: 'HarmonyOS Sans',
+          lineHeight: settingsResult.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
       }
 
@@ -115,10 +116,10 @@ struct SettingsPage {
       if (result.success) {
         this.saveMessage = '设置已保存'
         this.themeAdapter.updateFromSettings({
-          theme: this.settings.theme,
-          fontSize: this.settings.fontSize,
-          fontFamily: this.settings.fontFamily,
-          lineHeight: this.settings.lineHeight
+          theme: this.settings.themeMode || 'system',
+          fontSize: this.settings.editorFontSize,
+          fontFamily: 'HarmonyOS Sans',
+          lineHeight: this.settings.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
         setTimeout(() => {
           this.saveMessage = ''
@@ -133,17 +134,6 @@ struct SettingsPage {
     }
   }
 
-  async runSyncDiagnostics() {
-    try {
-      const result = await this.bridge.syncDiagnostics()
-      if (result.success && result.data) {
-        this.syncDiagnostics = result.data
-      }
-    } catch (err) {
-      console.error('Sync diagnostics failed:', err)
-    }
-  }
-
   async performSync() {
     this.isSyncing = true
     this.syncMessage = ''
@@ -151,7 +141,7 @@ struct SettingsPage {
     try {
       const result = await this.bridge.performSync()
       if (result.success && result.data) {
-        this.syncMessage = `同步完成: ${result.data.filesModified} 个文件已更新`
+        this.syncMessage = `同步完成: ${result.data.downloadedFiles.length} 个文件已下载`
         setTimeout(() => {
           this.syncMessage = ''
         }, 3000)
@@ -220,9 +210,6 @@ struct SettingsPage {
             // Editor settings
             this.EditorSettingsSection()
 
-            // Display settings
-            this.DisplaySettingsSection()
-
             // Theme settings
             this.ThemeSettingsSection()
 
@@ -259,46 +246,46 @@ struct SettingsPage {
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
-        Text(`${this.settings.fontSize}px`)
+        Text(`${this.settings.editorFontSize}px`)
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
 
         Slider({
-          value: this.settings.fontSize,
+          value: this.settings.editorFontSize,
           min: 12,
           max: 32,
           step: 1
         })
           .width(120)
           .onChange((value: number) => {
-            this.settings.fontSize = value
+            this.settings.editorFontSize = value
           })
       }
       .width('100%')
       .margin({ bottom: 16 })
 
-      // Line height
+      // Line spacing multiplier
       Row() {
-        Text('行高')
+        Text('行距倍数')
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
-        Text(`${this.settings.lineHeight.toFixed(1)}`)
+        Text(`${this.settings.editorLineSpacingMultiplier.toFixed(1)}`)
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 16 })
 
         Slider({
-          value: this.settings.lineHeight,
+          value: this.settings.editorLineSpacingMultiplier,
           min: 1.0,
           max: 3.0,
           step: 0.1
         })
           .width(120)
           .onChange((value: number) => {
-            this.settings.lineHeight = Math.round(value * 10) / 10
+            this.settings.editorLineSpacingMultiplier = Math.round(value * 10) / 10
           })
       }
       .width('100%')
@@ -311,36 +298,36 @@ struct SettingsPage {
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoSave })
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoSaveEnabled })
           .onChange((isOn: boolean) => {
-            this.settings.autoSave = isOn
+            this.settings.autoSaveEnabled = isOn
           })
       }
       .width('100%')
       .margin({ bottom: 16 })
 
-      // Auto save interval
-      if (this.settings.autoSave) {
+      // Auto save delay
+      if (this.settings.autoSaveEnabled) {
         Row() {
-          Text('自动保存间隔')
+          Text('自动保存延迟')
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
-          Text(`${this.settings.autoSaveInterval} 秒`)
+          Text(`${Math.round(this.settings.autoSaveDelayMs / 1000)} 秒`)
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
 
           Slider({
-            value: this.settings.autoSaveInterval,
+            value: this.settings.autoSaveDelayMs / 1000,
             min: 10,
             max: 120,
             step: 10
           })
             .width(120)
             .onChange((value: number) => {
-              this.settings.autoSaveInterval = value
+              this.settings.autoSaveDelayMs = value * 1000
             })
         }
         .width('100%')
@@ -354,84 +341,9 @@ struct SettingsPage {
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoIndent })
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoIndentEnabled })
           .onChange((isOn: boolean) => {
-            this.settings.autoIndent = isOn
-          })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
-    .margin({ bottom: 16 })
-  }
-
-  @Builder
-  DisplaySettingsSection() {
-    Column() {
-      Text('显示设置')
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
-        .margin({ bottom: 16 })
-
-      // Show word count
-      Row() {
-        Text('显示字数统计')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.showWordCount })
-          .onChange((isOn: boolean) => {
-            this.settings.showWordCount = isOn
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Show line numbers
-      Row() {
-        Text('显示行号')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.showLineNumbers })
-          .onChange((isOn: boolean) => {
-            this.settings.showLineNumbers = isOn
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Word wrap
-      Row() {
-        Text('自动换行')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.wordWrap })
-          .onChange((isOn: boolean) => {
-            this.settings.wordWrap = isOn
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Spell check
-      Row() {
-        Text('拼写检查')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.spellCheck })
-          .onChange((isOn: boolean) => {
-            this.settings.spellCheck = isOn
+            this.settings.autoIndentEnabled = isOn
           })
       }
       .width('100%')
@@ -468,28 +380,8 @@ struct SettingsPage {
           .value(this.getThemeName())
           .onSelect((index: number) => {
             const themes: ThemeMode[] = ['light', 'dark', 'system']
-            this.settings.theme = themes[index]
-            this.themeAdapter.setMode(this.settings.theme)
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Font family
-      Row() {
-        Text('字体')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Select([
-          { value: 'HarmonyOS Sans', icon: '' },
-          { value: '系统默认', icon: '' }
-        ] as SettingsSelectOption[])
-          .selected(0)
-          .value(this.settings.fontFamily)
-          .onSelect((index: number) => {
-            this.settings.fontFamily = index === 0 ? 'HarmonyOS Sans' : 'System Default'
+            this.settings.themeMode = themes[index]
+            this.themeAdapter.setMode(this.settings.themeMode)
           })
       }
       .width('100%')
@@ -538,7 +430,7 @@ struct SettingsPage {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // Sync provider
+      // Sync backend type
       if (this.syncConfig?.enabled) {
         Row() {
           Text('同步方式')
@@ -557,7 +449,7 @@ struct SettingsPage {
             .onSelect((index: number) => {
               if (this.syncConfig) {
                 const providers = ['github', 'gitlab', 'gitea', 'custom']
-                this.syncConfig.provider = providers[index] as SyncProvider
+                this.syncConfig.backendType = providers[index]
               }
             })
         }
@@ -581,25 +473,28 @@ struct SettingsPage {
         .width('100%')
         .margin({ bottom: 16 })
 
-        // Conflict strategy
+        // Sync interval
         Row() {
-          Text('冲突处理')
+          Text('同步间隔')
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
-          Select([
-            { value: '保留本地', icon: '' },
-            { value: '保留远程', icon: '' },
-            { value: '手动处理', icon: '' },
-            { value: '自动合并', icon: '' }
-          ] as SettingsSelectOption[])
-            .selected(this.getConflictStrategyIndex())
-            .value(this.getConflictStrategyName())
-            .onSelect((index: number) => {
+          Text(`${this.syncConfig?.syncIntervalSeconds || 300} 秒`)
+            .fontSize(14)
+            .fontColor(this.themeConfig.colors.textSecondary)
+            .margin({ right: 16 })
+
+          Slider({
+            value: this.syncConfig?.syncIntervalSeconds || 300,
+            min: 60,
+            max: 3600,
+            step: 60
+          })
+            .width(120)
+            .onChange((value: number) => {
               if (this.syncConfig) {
-                const strategies = ['keep_local', 'keep_remote', 'manual', 'auto_merge']
-                this.syncConfig.conflictStrategy = strategies[index] as ConflictStrategy
+                this.syncConfig.syncIntervalSeconds = value
               }
             })
         }
@@ -608,13 +503,6 @@ struct SettingsPage {
 
         // Sync actions
         Row() {
-          Button('诊断')
-            .fontSize(14)
-            .height(36)
-            .backgroundColor(this.themeConfig.colors.secondary)
-            .margin({ right: 12 })
-            .onClick(() => this.runSyncDiagnostics())
-
           Button('同步')
             .fontSize(14)
             .height(36)
@@ -624,11 +512,6 @@ struct SettingsPage {
         }
         .width('100%')
         .margin({ bottom: 16 })
-
-        // Sync diagnostics
-        if (this.syncDiagnostics) {
-          this.SyncDiagnosticsCard()
-        }
       }
     }
     .width('100%')
@@ -637,106 +520,27 @@ struct SettingsPage {
     .borderRadius(12)
   }
 
-  @Builder
-  SyncDiagnosticsCard() {
-    Column() {
-      Text('同步诊断')
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
-        .margin({ bottom: 8 })
-
-      Row() {
-        Text('Git 仓库')
-          .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
-          .layoutWeight(1)
-
-        Text(this.syncDiagnostics?.isGitRepository ? '是' : '否')
-          .fontSize(14)
-          .fontColor(this.syncDiagnostics?.isGitRepository ? this.themeConfig.colors.success : this.themeConfig.colors.error)
-      }
-      .width('100%')
-      .margin({ bottom: 4 })
-
-      Row() {
-        Text('远程仓库')
-          .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
-          .layoutWeight(1)
-
-        Text(this.syncDiagnostics?.hasRemote ? '已配置' : '未配置')
-          .fontSize(14)
-          .fontColor(this.syncDiagnostics?.hasRemote ? this.themeConfig.colors.success : this.themeConfig.colors.error)
-      }
-      .width('100%')
-      .margin({ bottom: 4 })
-
-      Row() {
-        Text('工作区状态')
-          .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
-          .layoutWeight(1)
-
-        Text(this.syncDiagnostics?.isClean ? '干净' : '有变更')
-          .fontSize(14)
-          .fontColor(this.syncDiagnostics?.isClean ? this.themeConfig.colors.success : this.themeConfig.colors.secondary)
-      }
-      .width('100%')
-
-      if (this.syncDiagnostics?.warnings && this.syncDiagnostics.warnings.length > 0) {
-        Column() {
-          ForEach(this.syncDiagnostics.warnings, (warning: string) => {
-            Text(`⚠ ${warning}`)
-              .fontSize(12)
-              .fontColor(this.themeConfig.colors.secondary)
-              .margin({ top: 4 })
-          }, (warning: string) => warning)
-        }
-        .width('100%')
-        .margin({ top: 8 })
-      }
-    }
-    .width('100%')
-    .padding(12)
-    .backgroundColor(this.themeConfig.colors.background)
-    .borderRadius(8)
-  }
-
   getThemeIndex(): number {
     const themes = ['light', 'dark', 'system']
-    return themes.indexOf(this.settings.theme)
+    return themes.indexOf(this.settings.themeMode || 'system')
   }
 
   getThemeName(): string {
-    if (this.settings.theme === 'light') return '浅色'
-    if (this.settings.theme === 'dark') return '深色'
+    if (this.settings.themeMode === 'light') return '浅色'
+    if (this.settings.themeMode === 'dark') return '深色'
     return '跟随系统'
   }
 
   getSyncProviderIndex(): number {
     const providers: string[] = ['github', 'gitlab', 'gitea', 'custom']
-    return providers.indexOf(this.syncConfig?.provider || 'github')
+    return providers.indexOf(this.syncConfig?.backendType || 'github')
   }
 
   getSyncProviderName(): string {
-    const p: SyncProvider = this.syncConfig?.provider || 'github'
+    const p: string = this.syncConfig?.backendType || 'github'
     if (p === 'github') return 'GitHub'
     if (p === 'gitlab') return 'GitLab'
     if (p === 'gitea') return 'Gitea'
     return '自定义'
-  }
-
-  getConflictStrategyIndex(): number {
-    const strategies: string[] = ['keep_local', 'keep_remote', 'manual', 'auto_merge']
-    return strategies.indexOf(this.syncConfig?.conflictStrategy || 'manual')
-  }
-
-  getConflictStrategyName(): string {
-    const s: ConflictStrategy = this.syncConfig?.conflictStrategy || 'manual'
-    if (s === 'keep_local') return '保留本地'
-    if (s === 'keep_remote') return '保留远程'
-    if (s === 'auto_merge') return '自动合并'
-    return '手动处理'
   }
 }

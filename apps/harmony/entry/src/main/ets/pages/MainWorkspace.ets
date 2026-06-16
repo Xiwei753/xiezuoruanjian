@@ -15,7 +15,7 @@ import {
   Project,
   ProjectTree,
   VolumeTree,
-  Chapter,
+  ChapterMeta,
 
   LocalSettings,
   RecentEdit
@@ -81,17 +81,22 @@ struct MainWorkspace {
   @State errorMessage: string = ''
   @State saveMessage: string = ''
   @State settings: LocalSettings = {
-    fontSize: 16,
-    lineHeight: 1.8,
-    fontFamily: 'HarmonyOS Sans',
-    theme: 'system',
-    autoSave: true,
-    autoSaveInterval: 30,
-    autoIndent: true,
-    showWordCount: true,
-    showLineNumbers: false,
-    wordWrap: true,
-    spellCheck: false
+    editorFontSize: 16,
+    editorLineSpacingMultiplier: 1.8,
+    themeMode: 'system',
+    autoSaveEnabled: true,
+    autoSaveDelayMs: 30000,
+    autoIndentEnabled: true,
+    autoIndentWidth: 2,
+    windowWidth: 0,
+    windowHeight: 0,
+    editorTypingAnimationEnabled: false,
+    editorSmoothCursorEnabled: false,
+    editorTypingAnimationDurationMs: 0,
+    editorSmoothCursorDurationMs: 0,
+    aiEnabled: false,
+    desktopSidebarWidth: 0,
+    desktopEditorWidth: 0
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
@@ -131,7 +136,7 @@ struct MainWorkspace {
     // 自动保存观察者
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
       (): Promise<void> => this.saveChapter(),
-      this.settings.autoSaveInterval * 1000
+      this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
 
@@ -225,7 +230,7 @@ struct MainWorkspace {
       if (result.success && result.data) {
         this.content = result.data.content
         this.lastSavedContent = result.data.content
-        this.wordCount = result.data.wordCount
+        this.wordCount = result.data.meta.wordCount
         this.hasUnsavedChanges = false
       } else {
         this.errorMessage = result.userMessage || '加载章节失败'
@@ -243,10 +248,9 @@ struct MainWorkspace {
       if (result.success && result.data) {
         this.settings = result.data
         this.themeAdapter.updateFromSettings({
-          theme: result.data.theme,
-          fontSize: result.data.fontSize,
-          fontFamily: result.data.fontFamily,
-          lineHeight: result.data.lineHeight
+          theme: result.data.themeMode,
+          fontSize: result.data.editorFontSize,
+          lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
         // 更新自动保存间隔
@@ -254,7 +258,7 @@ struct MainWorkspace {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
             (): Promise<void> => this.saveChapter(),
-            this.settings.autoSaveInterval * 1000
+            this.settings.autoSaveDelayMs
           )
           this.lifecycle.addObserver(this.autoSaveObserver)
         }
@@ -553,16 +557,11 @@ struct MainWorkspace {
             ForEach(this.projects, (project: Project) => {
               Row() {
                 Column() {
-                  Text(project.name)
+                  Text(project.title)
                     .fontSize(15)
                     .fontColor(this.themeConfig.colors.textPrimary)
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-                  Text(`${project.volumeCount} 卷 · ${project.chapterCount} 章`)
-                    .fontSize(12)
-                    .fontColor(this.themeConfig.colors.textSecondary)
-                    .margin({ top: 4 })
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
@@ -579,7 +578,7 @@ struct MainWorkspace {
                 ? this.themeConfig.colors.background
                 : 'transparent')
               .onClick(() => {
-                this.selectedProjectName = project.name
+                this.selectedProjectName = project.title
                 this.loadProjectTree(project.id)
               })
             }, (project: Project) => project.id)
@@ -676,7 +675,7 @@ struct MainWorkspace {
           .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 6 })
 
-        Text(volumeTree.volume.name)
+        Text(volumeTree.volume.title)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -721,10 +720,10 @@ struct MainWorkspace {
             .padding({ left: 32, top: 8, bottom: 8 })
             .width('100%')
         } else {
-          ForEach(volumeTree.chapters, (chapter: Chapter) => {
+          ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
             Row() {
               Column() {
-                Text(chapter.name)
+                Text(chapter.title)
                   .fontSize(14)
                   .fontColor(this.selectedChapterId === chapter.id
                     ? this.themeConfig.colors.primary
@@ -762,8 +761,8 @@ struct MainWorkspace {
               ? this.themeConfig.colors.background
               : 'transparent')
             .borderRadius(4)
-            .onClick(() => this.selectChapter(chapter.id, chapter.name))
-          }, (chapter: Chapter) => chapter.id)
+            .onClick(() => this.selectChapter(chapter.id, chapter.title))
+          }, (chapter: ChapterMeta) => chapter.id)
         }
       }
     }
@@ -837,12 +836,10 @@ struct MainWorkspace {
             .margin({ right: 8 })
         }
 
-        if (this.settings.showWordCount) {
-          Text(`${this.wordCount} 字`)
-            .fontSize(12)
-            .fontColor(this.themeConfig.colors.textSecondary)
-            .margin({ right: 8 })
-        }
+        Text(`${this.wordCount} 字`)
+          .fontSize(12)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 8 })
 
         Button('保存')
           .fontSize(14)
@@ -891,9 +888,8 @@ struct MainWorkspace {
             TextArea({ text: this.content, placeholder: '开始写作...' })
               .width('100%')
               .constraintSize({ minHeight: '100%' })
-              .fontSize(this.settings.fontSize)
-              .fontFamily(this.settings.fontFamily)
-              .lineHeight(this.settings.lineHeight * this.settings.fontSize)
+              .fontSize(this.settings.editorFontSize)
+              .lineHeight(this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize)
               .backgroundColor(this.themeConfig.colors.surface)
               .padding({ left: 24, right: 24, top: 20, bottom: 20 })
               .fontColor(this.themeConfig.colors.textPrimary)
@@ -911,7 +907,7 @@ struct MainWorkspace {
 
       // 底部工具栏
       Row() {
-        if (this.settings.autoSave) {
+        if (this.settings.autoSaveEnabled) {
           Text('自动保存')
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textHint)
@@ -1030,28 +1026,22 @@ struct MainWorkspace {
       ForEach(this.recentEdits, (edit: RecentEdit) => {
         Row() {
           Column() {
-            Text(edit.chapterTitle)
+            Text(`章节 ${edit.chapterId}`)
               .fontSize(16)
               .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 4 })
 
             Row() {
-              Text(edit.projectTitle)
+              Text(`作品 ${edit.projectId}`)
                 .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ right: 16 })
-
-              if (edit.wordCount) {
-                Text(`${edit.wordCount} 字`)
-                  .fontSize(13)
-                  .fontColor(this.themeConfig.colors.textHint)
-              }
             }
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
-          Text(this.formatTime(edit.editedAt))
+          Text(this.formatTime(edit.timestamp))
             .fontSize(13)
             .fontColor(this.themeConfig.colors.textHint)
         }
@@ -1065,7 +1055,7 @@ struct MainWorkspace {
             url: 'pages/WritingPage',
             params: {
               chapterId: edit.chapterId,
-              chapterTitle: edit.chapterTitle
+              chapterTitle: `章节 ${edit.chapterId}`
             }
           })
         })
@@ -1103,29 +1093,11 @@ struct MainWorkspace {
       ForEach(this.projects, (project: Project) => {
         Row() {
           Column() {
-            Text(project.name)
+            Text(project.title)
               .fontSize(17)
               .fontWeight(FontWeight.Medium)
               .fontColor(this.themeConfig.colors.textPrimary)
               .margin({ bottom: 6 })
-
-            Row() {
-              Text(`${project.volumeCount} 卷`)
-                .fontSize(13)
-                .fontColor(this.themeConfig.colors.textSecondary)
-                .margin({ right: 16 })
-
-              Text(`${project.chapterCount} 章`)
-                .fontSize(13)
-                .fontColor(this.themeConfig.colors.textSecondary)
-                .margin({ right: 16 })
-
-              if (project.totalWordCount) {
-                Text(`${project.totalWordCount} 字`)
-                  .fontSize(13)
-                  .fontColor(this.themeConfig.colors.textHint)
-              }
-            }
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
@@ -1145,7 +1117,7 @@ struct MainWorkspace {
             url: 'pages/WorkspacePage',
             params: {
               projectId: project.id,
-              projectName: project.name
+              projectName: project.title
             }
           })
         })

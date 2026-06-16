@@ -1,22 +1,18 @@
 import {
-  Workspace,
-  WorkspaceState,
+  WorkspaceSummary,
   Project,
   Volume,
-  Chapter,
-  ChapterData,
-  SaveReceipt,
+  ChapterMeta,
+  ChapterContent,
+  ChapterSaveReceipt,
   StarMapMeta,
   StarMapGraph,
   LocalSettings,
   SyncableSettings,
-  EffectiveSettings,
   ResultEnvelope,
   ProjectTree,
   WritingStats,
   SyncConfig,
-  SyncReport,
-  SyncDiagnostics,
   SyncResult,
   RecentEdit,
   WindowMetrics,
@@ -25,10 +21,10 @@ import {
 
 export interface IWriterCoreBridge {
   // Workspace
-  listWorkspaces(): Promise<ResultEnvelope<Workspace[]>>
-  openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceState>>
+  listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>>
+  openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceSummary>>
   validateWorkspace(path: string): Promise<ResultEnvelope<boolean>>
-  getWorkspaceState(): Promise<ResultEnvelope<WorkspaceState>>
+  getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>>
 
   // Project
   listProjects(): Promise<ResultEnvelope<Project[]>>
@@ -46,11 +42,11 @@ export interface IWriterCoreBridge {
   reorderVolumes(projectId: string, orderedVolumeIds: string[]): Promise<ResultEnvelope<boolean>>
 
   // Chapter
-  listChapters(volumeId: string): Promise<ResultEnvelope<Chapter[]>>
-  loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterData>>
-  saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<SaveReceipt>>
-  clearChapter(chapterId: string): Promise<ResultEnvelope<SaveReceipt>>
-  createChapter(volumeId: string, name: string): Promise<ResultEnvelope<Chapter>>
+  listChapters(volumeId: string): Promise<ResultEnvelope<ChapterMeta[]>>
+  loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterContent>>
+  saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
+  clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>>
+  createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>>
   renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>>
   deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>>
   reorderChapters(volumeId: string, orderedChapterIds: string[]): Promise<ResultEnvelope<boolean>>
@@ -69,13 +65,11 @@ export interface IWriterCoreBridge {
   saveLocalSettings(settings: LocalSettings): Promise<ResultEnvelope<boolean>>
   getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>>
   saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>>
-  getEffectiveSettings(): Promise<ResultEnvelope<EffectiveSettings>>
 
   // Sync
   loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>>
   saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
-  syncDryRun(): Promise<ResultEnvelope<SyncReport>>
-  syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnostics>>
+  syncDryRun(): Promise<ResultEnvelope<SyncResult>>
   performSync(): Promise<ResultEnvelope<SyncResult>>
 
   // Stats

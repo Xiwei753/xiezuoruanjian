@@ -1,6 +1,6 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { ProjectTree, VolumeTree, Chapter, Project } from '../model/CoreDtos'
+import { ProjectTree, VolumeTree, ChapterMeta, Project } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
@@ -155,7 +155,7 @@ struct WorkspacePage {
 
         // Project stats
         if (this.project) {
-          Text(`${this.project.volumeCount} 卷 · ${this.project.chapterCount} 章`)
+          Text(`${this.volumeTrees.length} 卷`)
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 12 })
@@ -260,7 +260,7 @@ struct WorkspacePage {
           .fillColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
-        Text(volumeTree.volume.name)
+        Text(volumeTree.volume.title)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -304,10 +304,10 @@ struct WorkspacePage {
           .width('100%')
           .backgroundColor(this.themeConfig.colors.surface)
         } else {
-          ForEach(volumeTree.chapters, (chapter: Chapter) => {
+          ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
             Row() {
               Column() {
-                Text(chapter.name)
+                Text(chapter.title)
                   .fontSize(15)
                   .fontColor(this.themeConfig.colors.textPrimary)
                   .margin({ bottom: 4 })
@@ -321,16 +321,6 @@ struct WorkspacePage {
                   Text(this.formatTime(chapter.updatedAt))
                     .fontSize(12)
                     .fontColor(this.themeConfig.colors.textHint)
-
-                  if (chapter.status) {
-                    Text(chapter.status === 'draft' ? '草稿' : chapter.status === 'published' ? '已发布' : '已归档')
-                      .fontSize(11)
-                      .fontColor(this.themeConfig.colors.primary)
-                      .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                      .backgroundColor(this.themeConfig.colors.background)
-                      .borderRadius(4)
-                      .margin({ left: 8 })
-                  }
                 }
               }
               .layoutWeight(1)
@@ -358,11 +348,11 @@ struct WorkspacePage {
                 url: 'pages/WritingPage',
                 params: {
                   chapterId: chapter.id,
-                  chapterTitle: chapter.name
+                  chapterTitle: chapter.title
                 }
               })
             })
-          }, (chapter: Chapter) => chapter.id)
+          }, (chapter: ChapterMeta) => chapter.id)
         }
       }
     }

@@ -11,13 +11,12 @@ import { HarmonyThemeAdapter } from '../system/HarmonyThemeAdapter'
 export type Environment = 'mock' | 'native'
 
 export interface AppContextConfig {
-  environment: Environment
+  environment: Environment  // 'mock' | 'native'，必须显式指定
   workspacePath: string
   enableAutoSave: boolean
   autoSaveIntervalMs: number
   enableSync: boolean
   enableLogging: boolean
-  allowMockFallback: boolean
 }
 
 const DEFAULT_WORKSPACE_DIR_NAME = 'writer-workspace'
@@ -63,13 +62,12 @@ export class AppContext {
     if (!AppContext.instance) {
       if (!config) {
         config = {
-          environment: 'native',
+          environment: 'native',  // 默认 native，不自动降级
           workspacePath: DEFAULT_WORKSPACE_DIR_NAME,
           enableAutoSave: true,
           autoSaveIntervalMs: 30000,
           enableSync: false,
-          enableLogging: true,
-          allowMockFallback: true
+          enableLogging: true
         }
       }
       AppContext.instance = new AppContext(config)
@@ -91,8 +89,7 @@ export class AppContext {
       enableAutoSave: this.config.enableAutoSave,
       autoSaveIntervalMs: this.config.autoSaveIntervalMs,
       enableSync: this.config.enableSync,
-      enableLogging: this.config.enableLogging,
-      allowMockFallback: this.config.allowMockFallback
+      enableLogging: this.config.enableLogging
     }
     return c
   }
@@ -141,9 +138,6 @@ export class AppContext {
     this.nativeInitFailed = true
   }
 
-  canFallbackToMock(): boolean {
-    return this.config.allowMockFallback && this.nativeInitFailed
-  }
 
   isReady(): boolean {
     return this.isInitialized
@@ -164,17 +158,6 @@ export class AppContext {
     this.networkManager = new NativeNetworkManager()
   }
 
-  async switchToMock(): Promise<void> {
-    if (this.config.environment === 'mock') {
-      return
-    }
-
-    this.config.environment = 'mock'
-    this.bridge = new MockWriterCoreBridge()
-    this.fileAccess = new MockFileAccess()
-    this.kvStore = new MockKVStore()
-    this.networkManager = new MockNetworkManager()
-  }
 
   dispose(): void {
     this.isInitialized = false
