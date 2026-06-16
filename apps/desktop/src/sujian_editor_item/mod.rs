@@ -22,7 +22,7 @@ use rendering::{InsertAnimation, DeleteAnimation, ScrollBuffer};
 pub use rendering::AnimatedGlyph;
 use std::cell::Cell;
 use std::time::Instant;
-use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorAnimationEvent, EditorAnimationKind};
+use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorAnimationEvent, EditorAnimationKind, GlyphRect};
 
 cpp! {{
     #include <QtGui/QFont>
@@ -979,7 +979,11 @@ impl SujianEditorItem {
             },
             cause,
         );
-        let events = self.engine.animation_events(&transaction);
+        let mut events = self.engine.animation_events(&transaction);
+
+        // 为 Insert/Delete 事件填充 glyph_rects（精确字符矩形）
+        self.fill_glyph_rects_for_events(&mut events, &new.text);
+
         self.last_event_count = events.len() as u32;
         self.last_summary = format!(
             "cause={:?};changes={};events={};animate={}",
@@ -1072,6 +1076,72 @@ impl SujianEditorItem {
             origin_cursor_rect: (origin_cx, origin_cy, 2.0, cursor_h),
             start_time: Instant::now(),
             duration_ms,
+        }
+    }
+
+    /// 为 Insert/Delete 类型的 animation events 填充 glyph_rects 字段。
+    ///
+    /// 利用 EditorLayout 的 glyph_positions_on_line 获取每个字符的精确
+    /// 矩形（x, y, w, h），写入 event.glyph_rects 供 QML overlay 使用。
+    /// Cursor 类型事件不需要 glyph_rects，保持为空。
+    fn fill_glyph_rects_for_events(
+        &mut self,
+        events: &mut [EditorAnimationEvent],
+        text: &str,
+    ) {
+        let width = self.bounding_width();
+        let snapshot = self.layout_snapshot(width);
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+
+        for event in events.iter_mut() {
+            match event.kind {
+                EditorAnimationKind::Insert | EditorAnimationKind::Delete => {
+                    let range_start = event.range_start;
+                    let range_end = range_start + event.range_len;
+                    let mut glyph_rects = Vec::new();
+
+                    for line in &snapshot.lines {
+                        if line.end <= range_start || line.start >= range_end {
+                            continue;
+                        }
+                        if line.para_text.is_empty() {
+                            continue;
+                        }
+                        let seg_start = range_start.max(line.start);
+                        let seg_end = range_end.min(line.end);
+                        if seg_start >= seg_end {
+                            continue;
+                        }
+
+                        let glyph_data = self.editor_layout.glyph_positions_on_line(
+                            line,
+                            seg_start,
+                            seg_end,
+                            font_size,
+                            font_family,
+                        );
+                        for (abs_byte, x_pos, ch_w) in glyph_data {
+                            if abs_byte >= text.len() {
+                                continue;
+                            }
+                            let ch = text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
+                            glyph_rects.push(GlyphRect {
+                                x: line.x + x_pos,
+                                y: line.y,
+                                w: ch_w,
+                                h: line.height,
+                                char_: ch.to_string(),
+                            });
+                        }
+                    }
+
+                    event.glyph_rects = glyph_rects;
+                }
+                EditorAnimationKind::Cursor => {
+                    // Cursor 事件不需要 glyph rects
+                }
+            }
         }
     }
 

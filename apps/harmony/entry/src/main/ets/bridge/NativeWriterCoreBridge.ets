@@ -44,6 +44,25 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private workspacePath: string = ''
   private chapterIndex: Map<string, ChapterLocation> = new Map()
   private volumeProjectIndex: Map<string, string> = new Map()
+  private nativeModuleAvailable: boolean = true
+
+  /**
+   * 防御性获取 native module。
+   * 如果 nativeModule 不可用（加载失败或运行时异常），返回错误 ResultEnvelope。
+   * 调用方应在 try-catch 中使用此方法，或用 checkNativeError() 包装。
+   */
+  private getNativeModule(): Record<string, Function> {
+    if (!this.nativeModuleAvailable) {
+      throw new Error('Native module is not available (previously failed to load)')
+    }
+    // nativeModule 是顶层 import 的模块对象，ArkTS 不支持运行时 require/import
+    // 如果顶层 import 失败，整个模块不会加载，所以这里主要防御运行时调用异常
+    if (nativeModule === null || nativeModule === undefined) {
+      this.nativeModuleAvailable = false
+      throw new Error('Native module is null or undefined')
+    }
+    return nativeModule as Record<string, Function>
+  }
 
   static getInstance(): NativeWriterCoreBridge {
     if (!NativeWriterCoreBridge.instance) {
@@ -135,7 +154,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       }
       for (const vol of volumesResult.data) {
         this.volumeProjectIndex.set(vol.id, project.id)
-        const jsonStr: string = nativeModule.nativeListChapters(project.id, vol.id)
+        const jsonStr: string = this.getNativeModule().nativeListChapters(project.id, vol.id)
         const chaptersResult = this.parseEnvelope<Chapter[]>(jsonStr)
         if (chaptersResult.success && chaptersResult.data) {
           for (const ch of chaptersResult.data) {
@@ -153,7 +172,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return true
     }
     try {
-      const result: number = nativeModule.nativeInit(workspacePath) as number
+      const result: number = this.getNativeModule().nativeInit(workspacePath) as number
       if (result === 0) {
         this.isInitialized = true
         this.workspacePath = workspacePath
@@ -164,6 +183,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return false
     } catch (e) {
       this.lastInitErrorCode = -999
+      this.nativeModuleAvailable = false
       console.error(`nativeInit exception: ${e}`)
       return false
     }
@@ -175,7 +195,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getLastError(): Promise<string> {
     try {
-      const err: string = nativeModule.nativeGetLastError() as string
+      const err: string = this.getNativeModule().nativeGetLastError() as string
       return err
     } catch (e) {
       return String(e)
@@ -223,7 +243,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async validateWorkspace(path: string): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeValidateWorkspace()
+      const jsonStr: string = this.getNativeModule().nativeValidateWorkspace()
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -238,7 +258,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async listProjects(): Promise<ResultEnvelope<Project[]>> {
     try {
-      const jsonStr: string = nativeModule.nativeListProjects()
+      const jsonStr: string = this.getNativeModule().nativeListProjects()
       return this.parseEnvelope<Project[]>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -247,7 +267,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getProjectTree(projectId: string): Promise<ResultEnvelope<ProjectTree>> {
     try {
-      const jsonStr: string = nativeModule.nativeGetProjectTree(projectId)
+      const jsonStr: string = this.getNativeModule().nativeGetProjectTree(projectId)
       const result = this.parseEnvelope<ProjectTree>(jsonStr)
       if (result.success && result.data) {
         const tree = result.data as ProjectTree
@@ -266,7 +286,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async createProject(name: string): Promise<ResultEnvelope<Project>> {
     try {
-      const jsonStr: string = nativeModule.nativeCreateProject(name)
+      const jsonStr: string = this.getNativeModule().nativeCreateProject(name)
       return this.parseEnvelope<Project>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -275,7 +295,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async renameProject(projectId: string, newName: string): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeRenameProject(projectId, newName)
+      const jsonStr: string = this.getNativeModule().nativeRenameProject(projectId, newName)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -284,7 +304,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async deleteProject(projectId: string): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeDeleteProject(projectId)
+      const jsonStr: string = this.getNativeModule().nativeDeleteProject(projectId)
       const result = this.parseEnvelope<boolean>(jsonStr)
       if (result.success) {
         this.invalidateVolumeProjectIndex(projectId)
@@ -298,7 +318,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getProjectStats(projectId: string): Promise<ResultEnvelope<WritingStats>> {
     try {
-      const jsonStr: string = nativeModule.nativeGetProjectStats(projectId)
+      const jsonStr: string = this.getNativeModule().nativeGetProjectStats(projectId)
       return this.parseEnvelope<WritingStats>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -309,7 +329,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async listVolumes(projectId: string): Promise<ResultEnvelope<Volume[]>> {
     try {
-      const jsonStr: string = nativeModule.nativeListVolumes(projectId)
+      const jsonStr: string = this.getNativeModule().nativeListVolumes(projectId)
       const result = this.parseEnvelope<Volume[]>(jsonStr)
       if (result.success && result.data) {
         for (const vol of result.data) {
@@ -324,9 +344,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async createVolume(projectId: string, name: string): Promise<ResultEnvelope<Volume>> {
     try {
-      const jsonStr: string = nativeModule.nativeCreateVolume(projectId, name)
+      const jsonStr: string = this.getNativeModule().nativeCreateVolume(projectId, name)
       const result = this.parseEnvelope<Volume>(jsonStr)
       if (result.success && result.data) {
+        // 新卷加入后，该项目下的卷列表已变化，清理旧索引并注册新卷
+        this.invalidateVolumeProjectIndex(projectId)
         this.volumeProjectIndex.set(result.data.id, projectId)
       }
       return result
@@ -337,7 +359,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async renameVolume(projectId: string, volumeId: string, newName: string): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeRenameVolume(projectId, volumeId, newName)
+      const jsonStr: string = this.getNativeModule().nativeRenameVolume(projectId, volumeId, newName)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -346,7 +368,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async deleteVolume(projectId: string, volumeId: string): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeDeleteVolume(projectId, volumeId)
+      const jsonStr: string = this.getNativeModule().nativeDeleteVolume(projectId, volumeId)
       const result = this.parseEnvelope<boolean>(jsonStr)
       if (result.success) {
         this.volumeProjectIndex.delete(volumeId)
@@ -360,7 +382,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async reorderVolumes(projectId: string, orderedVolumeIds: string[]): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeReorderVolumes(projectId, JSON.stringify(orderedVolumeIds))
+      const jsonStr: string = this.getNativeModule().nativeReorderVolumes(projectId, JSON.stringify(orderedVolumeIds))
       const result = this.parseEnvelope<boolean>(jsonStr)
       if (result.success) {
         this.invalidateVolumeProjectIndex(projectId)
@@ -377,7 +399,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async listChapters(volumeId: string): Promise<ResultEnvelope<Chapter[]>> {
     const projectId = this.volumeProjectIndex.get(volumeId) || ''
     try {
-      const jsonStr: string = nativeModule.nativeListChapters(projectId, volumeId)
+      const jsonStr: string = this.getNativeModule().nativeListChapters(projectId, volumeId)
       const result = this.parseEnvelope<Chapter[]>(jsonStr)
       if (result.success && result.data) {
         for (const ch of result.data) {
@@ -392,12 +414,18 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterData>> {
     await this.ensureChapterIndex()
-    const loc = this.resolveChapter(chapterId)
+    let loc = this.resolveChapter(chapterId)
+    if (!loc) {
+      // 索引未命中，清理缓存并重试一次
+      this.invalidateChapterIndex()
+      await this.ensureChapterIndex()
+      loc = this.resolveChapter(chapterId)
+    }
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
     try {
-      const jsonStr: string = nativeModule.nativeOpenChapter(loc.projectId, loc.volumeId, chapterId)
+      const jsonStr: string = this.getNativeModule().nativeOpenChapter(loc.projectId, loc.volumeId, chapterId)
       return this.parseEnvelope<ChapterData>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -406,12 +434,18 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<SaveReceipt>> {
     await this.ensureChapterIndex()
-    const loc = this.resolveChapter(chapterId)
+    let loc = this.resolveChapter(chapterId)
+    if (!loc) {
+      // 索引未命中，清理缓存并重试一次
+      this.invalidateChapterIndex()
+      await this.ensureChapterIndex()
+      loc = this.resolveChapter(chapterId)
+    }
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
     try {
-      const jsonStr: string = nativeModule.nativeSaveChapter(loc.projectId, loc.volumeId, chapterId, text)
+      const jsonStr: string = this.getNativeModule().nativeSaveChapter(loc.projectId, loc.volumeId, chapterId, text)
       return this.parseEnvelope<SaveReceipt>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -420,12 +454,18 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async clearChapter(chapterId: string): Promise<ResultEnvelope<SaveReceipt>> {
     await this.ensureChapterIndex()
-    const loc = this.resolveChapter(chapterId)
+    let loc = this.resolveChapter(chapterId)
+    if (!loc) {
+      // 索引未命中，清理缓存并重试一次
+      this.invalidateChapterIndex()
+      await this.ensureChapterIndex()
+      loc = this.resolveChapter(chapterId)
+    }
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
     try {
-      const jsonStr: string = nativeModule.nativeClearChapter(loc.projectId, loc.volumeId, chapterId)
+      const jsonStr: string = this.getNativeModule().nativeClearChapter(loc.projectId, loc.volumeId, chapterId)
       return this.parseEnvelope<SaveReceipt>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -435,9 +475,11 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async createChapter(volumeId: string, name: string): Promise<ResultEnvelope<Chapter>> {
     const projectId = this.volumeProjectIndex.get(volumeId) || ''
     try {
-      const jsonStr: string = nativeModule.nativeCreateChapter(projectId, volumeId, name)
+      const jsonStr: string = this.getNativeModule().nativeCreateChapter(projectId, volumeId, name)
       const result = this.parseEnvelope<Chapter>(jsonStr)
       if (result.success && result.data) {
+        // 新章节加入后，该 volume 下的章节列表已变化，清理旧索引并注册新章节
+        this.invalidateChapterIndex(volumeId)
         this.chapterIndex.set(result.data.id, { projectId: projectId, volumeId: volumeId })
       }
       return result
@@ -448,12 +490,18 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
     await this.ensureChapterIndex()
-    const loc = this.resolveChapter(chapterId)
+    let loc = this.resolveChapter(chapterId)
+    if (!loc) {
+      // 索引未命中，清理缓存并重试一次
+      this.invalidateChapterIndex()
+      await this.ensureChapterIndex()
+      loc = this.resolveChapter(chapterId)
+    }
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
     try {
-      const jsonStr: string = nativeModule.nativeRenameChapter(loc.projectId, loc.volumeId, chapterId, newName)
+      const jsonStr: string = this.getNativeModule().nativeRenameChapter(loc.projectId, loc.volumeId, chapterId, newName)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -462,12 +510,18 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
     await this.ensureChapterIndex()
-    const loc = this.resolveChapter(chapterId)
+    let loc = this.resolveChapter(chapterId)
+    if (!loc) {
+      // 索引未命中，清理缓存并重试一次
+      this.invalidateChapterIndex()
+      await this.ensureChapterIndex()
+      loc = this.resolveChapter(chapterId)
+    }
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
     try {
-      const jsonStr: string = nativeModule.nativeDeleteChapter(loc.projectId, loc.volumeId, chapterId)
+      const jsonStr: string = this.getNativeModule().nativeDeleteChapter(loc.projectId, loc.volumeId, chapterId)
       const result = this.parseEnvelope<boolean>(jsonStr)
       if (result.success) {
         this.chapterIndex.delete(chapterId)
@@ -481,7 +535,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async reorderChapters(volumeId: string, orderedChapterIds: string[]): Promise<ResultEnvelope<boolean>> {
     const projectId = this.volumeProjectIndex.get(volumeId) || ''
     try {
-      const jsonStr: string = nativeModule.nativeReorderChapters(projectId, volumeId, JSON.stringify(orderedChapterIds))
+      const jsonStr: string = this.getNativeModule().nativeReorderChapters(projectId, volumeId, JSON.stringify(orderedChapterIds))
       const result = this.parseEnvelope<boolean>(jsonStr)
       if (result.success) {
         this.invalidateChapterIndex(volumeId)
@@ -496,7 +550,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async listStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>> {
     try {
-      const jsonStr: string = nativeModule.nativeListStarMaps()
+      const jsonStr: string = this.getNativeModule().nativeListStarMaps()
       return this.parseEnvelope<StarMapMeta[]>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -505,7 +559,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
     try {
-      const jsonStr: string = nativeModule.nativeListStarMapsForProject(projectId)
+      const jsonStr: string = this.getNativeModule().nativeListStarMapsForProject(projectId)
       return this.parseEnvelope<StarMapMeta[]>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -514,7 +568,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getStarMap(starmapId: string): Promise<ResultEnvelope<StarMapMeta>> {
     try {
-      const jsonStr: string = nativeModule.nativeGetStarMap(starmapId)
+      const jsonStr: string = this.getNativeModule().nativeGetStarMap(starmapId)
       return this.parseEnvelope<StarMapMeta>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -523,7 +577,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getStarMapGraph(starmapId: string): Promise<ResultEnvelope<StarMapGraph>> {
     try {
-      const jsonStr: string = nativeModule.nativeGetStarMapGraph(starmapId)
+      const jsonStr: string = this.getNativeModule().nativeGetStarMapGraph(starmapId)
       return this.parseEnvelope<StarMapGraph>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -532,7 +586,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>> {
     try {
-      const jsonStr: string = nativeModule.nativeCreateStarMap(title, description)
+      const jsonStr: string = this.getNativeModule().nativeCreateStarMap(title, description)
       return this.parseEnvelope<StarMapMeta>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -541,7 +595,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async deleteStarMap(starmapId: string): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeDeleteStarMap(starmapId)
+      const jsonStr: string = this.getNativeModule().nativeDeleteStarMap(starmapId)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -550,7 +604,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeRenameStarMap(starmapId, newTitle)
+      const jsonStr: string = this.getNativeModule().nativeRenameStarMap(starmapId, newTitle)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -561,7 +615,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {
     try {
-      const jsonStr: string = nativeModule.nativeLoadLocalSettings()
+      const jsonStr: string = this.getNativeModule().nativeLoadLocalSettings()
       return this.parseEnvelope<LocalSettings>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -570,7 +624,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveLocalSettings(settings: LocalSettings): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeSaveLocalSettings(JSON.stringify(settings))
+      const jsonStr: string = this.getNativeModule().nativeSaveLocalSettings(JSON.stringify(settings))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -579,7 +633,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
     try {
-      const jsonStr: string = nativeModule.nativeLoadSyncableSettings()
+      const jsonStr: string = this.getNativeModule().nativeLoadSyncableSettings()
       return this.parseEnvelope<SyncableSettings>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -588,7 +642,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeSaveSyncableSettings(JSON.stringify(settings))
+      const jsonStr: string = this.getNativeModule().nativeSaveSyncableSettings(JSON.stringify(settings))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -626,7 +680,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
     try {
-      const jsonStr: string = nativeModule.nativeLoadSyncConfig()
+      const jsonStr: string = this.getNativeModule().nativeLoadSyncConfig()
       return this.parseEnvelope<SyncConfig>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -635,7 +689,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeSaveSyncConfig(JSON.stringify(config))
+      const jsonStr: string = this.getNativeModule().nativeSaveSyncConfig(JSON.stringify(config))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -644,7 +698,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async syncDryRun(): Promise<ResultEnvelope<SyncReport>> {
     try {
-      const jsonStr: string = nativeModule.nativeSyncDryRun()
+      const jsonStr: string = this.getNativeModule().nativeSyncDryRun()
       return this.parseEnvelope<SyncReport>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -653,7 +707,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnostics>> {
     try {
-      const jsonStr: string = nativeModule.nativeSyncDiagnostics()
+      const jsonStr: string = this.getNativeModule().nativeSyncDiagnostics()
       return this.parseEnvelope<SyncDiagnostics>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -662,7 +716,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async performSync(): Promise<ResultEnvelope<SyncResult>> {
     try {
-      const jsonStr: string = nativeModule.nativePerformSync()
+      const jsonStr: string = this.getNativeModule().nativePerformSync()
       return this.parseEnvelope<SyncResult>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -673,7 +727,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getWritingStats(): Promise<ResultEnvelope<WritingStats>> {
     try {
-      const jsonStr: string = nativeModule.nativeGetWritingStats()
+      const jsonStr: string = this.getNativeModule().nativeGetWritingStats()
       return this.parseEnvelope<WritingStats>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -685,7 +739,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return -1
     }
     try {
-      return nativeModule.nativeCalculateWordCount(text)
+      return this.getNativeModule().nativeCalculateWordCount(text)
     } catch (e) {
       return -1
     }
@@ -699,7 +753,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
         platform: 'harmony',
         sessionId: `hm-${Date.now()}`
       })
-      const jsonStr: string = nativeModule.nativeProcessWritingEvent(eventJson)
+      const jsonStr: string = this.getNativeModule().nativeProcessWritingEvent(eventJson)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -708,7 +762,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     try {
-      const jsonStr: string = nativeModule.nativeGetRecentEdits()
+      const jsonStr: string = this.getNativeModule().nativeGetRecentEdits()
       return this.parseEnvelope<RecentEdit[]>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -719,7 +773,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getNativeLoadStatus(): Promise<ResultEnvelope<string>> {
     try {
-      const status: string = nativeModule.nativeGetLoadStatus() as string
+      const status: string = this.getNativeModule().nativeGetLoadStatus() as string
       return { success: true, data: status }
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -728,7 +782,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async isWorkspaceValid(): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = nativeModule.nativeValidateWorkspace() as string
+      const jsonStr: string = this.getNativeModule().nativeValidateWorkspace() as string
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
@@ -737,7 +791,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async isAiAvailable(): Promise<ResultEnvelope<boolean>> {
     try {
-      const available: number = nativeModule.nativeIsAiAvailable() as number
+      const available: number = this.getNativeModule().nativeIsAiAvailable() as number
       return { success: true, data: available === 1 }
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }

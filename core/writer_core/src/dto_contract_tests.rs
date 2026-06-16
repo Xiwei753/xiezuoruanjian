@@ -237,6 +237,186 @@ fn project_stats_dto_fields_match_harmony() {
 }
 
 #[test]
+fn starmap_meta_dto_fields_match_harmony() {
+    let ffi_starmap_meta = json!({
+        "id": "sm1",
+        "title": "StarMap 1",
+        "description": "A star map",
+        "nodeCount": 5,
+        "edgeCount": 3,
+        "projectId": "p1",
+        "createdAt": "2024-01-01",
+        "updatedAt": "2024-01-01",
+        "layoutType": "force"
+    });
+
+    let expected_keys = vec![
+        "createdAt",
+        "description",
+        "edgeCount",
+        "id",
+        "layoutType",
+        "nodeCount",
+        "projectId",
+        "title",
+        "updatedAt",
+    ];
+    let actual_keys = sorted_keys(&ffi_starmap_meta);
+    assert_eq!(actual_keys, expected_keys, "StarMapMeta DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn starmap_node_dto_fields_match_harmony() {
+    let ffi_starmap_node = json!({
+        "id": "n1",
+        "label": "Character A",
+        "description": "Main character",
+        "x": 100.0,
+        "y": 200.0,
+        "width": 80.0,
+        "height": 40.0,
+        "type": "character",
+        "color": "#FF5722",
+        "icon": "person",
+        "metadata": {},
+        "parentId": "n0",
+        "childIds": []
+    });
+
+    let expected_keys = vec![
+        "childIds",
+        "color",
+        "description",
+        "height",
+        "icon",
+        "id",
+        "label",
+        "metadata",
+        "parentId",
+        "type",
+        "width",
+        "x",
+        "y",
+    ];
+    let actual_keys = sorted_keys(&ffi_starmap_node);
+    assert_eq!(actual_keys, expected_keys, "StarMapNode DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn starmap_edge_dto_fields_match_harmony() {
+    let ffi_starmap_edge = json!({
+        "id": "e1",
+        "sourceId": "n1",
+        "targetId": "n2",
+        "label": "knows",
+        "type": "relation",
+        "color": "#4CAF50",
+        "style": "solid",
+        "metadata": {}
+    });
+
+    let expected_keys = vec![
+        "color",
+        "id",
+        "label",
+        "metadata",
+        "sourceId",
+        "style",
+        "targetId",
+        "type",
+    ];
+    let actual_keys = sorted_keys(&ffi_starmap_edge);
+    assert_eq!(actual_keys, expected_keys, "StarMapEdge DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn writing_stats_dto_fields_match_harmony() {
+    let ffi_writing_stats = json!({
+        "totalChars": 5000,
+        "totalWords": 3000,
+        "totalChapters": 10,
+        "totalProjects": 2,
+        "todayChars": 500,
+        "todayDuration": 3600,
+        "todaySessions": 3,
+        "averageSpeed": 25.0,
+        "longestStreak": 7,
+        "currentStreak": 3,
+        "weeklyStats": []
+    });
+
+    let expected_keys = vec![
+        "averageSpeed",
+        "currentStreak",
+        "longestStreak",
+        "todayChars",
+        "todayDuration",
+        "todaySessions",
+        "totalChapters",
+        "totalChars",
+        "totalProjects",
+        "totalWords",
+        "weeklyStats",
+    ];
+    let actual_keys = sorted_keys(&ffi_writing_stats);
+    assert_eq!(actual_keys, expected_keys, "WritingStats DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn sync_config_dto_fields_match_harmony() {
+    let ffi_sync_config = json!({
+        "enabled": true,
+        "provider": "github",
+        "remoteUrl": "https://github.com/user/repo",
+        "branch": "main",
+        "autoSync": true,
+        "autoSyncInterval": 300,
+        "conflictStrategy": "manual",
+        "lastSyncAt": "2024-01-01",
+        "syncPath": "/sync"
+    });
+
+    let expected_keys = vec![
+        "autoSync",
+        "autoSyncInterval",
+        "branch",
+        "conflictStrategy",
+        "enabled",
+        "lastSyncAt",
+        "provider",
+        "remoteUrl",
+        "syncPath",
+    ];
+    let actual_keys = sorted_keys(&ffi_sync_config);
+    assert_eq!(actual_keys, expected_keys, "SyncConfig DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn recent_edit_dto_fields_match_harmony() {
+    let ffi_recent_edit = json!({
+        "projectId": "p1",
+        "projectTitle": "My Novel",
+        "chapterId": "c1",
+        "chapterTitle": "Chapter 1",
+        "volumeId": "v1",
+        "editedAt": "2024-01-01",
+        "wordCount": 500
+    });
+
+    let expected_keys = vec![
+        "chapterId",
+        "chapterTitle",
+        "editedAt",
+        "projectId",
+        "projectTitle",
+        "volumeId",
+        "wordCount",
+    ];
+    let actual_keys = sorted_keys(&ffi_recent_edit);
+    assert_eq!(actual_keys, expected_keys, "RecentEdit DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
 fn core_internal_project_serializes_with_snake_case() {
     let project = crate::project::Project {
         id: "p1".into(),

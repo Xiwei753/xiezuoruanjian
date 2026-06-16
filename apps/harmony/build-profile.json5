@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "",
-          "storePassword": "",
-          "keyAlias": "",
-          "keyPassword": "",
-          "profile": "",
+          "certpath": "C:\\Users\\xiwei\\.ohos\\config\\default_harmony_m7XRdiGfGvAV0KGLqf5tHwTREwfAZeU3Rf7Qpdr9W3Y=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001A045355C2E9AA92193AF624A17166578B91697FB62CBB12C913B6DEF97E74CF4595D24A22BE23",
+          "profile": "C:\\Users\\xiwei\\.ohos\\config\\default_harmony_m7XRdiGfGvAV0KGLqf5tHwTREwfAZeU3Rf7Qpdr9W3Y=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": ""
+          "storeFile": "C:\\Users\\xiwei\\.ohos\\config\\default_harmony_m7XRdiGfGvAV0KGLqf5tHwTREwfAZeU3Rf7Qpdr9W3Y=.p12",
+          "storePassword": "0000001A6659160A429203D7336BEBE922D37C73EA79BCF86D9C1107A4BBC9011B9E1624CD3C2266BF8C"
         }
       }
     ],
@@ -25,7 +25,8 @@
           "strictMode": {
             "caseSensitiveCheck": true
           }
-        }
+        },
+        "targetSdkVersion": "26.0.0"
       }
     ],
     "buildModeSet": [

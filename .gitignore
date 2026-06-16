@@ -92,3 +92,17 @@ android-ndk-r25c-linux.zip
 
 # Local native deps doc (not for version control)
 WINDOWS_NATIVE_DEPS.md
+
+# HarmonyOS build artifacts & IDE
+apps/harmony/oh_modules/
+apps/harmony/.hvigor/
+apps/harmony/hvigor/
+apps/harmony/entry/.cxx/
+apps/harmony/.appanalyzer/
+apps/harmony/.clang-tidy
+apps/harmony/.clangd
+apps/harmony/oh-package-lock.json5
+
+# Temp files
+aqtinstall.log
+temp_csr/

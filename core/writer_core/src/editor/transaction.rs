@@ -92,7 +92,27 @@ pub enum EditorAnimationKind {
     Cursor,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// 单个 glyph 的精确矩形信息，供平台端动画 overlay 使用。
+///
+/// Core 层不负责绘制，只负责在 animation event 中暴露每个字符的
+/// 精确位置和尺寸，避免平台端用 `fontSize * 0.6` 估算。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlyphRect {
+    /// 矩形左上角 x 坐标（文档坐标系，不含 scroll offset）
+    pub x: f64,
+    /// 矩形左上角 y 坐标（文档坐标系，不含 scroll offset）
+    pub y: f64,
+    /// 矩形宽度
+    pub w: f64,
+    /// 矩形高度
+    pub h: f64,
+    /// 该 glyph 对应的字符（可能是多字节 UTF-8）
+    #[serde(rename = "char")]
+    pub char_: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorAnimationEvent {
     pub id: u64,
@@ -103,6 +123,10 @@ pub struct EditorAnimationEvent {
     pub old_cursor: EditorCursor,
     pub new_cursor: EditorCursor,
     pub duration_ms: u64,
+    /// 每个 glyph 的精确矩形。Core 层默认为空 Vec（向后兼容），
+    /// 平台端填充后通过 FFI 传给 QML overlay。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub glyph_rects: Vec<GlyphRect>,
 }
 
 #[derive(Debug, Clone)]
@@ -179,6 +203,7 @@ impl EditorEngine {
                     old_cursor: transaction.old_selection.head,
                     new_cursor: transaction.new_selection.head,
                     duration_ms: self.animation_duration_ms,
+                    glyph_rects: Vec::new(),
                 });
             }
         }
@@ -195,6 +220,7 @@ impl EditorEngine {
                 old_cursor: transaction.old_selection.head,
                 new_cursor: transaction.new_selection.head,
                 duration_ms: self.animation_duration_ms,
+                glyph_rects: Vec::new(),
             });
         }
 
@@ -411,5 +437,67 @@ mod tests {
 
         assert!(!tx.should_animate);
         assert!(engine.animation_events(&tx).is_empty());
+    }
+
+    #[test]
+    fn glyph_rect_serializes_camel_case() {
+        let gr = GlyphRect {
+            x: 10.5,
+            y: 20.0,
+            w: 16.0,
+            h: 24.0,
+            char_: "你".to_string(),
+        };
+        let json = serde_json::to_string(&gr).unwrap();
+        // 字段名必须是 camelCase，char_ → "char"
+        assert!(json.contains("\"x\":"));
+        assert!(json.contains("\"y\":"));
+        assert!(json.contains("\"w\":"));
+        assert!(json.contains("\"h\":"));
+        assert!(json.contains("\"char\":"));
+        assert!(!json.contains("\"char_\":"));
+    }
+
+    #[test]
+    fn animation_event_glyph_rects_default_empty_and_skip_serializing() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "ab",
+            "abc",
+            EditorSelection::collapsed("ab", 2),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Typing,
+        );
+        let events = engine.animation_events(&tx);
+        // Core 层默认 glyph_rects 为空
+        assert!(events[0].glyph_rects.is_empty());
+        assert!(events[1].glyph_rects.is_empty());
+
+        // 空 glyphRects 不应出现在 JSON 中（skip_serializing_if）
+        let json = serde_json::to_string(&events).unwrap();
+        assert!(!json.contains("glyphRects"));
+    }
+
+    #[test]
+    fn animation_event_with_glyph_rects_serializes() {
+        let event = EditorAnimationEvent {
+            id: 1,
+            kind: EditorAnimationKind::Insert,
+            range_start: 0,
+            range_len: 3,
+            text: "abc".to_string(),
+            old_cursor: EditorCursor { index: 0 },
+            new_cursor: EditorCursor { index: 3 },
+            duration_ms: 160,
+            glyph_rects: vec![
+                GlyphRect { x: 0.0, y: 0.0, w: 10.0, h: 20.0, char_: "a".to_string() },
+                GlyphRect { x: 10.0, y: 0.0, w: 10.0, h: 20.0, char_: "b".to_string() },
+                GlyphRect { x: 20.0, y: 0.0, w: 10.0, h: 20.0, char_: "c".to_string() },
+            ],
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        // 非空 glyphRects 必须出现在 JSON 中
+        assert!(json.contains("glyphRects"));
+        assert!(json.contains("\"char\":"));
     }
 }

@@ -59,18 +59,40 @@ Item {
         var charCount = text.length
         if (charCount === 0) return
 
-        var fontSize = editorItem.font_pixel_size || 16
-        var charWidth = fontSize * 0.6
-        var highlightWidth = Math.min(charCount, 8) * charWidth
+        var highlightX, highlightY, highlightWidth, highlightHeight
+
+        if (event.glyphRects && Array.isArray(event.glyphRects) && event.glyphRects.length > 0) {
+            // 使用 Rust Core 提供的精确 glyph 矩形，计算 bounding rect
+            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            for (var i = 0; i < event.glyphRects.length; i++) {
+                var gr = event.glyphRects[i]
+                if (gr.x < minX) minX = gr.x
+                if (gr.y < minY) minY = gr.y
+                if (gr.x + gr.w > maxX) maxX = gr.x + gr.w
+                if (gr.y + gr.h > maxY) maxY = gr.y + gr.h
+            }
+            highlightX = minX
+            highlightY = minY
+            highlightWidth = maxX - minX
+            highlightHeight = maxY - minY
+        } else {
+            // Fallback: 旧估算逻辑（glyphRects 不可用时）
+            var fontSize = editorItem.font_pixel_size || 16
+            var charWidth = fontSize * 0.6
+            highlightWidth = Math.min(charCount, 8) * charWidth
+            highlightX = cursorRectX - highlightWidth
+            highlightY = cursorRectY
+            highlightHeight = cursorRectH
+        }
 
         var component = Qt.createComponent("EditorAnimationHighlight.qml")
         if (component.status !== Component.Ready) return
 
         var anim = component.createObject(root, {
-            "x": cursorRectX - highlightWidth,
-            "y": cursorRectY,
+            "x": highlightX,
+            "y": highlightY,
             "width": highlightWidth,
-            "height": cursorRectH,
+            "height": highlightHeight,
             "duration": duration,
             "color": editorItem.selection_color || "#006497",
             "animKind": "insert"
@@ -96,18 +118,40 @@ Item {
         var charCount = text.length
         if (charCount === 0) return
 
-        var fontSize = editorItem.font_pixel_size || 16
-        var charWidth = fontSize * 0.6
-        var ghostWidth = Math.min(charCount, 8) * charWidth
+        var ghostX, ghostY, ghostWidth, ghostHeight
+
+        if (event.glyphRects && Array.isArray(event.glyphRects) && event.glyphRects.length > 0) {
+            // 使用 Rust Core 提供的精确 glyph 矩形，计算 bounding rect
+            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            for (var i = 0; i < event.glyphRects.length; i++) {
+                var gr = event.glyphRects[i]
+                if (gr.x < minX) minX = gr.x
+                if (gr.y < minY) minY = gr.y
+                if (gr.x + gr.w > maxX) maxX = gr.x + gr.w
+                if (gr.y + gr.h > maxY) maxY = gr.y + gr.h
+            }
+            ghostX = minX
+            ghostY = minY
+            ghostWidth = maxX - minX
+            ghostHeight = maxY - minY
+        } else {
+            // Fallback: 旧估算逻辑（glyphRects 不可用时）
+            var fontSize = editorItem.font_pixel_size || 16
+            var charWidth = fontSize * 0.6
+            ghostWidth = Math.min(charCount, 8) * charWidth
+            ghostX = cursorRectX
+            ghostY = cursorRectY
+            ghostHeight = cursorRectH
+        }
 
         var component = Qt.createComponent("EditorAnimationHighlight.qml")
         if (component.status !== Component.Ready) return
 
         var anim = component.createObject(root, {
-            "x": cursorRectX,
-            "y": cursorRectY,
+            "x": ghostX,
+            "y": ghostY,
             "width": ghostWidth,
-            "height": cursorRectH,
+            "height": ghostHeight,
             "duration": duration,
             "color": editorItem.text_color || "#E2E2E5",
             "animKind": "delete"
