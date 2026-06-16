@@ -2,9 +2,7 @@ import { common } from '@kit.AbilityKit'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { MockWriterCoreBridge } from '../bridge/MockWriterCoreBridge'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
-import { WorkspaceFileAccess, MockFileAccess, NativeFileAccess } from '../system/HarmonyFileAccess'
-import { KVStore, MockKVStore, NativeKVStore } from '../system/HarmonySecureStorage'
-import { NetworkManager, MockNetworkManager, NativeNetworkManager } from '../system/HarmonyNetworkState'
+
 import { HarmonyLifecycle } from '../system/HarmonyLifecycle'
 import { HarmonyThemeAdapter } from '../system/HarmonyThemeAdapter'
 
@@ -25,9 +23,7 @@ export class AppContext {
   private static instance: AppContext
   private config: AppContextConfig
   private bridge: IWriterCoreBridge
-  private fileAccess: WorkspaceFileAccess
-  private kvStore: KVStore
-  private networkManager: NetworkManager
+
   private lifecycle: HarmonyLifecycle
   private themeAdapter: HarmonyThemeAdapter
   private isInitialized: boolean = false
@@ -41,14 +37,8 @@ export class AppContext {
 
     if (config.environment === 'mock') {
       this.bridge = new MockWriterCoreBridge()
-      this.fileAccess = new MockFileAccess()
-      this.kvStore = new MockKVStore()
-      this.networkManager = new MockNetworkManager()
     } else {
       this.bridge = NativeWriterCoreBridge.getInstance()
-      this.fileAccess = new NativeFileAccess()
-      this.kvStore = new NativeKVStore()
-      this.networkManager = new NativeNetworkManager()
     }
   }
 
@@ -102,17 +92,6 @@ export class AppContext {
     return this.bridge
   }
 
-  getFileAccess(): WorkspaceFileAccess {
-    return this.fileAccess
-  }
-
-  getKVStore(): KVStore {
-    return this.kvStore
-  }
-
-  getNetworkManager(): NetworkManager {
-    return this.networkManager
-  }
 
   getLifecycle(): HarmonyLifecycle {
     return this.lifecycle
@@ -153,11 +132,7 @@ export class AppContext {
       this.config.workspacePath = workspacePath
     }
     this.bridge = NativeWriterCoreBridge.getInstance()
-    this.fileAccess = new NativeFileAccess()
-    this.kvStore = new NativeKVStore()
-    this.networkManager = new NativeNetworkManager()
   }
-
 
   dispose(): void {
     this.isInitialized = false
@@ -176,17 +151,6 @@ export function getWorkspacePath(): string {
   return getAppContext().getWorkspacePath()
 }
 
-export function getFileAccess(): WorkspaceFileAccess {
-  return getAppContext().getFileAccess()
-}
-
-export function getKVStore(): KVStore {
-  return getAppContext().getKVStore()
-}
-
-export function getNetworkManager(): NetworkManager {
-  return getAppContext().getNetworkManager()
-}
 
 export function getLifecycle(): HarmonyLifecycle {
   return getAppContext().getLifecycle()
