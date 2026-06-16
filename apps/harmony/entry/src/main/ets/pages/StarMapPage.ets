@@ -3,6 +3,7 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
+import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
 
 interface StarMapPageParams {
   starmapId: string
@@ -29,10 +30,12 @@ struct StarMapPage {
   @State @Watch('onTransformChange') offsetX: number = 0
   @State @Watch('onTransformChange') offsetY: number = 0
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
+  private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
     const params = router.getParams() as StarMapPageParams
@@ -48,11 +51,24 @@ struct StarMapPage {
       self.themeConfig = theme
     })
     this.themeAdapter.addObserver(this.themeObserver!)
+
+    // 注册响应式布局观察者
+    this.adaptiveObserver = {
+      onWindowSizeChange(state: AdaptiveState) {
+        self.adaptiveState = state
+      }
+    }
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
+    // 初始化时同步一次状态
+    this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
   }
 
   aboutToDisappear() {
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
+    }
+    if (this.adaptiveObserver) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
   }
 
@@ -217,7 +233,8 @@ struct StarMapPage {
         }
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
 
       if (this.isLoading) {
         Column() {
@@ -290,12 +307,12 @@ struct StarMapPage {
             })
           }, (node: StarMapNode) => node.id)
 
-          // Node info panel
+          // Node info panel — 宽屏下偏右，窄屏下左上角
           if (this.selectedNode) {
             this.NodeInfoPanel()
           }
 
-          // Legend
+          // Legend — 宽屏下右下角，窄屏下左下角
           this.Legend()
 
           // Graph info
@@ -420,7 +437,10 @@ struct StarMapPage {
     .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(12)
     .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
-    .position({ x: 16, y: 16 })
+    .position({
+      x: this.adaptiveState.sizeClass === WindowSizeClass.Expanded ? 'right' : 16,
+      y: 16
+    })
   }
 
   @Builder
@@ -450,7 +470,10 @@ struct StarMapPage {
     .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(8)
     .shadow({ radius: 4, color: '#1A000000', offsetX: 0, offsetY: 2 })
-    .position({ x: 16, y: 'bottom' })
+    .position({
+      x: this.adaptiveState.sizeClass === WindowSizeClass.Expanded ? 'right' : 16,
+      y: 'bottom'
+    })
   }
 
   @Builder

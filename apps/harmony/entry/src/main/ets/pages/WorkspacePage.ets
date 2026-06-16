@@ -3,6 +3,7 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { ProjectTree, VolumeTree, Chapter, Project } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
+import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
 
 interface WorkspacePageParams {
   projectId: string
@@ -20,10 +21,12 @@ struct WorkspacePage {
   @State errorMessage: string = ''
   @State expandedVolumes: Set<string> = new Set()
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
+  private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
     const params = router.getParams() as WorkspacePageParams
@@ -38,11 +41,21 @@ struct WorkspacePage {
       self.themeConfig = theme
     })
     this.themeAdapter.addObserver(this.themeObserver!)
+
+    this.adaptiveObserver = {
+      onWindowSizeChange(state: AdaptiveState) {
+        self.adaptiveState = state
+      }
+    }
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
   }
 
   aboutToDisappear() {
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
+    }
+    if (this.adaptiveObserver) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
   }
 
@@ -156,7 +169,8 @@ struct WorkspacePage {
           .onClick(() => this.createVolume())
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
 
       if (this.isLoading) {
         Column() {
@@ -198,7 +212,8 @@ struct WorkspacePage {
             }
           }
           .width('100%')
-          .padding({ left: 16, right: 16, bottom: 24 })
+          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
@@ -207,6 +222,7 @@ struct WorkspacePage {
     .width('100%')
     .height('100%')
     .backgroundColor(this.themeConfig.colors.background)
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder

@@ -5,6 +5,7 @@ import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../system/HarmonyLifecycle'
 import { getAppContext } from '../common/AppContext'
+import { getAdaptiveContext } from '../common/AdaptiveContext'
 
 export default class EntryAbility extends UIAbility {
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
@@ -22,6 +23,9 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageCreate')
+
+    // 初始化响应式断点系统
+    getAdaptiveContext().initialize(windowStage)
 
     windowStage.loadContent('pages/Index', (err, data) => {
       if (err.code) {

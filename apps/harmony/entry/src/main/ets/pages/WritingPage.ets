@@ -4,6 +4,7 @@ import { ChapterData, SaveReceipt, LocalSettings } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
+import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 
 interface WritingPageParams {
   chapterId: string
@@ -39,12 +40,14 @@ struct WritingPage {
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State sessionStartTime: number = Date.now()
   @State sessionCharsAdded: number = 0
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
   private themeObserver: ThemeObserver | null = null
+  private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
     const params = router.getParams() as WritingPageParams
@@ -60,6 +63,14 @@ struct WritingPage {
       self.themeConfig = theme
     })
     this.themeAdapter.addObserver(this.themeObserver!)
+
+    // Setup adaptive layout observer
+    this.adaptiveObserver = {
+      onWindowSizeChange: (state: AdaptiveState): void => {
+        self.adaptiveState = state
+      }
+    }
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
     // Setup auto-save lifecycle observer
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
@@ -87,6 +98,9 @@ struct WritingPage {
     }
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
+    }
+    if (this.adaptiveObserver) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
   }
 
@@ -251,7 +265,8 @@ struct WritingPage {
           .onClick(() => this.saveChapter())
       }
       .width('100%')
-      .padding({ left: 20, right: 20, top: 20, bottom: 14 })
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 14 })
 
       if (this.isLoading) {
         Column() {
@@ -283,17 +298,21 @@ struct WritingPage {
         .justifyContent(FlexAlign.Center)
       } else {
         Scroll() {
-          TextArea({ text: this.content, placeholder: '开始写作...' })
-            .width('100%')
-            .constraintSize({ minHeight: '100%' })
-            .fontSize(this.settings.fontSize)
-            .fontFamily(this.settings.fontFamily)
-            .lineHeight(this.settings.lineHeight * this.settings.fontSize)
-            .backgroundColor(this.themeConfig.colors.surface)
-            .padding({ left: 24, right: 24, top: 20, bottom: 20 })
-            .fontColor(this.themeConfig.colors.textPrimary)
-            .placeholderColor(this.themeConfig.colors.textHint)
-            .onChange((value: string): void => { this.onContentChange(value) })
+          Column() {
+            TextArea({ text: this.content, placeholder: '开始写作...' })
+              .width('100%')
+              .constraintSize({ minHeight: '100%' })
+              .fontSize(this.settings.fontSize)
+              .fontFamily(this.settings.fontFamily)
+              .lineHeight(this.settings.lineHeight * this.settings.fontSize)
+              .backgroundColor(this.themeConfig.colors.surface)
+              .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 20 })
+              .fontColor(this.themeConfig.colors.textPrimary)
+              .placeholderColor(this.themeConfig.colors.textHint)
+              .onChange((value: string): void => { this.onContentChange(value) })
+          }
+          .width('100%')
+          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
@@ -320,11 +339,13 @@ struct WritingPage {
           .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.secondary : this.themeConfig.colors.success)
       }
       .width('100%')
-      .padding({ left: 20, right: 20, top: 10, bottom: 10 })
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 10, bottom: 10 })
       .backgroundColor(this.themeConfig.colors.background)
     }
     .width('100%')
     .height('100%')
     .backgroundColor(this.themeConfig.colors.background)
+    .alignItems(HorizontalAlign.Center)
   }
 }

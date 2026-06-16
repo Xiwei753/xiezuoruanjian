@@ -13,6 +13,7 @@ import {
 } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
+import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
 
 interface SettingsSelectOption {
   value: string
@@ -43,10 +44,12 @@ struct SettingsPage {
   @State saveMessage: string = ''
   @State syncMessage: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
+  private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
     const self = this
@@ -54,12 +57,26 @@ struct SettingsPage {
       self.themeConfig = theme
     })
     this.themeAdapter.addObserver(this.themeObserver!)
+
+    // 注册响应式布局观察者
+    this.adaptiveObserver = {
+      onWindowSizeChange(state: AdaptiveState) {
+        self.adaptiveState = state
+      }
+    }
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
+    // 初始化时同步一次状态
+    this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+
     this.loadSettings()
   }
 
   aboutToDisappear() {
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
+    }
+    if (this.adaptiveObserver) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
   }
 
@@ -181,7 +198,8 @@ struct SettingsPage {
           .onClick(() => this.saveSettings())
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
 
       if (this.isLoading) {
         Column() {
@@ -213,10 +231,12 @@ struct SettingsPage {
             this.SyncSettingsSection()
           }
           .width('100%')
-          .padding({ left: 16, right: 16, bottom: 24 })
+          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
+        .align(Alignment.TopCenter)
       }
     }
     .width('100%')

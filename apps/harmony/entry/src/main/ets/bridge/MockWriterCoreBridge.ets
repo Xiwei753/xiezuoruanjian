@@ -35,85 +35,15 @@ import {
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
   private currentWorkspacePath: string = '/mock/workspace'
-  private mockProjects: Project[] = [
-    {
-      id: 'proj-001',
-      name: '示例小说',
-      volumeCount: 2,
-      chapterCount: 5,
-      totalWordCount: 16500,
-      createdAt: '2026-01-15T10:00:00Z',
-      updatedAt: '2026-06-14T08:30:00Z',
-      description: '一个关于冒险的故事'
-    } as Project,
-    {
-      id: 'proj-002',
-      name: '随笔集',
-      volumeCount: 1,
-      chapterCount: 3,
-      totalWordCount: 5500,
-      createdAt: '2026-03-20T14:00:00Z',
-      updatedAt: '2026-06-13T20:15:00Z',
-      description: '日常生活感悟'
-    } as Project
-  ]
+  private mockProjects: Project[] = []
 
-  private mockVolumes: Map<string, Volume[]> = new Map<string, Volume[]>([
-    ['proj-001', [
-      { id: 'vol-001', projectId: 'proj-001', name: '第一卷 启程', order: 1, chapterCount: 3, totalWordCount: 9500 } as Volume,
-      { id: 'vol-002', projectId: 'proj-001', name: '第二卷 风暴', order: 2, chapterCount: 2, totalWordCount: 7000 } as Volume
-    ] as Volume[]],
-    ['proj-002', [
-      { id: 'vol-003', projectId: 'proj-002', name: '春日随笔', order: 1, chapterCount: 3, totalWordCount: 5500 } as Volume
-    ] as Volume[]]
-  ])
+  private mockVolumes: Map<string, Volume[]> = new Map<string, Volume[]>()
 
-  private mockChapters: Map<string, Chapter[]> = new Map<string, Chapter[]>([
-    ['vol-001', [
-      { id: 'ch-001', volumeId: 'vol-001', name: '第一章 初遇', wordCount: 3200, order: 1, updatedAt: '2026-06-14T08:30:00Z', status: 'draft' } as Chapter,
-      { id: 'ch-002', volumeId: 'vol-001', name: '第二章 出发', wordCount: 2800, order: 2, updatedAt: '2026-06-13T15:20:00Z', status: 'draft' } as Chapter,
-      { id: 'ch-003', volumeId: 'vol-001', name: '第三章 旅途', wordCount: 3500, order: 3, updatedAt: '2026-06-12T22:10:00Z', status: 'draft' } as Chapter
-    ] as Chapter[]],
-    ['vol-002', [
-      { id: 'ch-004', volumeId: 'vol-002', name: '第四章 暴风雨', wordCount: 4100, order: 1, updatedAt: '2026-06-11T18:45:00Z', status: 'draft' } as Chapter,
-      { id: 'ch-005', volumeId: 'vol-002', name: '第五章 新生', wordCount: 2900, order: 2, updatedAt: '2026-06-10T12:30:00Z', status: 'draft' } as Chapter
-    ] as Chapter[]],
-    ['vol-003', [
-      { id: 'ch-006', volumeId: 'vol-003', name: '樱花时节', wordCount: 1800, order: 1, updatedAt: '2026-06-09T09:15:00Z', status: 'draft' } as Chapter,
-      { id: 'ch-007', volumeId: 'vol-003', name: '雨后', wordCount: 2200, order: 2, updatedAt: '2026-06-08T16:40:00Z', status: 'draft' } as Chapter,
-      { id: 'ch-008', volumeId: 'vol-003', name: '夏日蝉鸣', wordCount: 1500, order: 3, updatedAt: '2026-06-07T11:20:00Z', status: 'draft' } as Chapter
-    ] as Chapter[]]
-  ])
+  private mockChapters: Map<string, Chapter[]> = new Map<string, Chapter[]>()
 
-  private mockChapterContents: Map<string, string> = new Map<string, string>([
-    ['ch-001', '那是一个风和日丽的早晨，林间小路上走来了一个年轻人。\n\n他背着简单的行囊，目光坚定地望着远方。这是他第一次离开家乡，心中既有期待，也有些许不安。\n\n"终于要开始了。"他自言自语道，嘴角微微上扬。\n\n前方的路还很长，但他已经做好了准备。'],
-    ['ch-002', '清晨的阳光透过窗帘的缝隙洒进房间。\n\n李明睁开眼睛，看了一眼墙上的时钟。六点半，比闹钟早了十分钟。\n\n他迅速起床，洗漱完毕，背上早已准备好的背包。今天是他出发的日子。'],
-  ])
+  private mockChapterContents: Map<string, string> = new Map<string, string>()
 
-  private mockStarMaps: StarMapMeta[] = [
-    {
-      id: 'starmap-001',
-      title: '人物关系图',
-      description: '主要角色之间的关系网络',
-      nodeCount: 8,
-      edgeCount: 12,
-      projectId: 'proj-001',
-      createdAt: '2026-02-10T10:00:00Z',
-      updatedAt: '2026-06-14T08:00:00Z',
-      layoutType: 'force'
-    } as StarMapMeta,
-    {
-      id: 'starmap-002',
-      title: '剧情线索',
-      description: '故事主线与支线发展',
-      nodeCount: 15,
-      edgeCount: 20,
-      projectId: 'proj-001',
-      createdAt: '2026-03-05T14:30:00Z',
-      updatedAt: '2026-06-13T16:45:00Z',
-      layoutType: 'tree'
-    } as StarMapMeta
-  ]
+  private mockStarMaps: StarMapMeta[] = []
 
   private mockStarMapViewport: StarMapViewport = {
     centerX: 400,
@@ -128,33 +58,11 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   } as StarMapLayout
 
   private mockStarMapGraph: StarMapGraph = {
-    id: 'starmap-001',
-    title: '人物关系图',
-    description: '主要角色之间的关系网络',
-    nodes: [
-      { id: 'node-001', label: '主角', x: 400, y: 300, type: 'character', color: '#4A90D9', description: '故事的主人公' } as StarMapNode,
-      { id: 'node-002', label: '伙伴A', x: 250, y: 200, type: 'character', color: '#7B68EE', description: '主角的挚友' } as StarMapNode,
-      { id: 'node-003', label: '伙伴B', x: 550, y: 200, type: 'character', color: '#7B68EE', description: '旅途中的同伴' } as StarMapNode,
-      { id: 'node-004', label: '导师', x: 300, y: 450, type: 'character', color: '#2ECC71', description: '传授技艺的长者' } as StarMapNode,
-      { id: 'node-005', label: '对手', x: 500, y: 450, type: 'character', color: '#E74C3C', description: '宿命之敌' } as StarMapNode,
-      { id: 'node-006', label: '故乡', x: 150, y: 350, type: 'location', color: '#F39C12', description: '主角出生的地方' } as StarMapNode,
-      { id: 'node-007', label: '王城', x: 650, y: 350, type: 'location', color: '#F39C12', description: '王国的中心' } as StarMapNode,
-      { id: 'node-008', label: '启程', x: 200, y: 100, type: 'event', color: '#9B59B6', description: '冒险的开始' } as StarMapNode
-    ],
-    edges: [
-      { id: 'edge-001', sourceId: 'node-001', targetId: 'node-002', label: '挚友', type: 'relation', style: 'solid' } as StarMapEdge,
-      { id: 'edge-002', sourceId: 'node-001', targetId: 'node-003', label: '同伴', type: 'relation', style: 'solid' } as StarMapEdge,
-      { id: 'edge-003', sourceId: 'node-001', targetId: 'node-004', label: '师徒', type: 'relation', style: 'solid' } as StarMapEdge,
-      { id: 'edge-004', sourceId: 'node-001', targetId: 'node-005', label: '宿敌', type: 'conflict', style: 'dashed' } as StarMapEdge,
-      { id: 'edge-005', sourceId: 'node-001', targetId: 'node-006', label: '出身地', type: 'relation', style: 'solid' } as StarMapEdge,
-      { id: 'edge-006', sourceId: 'node-001', targetId: 'node-008', label: '经历', type: 'timeline', style: 'solid' } as StarMapEdge,
-      { id: 'edge-007', sourceId: 'node-002', targetId: 'node-003', label: '相识', type: 'relation', style: 'solid' } as StarMapEdge,
-      { id: 'edge-008', sourceId: 'node-004', targetId: 'node-005', label: '旧识', type: 'relation', style: 'dotted' } as StarMapEdge,
-      { id: 'edge-009', sourceId: 'node-005', targetId: 'node-007', label: '盘踞', type: 'relation', style: 'solid' } as StarMapEdge,
-      { id: 'edge-010', sourceId: 'node-008', targetId: 'node-006', label: '离开', type: 'timeline', style: 'solid' } as StarMapEdge,
-      { id: 'edge-011', sourceId: 'node-002', targetId: 'node-004', label: '同门', type: 'relation', style: 'solid' } as StarMapEdge,
-      { id: 'edge-012', sourceId: 'node-003', targetId: 'node-007', label: '目的地', type: 'dependency', style: 'solid' } as StarMapEdge
-    ],
+    id: '',
+    title: '',
+    description: '',
+    nodes: [] as StarMapNode[],
+    edges: [] as StarMapEdge[],
     embeds: [] as StarMapEmbed[],
     links: [] as StarMapLink[],
     viewport: this.mockStarMapViewport,
@@ -173,9 +81,9 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     showLineNumbers: false,
     wordWrap: true,
     spellCheck: false,
-    lastWorkspacePath: '/mock/workspace',
-    lastProjectId: 'proj-001',
-    lastChapterId: 'ch-001'
+    lastWorkspacePath: '',
+    lastProjectId: '',
+    lastChapterId: ''
   } as LocalSettings
 
   private mockSyncConfig: SyncConfig = {
@@ -222,16 +130,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const state: WorkspaceState = {
       workspace: { path, name: '我的写作空间', isValid: true, lockState: 'unlocked' } as Workspace,
       projects: this.mockProjects,
-      recentEdits: [
-        {
-          projectId: 'proj-001',
-          projectTitle: '示例小说',
-          chapterId: 'ch-001',
-          chapterTitle: '第一章 初遇',
-          editedAt: '2026-06-14T08:30:00Z',
-          wordCount: 3200
-        } as RecentEdit
-      ] as RecentEdit[],
+      recentEdits: [] as RecentEdit[],
       syncState: {
         status: 'idle',
         lastSyncAt: '2026-06-14T00:00:00Z'
@@ -572,7 +471,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async getStarMapGraph(starmapId: string): Promise<ResultEnvelope<StarMapGraph>> {
     await this.delay(200)
-    if (starmapId === 'starmap-001') {
+    if (this.mockStarMapGraph.id === starmapId) {
       return this.success(this.mockStarMapGraph)
     }
     return this.error('STARMAP_NOT_FOUND', '星图不存在')
@@ -586,7 +485,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       description,
       nodeCount: 0,
       edgeCount: 0,
-      projectId: 'proj-001',
+      projectId: '',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       layoutType: 'force'
@@ -824,32 +723,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     await this.delay(100)
-    return this.success([
-      {
-        projectId: 'proj-001',
-        projectTitle: '示例小说',
-        chapterId: 'ch-001',
-        chapterTitle: '第一章 初遇',
-        editedAt: '2026-06-14T08:30:00Z',
-        wordCount: 3200
-      } as RecentEdit,
-      {
-        projectId: 'proj-001',
-        projectTitle: '示例小说',
-        chapterId: 'ch-004',
-        chapterTitle: '第四章 暴风雨',
-        editedAt: '2026-06-13T18:45:00Z',
-        wordCount: 4100
-      } as RecentEdit,
-      {
-        projectId: 'proj-002',
-        projectTitle: '随笔集',
-        chapterId: 'ch-006',
-        chapterTitle: '樱花时节',
-        editedAt: '2026-06-12T09:15:00Z',
-        wordCount: 1800
-      } as RecentEdit
-    ] as RecentEdit[])
+    return this.success([] as RecentEdit[])
   }
 
   // Native Status methods

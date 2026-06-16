@@ -4,6 +4,7 @@ import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
+import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
 
 @Entry
 @Component
@@ -16,10 +17,12 @@ struct Index {
   @State errorMessage: string = ''
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State nativeStatus: string = ''
+  @State adaptiveState: AdaptiveState = getAdaptiveState()
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
+  private adaptiveObserver: AdaptiveObserver | null = null
 
   aboutToAppear() {
     const self = this
@@ -27,12 +30,23 @@ struct Index {
       self.themeConfig = theme
     })
     this.themeAdapter.addObserver(this.themeObserver!)
+
+    this.adaptiveObserver = {
+      onWindowSizeChange(state: AdaptiveState) {
+        self.adaptiveState = state
+      }
+    }
+    AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
+
     this.initAndLoad()
   }
 
   aboutToDisappear() {
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
+    }
+    if (this.adaptiveObserver) {
+      AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
   }
 
@@ -107,7 +121,7 @@ struct Index {
 
   build() {
     Column() {
-      // Header
+      // Header — 受内容最大宽度约束，居中显示
       Row() {
         Text('写作软件')
           .fontSize(28)
@@ -136,7 +150,8 @@ struct Index {
         .alignItems(HorizontalAlign.End)
       }
       .width('100%')
-      .padding({ left: 20, right: 20, top: 20, bottom: 16 })
+      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 16 })
 
       if (this.isLoading) {
         Column() {
@@ -186,10 +201,12 @@ struct Index {
             this.QuickActions()
           }
           .width('100%')
-          .padding({ left: 20, right: 20, bottom: 32 })
+          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
+          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 32 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
+        .align(Alignment.TopCenter)
       }
     }
     .width('100%')
@@ -270,6 +287,7 @@ struct Index {
     .borderRadius(16)
     .margin({ bottom: 20 })
     .shadow({ radius: 4, color: '#1A000000', offsetY: 2 })
+    .constraintSize({ maxWidth: 600 })
   }
 
   @Builder
@@ -430,8 +448,8 @@ struct Index {
         .margin({ bottom: 16 })
         .width('100%')
 
-      Grid() {
-        GridItem() {
+      GridRow({ columns: this.adaptiveState.gridColumns, gutter: 16 }) {
+        GridCol({ span: 1 }) {
           Column() {
             Image($r('sys.media.ohos_ic_public_add'))
               .width(36)
@@ -444,7 +462,7 @@ struct Index {
               .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
-          .height('100%')
+          .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(16)
@@ -452,7 +470,7 @@ struct Index {
         .onClick(() => {
         })
 
-        GridItem() {
+        GridCol({ span: 1 }) {
           Column() {
             Image($r('app.media.ic_star'))
               .width(36)
@@ -465,7 +483,7 @@ struct Index {
               .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
-          .height('100%')
+          .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(16)
@@ -480,7 +498,7 @@ struct Index {
           })
         })
 
-        GridItem() {
+        GridCol({ span: 1 }) {
           Column() {
             Image($r('sys.media.ohos_ic_public_more'))
               .width(36)
@@ -493,7 +511,7 @@ struct Index {
               .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
-          .height('100%')
+          .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(16)
@@ -502,7 +520,7 @@ struct Index {
           router.pushUrl({ url: 'pages/SettingsPage' })
         })
 
-        GridItem() {
+        GridCol({ span: 1 }) {
           Column() {
             Image($r('app.media.ic_refresh'))
               .width(36)
@@ -515,7 +533,7 @@ struct Index {
               .fontColor(this.themeConfig.colors.textPrimary)
           }
           .width('100%')
-          .height('100%')
+          .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
           .borderRadius(16)
@@ -524,11 +542,6 @@ struct Index {
           router.pushUrl({ url: 'pages/SettingsPage' })
         })
       }
-      .columnsTemplate('1fr 1fr')
-      .rowsTemplate('1fr 1fr')
-      .columnsGap(16)
-      .rowsGap(16)
-      .height(220)
       .width('100%')
     }
     .width('100%')
