@@ -60,10 +60,10 @@ jobs:
         uses: jurplel/install-qt-action@v4
         id: install-qt
         with:
-          version: '6.6.3'
+          version: '6.8.3'
           host: 'windows'
           target: 'desktop'
-          arch: 'win64_msvc2019_64'
+          arch: 'win64_msvc2022_64'
 
       - name: Configure Qt environment variables
         shell: pwsh

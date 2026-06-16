@@ -40,6 +40,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -53,25 +58,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Qt, AppImage, and system dependencies
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        id: install-qt
+        with:
+          version: '6.8.3'
+          host: 'linux'
+          target: 'desktop'
+          arch: 'gcc_64'
+          modules: 'qtshadertools qtimageformats'
+
+      - name: Install system dependencies (non-Qt)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            qt6-base-dev \
-            qt6-declarative-dev \
-            qt6-tools-dev \
-            qt6-tools-dev-tools \
-            qt6-base-private-dev \
-            qt6-wayland \
-            qml6-module-qt-labs-platform \
-            qml6-module-qtqml \
-            qml6-module-qtqml-workerscript \
-            qml6-module-qtquick \
-            qml6-module-qtquick-controls \
-            qml6-module-qtquick-dialogs \
-            qml6-module-qtquick-layouts \
-            qml6-module-qtquick-templates \
-            qml6-module-qtquick-window \
             cmake \
             extra-cmake-modules \
             ninja-build \
@@ -94,11 +94,12 @@ jobs:
 
       - name: Configure Qt environment variables
         run: |
-          QMAKE_PATH="$(command -v qmake6 || command -v qmake-qt6)"
-          echo "QMAKE=$QMAKE_PATH" >> "$GITHUB_ENV"
-          echo "QT_INCLUDE_PATH=$($QMAKE_PATH -query QT_INSTALL_HEADERS)" >> "$GITHUB_ENV"
-          echo "QT_LIBRARY_PATH=$($QMAKE_PATH -query QT_INSTALL_LIBS)" >> "$GITHUB_ENV"
+          echo "QMAKE=$QT_ROOT_DIR/bin/qmake" >> "$GITHUB_ENV"
           echo "QT_VERSION_MAJOR=6" >> "$GITHUB_ENV"
+          echo "QT_INCLUDE_PATH=$QT_ROOT_DIR/include" >> "$GITHUB_ENV"
+          echo "QT_LIBRARY_PATH=$QT_ROOT_DIR/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$QT_ROOT_DIR/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$QT_ROOT_DIR/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Build fcitx5 Qt6 input context
         run: |
@@ -111,7 +112,7 @@ jobs:
             -DBUILD_ONLY_PLUGIN=ON \
             -DBUILD_STATIC_PLUGIN=OFF \
             -DWITH_FCITX_PLUGIN_NAME=ON \
-            -DCMAKE_PREFIX_PATH="$($QMAKE -query QT_INSTALL_PREFIX)"
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
           cmake --build fcitx5-qt-build --target fcitx5platforminputcontextplugin-qt6
           FCITX_QT_PLUGIN="$(find "$PWD/fcitx5-qt-build" -path '*/platforminputcontext/libfcitx5platforminputcontextplugin.so' -print -quit)"
           if [ ! -f "$FCITX_QT_PLUGIN" ]; then
