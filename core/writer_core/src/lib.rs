@@ -21,7 +21,7 @@
 //! | `chapter` | 章节 CRUD、内容读写、备份、验证保存 | 正文永远是纯文本 |
 //! | `settings` | 本地设置 & 可同步设置 | 分为 LocalSettings / SyncableSettings |
 //! | `sync` | 同步配置、密钥、状态、诊断、实际同步（合并了 sync） | 唯一同步模块 |
-//! | `mind_map` | LEGACY: 思维导图（图数据、布局、快照）- 已废弃，仅做迁移兼容 | 独立于星图模块 |
+
 //! | `starmap` | 星图（元数据、图、布局）- 正式图谱路线 | 唯一推荐图谱接口 |
 //! | `writing_stats` | 写作统计（事件记录、聚合、查询） | 按设备/项目/章节统计 |
 //! | `error` | 统一错误类型 | 所有模块共享 |
@@ -53,12 +53,7 @@ pub mod editor;
 pub mod error;
 pub mod history;
 pub mod index;
-/// 思维导图 - 已废弃，仅做迁移兼容。
-/// 正式图谱路线为 `starmap`，禁止新增功能进入 mind_map。
-/// 默认不编译，需启用 `legacy-mind-map` feature。
-#[cfg(feature = "legacy-mind-map")]
-#[deprecated(since = "0.2.0", note = "Legacy mind_map module. Use starmap instead.")]
-pub(crate) mod mind_map;
+
 pub mod project;
 pub mod settings;
 pub mod starmap;

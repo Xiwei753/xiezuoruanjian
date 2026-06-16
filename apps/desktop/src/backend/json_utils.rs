@@ -8,14 +8,6 @@ pub(crate) fn envelope_ok_json<T: serde::Serialize>(data: T) -> String {
     writer_core::api::ResultEnvelope::success(data).to_json_string()
 }
 
-pub(crate) fn envelope_ok_with_changes_json<T: serde::Serialize>(
-    data: T,
-    changed_paths: Vec<String>,
-    changed_entities: Vec<writer_core::api::ChangedEntityDto>,
-) -> String {
-    writer_core::api::ResultEnvelope::success_with_changes(data, changed_paths, changed_entities)
-        .to_json_string()
-}
 
 pub(crate) fn serde_value_to_qjson(value: serde_json::Value) -> QJsonValue {
     match value {

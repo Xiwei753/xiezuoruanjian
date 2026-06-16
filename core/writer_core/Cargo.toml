@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["git-https"]
 ai = []
 harmony-ffi = ["once_cell"]
-legacy-mind-map = []
+
 git-https = ["git2/https", "git2/vendored-openssl"]
 
 [dependencies]

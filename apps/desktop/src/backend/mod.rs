@@ -16,7 +16,7 @@
 // - 被 apps/desktop/src/main.rs 引用，用于实例化 BackendRuntime 并注册全局 QML 环境属性。
 // =============================================================================
 
-#[allow(deprecated)]
+
 pub mod app_backend;
 pub mod json_utils;
 
