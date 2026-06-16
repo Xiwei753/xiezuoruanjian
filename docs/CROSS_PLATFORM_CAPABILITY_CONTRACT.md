@@ -66,7 +66,7 @@ Supersedes: None
   - **Response Schema**：输出的数据包，指出受影响的实体（`changedEntities`）。
   - **Error Mapping**：对底层 IO/Git/序列化错误的统一捕获和 errorCode 映射。
   - **Core Tests**：必须包含针对此 Command 的独立单元测试和集成测试，确保脱离 UI 时逻辑 100% 正确。
-<<<<<<< HEAD
+
 - **禁止平台绕道**：平台端严禁越过 Command 机制直接修改 workspace 下的任何文件（包括但不限于 `settings.json`、`.git/` 下的文件）。
 
 ### 6. Shared Event Model (统一事件模型)
