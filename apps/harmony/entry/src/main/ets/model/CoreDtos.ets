@@ -457,3 +457,77 @@ export type ErrorCode =
   | 'UNKNOWN_ERROR'
   | 'PARSE_ERROR'
   | 'NATIVE_ERROR'
+
+// ========== 布局策略类型（Core layout_policy） ==========
+
+export enum FoldPosture {
+  Unknown = 'Unknown',
+  FullyOpened = 'FullyOpened',
+  HalfOpened = 'HalfOpened',
+  Closed = 'Closed'
+}
+
+export enum Orientation {
+  Unknown = 'Unknown',
+  Portrait = 'Portrait',
+  Landscape = 'Landscape'
+}
+
+export enum PointerKind {
+  Unknown = 'Unknown',
+  Touch = 'Touch',
+  Stylus = 'Stylus',
+  Mouse = 'Mouse'
+}
+
+export enum WidthClass {
+  Compact = 'Compact',
+  Medium = 'Medium',
+  Expanded = 'Expanded'
+}
+
+export enum HeightClass {
+  Compact = 'Compact',
+  Medium = 'Medium',
+  Expanded = 'Expanded'
+}
+
+export enum ShellMode {
+  SinglePane = 'SinglePane',
+  SupportingPane = 'SupportingPane',
+  TwoPane = 'TwoPane'
+}
+
+export enum EditorMode {
+  FullWidth = 'FullWidth',
+  CenteredPaper = 'CenteredPaper'
+}
+
+export enum NavigationMode {
+  Stack = 'Stack',
+  ListDetail = 'ListDetail'
+}
+
+export interface WindowMetrics {
+  widthVp: number
+  heightVp: number
+  safeTopVp: number
+  safeBottomVp: number
+  keyboardVisible: boolean
+  foldPosture: FoldPosture
+  orientation: Orientation
+  pointer: PointerKind
+}
+
+export interface LayoutPlan {
+  widthClass: WidthClass
+  heightClass: HeightClass
+  shellMode: ShellMode
+  editorMode: EditorMode
+  navigationMode: NavigationMode
+  contentMaxWidthVp: number
+  pagePaddingVp: number
+  gridColumns: number
+  showSidePanel: boolean
+  showBottomBar: boolean
+}

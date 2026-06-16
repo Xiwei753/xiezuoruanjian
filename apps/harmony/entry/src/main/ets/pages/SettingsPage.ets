@@ -13,7 +13,8 @@ import {
 } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface SettingsSelectOption {
   value: string

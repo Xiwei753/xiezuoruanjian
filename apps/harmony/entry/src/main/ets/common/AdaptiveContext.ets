@@ -1,25 +1,20 @@
 import window from '@ohos.window'
 import hilog from '@ohos.hilog'
+import { getBridge } from './AppContext'
+import {
+  WindowMetrics, LayoutPlan, FoldPosture, Orientation, PointerKind,
+  WidthClass, HeightClass, ShellMode, EditorMode, NavigationMode
+} from '../model/CoreDtos'
 
 /**
- * 窗口尺寸断点枚举
- * Compact  (< 520vp) — 手机/折叠外屏
- * Medium   (520–840vp) — 折叠展开小屏/竖屏平板
- * Expanded (>= 840vp) — 平板/折叠内屏横向
- */
-export enum WindowSizeClass {
-  Compact,
-  Medium,
-  Expanded
-}
-
-/**
- * 响应式布局状态
+ * 响应式布局状态 — 直接映射 Core LayoutPlan
  */
 export interface AdaptiveState {
   widthVp: number
   heightVp: number
-  sizeClass: WindowSizeClass
+  layoutPlan: LayoutPlan
+  // 便捷访问属性（从 layoutPlan 派生）
+  sizeClass: WidthClass
   isTwoPane: boolean
   contentMaxWidth: number
   pagePadding: number
@@ -36,33 +31,10 @@ export interface AdaptiveObserver {
 const TAG = 'AdaptiveContext'
 const DOMAIN = 0x0000
 
-// 断点阈值
-const COMPACT_MAX_VP = 520
-const MEDIUM_MAX_VP = 840
-
-// 各断点对应的布局参数
-const CONTENT_MAX_WIDTH: Record<number, number> = {
-  [WindowSizeClass.Compact]: Number.MAX_SAFE_INTEGER,
-  [WindowSizeClass.Medium]: 720,
-  [WindowSizeClass.Expanded]: 840
-}
-
-const PAGE_PADDING: Record<number, number> = {
-  [WindowSizeClass.Compact]: 16,
-  [WindowSizeClass.Medium]: 24,
-  [WindowSizeClass.Expanded]: 32
-}
-
-const GRID_COLUMNS: Record<number, number> = {
-  [WindowSizeClass.Compact]: 2,
-  [WindowSizeClass.Medium]: 3,
-  [WindowSizeClass.Expanded]: 4
-}
-
 /**
  * 响应式断点上下文（单例）
  *
- * 监听窗口尺寸变化，计算断点状态，通知所有订阅者。
+ * 监听窗口尺寸变化，通过 bridge.resolveLayout 获取布局方案，通知所有订阅者。
  * 在 EntryAbility.onWindowStageCreate 中初始化。
  */
 export class AdaptiveContext {
@@ -96,11 +68,11 @@ export class AdaptiveContext {
       const density = properties.densityPixels
       const widthVp = rect.width / density
       const heightVp = rect.height / density
-      this.updateState(widthVp, heightVp)
+      await this.updateState(widthVp, heightVp)
 
       // 注册窗口尺寸变化监听
       this.registerWindowSizeChange()
-      hilog.info(DOMAIN, TAG, `Initialized: ${WindowSizeClass[this.state.sizeClass]} ${this.state.widthVp}x${this.state.heightVp}`)
+      hilog.info(DOMAIN, TAG, `Initialized: ${this.state.sizeClass} ${this.state.widthVp}x${this.state.heightVp}`)
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to initialize: ${JSON.stringify(err)}`)
     }
@@ -113,6 +85,7 @@ export class AdaptiveContext {
     return {
       widthVp: this.state.widthVp,
       heightVp: this.state.heightVp,
+      layoutPlan: this.state.layoutPlan,
       sizeClass: this.state.sizeClass,
       isTwoPane: this.state.isTwoPane,
       contentMaxWidth: this.state.contentMaxWidth,
@@ -196,28 +169,38 @@ export class AdaptiveContext {
     }
   }
 
-  private updateState(widthVp: number, heightVp: number): void {
-    const sizeClass = AdaptiveContext.computeSizeClass(widthVp)
-    const isTwoPane = sizeClass === WindowSizeClass.Expanded
-
-    const oldSizeClass = this.state.sizeClass
-
-    this.state = {
+  private async updateState(widthVp: number, heightVp: number): Promise<void> {
+    const bridge = getBridge()
+    const metrics: WindowMetrics = {
       widthVp: Math.round(widthVp * 100) / 100,
       heightVp: Math.round(heightVp * 100) / 100,
-      sizeClass: sizeClass,
-      isTwoPane: isTwoPane,
-      contentMaxWidth: CONTENT_MAX_WIDTH[sizeClass],
-      pagePadding: PAGE_PADDING[sizeClass],
-      gridColumns: GRID_COLUMNS[sizeClass]
+      safeTopVp: 0,  // TODO: 从平台获取
+      safeBottomVp: 0,  // TODO: 从平台获取
+      keyboardVisible: false,  // TODO: 从平台获取
+      foldPosture: FoldPosture.Unknown,  // TODO: 从平台获取
+      orientation: widthVp > heightVp ? Orientation.Landscape : Orientation.Portrait,
+      pointer: PointerKind.Touch
     }
 
-    // 断点变化时打印日志
-    if (oldSizeClass !== sizeClass) {
-      hilog.info(DOMAIN, TAG, `Size class changed: ${WindowSizeClass[oldSizeClass]} → ${WindowSizeClass[sizeClass]}`)
+    try {
+      const result = await bridge.resolveLayout(metrics)
+      if (result.success && result.data) {
+        const plan = result.data
+        this.state = {
+          widthVp: metrics.widthVp,
+          heightVp: metrics.heightVp,
+          layoutPlan: plan,
+          sizeClass: plan.widthClass,
+          isTwoPane: plan.shellMode === ShellMode.TwoPane,
+          contentMaxWidth: plan.contentMaxWidthVp === 0 ? Number.MAX_SAFE_INTEGER : plan.contentMaxWidthVp,
+          pagePadding: plan.pagePaddingVp,
+          gridColumns: plan.gridColumns
+        }
+        this.notifyObservers()
+      }
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `resolveLayout failed: ${JSON.stringify(err)}`)
     }
-
-    this.notifyObservers()
   }
 
   private notifyObservers(): void {
@@ -231,25 +214,28 @@ export class AdaptiveContext {
     })
   }
 
-  private static computeSizeClass(widthVp: number): WindowSizeClass {
-    if (widthVp < COMPACT_MAX_VP) {
-      return WindowSizeClass.Compact
-    } else if (widthVp < MEDIUM_MAX_VP) {
-      return WindowSizeClass.Medium
-    } else {
-      return WindowSizeClass.Expanded
-    }
-  }
-
   private static createDefaultState(): AdaptiveState {
+    const defaultPlan: LayoutPlan = {
+      widthClass: WidthClass.Compact,
+      heightClass: HeightClass.Compact,
+      shellMode: ShellMode.SinglePane,
+      editorMode: EditorMode.FullWidth,
+      navigationMode: NavigationMode.Stack,
+      contentMaxWidthVp: 0,
+      pagePaddingVp: 16,
+      gridColumns: 2,
+      showSidePanel: false,
+      showBottomBar: true
+    }
     return {
       widthVp: 0,
       heightVp: 0,
-      sizeClass: WindowSizeClass.Compact,
+      layoutPlan: defaultPlan,
+      sizeClass: WidthClass.Compact,
       isTwoPane: false,
-      contentMaxWidth: CONTENT_MAX_WIDTH[WindowSizeClass.Compact],
-      pagePadding: PAGE_PADDING[WindowSizeClass.Compact],
-      gridColumns: GRID_COLUMNS[WindowSizeClass.Compact]
+      contentMaxWidth: Number.MAX_SAFE_INTEGER,
+      pagePadding: 16,
+      gridColumns: 2
     }
   }
 }

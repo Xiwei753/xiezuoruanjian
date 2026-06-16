@@ -11,6 +11,7 @@
 //! - 所有函数要求先调用 `writer_core_init` 初始化全局单例
 
 mod project_ops;
+mod layout_ops;
 mod settings_ops;
 mod starmap_ops;
 mod sync_ops;

@@ -4,7 +4,8 @@ import { ChapterData, SaveReceipt, LocalSettings } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
+import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface WritingPageParams {
   chapterId: string

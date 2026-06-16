@@ -18,7 +18,9 @@ import {
   SyncReport,
   SyncDiagnostics,
   SyncResult,
-  RecentEdit
+  RecentEdit,
+  WindowMetrics,
+  LayoutPlan
 } from '../model/CoreDtos'
 
 export interface IWriterCoreBridge {
@@ -81,6 +83,9 @@ export interface IWriterCoreBridge {
   calculateWordCount(text: string): Promise<number>
   processWritingEvent(charsAdded: number, durationSeconds: number): Promise<ResultEnvelope<boolean>>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
+
+  // Layout Policy
+  resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>>
 
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>

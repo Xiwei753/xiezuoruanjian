@@ -30,7 +30,15 @@ import {
   SyncResult,
   RecentEdit,
   SyncState,
-  ErrorCode
+  ErrorCode,
+  WindowMetrics,
+  LayoutPlan,
+  FoldPosture,
+  WidthClass,
+  HeightClass,
+  ShellMode,
+  EditorMode,
+  NavigationMode
 } from '../model/CoreDtos'
 
 export class MockWriterCoreBridge implements IWriterCoreBridge {
@@ -724,6 +732,98 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     await this.delay(100)
     return this.success([] as RecentEdit[])
+  }
+
+  // Layout Policy methods
+  resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>> {
+    const widthVp = metrics.widthVp
+    const heightVp = metrics.heightVp
+
+    let widthClass: WidthClass
+    if (widthVp < 600) {
+      widthClass = WidthClass.Compact
+    } else if (widthVp < 840) {
+      widthClass = WidthClass.Medium
+    } else {
+      widthClass = WidthClass.Expanded
+    }
+
+    let heightClass: HeightClass
+    if (heightVp < 480) {
+      heightClass = HeightClass.Compact
+    } else if (heightVp < 900) {
+      heightClass = HeightClass.Medium
+    } else {
+      heightClass = HeightClass.Expanded
+    }
+
+    let shellMode: ShellMode
+    let navigationMode: NavigationMode
+    let editorMode: EditorMode
+    let contentMaxWidthVp: number
+    let pagePaddingVp: number
+    let gridColumns: number
+    let showSidePanel: boolean
+    let showBottomBar: boolean
+
+    switch (widthClass) {
+      case WidthClass.Compact:
+        shellMode = ShellMode.SinglePane
+        navigationMode = NavigationMode.Stack
+        editorMode = EditorMode.FullWidth
+        contentMaxWidthVp = 0
+        pagePaddingVp = 16
+        gridColumns = 2
+        showSidePanel = false
+        showBottomBar = true
+        break
+      case WidthClass.Medium:
+        shellMode = ShellMode.SupportingPane
+        navigationMode = NavigationMode.Stack
+        editorMode = EditorMode.CenteredPaper
+        contentMaxWidthVp = 720
+        pagePaddingVp = 24
+        gridColumns = 3
+        showSidePanel = false
+        showBottomBar = true
+        break
+      case WidthClass.Expanded:
+        shellMode = ShellMode.TwoPane
+        navigationMode = NavigationMode.ListDetail
+        editorMode = EditorMode.CenteredPaper
+        contentMaxWidthVp = 840
+        pagePaddingVp = 32
+        gridColumns = 4
+        showSidePanel = true
+        showBottomBar = false
+        break
+    }
+
+    if (metrics.foldPosture === FoldPosture.HalfOpened) {
+      shellMode = ShellMode.SupportingPane
+    }
+
+    if (metrics.keyboardVisible) {
+      showBottomBar = false
+    }
+
+    const plan: LayoutPlan = {
+      widthClass,
+      heightClass,
+      shellMode,
+      editorMode,
+      navigationMode,
+      contentMaxWidthVp,
+      pagePaddingVp,
+      gridColumns,
+      showSidePanel,
+      showBottomBar
+    }
+
+    return Promise.resolve({
+      success: true,
+      data: plan
+    } as ResultEnvelope<LayoutPlan>)
   }
 
   // Native Status methods

@@ -4,7 +4,8 @@ import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
-import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 @Entry
 @Component

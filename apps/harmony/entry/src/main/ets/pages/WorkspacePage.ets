@@ -3,7 +3,8 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { ProjectTree, VolumeTree, Chapter, Project } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface WorkspacePageParams {
   projectId: string

@@ -3,7 +3,8 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, WindowSizeClass, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface StarMapPageParams {
   starmapId: string
@@ -438,7 +439,7 @@ struct StarMapPage {
     .borderRadius(12)
     .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
     .position({
-      x: this.adaptiveState.sizeClass === WindowSizeClass.Expanded ? 'right' : 16,
+      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? 'right' : 16,
       y: 16
     })
   }
@@ -471,7 +472,7 @@ struct StarMapPage {
     .borderRadius(8)
     .shadow({ radius: 4, color: '#1A000000', offsetX: 0, offsetY: 2 })
     .position({
-      x: this.adaptiveState.sizeClass === WindowSizeClass.Expanded ? 'right' : 16,
+      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? 'right' : 16,
       y: 'bottom'
     })
   }
