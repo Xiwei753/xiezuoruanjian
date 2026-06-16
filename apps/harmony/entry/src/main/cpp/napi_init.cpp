@@ -110,10 +110,67 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
     return result;
 }
 
+// ── Layout Policy ──
+
+static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    size_t json_len = 0;
+    char* json = nullptr;
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
+        json = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
+    } else {
+        json = new char[1];
+        json[0] = '\0';
+    }
+
+    napi_value result = ReturnJsonString(env, writer_core_resolve_layout(json));
+    delete[] json;
+    return result;
+}
+
 // ── Workspace ──
 
 static napi_value NativeValidateWorkspace(napi_env env, napi_callback_info info) {
     return ReturnJsonString(env, writer_core_validate_workspace());
+}
+
+static napi_value NativeListWorkspaces(napi_env env, napi_callback_info info) {
+    return ReturnJsonString(env, writer_core_list_workspaces());
+}
+
+static napi_value NativeOpenWorkspace(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char path[2048] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], path, sizeof(path), nullptr);
+    }
+
+    return ReturnJsonString(env, writer_core_open_workspace(path));
+}
+
+static napi_value NativeGetWorkspaceState(napi_env env, napi_callback_info info) {
+    return ReturnJsonString(env, writer_core_get_workspace_state());
+}
+
+static napi_value NativeResolveChapterLocation(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char chapter_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], chapter_id, sizeof(chapter_id), nullptr);
+    }
+
+    return ReturnJsonString(env, writer_core_resolve_chapter_location(chapter_id));
 }
 
 // ── Project ──
@@ -662,8 +719,14 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"nativeGetLoadStatus", nullptr, NativeGetLoadStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLastError", nullptr, NativeGetLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // Layout Policy
+        {"nativeResolveLayout", nullptr, NativeResolveLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
         // Workspace
         {"nativeValidateWorkspace", nullptr, NativeValidateWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeListWorkspaces", nullptr, NativeListWorkspaces, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeOpenWorkspace", nullptr, NativeOpenWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetWorkspaceState", nullptr, NativeGetWorkspaceState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeResolveChapterLocation", nullptr, NativeResolveChapterLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
         // Project
         {"nativeListProjects", nullptr, NativeListProjects, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetProjectTree", nullptr, NativeGetProjectTree, nullptr, nullptr, nullptr, napi_default, nullptr},

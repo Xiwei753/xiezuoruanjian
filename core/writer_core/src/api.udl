@@ -949,4 +949,82 @@ interface WriterAppService {
     ActionResultDto execute_action(string action_id, string args_json, string context_json);
 
     boolean ai_available();
+
+    // ── Layout Policy ──
+
+    LayoutPlanDto resolve_layout(WindowMetricsDto metrics);
+};
+
+// ── Layout Policy DTOs ──
+
+enum FoldPostureDto {
+    "Unknown",
+    "FullyOpened",
+    "HalfOpened",
+    "Closed",
+};
+
+enum OrientationDto {
+    "Unknown",
+    "Portrait",
+    "Landscape",
+};
+
+enum PointerKindDto {
+    "Unknown",
+    "Touch",
+    "Stylus",
+    "Mouse",
+};
+
+enum WidthClassDto {
+    "Compact",
+    "Medium",
+    "Expanded",
+};
+
+enum HeightClassDto {
+    "Compact",
+    "Medium",
+    "Expanded",
+};
+
+enum ShellModeDto {
+    "SinglePane",
+    "SupportingPane",
+    "TwoPane",
+};
+
+enum EditorModeDto {
+    "FullWidth",
+    "CenteredPaper",
+};
+
+enum NavigationModeDto {
+    "Stack",
+    "ListDetail",
+};
+
+dictionary WindowMetricsDto {
+    float width_vp;
+    float height_vp;
+    float safe_top_vp;
+    float safe_bottom_vp;
+    boolean keyboard_visible;
+    FoldPostureDto fold_posture;
+    OrientationDto orientation;
+    PointerKindDto pointer;
+};
+
+dictionary LayoutPlanDto {
+    WidthClassDto width_class;
+    HeightClassDto height_class;
+    ShellModeDto shell_mode;
+    EditorModeDto editor_mode;
+    NavigationModeDto navigation_mode;
+    float content_max_width_vp;
+    float page_padding_vp;
+    u8 grid_columns;
+    boolean show_side_panel;
+    boolean show_bottom_bar;
 };

@@ -15,6 +15,12 @@ export interface AppContextConfig {
   autoSaveIntervalMs: number
   enableSync: boolean
   enableLogging: boolean
+  /**
+   * native smoke test 模式：禁止 mock 降级。
+   * 在 CI 验收中设为 true，确保所有操作走真实 Rust Core。
+   * 如果 native 初始化失败，不会降级到 mock，而是直接报错。
+   */
+  nativeSmokeTest: boolean
 }
 
 const DEFAULT_WORKSPACE_DIR_NAME = 'writer-workspace'
@@ -57,7 +63,8 @@ export class AppContext {
           enableAutoSave: true,
           autoSaveIntervalMs: 30000,
           enableSync: false,
-          enableLogging: true
+          enableLogging: true,
+          nativeSmokeTest: false
         }
       }
       AppContext.instance = new AppContext(config)
@@ -79,7 +86,8 @@ export class AppContext {
       enableAutoSave: this.config.enableAutoSave,
       autoSaveIntervalMs: this.config.autoSaveIntervalMs,
       enableSync: this.config.enableSync,
-      enableLogging: this.config.enableLogging
+      enableLogging: this.config.enableLogging,
+      nativeSmokeTest: this.config.nativeSmokeTest
     }
     return c
   }
@@ -109,12 +117,18 @@ export class AppContext {
     return this.config.environment === 'native'
   }
 
+  isNativeSmokeTest(): boolean {
+    return this.config.nativeSmokeTest
+  }
+
   isNativeInitFailed(): boolean {
     return this.nativeInitFailed
   }
 
   markNativeInitFailed(): void {
     this.nativeInitFailed = true
+    // 在 nativeSmokeTest 模式下，native 初始化失败不降级到 mock
+    // 调用方应检查 isNativeInitFailed() 并报错
   }
 
 
@@ -127,6 +141,8 @@ export class AppContext {
       return
     }
 
+    // 在 nativeSmokeTest 模式下禁止从 mock 切换到 native
+    // 必须在初始化时就指定 native 环境
     this.config.environment = 'native'
     if (workspacePath) {
       this.config.workspacePath = workspacePath

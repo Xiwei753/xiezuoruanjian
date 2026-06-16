@@ -373,5 +373,11 @@ class AppServiceBridge(workspacePath: String) {
     } catch (e: UnsatisfiedLinkError) {
         false
     }
+
+    // ── Layout Policy ──
+
+    fun resolveLayout(metrics: uniffi.writer_core.WindowMetricsDto): BridgeResult<uniffi.writer_core.LayoutPlanDto> = wrapResult {
+        service.resolveLayout(metrics)
+    }
 }
 

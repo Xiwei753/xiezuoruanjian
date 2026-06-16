@@ -278,6 +278,9 @@ pub struct AppBackend {
     current_setting_smooth_cursor_enabled: bool,
     current_setting_typing_animation_duration_ms: u32,
     current_setting_smooth_cursor_duration_ms: u32,
+
+    // ── Layout Policy ──
+    resolve_layout: qt_method!(fn(&self, width_vp: f64, height_vp: f64, safe_top_vp: f64, safe_bottom_vp: f64, keyboard_visible: bool, fold_posture: QString, orientation: QString, pointer: QString) -> QJsonObject),
 }
 
 impl AppBackend {
@@ -399,6 +402,57 @@ impl AppBackend {
     fn set_ai_enabled(&mut self, val: bool) {
         self.current_ai_enabled = val;
         self.ai_enabled_changed();
+    }
+
+    // ── Layout Policy ──
+
+    fn resolve_layout(
+        &self,
+        width_vp: f64,
+        height_vp: f64,
+        safe_top_vp: f64,
+        safe_bottom_vp: f64,
+        keyboard_visible: bool,
+        fold_posture: QString,
+        orientation: QString,
+        pointer: QString,
+    ) -> QJsonObject {
+        use writer_core::layout_policy::{
+            FoldPosture, Orientation, PointerKind, WindowMetrics, resolve_layout,
+        };
+
+        let fp = match fold_posture.to_string().as_str() {
+            "FullyOpened" => FoldPosture::FullyOpened,
+            "HalfOpened" => FoldPosture::HalfOpened,
+            "Closed" => FoldPosture::Closed,
+            _ => FoldPosture::Unknown,
+        };
+        let orient = match orientation.to_string().as_str() {
+            "Portrait" => Orientation::Portrait,
+            "Landscape" => Orientation::Landscape,
+            _ => Orientation::Unknown,
+        };
+        let ptr = match pointer.to_string().as_str() {
+            "Touch" => PointerKind::Touch,
+            "Stylus" => PointerKind::Stylus,
+            "Mouse" => PointerKind::Mouse,
+            _ => PointerKind::Unknown,
+        };
+
+        let metrics = WindowMetrics {
+            width_vp: width_vp as f32,
+            height_vp: height_vp as f32,
+            safe_top_vp: safe_top_vp as f32,
+            safe_bottom_vp: safe_bottom_vp as f32,
+            keyboard_visible,
+            fold_posture: fp,
+            orientation: orient,
+            pointer: ptr,
+        };
+
+        let plan = resolve_layout(&metrics);
+        let json = serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string());
+        qjson_object_from_json(&json)
     }
 
     fn query_system_color_scheme(&mut self) {

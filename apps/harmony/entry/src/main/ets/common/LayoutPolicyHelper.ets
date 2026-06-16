@@ -1,10 +1,12 @@
 /**
  * LayoutPolicyHelper — 与 Core layout_policy.rs 完全一致的布局策略纯函数
  *
- * 本文件是 Core resolve_layout() 的 ArkTS 镜像，供 Mock 模式使用。
- * 当 Core 通过 FFI 接入后，删除本文件，改用 Core 返回值。
+ * ⚠️ DEPRECATED: 本文件仅用于 Mock 模式（MockWriterCoreBridge）。
+ * 正式 native 模式必须通过 bridge.resolveLayout() 调用 Core FFI。
+ * 当 Mock 模式被移除后，本文件应一并删除。
  *
  * 断点阈值、映射规则、特殊规则覆盖必须与 Core layout_policy.rs 保持同步。
+ * 任何布局策略变更必须先在 Core layout_policy.rs 中修改，再同步到本文件。
  */
 
 import {

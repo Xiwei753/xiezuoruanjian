@@ -14,8 +14,15 @@ char*  writer_core_get_last_error(void);
 int32_t writer_core_calculate_word_count(const char* text);
 void    writer_core_free_string(char* ptr);
 
+// ── Layout Policy ──
+char*  writer_core_resolve_layout(const char* metrics_json);
+
 // ── Workspace ──
 char*  writer_core_validate_workspace(void);
+char*  writer_core_list_workspaces(void);
+char*  writer_core_open_workspace(const char* path);
+char*  writer_core_get_workspace_state(void);
+char*  writer_core_resolve_chapter_location(const char* chapter_id);
 
 // ── Project ──
 char*  writer_core_list_projects(void);

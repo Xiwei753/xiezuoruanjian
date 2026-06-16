@@ -537,4 +537,12 @@ impl WriterAppService {
     pub fn ai_available(&self) -> bool {
         self.api.ai_available()
     }
+
+    // ── Layout Policy ──
+
+    pub fn resolve_layout(&self, metrics: crate::api::WindowMetricsDto) -> crate::api::LayoutPlanDto {
+        let core_metrics: crate::layout_policy::WindowMetrics = metrics.into();
+        let plan = crate::layout_policy::resolve_layout(&core_metrics);
+        plan.into()
+    }
 }

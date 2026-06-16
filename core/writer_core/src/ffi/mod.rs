@@ -26,7 +26,7 @@ use once_cell::sync::OnceCell;
 
 use crate::facade::WriterCore;
 
-static CORE: OnceCell<Mutex<Option<WriterCore>>> = OnceCell::new();
+pub(crate) static CORE: OnceCell<Mutex<Option<WriterCore>>> = OnceCell::new();
 static LAST_ERROR: OnceCell<Mutex<String>> = OnceCell::new();
 
 pub(crate) fn set_last_error(msg: &str) {

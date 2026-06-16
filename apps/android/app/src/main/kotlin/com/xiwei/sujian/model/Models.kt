@@ -491,3 +491,61 @@ data class ProjectStatsSummary(
     val projectId: String,
     val wordCount: Long
 )
+
+// ── Layout Policy Models ──
+
+enum class FoldPosture {
+    Unknown, FullyOpened, HalfOpened, Closed
+}
+
+enum class Orientation {
+    Unknown, Portrait, Landscape
+}
+
+enum class PointerKind {
+    Unknown, Touch, Stylus, Mouse
+}
+
+enum class WidthClass {
+    Compact, Medium, Expanded
+}
+
+enum class HeightClass {
+    Compact, Medium, Expanded
+}
+
+enum class ShellMode {
+    SinglePane, SupportingPane, TwoPane
+}
+
+enum class EditorMode {
+    FullWidth, CenteredPaper
+}
+
+enum class NavigationMode {
+    Stack, ListDetail
+}
+
+data class WindowMetrics(
+    val widthVp: Float,
+    val heightVp: Float,
+    val safeTopVp: Float = 0f,
+    val safeBottomVp: Float = 0f,
+    val keyboardVisible: Boolean = false,
+    val foldPosture: FoldPosture = FoldPosture.Unknown,
+    val orientation: Orientation = Orientation.Portrait,
+    val pointer: PointerKind = PointerKind.Touch
+)
+
+data class LayoutPlan(
+    val widthClass: WidthClass,
+    val heightClass: HeightClass,
+    val shellMode: ShellMode,
+    val editorMode: EditorMode,
+    val navigationMode: NavigationMode,
+    val contentMaxWidthVp: Float,
+    val pagePaddingVp: Float,
+    val gridColumns: Int,
+    val showSidePanel: Boolean,
+    val showBottomBar: Boolean
+)

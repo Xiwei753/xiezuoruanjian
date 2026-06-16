@@ -90,34 +90,26 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   /**
-   * 通过 getProjectTree 遍历所有项目，查找 chapterId 所在的 projectId 和 volumeId。
-   * 这是临时方案：Core FFI 应提供 resolveChapterLocation(chapterId) 或章节操作直接接受 chapterId。
-   * 在 Core 提供此能力之前，每次调用时遍历查找（性能差但正确，不做长期缓存）。
+   * 通过 Core FFI 的 resolveChapterLocation 查找 chapterId 所在的 projectId 和 volumeId。
+   * 不再使用遍历项目树的临时方案。
    */
-  private async resolveChapterViaTree(chapterId: string): Promise<{ projectId: string, volumeId: string } | null> {
-    const projectsResult = await this.listProjects()
-    if (!projectsResult.success || !projectsResult.data) {
+  private async resolveChapterLocation(chapterId: string): Promise<{ projectId: string, volumeId: string } | null> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeResolveChapterLocation(chapterId)
+      const result = this.parseEnvelope<{ projectId: string, volumeId: string, chapterId: string }>(jsonStr)
+      if (result.success && result.data) {
+        return { projectId: result.data.projectId, volumeId: result.data.volumeId }
+      }
+      return null
+    } catch (e) {
       return null
     }
-    for (const project of projectsResult.data) {
-      const treeResult = await this.getProjectTree(project.id)
-      if (!treeResult.success || !treeResult.data) {
-        continue
-      }
-      for (const vt of treeResult.data.volumes) {
-        for (const ch of vt.chapters) {
-          if (ch.id === chapterId) {
-            return { projectId: project.id, volumeId: vt.volume.id }
-          }
-        }
-      }
-    }
-    return null
   }
 
   /**
-   * 通过 getProjectTree 遍历，查找 volumeId 所属的 projectId。
-   * 临时方案，不做长期缓存。
+   * 通过 Core FFI 的 resolveChapterLocation 查找 volumeId 所属的 projectId。
+   * 先尝试用 volumeId 作为 chapterId 的方式查找（不适用），
+   * 仍需遍历项目树，但未来 Core 应提供 resolveVolumeLocation。
    */
   private async resolveVolumeProjectId(volumeId: string): Promise<string | null> {
     const projectsResult = await this.listProjects()
@@ -332,7 +324,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterContent>> {
-    const loc = await this.resolveChapterViaTree(chapterId)
+    const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
@@ -345,7 +337,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    const loc = await this.resolveChapterViaTree(chapterId)
+    const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
@@ -358,7 +350,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    const loc = await this.resolveChapterViaTree(chapterId)
+    const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
@@ -384,7 +376,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
-    const loc = await this.resolveChapterViaTree(chapterId)
+    const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }
@@ -397,7 +389,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
-    const loc = await this.resolveChapterViaTree(chapterId)
+    const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
       return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到` }
     }

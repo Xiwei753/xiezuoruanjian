@@ -21,5 +21,6 @@ object BridgeProvider {
     fun getSettingsBridge(context: Context): SettingsBridge = SettingsBridge(getAppServiceBridge(context))
     fun getSyncBridge(context: Context): SyncBridge = SyncBridge(getAppServiceBridge(context))
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getAppServiceBridge(context))
+    fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = LayoutPolicyBridge(getAppServiceBridge(context))
     fun getAiStatus(context: Context): Boolean = getAppServiceBridge(context).aiAvailable()
 }

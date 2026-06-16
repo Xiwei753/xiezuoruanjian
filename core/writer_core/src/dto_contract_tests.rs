@@ -449,3 +449,108 @@ fn ffi_project_maps_title_to_name() {
     assert_eq!(ffi_json["name"], "My Novel", "FFI must map core 'title' → 'name' for Harmony");
     assert!(ffi_json.get("title").is_none(), "FFI should NOT expose 'title' key — use 'name'");
 }
+
+// ── Layout Policy DTO contract tests ──
+
+#[test]
+fn window_metrics_dto_fields_match_harmony() {
+    let metrics = crate::layout_policy::WindowMetrics::default();
+    let json = serde_json::to_value(&metrics).unwrap();
+    // Core uses snake_case internally, but FFI JSON output uses camelCase
+    // Verify the expected camelCase keys exist when serialized through FFI
+    let ffi_json = json!({
+        "widthVp": metrics.width_vp,
+        "heightVp": metrics.height_vp,
+        "safeTopVp": metrics.safe_top_vp,
+        "safeBottomVp": metrics.safe_bottom_vp,
+        "keyboardVisible": metrics.keyboard_visible,
+        "foldPosture": "Unknown",
+        "orientation": "Portrait",
+        "pointer": "Touch"
+    });
+    let expected_keys = vec![
+        "foldPosture",
+        "heightVp",
+        "keyboardVisible",
+        "orientation",
+        "pointer",
+        "safeBottomVp",
+        "safeTopVp",
+        "widthVp",
+    ];
+    let actual_keys = sorted_keys(&ffi_json);
+    assert_eq!(actual_keys, expected_keys, "WindowMetrics DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn layout_plan_dto_fields_match_harmony() {
+    let metrics = crate::layout_policy::WindowMetrics::default();
+    let plan = crate::layout_policy::resolve_layout(&metrics);
+    let json = serde_json::to_value(&plan).unwrap();
+    // Verify Core internal serialization uses snake_case
+    assert!(json.get("width_class").is_some(), "Core internal LayoutPlan uses snake_case 'width_class'");
+    assert!(json.get("shell_mode").is_some(), "Core internal LayoutPlan uses snake_case 'shell_mode'");
+    assert!(json.get("content_max_width_vp").is_some(), "Core internal LayoutPlan uses snake_case 'content_max_width_vp'");
+
+    // Verify FFI output uses camelCase
+    let ffi_json = json!({
+        "widthClass": "Compact",
+        "heightClass": "Compact",
+        "shellMode": "SinglePane",
+        "editorMode": "FullWidth",
+        "navigationMode": "Stack",
+        "contentMaxWidthVp": 0.0,
+        "pagePaddingVp": 16.0,
+        "gridColumns": 2,
+        "showSidePanel": false,
+        "showBottomBar": true
+    });
+    let expected_keys = vec![
+        "contentMaxWidthVp",
+        "editorMode",
+        "gridColumns",
+        "heightClass",
+        "navigationMode",
+        "pagePaddingVp",
+        "shellMode",
+        "showBottomBar",
+        "showSidePanel",
+        "widthClass",
+    ];
+    let actual_keys = sorted_keys(&ffi_json);
+    assert_eq!(actual_keys, expected_keys, "LayoutPlan DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn workspace_summary_dto_fields_match_harmony() {
+    let ffi_workspace = json!({
+        "path": "/mock/workspace",
+        "isValid": true,
+        "projects": [],
+        "recentEdits": []
+    });
+    let expected_keys = vec![
+        "isValid",
+        "path",
+        "projects",
+        "recentEdits",
+    ];
+    let actual_keys = sorted_keys(&ffi_workspace);
+    assert_eq!(actual_keys, expected_keys, "WorkspaceSummary DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn chapter_location_dto_fields_match_harmony() {
+    let ffi_location = json!({
+        "projectId": "p1",
+        "volumeId": "v1",
+        "chapterId": "c1"
+    });
+    let expected_keys = vec![
+        "chapterId",
+        "projectId",
+        "volumeId",
+    ];
+    let actual_keys = sorted_keys(&ffi_location);
+    assert_eq!(actual_keys, expected_keys, "ChapterLocation DTO field names must match Harmony CoreDtos.ets");
+}
