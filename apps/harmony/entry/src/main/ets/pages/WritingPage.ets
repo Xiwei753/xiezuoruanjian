@@ -285,7 +285,7 @@ struct WritingPage {
         Scroll() {
           TextArea({ text: this.content, placeholder: '开始写作...' })
             .width('100%')
-            .minHeight('100%')
+            .constraintSize({ minHeight: '100%' })
             .fontSize(this.settings.fontSize)
             .fontFamily(this.settings.fontFamily)
             .lineHeight(this.settings.lineHeight * this.settings.fontSize)
@@ -293,7 +293,7 @@ struct WritingPage {
             .padding({ left: 24, right: 24, top: 20, bottom: 20 })
             .fontColor(this.themeConfig.colors.textPrimary)
             .placeholderColor(this.themeConfig.colors.textHint)
-            .onChange((value: string) => this.onContentChange(value))
+            .onChange((value: string): void => { this.onContentChange(value) })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
