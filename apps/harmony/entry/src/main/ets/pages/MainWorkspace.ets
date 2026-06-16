@@ -33,6 +33,7 @@ import {
   AdaptiveContext,
   AdaptiveState,
   AdaptiveObserver,
+  SimpleAdaptiveObserver,
 
   getAdaptiveContext,
   getAdaptiveState
@@ -122,11 +123,9 @@ struct MainWorkspace {
     this.themeAdapter.addObserver(this.themeObserver!)
 
     // 响应式断点观察者
-    this.adaptiveObserver = {
-      onWindowSizeChange(state: AdaptiveState) {
-        self.adaptiveState = state
-      }
-    }
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
     this.adaptiveContext.addObserver(this.adaptiveObserver!)
 
     // 自动保存观察者
@@ -907,7 +906,7 @@ struct MainWorkspace {
         .layoutWeight(1)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
-        .align(Alignment.TopCenter)
+        .align(Alignment.Top)
       }
 
       // 底部工具栏

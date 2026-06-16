@@ -3,7 +3,7 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface StarMapPageParams {
@@ -54,11 +54,9 @@ struct StarMapPage {
     this.themeAdapter.addObserver(this.themeObserver!)
 
     // 注册响应式布局观察者
-    this.adaptiveObserver = {
-      onWindowSizeChange(state: AdaptiveState) {
-        self.adaptiveState = state
-      }
-    }
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     // 初始化时同步一次状态
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()

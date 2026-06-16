@@ -4,7 +4,7 @@ import { ChapterData, SaveReceipt, LocalSettings } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface WritingPageParams {
@@ -66,11 +66,9 @@ struct WritingPage {
     this.themeAdapter.addObserver(this.themeObserver!)
 
     // Setup adaptive layout observer
-    this.adaptiveObserver = {
-      onWindowSizeChange: (state: AdaptiveState): void => {
-        self.adaptiveState = state
-      }
-    }
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
     // Setup auto-save lifecycle observer

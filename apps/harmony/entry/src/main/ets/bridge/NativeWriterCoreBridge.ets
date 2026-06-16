@@ -21,7 +21,9 @@ import {
   SyncDiagnostics,
   SyncResult,
   RecentEdit,
-  ErrorCode
+  ErrorCode,
+  WindowMetrics,
+  LayoutPlan
 } from '../model/CoreDtos'
 
 import nativeModule from 'libwriter_core.so'
@@ -793,6 +795,17 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     try {
       const available: number = this.getNativeModule().nativeIsAiAvailable() as number
       return { success: true, data: available === 1 }
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
+  }
+
+  // ── Layout Policy ──
+
+  async resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeResolveLayout(JSON.stringify(metrics))
+      return this.parseEnvelope<LayoutPlan>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }

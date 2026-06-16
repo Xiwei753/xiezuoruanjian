@@ -4,7 +4,7 @@ import { Project, RecentEdit, WritingStats } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 @Entry
@@ -32,11 +32,9 @@ struct Index {
     })
     this.themeAdapter.addObserver(this.themeObserver!)
 
-    this.adaptiveObserver = {
-      onWindowSizeChange(state: AdaptiveState) {
-        self.adaptiveState = state
-      }
-    }
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
     this.initAndLoad()
@@ -207,7 +205,7 @@ struct Index {
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        .align(Alignment.TopCenter)
+        .align(Alignment.Top)
       }
     }
     .width('100%')

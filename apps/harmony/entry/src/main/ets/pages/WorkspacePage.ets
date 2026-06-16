@@ -3,7 +3,7 @@ import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { ProjectTree, VolumeTree, Chapter, Project } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface WorkspacePageParams {
@@ -43,11 +43,9 @@ struct WorkspacePage {
     })
     this.themeAdapter.addObserver(this.themeObserver!)
 
-    this.adaptiveObserver = {
-      onWindowSizeChange(state: AdaptiveState) {
-        self.adaptiveState = state
-      }
-    }
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
   }
 

@@ -1,4 +1,5 @@
 import window from '@ohos.window'
+import display from '@ohos.display'
 import hilog from '@ohos.hilog'
 import { getBridge } from './AppContext'
 import {
@@ -26,6 +27,24 @@ export interface AdaptiveState {
  */
 export interface AdaptiveObserver {
   onWindowSizeChange(state: AdaptiveState): void
+}
+
+/**
+ * AdaptiveObserver 的便捷实现类
+ *
+ * ArkTS 要求对象字面量必须有显式类型声明（arkts-no-untyped-obj-literals），
+ * 因此提供此类替代在各页面中直接使用匿名对象字面量。
+ */
+export class SimpleAdaptiveObserver implements AdaptiveObserver {
+  private callback: (state: AdaptiveState) => void
+
+  constructor(callback: (state: AdaptiveState) => void) {
+    this.callback = callback
+  }
+
+  onWindowSizeChange(state: AdaptiveState): void {
+    this.callback(state)
+  }
 }
 
 const TAG = 'AdaptiveContext'
@@ -65,7 +84,8 @@ export class AdaptiveContext {
       // 读取初始尺寸
       const properties = this.mainWindow.getWindowProperties()
       const rect = properties.windowRect
-      const density = properties.densityPixels
+      const displayInfo = display.getDefaultDisplaySync()
+      const density = displayInfo.densityPixels
       const widthVp = rect.width / density
       const heightVp = rect.height / density
       await this.updateState(widthVp, heightVp)
@@ -113,7 +133,7 @@ export class AdaptiveContext {
    * 返回的函数可用于取消订阅
    */
   onWindowSizeChange(callback: (state: AdaptiveState) => void): () => void {
-    const observer: AdaptiveObserver = { onWindowSizeChange: callback }
+    const observer: AdaptiveObserver = new SimpleAdaptiveObserver(callback)
     this.observers.add(observer)
     // 立即通知当前状态
     callback(this.getCurrentState())
@@ -144,7 +164,8 @@ export class AdaptiveContext {
           return
         }
         const properties = this.mainWindow.getWindowProperties()
-        const density = properties.densityPixels
+        const displayInfo = display.getDefaultDisplaySync()
+        const density = displayInfo.densityPixels
         const widthVp = data.width / density
         const heightVp = data.height / density
         this.updateState(widthVp, heightVp)

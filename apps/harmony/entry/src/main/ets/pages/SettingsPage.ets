@@ -13,7 +13,7 @@ import {
 } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
-import { AdaptiveContext, AdaptiveState, AdaptiveObserver } from '../common/AdaptiveContext'
+import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface SettingsSelectOption {
@@ -60,11 +60,9 @@ struct SettingsPage {
     this.themeAdapter.addObserver(this.themeObserver!)
 
     // 注册响应式布局观察者
-    this.adaptiveObserver = {
-      onWindowSizeChange(state: AdaptiveState) {
-        self.adaptiveState = state
-      }
-    }
+    this.adaptiveObserver = new SimpleAdaptiveObserver((state: AdaptiveState) => {
+      self.adaptiveState = state
+    })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     // 初始化时同步一次状态
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
@@ -237,7 +235,7 @@ struct SettingsPage {
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        .align(Alignment.TopCenter)
+        .align(Alignment.Top)
       }
     }
     .width('100%')
