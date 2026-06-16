@@ -1,6 +1,6 @@
 # HarmonyOS NEXT 技术路线
 
-Status: draft
+Status: wip
 Last verified: 2026-06-14
 Truth source: docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md
 
@@ -8,7 +8,9 @@ Truth source: docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md
 
 ## 一、定位
 
-鸿蒙端是 writer_core 的第三个客户端壳层，遵循 Core-first 架构约束。
+**Harmony 当前为 WIP shell，不认为已完成 Rust Core 全量接入，不认为已完成多端 UI 对齐，不作为正式端发布。**
+
+鸿蒙端是 writer_core 的第三个客户端壳层，遵循 Core-first 架构约束。当前仅完成壳层结构搭建，未接入 Rust Core，所有数据均为 mock。
 
 **核心原则**：
 - 鸿蒙端只负责 UI 渲染、ArkUI 生命周期和系统权限
@@ -34,6 +36,8 @@ Truth source: docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md
 
 **目标**：建立 ArkTS 页面结构和 mock bridge，验证路由和状态流。
 
+> **约束声明**：当前只是壳层验证，不代表功能完成。所有页面和桥接均使用 mock 数据，未接入 Rust Core，不认为已完成 Rust Core 全量接入，不认为已完成多端 UI 对齐，不作为正式端发布。
+
 **交付物**：
 - `apps/harmony/` 目录结构
 - Index.ets - 应用入口
@@ -46,7 +50,7 @@ Truth source: docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md
 **约束**：
 - 不接入 Rust Core
 - 不使用 UniFFI / NAPI / C++ 桥
-- 返回 mock 数据
+- 返回 mock 数据（仅供开发验证，不是正式功能）
 - 只验证页面结构和接口形状
 
 ### 阶段 2：接口设计 (Desktop 抢修完成后)
@@ -116,7 +120,18 @@ apps/harmony/
 
 ---
 
-## 七、参考文档
+## 七、WIP 声明
+
+```
+Harmony 当前为 WIP shell
+不认为已完成 Rust Core 全量接入
+不认为已完成多端 UI 对齐
+不作为正式端发布
+```
+
+---
+
+## 八、参考文档
 
 - [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](CROSS_PLATFORM_CAPABILITY_CONTRACT.md) - 跨平台能力契约
 - [API_CONTRACTS.md](API_CONTRACTS.md) - 接口边界与交互契约
