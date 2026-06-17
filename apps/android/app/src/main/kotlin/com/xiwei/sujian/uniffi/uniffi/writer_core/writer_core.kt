@@ -3055,18 +3055,7 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     companion object
     
 }
-    }
-    )
-    }
-    
 
-    
-
-    
-    
-    companion object
-    
-}
 
 /**
  * @suppress
