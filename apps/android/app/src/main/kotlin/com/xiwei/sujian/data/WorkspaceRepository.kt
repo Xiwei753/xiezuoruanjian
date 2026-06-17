@@ -104,11 +104,12 @@ class WorkspaceRepository(private val context: Context) {
         deletedChars: Int,
         pastedChars: Int,
         aiInsertedChars: Int,
+        durationSeconds: Int,
         sessionId: String
     ): BridgeResult<Boolean> {
         return writingBridge.recordWritingEvent(
             deviceId, projectId, volumeId, chapterId,
-            source, insertedChars, deletedChars, pastedChars, aiInsertedChars, sessionId
+            source, insertedChars, deletedChars, pastedChars, aiInsertedChars, durationSeconds, sessionId
         )
     }
 
@@ -234,9 +235,10 @@ class WorkspaceRepository(private val context: Context) {
         chapterId: String,
         oldText: String,
         newText: String,
+        durationSeconds: UInt,
         sessionId: String
     ): BridgeResult<Boolean> {
-        return writingBridge.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, sessionId)
+        return writingBridge.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, durationSeconds, sessionId)
     }
 
 }

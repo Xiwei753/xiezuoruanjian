@@ -241,10 +241,15 @@ class EditorViewModel(
         if (statsLastEventMs == 0L || (nowMs - statsLastEventMs) > 5 * 60 * 1000) {
             statsSessionId = java.util.UUID.randomUUID().toString()
         }
+        val durationSeconds = if (statsLastEventMs > 0L) {
+            ((nowMs - statsLastEventMs) / 1000).toUInt()
+        } else {
+            0u
+        }
         statsLastEventMs = nowMs
 
         workspaceRepository.processWritingEvent(
-            statsDeviceId, "android", pid, vid, cid, oldText, newText, statsSessionId
+            statsDeviceId, "android", pid, vid, cid, oldText, newText, durationSeconds, statsSessionId
         )
     }
 
