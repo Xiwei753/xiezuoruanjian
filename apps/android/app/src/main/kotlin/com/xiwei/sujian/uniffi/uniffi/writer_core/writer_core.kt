@@ -1015,6 +1015,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_validate_workspace(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_resolve_layout(`ptr`: Pointer,`metrics`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_func_create_project_in_workspace(`workspace`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_func_init_workspace(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -2098,6 +2100,8 @@ public interface WriterAppServiceInterface {
     
     fun `validateWorkspace`(): kotlin.Boolean
     
+    fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto
+    
     companion object
 }
 
@@ -3026,6 +3030,30 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_validate_workspace(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(WriterException::class)override fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto {
+            return FfiConverterTypeLayoutPlanDto.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_resolve_layout(
+        it, FfiConverterTypeWindowMetricsDto.lower(`metrics`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    
+     
+    companion object
+    
 }
     }
     )
@@ -6220,6 +6248,367 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
 }
 
 
+
+
+
+
+enum class FoldPostureDto {
+    
+    UNKNOWN,
+    FULLY_OPENED,
+    HALF_OPENED,
+    CLOSED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFoldPostureDto: FfiConverterRustBuffer<FoldPostureDto> {
+    override fun read(buf: ByteBuffer) = try {
+        FoldPostureDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FoldPostureDto) = 4UL
+
+    override fun write(value: FoldPostureDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+enum class OrientationDto {
+    
+    UNKNOWN,
+    PORTRAIT,
+    LANDSCAPE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeOrientationDto: FfiConverterRustBuffer<OrientationDto> {
+    override fun read(buf: ByteBuffer) = try {
+        OrientationDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: OrientationDto) = 4UL
+
+    override fun write(value: OrientationDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+enum class PointerKindDto {
+    
+    UNKNOWN,
+    TOUCH,
+    STYLUS,
+    MOUSE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePointerKindDto: FfiConverterRustBuffer<PointerKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        PointerKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PointerKindDto) = 4UL
+
+    override fun write(value: PointerKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+enum class WidthClassDto {
+    
+    COMPACT,
+    MEDIUM,
+    EXPANDED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWidthClassDto: FfiConverterRustBuffer<WidthClassDto> {
+    override fun read(buf: ByteBuffer) = try {
+        WidthClassDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: WidthClassDto) = 4UL
+
+    override fun write(value: WidthClassDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+enum class HeightClassDto {
+    
+    COMPACT,
+    MEDIUM,
+    EXPANDED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeHeightClassDto: FfiConverterRustBuffer<HeightClassDto> {
+    override fun read(buf: ByteBuffer) = try {
+        HeightClassDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: HeightClassDto) = 4UL
+
+    override fun write(value: HeightClassDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+enum class ShellModeDto {
+    
+    SINGLE_PANE,
+    SUPPORTING_PANE,
+    TWO_PANE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeShellModeDto: FfiConverterRustBuffer<ShellModeDto> {
+    override fun read(buf: ByteBuffer) = try {
+        ShellModeDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ShellModeDto) = 4UL
+
+    override fun write(value: ShellModeDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+enum class EditorModeDto {
+    
+    FULL_WIDTH,
+    CENTERED_PAPER;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEditorModeDto: FfiConverterRustBuffer<EditorModeDto> {
+    override fun read(buf: ByteBuffer) = try {
+        EditorModeDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: EditorModeDto) = 4UL
+
+    override fun write(value: EditorModeDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+enum class NavigationModeDto {
+    
+    STACK,
+    LIST_DETAIL;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNavigationModeDto: FfiConverterRustBuffer<NavigationModeDto> {
+    override fun read(buf: ByteBuffer) = try {
+        NavigationModeDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: NavigationModeDto) = 4UL
+
+    override fun write(value: NavigationModeDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+data class WindowMetricsDto (
+    var `widthVp`: kotlin.Float,
+    var `heightVp`: kotlin.Float,
+    var `safeTopVp`: kotlin.Float,
+    var `safeBottomVp`: kotlin.Float,
+    var `keyboardVisible`: kotlin.Boolean,
+    var `foldPosture`: FoldPostureDto,
+    var `orientation`: OrientationDto,
+    var `pointer`: PointerKindDto
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWindowMetricsDto: FfiConverterRustBuffer<WindowMetricsDto> {
+    override fun read(buf: ByteBuffer): WindowMetricsDto {
+        return WindowMetricsDto(
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeFoldPostureDto.read(buf),
+            FfiConverterTypeOrientationDto.read(buf),
+            FfiConverterTypePointerKindDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WindowMetricsDto) = (
+            FfiConverterFloat.allocationSize(value.`widthVp`) +
+            FfiConverterFloat.allocationSize(value.`heightVp`) +
+            FfiConverterFloat.allocationSize(value.`safeTopVp`) +
+            FfiConverterFloat.allocationSize(value.`safeBottomVp`) +
+            FfiConverterBoolean.allocationSize(value.`keyboardVisible`) +
+            FfiConverterTypeFoldPostureDto.allocationSize(value.`foldPosture`) +
+            FfiConverterTypeOrientationDto.allocationSize(value.`orientation`) +
+            FfiConverterTypePointerKindDto.allocationSize(value.`pointer`)
+    )
+
+    override fun write(value: WindowMetricsDto, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`widthVp`, buf)
+            FfiConverterFloat.write(value.`heightVp`, buf)
+            FfiConverterFloat.write(value.`safeTopVp`, buf)
+            FfiConverterFloat.write(value.`safeBottomVp`, buf)
+            FfiConverterBoolean.write(value.`keyboardVisible`, buf)
+            FfiConverterTypeFoldPostureDto.write(value.`foldPosture`, buf)
+            FfiConverterTypeOrientationDto.write(value.`orientation`, buf)
+            FfiConverterTypePointerKindDto.write(value.`pointer`, buf)
+    }
+}
+
+
+
+data class LayoutPlanDto (
+    var `widthClass`: WidthClassDto,
+    var `heightClass`: HeightClassDto,
+    var `shellMode`: ShellModeDto,
+    var `editorMode`: EditorModeDto,
+    var `navigationMode`: NavigationModeDto,
+    var `contentMaxWidthVp`: kotlin.Float,
+    var `pagePaddingVp`: kotlin.Float,
+    var `gridColumns`: kotlin.Byte,
+    var `showSidePanel`: kotlin.Boolean,
+    var `showBottomBar`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLayoutPlanDto: FfiConverterRustBuffer<LayoutPlanDto> {
+    override fun read(buf: ByteBuffer): LayoutPlanDto {
+        return LayoutPlanDto(
+            FfiConverterTypeWidthClassDto.read(buf),
+            FfiConverterTypeHeightClassDto.read(buf),
+            FfiConverterTypeShellModeDto.read(buf),
+            FfiConverterTypeEditorModeDto.read(buf),
+            FfiConverterTypeNavigationModeDto.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            buf.get().toUByte().toByte(),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LayoutPlanDto) = (
+            FfiConverterTypeWidthClassDto.allocationSize(value.`widthClass`) +
+            FfiConverterTypeHeightClassDto.allocationSize(value.`heightClass`) +
+            FfiConverterTypeShellModeDto.allocationSize(value.`shellMode`) +
+            FfiConverterTypeEditorModeDto.allocationSize(value.`editorMode`) +
+            FfiConverterTypeNavigationModeDto.allocationSize(value.`navigationMode`) +
+            FfiConverterFloat.allocationSize(value.`contentMaxWidthVp`) +
+            FfiConverterFloat.allocationSize(value.`pagePaddingVp`) +
+            1UL +
+            FfiConverterBoolean.allocationSize(value.`showSidePanel`) +
+            FfiConverterBoolean.allocationSize(value.`showBottomBar`)
+    )
+
+    override fun write(value: LayoutPlanDto, buf: ByteBuffer) {
+            FfiConverterTypeWidthClassDto.write(value.`widthClass`, buf)
+            FfiConverterTypeHeightClassDto.write(value.`heightClass`, buf)
+            FfiConverterTypeShellModeDto.write(value.`shellMode`, buf)
+            FfiConverterTypeEditorModeDto.write(value.`editorMode`, buf)
+            FfiConverterTypeNavigationModeDto.write(value.`navigationMode`, buf)
+            FfiConverterFloat.write(value.`contentMaxWidthVp`, buf)
+            FfiConverterFloat.write(value.`pagePaddingVp`, buf)
+            buf.put(value.`gridColumns`)
+            FfiConverterBoolean.write(value.`showSidePanel`, buf)
+            FfiConverterBoolean.write(value.`showBottomBar`, buf)
+    }
+}
 
 
 
