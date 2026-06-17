@@ -107,27 +107,20 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   /**
-   * 通过 Core FFI 的 resolveChapterLocation 查找 volumeId 所属的 projectId。
-   * 先尝试用 volumeId 作为 chapterId 的方式查找（不适用），
-   * 仍需遍历项目树，但未来 Core 应提供 resolveVolumeLocation。
+   * 通过 Core FFI 的 resolveVolumeLocation 查找 volumeId 所属的 projectId。
+   * 不再使用遍历项目树的临时方案。
    */
   private async resolveVolumeProjectId(volumeId: string): Promise<string | null> {
-    const projectsResult = await this.listProjects()
-    if (!projectsResult.success || !projectsResult.data) {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeResolveVolumeLocation(volumeId)
+      const result = this.parseEnvelope<{ projectId: string, volumeId: string }>(jsonStr)
+      if (result.success && result.data) {
+        return result.data.projectId
+      }
+      return null
+    } catch (e) {
       return null
     }
-    for (const project of projectsResult.data) {
-      const treeResult = await this.getProjectTree(project.id)
-      if (!treeResult.success || !treeResult.data) {
-        continue
-      }
-      for (const vt of treeResult.data.volumes) {
-        if (vt.volume.id === volumeId) {
-          return project.id
-        }
-      }
-    }
-    return null
   }
 
   private lastInitErrorCode: number = 0

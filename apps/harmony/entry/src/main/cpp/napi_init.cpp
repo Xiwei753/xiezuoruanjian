@@ -173,6 +173,19 @@ static napi_value NativeResolveChapterLocation(napi_env env, napi_callback_info 
     return ReturnJsonString(env, writer_core_resolve_chapter_location(chapter_id));
 }
 
+static napi_value NativeResolveVolumeLocation(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char volume_id[256] = {0};
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], volume_id, sizeof(volume_id), nullptr);
+    }
+
+    return ReturnJsonString(env, writer_core_resolve_volume_location(volume_id));
+}
+
 // ── Project ──
 
 static napi_value NativeListProjects(napi_env env, napi_callback_info info) {
@@ -727,6 +740,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"nativeOpenWorkspace", nullptr, NativeOpenWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWorkspaceState", nullptr, NativeGetWorkspaceState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeResolveChapterLocation", nullptr, NativeResolveChapterLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeResolveVolumeLocation", nullptr, NativeResolveVolumeLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
         // Project
         {"nativeListProjects", nullptr, NativeListProjects, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetProjectTree", nullptr, NativeGetProjectTree, nullptr, nullptr, nullptr, napi_default, nullptr},

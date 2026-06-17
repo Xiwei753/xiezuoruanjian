@@ -10,7 +10,7 @@ pub unsafe extern "C" fn writer_core_list_projects() -> *mut c_char {
             let stats = core.get_project_stats(&p.id).ok();
             serde_json::json!({
                 "id": p.id,
-                "name": p.title,
+                "title": p.title,
                 "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
                 "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
                 "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
@@ -41,7 +41,7 @@ pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char)
         let stats = core.get_project_stats(&pid).ok();
         let project_json = serde_json::json!({
             "id": project.id,
-            "name": project.title,
+            "title": project.title,
             "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
             "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
             "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
@@ -56,7 +56,7 @@ pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char)
             let vol_json = serde_json::json!({
                 "id": vol.id,
                 "projectId": pid,
-                "name": vol.title,
+                "title": vol.title,
                 "order": vol.order,
                 "chapterCount": chapters.len(),
                 "createdAt": vol.created_at,
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char)
                 serde_json::json!({
                     "id": c.id,
                     "volumeId": vol.id,
-                    "name": c.title,
+                    "title": c.title,
                     "wordCount": c.word_count,
                     "order": c.order,
                     "updatedAt": c.updated_at,
@@ -99,7 +99,7 @@ pub unsafe extern "C" fn writer_core_create_project(name: *const c_char) -> *mut
         let project = core.create_project(&title).map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": project.id,
-            "name": project.title,
+            "title": project.title,
             "volumeCount": 0,
             "chapterCount": 0,
             "totalWordCount": 0,
@@ -125,7 +125,7 @@ pub unsafe extern "C" fn writer_core_list_volumes(project_id: *const c_char) -> 
             serde_json::json!({
                 "id": v.id,
                 "projectId": pid,
-                "name": v.title,
+                "title": v.title,
                 "order": v.order,
                 "chapterCount": chapters.len(),
                 "createdAt": v.created_at,
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn writer_core_create_volume(project_id: *const c_char, na
         Ok(serde_json::json!({
             "id": vol.id,
             "projectId": pid,
-            "name": vol.title,
+            "title": vol.title,
             "order": vol.order,
             "chapterCount": 0,
             "createdAt": vol.created_at,
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn writer_core_list_chapters(project_id: *const c_char, vo
             serde_json::json!({
                 "id": c.id,
                 "volumeId": vid,
-                "name": c.title,
+                "title": c.title,
                 "wordCount": c.word_count,
                 "order": c.order,
                 "updatedAt": c.updated_at,
@@ -219,7 +219,7 @@ pub unsafe extern "C" fn writer_core_create_chapter(
         Ok(serde_json::json!({
             "id": chapter.id,
             "volumeId": vid,
-            "name": chapter.title,
+            "title": chapter.title,
             "wordCount": chapter.word_count,
             "order": chapter.order,
             "updatedAt": chapter.updated_at,

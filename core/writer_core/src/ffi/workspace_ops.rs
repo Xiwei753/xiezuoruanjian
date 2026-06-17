@@ -24,7 +24,7 @@ pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
             let stats = core.get_project_stats(&p.id).ok();
             serde_json::json!({
                 "id": p.id,
-                "name": p.title,
+                "title": p.title,
                 "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
                 "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
                 "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
@@ -37,7 +37,7 @@ pub unsafe extern "C" fn writer_core_list_workspaces() -> *mut c_char {
                 "projectId": e.project_id,
                 "volumeId": e.volume_id,
                 "chapterId": e.chapter_id,
-                "editedAt": e.timestamp
+                "timestamp": e.timestamp
             })
         }).collect();
         let summary = serde_json::json!({
@@ -81,7 +81,7 @@ pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut
     let project_jsons: Vec<serde_json::Value> = projects.iter().map(|p| {
         serde_json::json!({
             "id": p.id,
-            "name": p.title,
+            "title": p.title,
             "createdAt": p.created_at,
             "updatedAt": p.updated_at
         })
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn writer_core_open_workspace(path: *const c_char) -> *mut
             "projectId": e.project_id,
             "volumeId": e.volume_id,
             "chapterId": e.chapter_id,
-            "editedAt": e.timestamp
+            "timestamp": e.timestamp
         })
     }).collect();
 
@@ -115,7 +115,7 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
             let stats = core.get_project_stats(&p.id).ok();
             serde_json::json!({
                 "id": p.id,
-                "name": p.title,
+                "title": p.title,
                 "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
                 "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
                 "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
@@ -128,7 +128,7 @@ pub unsafe extern "C" fn writer_core_get_workspace_state() -> *mut c_char {
                 "projectId": e.project_id,
                 "volumeId": e.volume_id,
                 "chapterId": e.chapter_id,
-                "editedAt": e.timestamp
+                "timestamp": e.timestamp
             })
         }).collect();
         Ok(serde_json::json!({
@@ -175,6 +175,34 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(chapter_id: *const
     }
 }
 
+/// Resolve the project that contains a given volume.
+/// This replaces the ArkTS-side tree traversal for volumeId -> projectId.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_resolve_volume_location(volume_id: *const c_char) -> *mut c_char {
+    let vid = match c_str_to_rust(volume_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_INPUT", &format!("volume_id is null or invalid UTF-8: {}", e)),
+    };
+    match with_core(|core| {
+        let projects = core.list_projects().map_err(|e| format!("{}", e))?;
+        for p in &projects {
+            let volumes = core.list_volumes(&p.id).map_err(|e| format!("{}", e))?;
+            for v in &volumes {
+                if v.id == vid {
+                    return Ok(serde_json::json!({
+                        "projectId": p.id,
+                        "volumeId": vid
+                    }));
+                }
+            }
+        }
+        Err(format!("volume {} not found in any project", vid))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("VOLUME_NOT_FOUND", &e),
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_recent_edits() -> *mut c_char {
     match with_core(|core| {
@@ -184,7 +212,7 @@ pub unsafe extern "C" fn writer_core_get_recent_edits() -> *mut c_char {
                 "projectId": e.project_id,
                 "volumeId": e.volume_id,
                 "chapterId": e.chapter_id,
-                "editedAt": e.timestamp
+                "timestamp": e.timestamp
             })
         }).collect();
         Ok(json_arr)
