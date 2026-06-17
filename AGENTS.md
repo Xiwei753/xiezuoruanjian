@@ -42,6 +42,7 @@ apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 | 为了首行缩进往正文里插入空格 | 破坏纯文本 |
 | 把正文保存成 HTML | 正文永远是纯文本 |
 | 恢复旧的 HTML 字符串拼接排版 | 已废弃的方案 |
+| 手动修改 UniFFI 自动生成的绑定文件（`writer_core.kt` 等） | 绑定文件由 `uniffi-bindgen` 生成，手动修改会被覆盖；如果生成结果有误，应修 Rust FFI 层根源再重新生成 |
 
 ### 2.2 必须遵守
 
@@ -51,6 +52,7 @@ apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 | 新设置项记录到 `docs/settings_schema.md` | 设置 schema 是权威定义 |
 | 同步状态、删除确认、错误提示走统一状态/事件通道 | 不允许 QML 直接处理业务状态 |
 | QML 只绑定 backend 暴露的 view model / command | 不允许 QML 内部维护业务数据 |
+| UniFFI 绑定文件出错时重新生成，不手动修改 | `writer_core.kt` 等由 `uniffi-bindgen` 生成；如果生成结果有误，修 Rust FFI 层根源再重新生成 |
 
 ### 2.3 Agent 专属规则与技术路线约束
 

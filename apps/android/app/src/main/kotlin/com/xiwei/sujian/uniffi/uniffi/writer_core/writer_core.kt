@@ -860,6 +860,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -975,11 +977,11 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_perform_sync_dry_run(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_writer_core_fn_method_writerappservice_process_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`oldText`: RustBuffer.ByValue,`newText`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_process_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`platform`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`oldText`: RustBuffer.ByValue,`newText`: RustBuffer.ByValue,`durationSeconds`: Int,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_record_recent_edit(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_record_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`insertedChars`: Int,`deletedChars`: Int,`pastedChars`: Int,`aiInsertedChars`: Int,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_writer_core_fn_method_writerappservice_record_writing_event(`ptr`: Pointer,`deviceId`: RustBuffer.ByValue,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`source`: RustBuffer.ByValue,`insertedChars`: Int,`deletedChars`: Int,`pastedChars`: Int,`aiInsertedChars`: Int,`durationSeconds`: Int,`sessionId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_rename_chapter(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`newTitle`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -993,6 +995,8 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_resolve_layout(`ptr`: Pointer,`metrics`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_save_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_save_local_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1015,8 +1019,6 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_validate_workspace(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    fun uniffi_writer_core_fn_method_writerappservice_resolve_layout(`ptr`: Pointer,`metrics`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_func_create_project_in_workspace(`workspace`: RustBuffer.ByValue,`title`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_func_init_workspace(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1261,6 +1263,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_reorder_volumes(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_resolve_layout(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_chapter_content(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings(
@@ -1455,13 +1459,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_perform_sync_dry_run() != 3610.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_process_writing_event() != 21664.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_process_writing_event() != 57848.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_record_recent_edit() != 60183.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_writer_core_checksum_method_writerappservice_record_writing_event() != 47281.toShort()) {
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_record_writing_event() != 16714.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_rename_chapter() != 2312.toShort()) {
@@ -1480,6 +1484,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_volumes() != 7484.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_resolve_layout() != 1934.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_chapter_content() != 9144.toShort()) {
@@ -1564,6 +1571,29 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+
+/**
+ * @suppress
+ */
+public object FfiConverterUByte: FfiConverter<UByte, Byte> {
+    override fun lift(value: Byte): UByte {
+        return value.toUByte()
+    }
+
+    override fun read(buf: ByteBuffer): UByte {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: UByte): Byte {
+        return value.toByte()
+    }
+
+    override fun allocationSize(value: UByte) = 1UL
+
+    override fun write(value: UByte, buf: ByteBuffer) {
+        buf.put(value.toByte())
+    }
+}
 
 /**
  * @suppress
@@ -2060,11 +2090,11 @@ public interface WriterAppServiceInterface {
     
     fun `performSyncDryRun`(`config`: SyncConfigDto): SyncPlanDto
     
-    fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean
+    fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `durationSeconds`: kotlin.UInt, `sessionId`: kotlin.String): kotlin.Boolean
     
     fun `recordRecentEdit`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String): kotlin.Boolean
     
-    fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean
+    fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `durationSeconds`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean
     
     fun `renameChapter`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `newTitle`: kotlin.String): kotlin.Boolean
     
@@ -2077,6 +2107,8 @@ public interface WriterAppServiceInterface {
     fun `reorderProjects`(`orderedProjectIds`: List<kotlin.String>): kotlin.Boolean
     
     fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean
+    
+    fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto
     
     fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto
     
@@ -2099,8 +2131,6 @@ public interface WriterAppServiceInterface {
     fun `updateStarmapLink`(`starmapId`: kotlin.String, `linkId`: kotlin.String, `patch`: StarMapLinkPatchInputDto): StarMapLinkDto
     
     fun `validateWorkspace`(): kotlin.Boolean
-    
-    fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto
     
     companion object
 }
@@ -2777,12 +2807,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `sessionId`: kotlin.String): kotlin.Boolean {
+    @Throws(WriterException::class)override fun `processWritingEvent`(`deviceId`: kotlin.String, `platform`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `oldText`: kotlin.String, `newText`: kotlin.String, `durationSeconds`: kotlin.UInt, `sessionId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_process_writing_event(
-        it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`platform`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`oldText`),FfiConverterString.lower(`newText`),FfiConverterString.lower(`sessionId`),_status)
+        it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`platform`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`oldText`),FfiConverterString.lower(`newText`),FfiConverterUInt.lower(`durationSeconds`),FfiConverterString.lower(`sessionId`),_status)
 }
     }
     )
@@ -2803,12 +2833,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean {
+    @Throws(WriterException::class)override fun `recordWritingEvent`(`deviceId`: kotlin.String, `projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `source`: kotlin.String, `insertedChars`: kotlin.Int, `deletedChars`: kotlin.Int, `pastedChars`: kotlin.Int, `aiInsertedChars`: kotlin.Int, `durationSeconds`: kotlin.Int, `sessionId`: kotlin.String): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_record_writing_event(
-        it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`source`),FfiConverterInt.lower(`insertedChars`),FfiConverterInt.lower(`deletedChars`),FfiConverterInt.lower(`pastedChars`),FfiConverterInt.lower(`aiInsertedChars`),FfiConverterString.lower(`sessionId`),_status)
+        it, FfiConverterString.lower(`deviceId`),FfiConverterString.lower(`projectId`),FfiConverterString.lower(`volumeId`),FfiConverterString.lower(`chapterId`),FfiConverterString.lower(`source`),FfiConverterInt.lower(`insertedChars`),FfiConverterInt.lower(`deletedChars`),FfiConverterInt.lower(`pastedChars`),FfiConverterInt.lower(`aiInsertedChars`),FfiConverterInt.lower(`durationSeconds`),FfiConverterString.lower(`sessionId`),_status)
 }
     }
     )
@@ -2887,6 +2917,18 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_volumes(
         it, FfiConverterString.lower(`projectId`),FfiConverterSequenceString.lower(`orderedVolumeIds`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto {
+            return FfiConverterTypeLayoutPlanDto.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_resolve_layout(
+        it, FfiConverterTypeWindowMetricsDto.lower(`metrics`),_status)
 }
     }
     )
@@ -3037,25 +3079,12 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     
 
     
-    @Throws(WriterException::class)override fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto {
-            return FfiConverterTypeLayoutPlanDto.lift(
-    callWithPointer {
-    uniffiRustCallWithError(WriterException) { _status ->
-    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_resolve_layout(
-        it, FfiConverterTypeWindowMetricsDto.lower(`metrics`),_status)
-}
-    }
-    )
-    }
-    
 
     
     
-     
     companion object
     
 }
-
 
 /**
  * @suppress
@@ -3606,6 +3635,70 @@ public object FfiConverterTypeDeviceStatsSummaryDto: FfiConverterRustBuffer<Devi
     override fun write(value: DeviceStatsSummaryDto, buf: ByteBuffer) {
             FfiConverterTypeDateRangeDto.write(value.`range`, buf)
             FfiConverterSequenceTypeDeviceStatsRecordDto.write(value.`devices`, buf)
+    }
+}
+
+
+
+data class LayoutPlanDto (
+    var `widthClass`: WidthClassDto, 
+    var `heightClass`: HeightClassDto, 
+    var `shellMode`: ShellModeDto, 
+    var `editorMode`: EditorModeDto, 
+    var `navigationMode`: NavigationModeDto, 
+    var `contentMaxWidthVp`: kotlin.Float, 
+    var `pagePaddingVp`: kotlin.Float, 
+    var `gridColumns`: kotlin.UByte, 
+    var `showSidePanel`: kotlin.Boolean, 
+    var `showBottomBar`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLayoutPlanDto: FfiConverterRustBuffer<LayoutPlanDto> {
+    override fun read(buf: ByteBuffer): LayoutPlanDto {
+        return LayoutPlanDto(
+            FfiConverterTypeWidthClassDto.read(buf),
+            FfiConverterTypeHeightClassDto.read(buf),
+            FfiConverterTypeShellModeDto.read(buf),
+            FfiConverterTypeEditorModeDto.read(buf),
+            FfiConverterTypeNavigationModeDto.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterUByte.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LayoutPlanDto) = (
+            FfiConverterTypeWidthClassDto.allocationSize(value.`widthClass`) +
+            FfiConverterTypeHeightClassDto.allocationSize(value.`heightClass`) +
+            FfiConverterTypeShellModeDto.allocationSize(value.`shellMode`) +
+            FfiConverterTypeEditorModeDto.allocationSize(value.`editorMode`) +
+            FfiConverterTypeNavigationModeDto.allocationSize(value.`navigationMode`) +
+            FfiConverterFloat.allocationSize(value.`contentMaxWidthVp`) +
+            FfiConverterFloat.allocationSize(value.`pagePaddingVp`) +
+            FfiConverterUByte.allocationSize(value.`gridColumns`) +
+            FfiConverterBoolean.allocationSize(value.`showSidePanel`) +
+            FfiConverterBoolean.allocationSize(value.`showBottomBar`)
+    )
+
+    override fun write(value: LayoutPlanDto, buf: ByteBuffer) {
+            FfiConverterTypeWidthClassDto.write(value.`widthClass`, buf)
+            FfiConverterTypeHeightClassDto.write(value.`heightClass`, buf)
+            FfiConverterTypeShellModeDto.write(value.`shellMode`, buf)
+            FfiConverterTypeEditorModeDto.write(value.`editorMode`, buf)
+            FfiConverterTypeNavigationModeDto.write(value.`navigationMode`, buf)
+            FfiConverterFloat.write(value.`contentMaxWidthVp`, buf)
+            FfiConverterFloat.write(value.`pagePaddingVp`, buf)
+            FfiConverterUByte.write(value.`gridColumns`, buf)
+            FfiConverterBoolean.write(value.`showSidePanel`, buf)
+            FfiConverterBoolean.write(value.`showBottomBar`, buf)
     }
 }
 
@@ -4234,6 +4327,8 @@ data class StarMapEdgeDto (
     var `toTarget`: StarMapDeepTargetDto?, 
     var `fromEndpoint`: StarMapEdgeEndpointDto?, 
     var `toEndpoint`: StarMapEdgeEndpointDto?, 
+    var `fromEndpointPath`: StarMapEndpointPathDto?, 
+    var `toEndpointPath`: StarMapEndpointPathDto?, 
     var `createdAt`: kotlin.ULong, 
     var `updatedAt`: kotlin.ULong
 ) {
@@ -4257,6 +4352,8 @@ public object FfiConverterTypeStarMapEdgeDto: FfiConverterRustBuffer<StarMapEdge
             FfiConverterOptionalTypeStarMapDeepTargetDto.read(buf),
             FfiConverterOptionalTypeStarMapEdgeEndpointDto.read(buf),
             FfiConverterOptionalTypeStarMapEdgeEndpointDto.read(buf),
+            FfiConverterOptionalTypeStarMapEndpointPathDto.read(buf),
+            FfiConverterOptionalTypeStarMapEndpointPathDto.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
         )
@@ -4273,6 +4370,8 @@ public object FfiConverterTypeStarMapEdgeDto: FfiConverterRustBuffer<StarMapEdge
             FfiConverterOptionalTypeStarMapDeepTargetDto.allocationSize(value.`toTarget`) +
             FfiConverterOptionalTypeStarMapEdgeEndpointDto.allocationSize(value.`fromEndpoint`) +
             FfiConverterOptionalTypeStarMapEdgeEndpointDto.allocationSize(value.`toEndpoint`) +
+            FfiConverterOptionalTypeStarMapEndpointPathDto.allocationSize(value.`fromEndpointPath`) +
+            FfiConverterOptionalTypeStarMapEndpointPathDto.allocationSize(value.`toEndpointPath`) +
             FfiConverterULong.allocationSize(value.`createdAt`) +
             FfiConverterULong.allocationSize(value.`updatedAt`)
     )
@@ -4288,6 +4387,8 @@ public object FfiConverterTypeStarMapEdgeDto: FfiConverterRustBuffer<StarMapEdge
             FfiConverterOptionalTypeStarMapDeepTargetDto.write(value.`toTarget`, buf)
             FfiConverterOptionalTypeStarMapEdgeEndpointDto.write(value.`fromEndpoint`, buf)
             FfiConverterOptionalTypeStarMapEdgeEndpointDto.write(value.`toEndpoint`, buf)
+            FfiConverterOptionalTypeStarMapEndpointPathDto.write(value.`fromEndpointPath`, buf)
+            FfiConverterOptionalTypeStarMapEndpointPathDto.write(value.`toEndpointPath`, buf)
             FfiConverterULong.write(value.`createdAt`, buf)
             FfiConverterULong.write(value.`updatedAt`, buf)
     }
@@ -4718,6 +4819,70 @@ public object FfiConverterTypeStarMapEndpointDto: FfiConverterRustBuffer<StarMap
             FfiConverterString.write(value.`kind`, buf)
             FfiConverterOptionalString.write(value.`nodeId`, buf)
             FfiConverterOptionalString.write(value.`anchorId`, buf)
+    }
+}
+
+
+
+data class StarMapEndpointPathDto (
+    var `segments`: List<StarMapEndpointPathSegmentDto>, 
+    var `endpoint`: StarMapEdgeEndpointDto
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEndpointPathDto: FfiConverterRustBuffer<StarMapEndpointPathDto> {
+    override fun read(buf: ByteBuffer): StarMapEndpointPathDto {
+        return StarMapEndpointPathDto(
+            FfiConverterSequenceTypeStarMapEndpointPathSegmentDto.read(buf),
+            FfiConverterTypeStarMapEdgeEndpointDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEndpointPathDto) = (
+            FfiConverterSequenceTypeStarMapEndpointPathSegmentDto.allocationSize(value.`segments`) +
+            FfiConverterTypeStarMapEdgeEndpointDto.allocationSize(value.`endpoint`)
+    )
+
+    override fun write(value: StarMapEndpointPathDto, buf: ByteBuffer) {
+            FfiConverterSequenceTypeStarMapEndpointPathSegmentDto.write(value.`segments`, buf)
+            FfiConverterTypeStarMapEdgeEndpointDto.write(value.`endpoint`, buf)
+    }
+}
+
+
+
+data class StarMapEndpointPathSegmentDto (
+    var `kind`: kotlin.String, 
+    var `starmapId`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeStarMapEndpointPathSegmentDto: FfiConverterRustBuffer<StarMapEndpointPathSegmentDto> {
+    override fun read(buf: ByteBuffer): StarMapEndpointPathSegmentDto {
+        return StarMapEndpointPathSegmentDto(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: StarMapEndpointPathSegmentDto) = (
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterOptionalString.allocationSize(value.`starmapId`)
+    )
+
+    override fun write(value: StarMapEndpointPathSegmentDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`kind`, buf)
+            FfiConverterOptionalString.write(value.`starmapId`, buf)
     }
 }
 
@@ -5205,8 +5370,7 @@ public object FfiConverterTypeStarMapNodeDto: FfiConverterRustBuffer<StarMapNode
 
 data class StarMapPathSegmentDto (
     var `kind`: kotlin.String, 
-    var `starmapId`: kotlin.String?, 
-    var `nodeId`: kotlin.String?
+    var `starmapId`: kotlin.String?
 ) {
     
     companion object
@@ -5220,20 +5384,17 @@ public object FfiConverterTypeStarMapPathSegmentDto: FfiConverterRustBuffer<Star
         return StarMapPathSegmentDto(
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
-            FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: StarMapPathSegmentDto) = (
             FfiConverterString.allocationSize(value.`kind`) +
-            FfiConverterOptionalString.allocationSize(value.`starmapId`) +
-            FfiConverterOptionalString.allocationSize(value.`nodeId`)
+            FfiConverterOptionalString.allocationSize(value.`starmapId`)
     )
 
     override fun write(value: StarMapPathSegmentDto, buf: ByteBuffer) {
             FfiConverterString.write(value.`kind`, buf)
             FfiConverterOptionalString.write(value.`starmapId`, buf)
-            FfiConverterOptionalString.write(value.`nodeId`, buf)
     }
 }
 
@@ -6043,6 +6204,62 @@ public object FfiConverterTypeVolumeDto: FfiConverterRustBuffer<VolumeDto> {
 
 
 
+data class WindowMetricsDto (
+    var `widthVp`: kotlin.Float, 
+    var `heightVp`: kotlin.Float, 
+    var `safeTopVp`: kotlin.Float, 
+    var `safeBottomVp`: kotlin.Float, 
+    var `keyboardVisible`: kotlin.Boolean, 
+    var `foldPosture`: FoldPostureDto, 
+    var `orientation`: OrientationDto, 
+    var `pointer`: PointerKindDto
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWindowMetricsDto: FfiConverterRustBuffer<WindowMetricsDto> {
+    override fun read(buf: ByteBuffer): WindowMetricsDto {
+        return WindowMetricsDto(
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterTypeFoldPostureDto.read(buf),
+            FfiConverterTypeOrientationDto.read(buf),
+            FfiConverterTypePointerKindDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: WindowMetricsDto) = (
+            FfiConverterFloat.allocationSize(value.`widthVp`) +
+            FfiConverterFloat.allocationSize(value.`heightVp`) +
+            FfiConverterFloat.allocationSize(value.`safeTopVp`) +
+            FfiConverterFloat.allocationSize(value.`safeBottomVp`) +
+            FfiConverterBoolean.allocationSize(value.`keyboardVisible`) +
+            FfiConverterTypeFoldPostureDto.allocationSize(value.`foldPosture`) +
+            FfiConverterTypeOrientationDto.allocationSize(value.`orientation`) +
+            FfiConverterTypePointerKindDto.allocationSize(value.`pointer`)
+    )
+
+    override fun write(value: WindowMetricsDto, buf: ByteBuffer) {
+            FfiConverterFloat.write(value.`widthVp`, buf)
+            FfiConverterFloat.write(value.`heightVp`, buf)
+            FfiConverterFloat.write(value.`safeTopVp`, buf)
+            FfiConverterFloat.write(value.`safeBottomVp`, buf)
+            FfiConverterBoolean.write(value.`keyboardVisible`, buf)
+            FfiConverterTypeFoldPostureDto.write(value.`foldPosture`, buf)
+            FfiConverterTypeOrientationDto.write(value.`orientation`, buf)
+            FfiConverterTypePointerKindDto.write(value.`pointer`, buf)
+    }
+}
+
+
+
 data class WorkspaceSummaryDto (
     var `path`: kotlin.String, 
     var `isValid`: kotlin.Boolean, 
@@ -6241,6 +6458,36 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
 
 
 
+enum class EditorModeDto {
+    
+    FULL_WIDTH,
+    CENTERED_PAPER;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEditorModeDto: FfiConverterRustBuffer<EditorModeDto> {
+    override fun read(buf: ByteBuffer) = try {
+        EditorModeDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: EditorModeDto) = 4UL
+
+    override fun write(value: EditorModeDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class FoldPostureDto {
     
     UNKNOWN,
@@ -6272,6 +6519,68 @@ public object FfiConverterTypeFoldPostureDto: FfiConverterRustBuffer<FoldPosture
 
 
 
+
+enum class HeightClassDto {
+    
+    COMPACT,
+    MEDIUM,
+    EXPANDED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeHeightClassDto: FfiConverterRustBuffer<HeightClassDto> {
+    override fun read(buf: ByteBuffer) = try {
+        HeightClassDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: HeightClassDto) = 4UL
+
+    override fun write(value: HeightClassDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class NavigationModeDto {
+    
+    STACK,
+    LIST_DETAIL;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNavigationModeDto: FfiConverterRustBuffer<NavigationModeDto> {
+    override fun read(buf: ByteBuffer) = try {
+        NavigationModeDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: NavigationModeDto) = 4UL
+
+    override fun write(value: NavigationModeDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class OrientationDto {
     
     UNKNOWN,
@@ -6297,6 +6606,37 @@ public object FfiConverterTypeOrientationDto: FfiConverterRustBuffer<Orientation
         buf.putInt(value.ordinal + 1)
     }
 }
+
+
+
+
+
+
+enum class PlatformDto {
+    
+    LINUX,
+    ANDROID;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePlatformDto: FfiConverterRustBuffer<PlatformDto> {
+    override fun read(buf: ByteBuffer) = try {
+        PlatformDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PlatformDto) = 4UL
+
+    override fun write(value: PlatformDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
 
 
 
@@ -6333,65 +6673,6 @@ public object FfiConverterTypePointerKindDto: FfiConverterRustBuffer<PointerKind
 
 
 
-enum class WidthClassDto {
-    
-    COMPACT,
-    MEDIUM,
-    EXPANDED;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeWidthClassDto: FfiConverterRustBuffer<WidthClassDto> {
-    override fun read(buf: ByteBuffer) = try {
-        WidthClassDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: WidthClassDto) = 4UL
-
-    override fun write(value: WidthClassDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-enum class HeightClassDto {
-    
-    COMPACT,
-    MEDIUM,
-    EXPANDED;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeHeightClassDto: FfiConverterRustBuffer<HeightClassDto> {
-    override fun read(buf: ByteBuffer) = try {
-        HeightClassDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: HeightClassDto) = 4UL
-
-    override fun write(value: HeightClassDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
 
 enum class ShellModeDto {
     
@@ -6415,214 +6696,6 @@ public object FfiConverterTypeShellModeDto: FfiConverterRustBuffer<ShellModeDto>
     override fun allocationSize(value: ShellModeDto) = 4UL
 
     override fun write(value: ShellModeDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-enum class EditorModeDto {
-    
-    FULL_WIDTH,
-    CENTERED_PAPER;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeEditorModeDto: FfiConverterRustBuffer<EditorModeDto> {
-    override fun read(buf: ByteBuffer) = try {
-        EditorModeDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: EditorModeDto) = 4UL
-
-    override fun write(value: EditorModeDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-enum class NavigationModeDto {
-    
-    STACK,
-    LIST_DETAIL;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypeNavigationModeDto: FfiConverterRustBuffer<NavigationModeDto> {
-    override fun read(buf: ByteBuffer) = try {
-        NavigationModeDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: NavigationModeDto) = 4UL
-
-    override fun write(value: NavigationModeDto, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-data class WindowMetricsDto (
-    var `widthVp`: kotlin.Float,
-    var `heightVp`: kotlin.Float,
-    var `safeTopVp`: kotlin.Float,
-    var `safeBottomVp`: kotlin.Float,
-    var `keyboardVisible`: kotlin.Boolean,
-    var `foldPosture`: FoldPostureDto,
-    var `orientation`: OrientationDto,
-    var `pointer`: PointerKindDto
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeWindowMetricsDto: FfiConverterRustBuffer<WindowMetricsDto> {
-    override fun read(buf: ByteBuffer): WindowMetricsDto {
-        return WindowMetricsDto(
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterTypeFoldPostureDto.read(buf),
-            FfiConverterTypeOrientationDto.read(buf),
-            FfiConverterTypePointerKindDto.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: WindowMetricsDto) = (
-            FfiConverterFloat.allocationSize(value.`widthVp`) +
-            FfiConverterFloat.allocationSize(value.`heightVp`) +
-            FfiConverterFloat.allocationSize(value.`safeTopVp`) +
-            FfiConverterFloat.allocationSize(value.`safeBottomVp`) +
-            FfiConverterBoolean.allocationSize(value.`keyboardVisible`) +
-            FfiConverterTypeFoldPostureDto.allocationSize(value.`foldPosture`) +
-            FfiConverterTypeOrientationDto.allocationSize(value.`orientation`) +
-            FfiConverterTypePointerKindDto.allocationSize(value.`pointer`)
-    )
-
-    override fun write(value: WindowMetricsDto, buf: ByteBuffer) {
-            FfiConverterFloat.write(value.`widthVp`, buf)
-            FfiConverterFloat.write(value.`heightVp`, buf)
-            FfiConverterFloat.write(value.`safeTopVp`, buf)
-            FfiConverterFloat.write(value.`safeBottomVp`, buf)
-            FfiConverterBoolean.write(value.`keyboardVisible`, buf)
-            FfiConverterTypeFoldPostureDto.write(value.`foldPosture`, buf)
-            FfiConverterTypeOrientationDto.write(value.`orientation`, buf)
-            FfiConverterTypePointerKindDto.write(value.`pointer`, buf)
-    }
-}
-
-
-
-data class LayoutPlanDto (
-    var `widthClass`: WidthClassDto,
-    var `heightClass`: HeightClassDto,
-    var `shellMode`: ShellModeDto,
-    var `editorMode`: EditorModeDto,
-    var `navigationMode`: NavigationModeDto,
-    var `contentMaxWidthVp`: kotlin.Float,
-    var `pagePaddingVp`: kotlin.Float,
-    var `gridColumns`: kotlin.Byte,
-    var `showSidePanel`: kotlin.Boolean,
-    var `showBottomBar`: kotlin.Boolean
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeLayoutPlanDto: FfiConverterRustBuffer<LayoutPlanDto> {
-    override fun read(buf: ByteBuffer): LayoutPlanDto {
-        return LayoutPlanDto(
-            FfiConverterTypeWidthClassDto.read(buf),
-            FfiConverterTypeHeightClassDto.read(buf),
-            FfiConverterTypeShellModeDto.read(buf),
-            FfiConverterTypeEditorModeDto.read(buf),
-            FfiConverterTypeNavigationModeDto.read(buf),
-            FfiConverterFloat.read(buf),
-            FfiConverterFloat.read(buf),
-            buf.get().toUByte().toByte(),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: LayoutPlanDto) = (
-            FfiConverterTypeWidthClassDto.allocationSize(value.`widthClass`) +
-            FfiConverterTypeHeightClassDto.allocationSize(value.`heightClass`) +
-            FfiConverterTypeShellModeDto.allocationSize(value.`shellMode`) +
-            FfiConverterTypeEditorModeDto.allocationSize(value.`editorMode`) +
-            FfiConverterTypeNavigationModeDto.allocationSize(value.`navigationMode`) +
-            FfiConverterFloat.allocationSize(value.`contentMaxWidthVp`) +
-            FfiConverterFloat.allocationSize(value.`pagePaddingVp`) +
-            1UL +
-            FfiConverterBoolean.allocationSize(value.`showSidePanel`) +
-            FfiConverterBoolean.allocationSize(value.`showBottomBar`)
-    )
-
-    override fun write(value: LayoutPlanDto, buf: ByteBuffer) {
-            FfiConverterTypeWidthClassDto.write(value.`widthClass`, buf)
-            FfiConverterTypeHeightClassDto.write(value.`heightClass`, buf)
-            FfiConverterTypeShellModeDto.write(value.`shellMode`, buf)
-            FfiConverterTypeEditorModeDto.write(value.`editorMode`, buf)
-            FfiConverterTypeNavigationModeDto.write(value.`navigationMode`, buf)
-            FfiConverterFloat.write(value.`contentMaxWidthVp`, buf)
-            FfiConverterFloat.write(value.`pagePaddingVp`, buf)
-            buf.put(value.`gridColumns`)
-            FfiConverterBoolean.write(value.`showSidePanel`, buf)
-            FfiConverterBoolean.write(value.`showBottomBar`, buf)
-    }
-}
-
-
-
-
-enum class PlatformDto {
-    
-    LINUX,
-    ANDROID;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypePlatformDto: FfiConverterRustBuffer<PlatformDto> {
-    override fun read(buf: ByteBuffer) = try {
-        PlatformDto.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: PlatformDto) = 4UL
-
-    override fun write(value: PlatformDto, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -6931,6 +7004,37 @@ public object FfiConverterTypeStarMapSourceKindDto: FfiConverterRustBuffer<StarM
     override fun allocationSize(value: StarMapSourceKindDto) = 4UL
 
     override fun write(value: StarMapSourceKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class WidthClassDto {
+    
+    COMPACT,
+    MEDIUM,
+    EXPANDED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWidthClassDto: FfiConverterRustBuffer<WidthClassDto> {
+    override fun read(buf: ByteBuffer) = try {
+        WidthClassDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: WidthClassDto) = 4UL
+
+    override fun write(value: WidthClassDto, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -7379,6 +7483,38 @@ public object FfiConverterOptionalTypeStarMapEndpointDto: FfiConverterRustBuffer
         } else {
             buf.put(1)
             FfiConverterTypeStarMapEndpointDto.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeStarMapEndpointPathDto: FfiConverterRustBuffer<StarMapEndpointPathDto?> {
+    override fun read(buf: ByteBuffer): StarMapEndpointPathDto? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeStarMapEndpointPathDto.read(buf)
+    }
+
+    override fun allocationSize(value: StarMapEndpointPathDto?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeStarMapEndpointPathDto.allocationSize(value)
+        }
+    }
+
+    override fun write(value: StarMapEndpointPathDto?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeStarMapEndpointPathDto.write(value, buf)
         }
     }
 }
@@ -7959,6 +8095,34 @@ public object FfiConverterSequenceTypeStarMapEmbedDto: FfiConverterRustBuffer<Li
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeStarMapEmbedDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeStarMapEndpointPathSegmentDto: FfiConverterRustBuffer<List<StarMapEndpointPathSegmentDto>> {
+    override fun read(buf: ByteBuffer): List<StarMapEndpointPathSegmentDto> {
+        val len = buf.getInt()
+        return List<StarMapEndpointPathSegmentDto>(len) {
+            FfiConverterTypeStarMapEndpointPathSegmentDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<StarMapEndpointPathSegmentDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeStarMapEndpointPathSegmentDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<StarMapEndpointPathSegmentDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeStarMapEndpointPathSegmentDto.write(it, buf)
         }
     }
 }
