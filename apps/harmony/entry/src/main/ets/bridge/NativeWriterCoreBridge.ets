@@ -583,7 +583,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
-    chapterId: string, oldText: string, newText: string, sessionId: string): Promise<ResultEnvelope<boolean>> {
+    chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>> {
     try {
       const eventJson = JSON.stringify({
         deviceId: deviceId,
@@ -593,6 +593,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
         chapterId: chapterId,
         oldText: oldText,
         newText: newText,
+        durationSeconds: durationSeconds,
         sessionId: sessionId
       })
       const jsonStr: string = this.getNativeModule().nativeProcessWritingEvent(eventJson)

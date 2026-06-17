@@ -288,26 +288,26 @@ export interface StarMapMeta {
 }
 
 export interface StarMapGraph {
+  schemaVersion: number
   id: string
+  starmapId: string
   title: string
-  description: string
   nodes: StarMapNode[]
   edges: StarMapEdge[]
   embeds: StarMapEmbed[]
   links: StarMapLink[]
-  viewport?: StarMapViewport
   layout?: StarMapLayout
+  createdAt: number
+  updatedAt: number
 }
 
 export interface StarMapNode {
   id: string
-  label: string
+  title: string
+  kind: NodeType
+  payload?: Record<string, Object>
+  tags?: string[]
   description?: string
-  x: number
-  y: number
-  width?: number
-  height?: number
-  type: NodeType
   color?: string
   icon?: string
   metadata?: Record<string, string>
@@ -315,20 +315,20 @@ export interface StarMapNode {
   childIds?: string[]
 }
 
-export type NodeType = 'character' | 'location' | 'event' | 'theme' | 'plot' | 'item' | 'organization' | 'custom'
+export type NodeType = 'Character' | 'Event' | 'Location' | 'Item' | 'Concept' | 'Theme' | 'Note' | 'Organization' | 'Timeline' | 'Plot' | 'Foreshadowing' | 'Chapter' | 'Custom'
 
 export interface StarMapEdge {
   id: string
-  sourceId: string
-  targetId: string
+  from?: string
+  to?: string
+  kind: EdgeKind
   label?: string
-  type: EdgeType
-  color?: string
-  style?: 'solid' | 'dashed' | 'dotted'
-  metadata?: Record<string, string>
+  payload?: Record<string, Object>
+  createdAt: number
+  updatedAt: number
 }
 
-export type EdgeType = 'relation' | 'dependency' | 'timeline' | 'conflict' | 'alliance' | 'custom'
+export type EdgeKind = 'Contains' | 'References' | 'AppearsIn' | 'Causes' | 'RelatedTo' | 'LocatedAt' | 'CharacterRelation' | 'Timeline' | 'Foreshadows' | 'Resolves' | 'DependsOn' | 'ConflictsWith' | 'Custom'
 
 export interface StarMapEmbed {
   id: string
@@ -349,16 +349,47 @@ export interface StarMapLink {
 }
 
 export interface StarMapViewport {
-  centerX: number
-  centerY: number
-  zoom: number
-  rotation: number
+  scale: number
+  offsetX: number
+  offsetY: number
+  width: number
+  height: number
 }
 
 export interface StarMapLayout {
-  type: 'force' | 'tree' | 'radial' | 'manual'
-  params?: Record<string, number>
-  seed?: number
+  kind: 'Freeform' | 'AutoRadial' | 'Custom'
+  nodes: StarMapLayoutNode[]
+}
+
+export interface StarMapLayoutNode {
+  nodeId: string
+  x: number
+  y: number
+  width: number
+  height: number
+  radius: number
+  collapsed: boolean
+  zIndex: number
+  scale: number
+  depth: number
+  focusWeight: number
+  orbitGroup?: string
+}
+
+export interface StarMapEdgeRender {
+  edgeId: string
+  startX: number
+  startY: number
+  endX: number
+  endY: number
+  arrowTipX: number
+  arrowTipY: number
+  arrowLeftX: number
+  arrowLeftY: number
+  arrowRightX: number
+  arrowRightY: number
+  labelX?: number
+  labelY?: number
 }
 
 // DO NOT EXPAND StarMap DTOs until Core's StarMap contracts are finalized.

@@ -14,6 +14,8 @@ import {
   StarMapLink,
   StarMapViewport,
   StarMapLayout,
+  StarMapLayoutNode,
+  StarMapEdgeRender,
   LocalSettings,
   SyncableSettings,
   ResultEnvelope,
@@ -47,27 +49,30 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   private mockStarMaps: StarMapMeta[] = []
 
   private mockStarMapViewport: StarMapViewport = {
-    centerX: 400,
-    centerY: 300,
-    zoom: 1,
-    rotation: 0
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    width: 800,
+    height: 600
   } as StarMapViewport
 
   private mockStarMapLayout: StarMapLayout = {
-    type: 'force',
-    params: undefined
+    kind: 'Freeform',
+    nodes: [] as StarMapLayoutNode[]
   } as StarMapLayout
 
   private mockStarMapGraph: StarMapGraph = {
+    schemaVersion: 1,
     id: '',
+    starmapId: '',
     title: '',
-    description: '',
     nodes: [] as StarMapNode[],
     edges: [] as StarMapEdge[],
     embeds: [] as StarMapEmbed[],
     links: [] as StarMapLink[],
-    viewport: this.mockStarMapViewport,
-    layout: this.mockStarMapLayout
+    layout: this.mockStarMapLayout,
+    createdAt: 0,
+    updatedAt: 0
   }
 
   private mockSettings: LocalSettings = {
@@ -717,7 +722,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
   }
 
   async processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
-    chapterId: string, oldText: string, newText: string, sessionId: string): Promise<ResultEnvelope<boolean>> {
+    chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(50)
     return this.success(true)
   }

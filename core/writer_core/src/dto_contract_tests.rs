@@ -563,16 +563,18 @@ fn writing_event_dto_fields_match_harmony() {
         "projectId": "p1",
         "volumeId": "v1",
         "chapterId": "c1",
-        "charsAdded": 100,
+        "oldText": "旧文本",
+        "newText": "新文本",
         "durationSeconds": 60,
         "sessionId": "hm-1234567890"
     });
     // 验证所有字段名都是 camelCase
     let expected_keys = vec![
         "chapterId",
-        "charsAdded",
         "deviceId",
         "durationSeconds",
+        "newText",
+        "oldText",
         "platform",
         "projectId",
         "sessionId",

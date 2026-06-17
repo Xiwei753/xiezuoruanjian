@@ -44,8 +44,6 @@ import {
 /** 左侧面板宽度（Expanded 双栏模式） */
 const LEFT_PANEL_WIDTH: number = 320
 
-/** 右侧写作区内容最大宽度 */
-const EDITOR_CONTENT_MAX_WIDTH: number = 840
 
 /** 左右面板分割线宽度 */
 const DIVIDER_WIDTH: number = 0.5
@@ -103,6 +101,7 @@ struct MainWorkspace {
   @State selectedVolumeId: string = ''
   @State sessionOldText: string = ''
   @State sessionId: string = ''
+  @State sessionStartTime: number = 0
 
   // ── 通用状态 ──
   @State isInitialLoading: boolean = true
@@ -149,6 +148,7 @@ struct MainWorkspace {
     // 记录写作编辑事件（让 Core 统一计算统计）
     if (this.selectedChapterId && this.sessionOldText !== this.content) {
       const deviceId = this.settings.statsDeviceId || 'unknown'
+      const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
       this.bridge.processWritingEvent(
         deviceId,
         'harmony',
@@ -157,6 +157,7 @@ struct MainWorkspace {
         this.selectedChapterId,
         this.sessionOldText,
         this.content,
+        durationSeconds,
         this.sessionId
       )
     }
@@ -245,6 +246,7 @@ struct MainWorkspace {
         // 记录编辑前文本，用于写作统计
         this.sessionOldText = result.data.content
         this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
+        this.sessionStartTime = Date.now()
       } else {
         this.errorMessage = result.userMessage || '加载章节失败'
       }
@@ -395,6 +397,7 @@ struct MainWorkspace {
     // 如果有未保存的变更，先上报并保存
     if (this.hasUnsavedChanges && this.selectedChapterId) {
       const deviceId = this.settings.statsDeviceId || 'unknown'
+      const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
       this.bridge.processWritingEvent(
         deviceId,
         'harmony',
@@ -403,6 +406,7 @@ struct MainWorkspace {
         this.selectedChapterId,
         this.sessionOldText,
         this.content,
+        durationSeconds,
         this.sessionId
       )
       this.saveChapter()
@@ -411,6 +415,7 @@ struct MainWorkspace {
     this.selectedChapterId = chapterId
     this.selectedChapterTitle = chapterName
     this.selectedVolumeId = volumeId
+    this.sessionStartTime = Date.now()
     this.loadChapter()
     this.loadSettings()
   }
@@ -916,7 +921,7 @@ struct MainWorkspace {
               .onChange((value: string): void => { this.onContentChange(value) })
           }
           .width('100%')
-          .constraintSize({ maxWidth: EDITOR_CONTENT_MAX_WIDTH })
+          .constraintSize({ maxWidth: this.adaptiveState.layoutPlan?.contentMaxWidthVp || 840 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
@@ -941,7 +946,7 @@ struct MainWorkspace {
       }
       .width('100%')
       .padding({ left: 24, right: 24, top: 10, bottom: 10 })
-      .constraintSize({ maxWidth: EDITOR_CONTENT_MAX_WIDTH })
+      .constraintSize({ maxWidth: this.adaptiveState.layoutPlan?.contentMaxWidthVp || 840 })
       .backgroundColor(this.themeConfig.colors.background)
     }
     .width('100%')

@@ -1,6 +1,6 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta } from '../model/CoreDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
@@ -22,6 +22,8 @@ struct StarMapPage {
   @State starmapId: string = ''
   @State starmapTitle: string = ''
   @State graph: StarMapGraph | null = null
+  @State layoutNodes: StarMapLayoutNode[] = []
+  @State edgeRenders: StarMapEdgeRender[] = []
   @State allStarMaps: StarMapMeta[] = []
   @State isLoading: boolean = true
   @State errorMessage: string = ''
@@ -100,6 +102,30 @@ struct StarMapPage {
       const result = await this.bridge.getStarMapGraph(this.starmapId)
       if (result.success && result.data) {
         this.graph = result.data
+        // 从 graph.layout.nodes 提取布局坐标
+        if (result.data.layout && result.data.layout.nodes) {
+          this.layoutNodes = result.data.layout.nodes
+        } else {
+          // 兼容：如果 layout.nodes 为空，从旧数据降级
+          this.layoutNodes = result.data.nodes.map((node: StarMapNode): StarMapLayoutNode => {
+            const legacy = node as Record<string, Object>
+            const layoutNode: StarMapLayoutNode = {
+              nodeId: node.id,
+              x: (legacy['x'] as number) || 0,
+              y: (legacy['y'] as number) || 0,
+              width: (legacy['width'] as number) || 160,
+              height: (legacy['height'] as number) || 80,
+              radius: 16,
+              collapsed: false,
+              zIndex: 0,
+              scale: 1,
+              depth: 0,
+              focusWeight: 0,
+              orbitGroup: undefined
+            }
+            return layoutNode
+          })
+        }
       } else {
         this.errorMessage = result.userMessage || '加载星图失败'
       }
@@ -123,43 +149,43 @@ struct StarMapPage {
 
   getNodeColor(node: StarMapNode): string {
     if (node.color) return node.color
-    const typeColors: Record<string, string> = {
-      'character': '#4A90D9',
-      'location': '#F39C12',
-      'event': '#9B59B6',
-      'theme': '#2ECC71',
-      'plot': '#E74C3C',
-      'item': '#1ABC9C',
-      'organization': '#3498DB',
-      'custom': '#95A5A6'
+    const kindColors: Record<string, string> = {
+      'Character': '#4A90D9',
+      'Location': '#F39C12',
+      'Event': '#9B59B6',
+      'Theme': '#2ECC71',
+      'Plot': '#E74C3C',
+      'Item': '#1ABC9C',
+      'Organization': '#3498DB',
+      'Custom': '#95A5A6'
     }
-    return typeColors[node.type] || '#4A90D9'
+    return kindColors[node.kind] || '#4A90D9'
   }
 
-  getNodeTypeName(type: string): string {
-    const typeNames: Record<string, string> = {
-      'character': '角色',
-      'location': '地点',
-      'event': '事件',
-      'theme': '主题',
-      'plot': '情节',
-      'item': '物品',
-      'organization': '组织',
-      'custom': '自定义'
+  getNodeTypeName(kind: string): string {
+    const kindNames: Record<string, string> = {
+      'Character': '角色',
+      'Location': '地点',
+      'Event': '事件',
+      'Theme': '主题',
+      'Plot': '情节',
+      'Item': '物品',
+      'Organization': '组织',
+      'Custom': '自定义'
     }
-    return typeNames[type] || '未知'
+    return kindNames[kind] || '未知'
   }
 
-  getEdgeTypeName(type: string): string {
-    const typeNames: Record<string, string> = {
-      'relation': '关系',
-      'dependency': '依赖',
-      'timeline': '时间线',
-      'conflict': '冲突',
-      'alliance': '同盟',
-      'custom': '自定义'
+  getEdgeTypeName(kind: string): string {
+    const kindNames: Record<string, string> = {
+      'CharacterRelation': '角色关系',
+      'DependsOn': '依赖',
+      'Timeline': '时间线',
+      'ConflictsWith': '冲突',
+      'RelatedTo': '关联',
+      'Custom': '自定义'
     }
-    return typeNames[type] || '未知'
+    return kindNames[kind] || '未知'
   }
 
   selectNode(nodeId: string) {
@@ -351,6 +377,13 @@ struct StarMapPage {
 
           // Nodes layer
           ForEach(this.graph.nodes, (node: StarMapNode) => {
+            // 从 layoutNodes 查找坐标
+            const layoutNode = this.layoutNodes.find(ln => ln.nodeId === node.id)
+            const nodeX = layoutNode?.x ?? 0
+            const nodeY = layoutNode?.y ?? 0
+            const nodeWidth = layoutNode?.width ?? 160
+            const nodeHeight = layoutNode?.height ?? 80
+
             Column() {
               Circle({ width: 56, height: 56 })
                 .fill(this.getNodeColor(node))
@@ -363,7 +396,7 @@ struct StarMapPage {
                   offsetY: this.draggingNodeId === node.id ? 4 : 2
                 })
 
-              Text(node.label)
+              Text(node.title)
                 .fontSize(13)
                 .fontWeight(this.selectedNodeId === node.id ? FontWeight.Bold : FontWeight.Normal)
                 .fontColor(this.themeConfig.colors.textPrimary)
@@ -373,8 +406,8 @@ struct StarMapPage {
                 .width(80)
             }
             .position({
-              x: (node.x * this.zoomScale) + this.offsetX - 40 + this.wobbleX(node.id, this.motionTick),
-              y: (node.y * this.zoomScale) + this.offsetY - 40 + this.wobbleY(node.id, this.motionTick)
+              x: (nodeX * this.zoomScale) + this.offsetX - nodeWidth / 2 + this.wobbleX(node.id, this.motionTick),
+              y: (nodeY * this.zoomScale) + this.offsetY - nodeHeight / 2 + this.wobbleY(node.id, this.motionTick)
             })
             .scale(
               this.draggingNodeId === node.id
@@ -390,10 +423,12 @@ struct StarMapPage {
                   this.draggingNodeId = node.id
                 })
                 .onActionUpdate((event: GestureEvent) => {
-                  // 更新节点位置（实际修改 node.x/y）
-                  node.x += event.offsetX / this.zoomScale
-                  node.y += event.offsetY / this.zoomScale
-                  // 重置 PanGesture 的 offset 避免累积
+                  // 更新 layoutNode 坐标，不修改 StarMapNode
+                  const layoutIndex = this.layoutNodes.findIndex(ln => ln.nodeId === node.id)
+                  if (layoutIndex >= 0) {
+                    this.layoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
+                    this.layoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
+                  }
                 })
                 .onActionEnd(() => {
                   this.draggingNodeId = ''
@@ -456,14 +491,14 @@ struct StarMapPage {
             .fill(this.getNodeColor(this.selectedNode!))
             .margin({ right: 8 })
 
-          Text(this.getNodeTypeName(this.selectedNode!.type))
+          Text(this.getNodeTypeName(this.selectedNode!.kind))
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textSecondary)
         }
         .margin({ bottom: 12 })
 
-        // Node label
-        Text(this.selectedNode!.label)
+        // Node title
+        Text(this.selectedNode!.title)
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -477,14 +512,14 @@ struct StarMapPage {
             .margin({ bottom: 12 })
         }
 
-        // Node coordinates
+        // Node coordinates — 从 layoutNodes 查找
         Row() {
-          Text(`X: ${Math.round(this.selectedNode!.x)}`)
+          Text(`X: ${Math.round(this.layoutNodes.find(ln => ln.nodeId === this.selectedNodeId)?.x ?? 0)}`)
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ right: 16 })
 
-          Text(`Y: ${Math.round(this.selectedNode!.y)}`)
+          Text(`Y: ${Math.round(this.layoutNodes.find(ln => ln.nodeId === this.selectedNodeId)?.y ?? 0)}`)
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textHint)
         }
@@ -499,7 +534,7 @@ struct StarMapPage {
             .margin({ bottom: 8 })
 
           ForEach(this.graph.edges.filter(e =>
-            e.sourceId === this.selectedNodeId || e.targetId === this.selectedNodeId
+            e.from === this.selectedNodeId || e.to === this.selectedNodeId
           ), (edge: StarMapEdge) => {
             Row() {
               Circle({ width: 8, height: 8 })
@@ -511,13 +546,13 @@ struct StarMapPage {
                   .fontSize(13)
                   .fontColor(this.themeConfig.colors.textPrimary)
 
-                Text(this.getEdgeTypeName(edge.type))
+                Text(this.getEdgeTypeName(edge.kind))
                   .fontSize(11)
                   .fontColor(this.themeConfig.colors.textHint)
               }
               .layoutWeight(1)
 
-              Text(edge.sourceId === this.selectedNodeId ? '→' : '←')
+              Text(edge.from === this.selectedNodeId ? '→' : '←')
                 .fontSize(14)
                 .fontColor(this.themeConfig.colors.textSecondary)
             }
@@ -619,23 +654,30 @@ struct StarMapPage {
     }
 
     for (const edge of this.graph.edges) {
-      const src = nodeMap.get(edge.sourceId)
-      const tgt = nodeMap.get(edge.targetId)
+      const src = nodeMap.get(edge.from || '')
+      const tgt = nodeMap.get(edge.to || '')
       if (!src || !tgt) continue
 
-      const x1 = (src.x * this.zoomScale) + this.offsetX + this.wobbleX(src.id, this.motionTick)
-      const y1 = (src.y * this.zoomScale) + this.offsetY + this.wobbleY(src.id, this.motionTick)
-      const x2 = (tgt.x * this.zoomScale) + this.offsetX + this.wobbleX(tgt.id, this.motionTick)
-      const y2 = (tgt.y * this.zoomScale) + this.offsetY + this.wobbleY(tgt.id, this.motionTick)
+      const srcLayout = this.layoutNodes.find(ln => ln.nodeId === src.id)
+      const tgtLayout = this.layoutNodes.find(ln => ln.nodeId === tgt.id)
+      const srcX = srcLayout?.x ?? 0
+      const srcY = srcLayout?.y ?? 0
+      const tgtX = tgtLayout?.x ?? 0
+      const tgtY = tgtLayout?.y ?? 0
 
-      const isSelected = this.selectedNodeId === edge.sourceId || this.selectedNodeId === edge.targetId
+      const x1 = (srcX * this.zoomScale) + this.offsetX + this.wobbleX(src.id, this.motionTick)
+      const y1 = (srcY * this.zoomScale) + this.offsetY + this.wobbleY(src.id, this.motionTick)
+      const x2 = (tgtX * this.zoomScale) + this.offsetX + this.wobbleX(tgt.id, this.motionTick)
+      const y2 = (tgtY * this.zoomScale) + this.offsetY + this.wobbleY(tgt.id, this.motionTick)
+
+      const isSelected = this.selectedNodeId === edge.from || this.selectedNodeId === edge.to
 
       ctx.beginPath()
       ctx.moveTo(x1, y1)
       ctx.lineTo(x2, y2)
       ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
       ctx.lineWidth = isSelected ? 2.5 : 1.5
-      if (edge.type === 'dependency' || edge.type === 'conflict') {
+      if (edge.kind === 'DependsOn' || edge.kind === 'ConflictsWith') {
         ctx.setLineDash([6, 4])
       } else {
         ctx.setLineDash([])

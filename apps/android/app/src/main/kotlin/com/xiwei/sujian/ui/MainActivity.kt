@@ -2,7 +2,6 @@ package com.xiwei.sujian.ui
 
 import android.content.Intent
 
-import android.widget.Toast
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.coordinatorlayout.widget.CoordinatorLayout
@@ -506,7 +505,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * TwoPane 模式下：在右侧面板显示指定项目的章节列表。
-     * 动态创建 RecyclerView 加载卷/章结构，点击章节时启动 EditorActivity。
+     * 使用 DetailChapterListFragment 替代动态创建视图。
      */
     private fun showChapterListInRightPane(projectId: String, projectTitle: String) {
         // 隐藏占位提示，显示内容容器
@@ -516,52 +515,15 @@ class MainActivity : AppCompatActivity() {
         // 清空右侧面板旧内容
         detailContentContainer.removeAllViews()
 
-        // 创建章节列表标题
-        val titleText = TextView(this).apply {
-            text = projectTitle
-            textSize = 20f
-            setPadding(32, 24, 32, 16)
-            setTextColor(resources.getColor(android.R.color.black, theme))
+        // 使用 DetailChapterListFragment
+        val fragment = DetailChapterListFragment.newInstance(projectId, projectTitle)
+        fragment.setOnChapterClickListener { volumeId, chapterId, chapterTitle ->
+            showEditorInRightPane(projectId, volumeId, chapterId, chapterTitle)
         }
-        detailContentContainer.addView(titleText)
 
-        // 创建章节列表 RecyclerView
-        val chapterList = RecyclerView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            layoutManager = LinearLayoutManager(this@MainActivity)
-        }
-        detailContentContainer.addView(chapterList)
-
-        // 加载章节列表数据
-        lifecycleScope.launch {
-            val items = ErrorUtil.safeRunSuspend(this@MainActivity, emptyList<ChapterListItem>()) {
-                withContext(Dispatchers.IO) {
-                    val volumes = workspaceRepository.getVolumes(projectId)
-                    val result = mutableListOf<ChapterListItem>()
-                    for (volume in volumes) {
-                        result.add(ChapterListItem.VolumeHeader(volume.id, volume.title))
-                        val chapters = workspaceRepository.getChapters(projectId, volume.id)
-                        if (chapters.isEmpty()) {
-                            result.add(ChapterListItem.EmptyHint(volume.id))
-                        } else {
-                            for (chapter in chapters) {
-                                result.add(ChapterListItem.ChapterItem(volume.id, chapter.id, chapter.title, chapter.wordCount))
-                            }
-                        }
-                    }
-                    result
-                }
-            }
-
-            val detailAdapter = DetailChapterAdapter(items) { volumeId, chapterId, chapterTitle ->
-                // TwoPane 模式下：在右侧面板嵌入 EditorFragment
-                showEditorInRightPane(projectId, volumeId, chapterId, chapterTitle)
-            }
-            chapterList.adapter = detailAdapter
-        }
+        supportFragmentManager.beginTransaction()
+            .replace(R.id.detailContentContainer, fragment)
+            .commit()
 
         // 更新 toolbar 标题
         toolbar.title = projectTitle
@@ -619,7 +581,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * TwoPane 模式下：从编辑器返回章节列表。
-     * 移除 EditorFragment，恢复章节列表视图。
+     * 移除 EditorFragment 或 DetailChapterListFragment，恢复占位提示。
      */
     private fun returnToChapterList() {
         currentEditorFragment?.let { fragment ->
@@ -631,94 +593,30 @@ class MainActivity : AppCompatActivity() {
                     .remove(fragment)
                     .commitNow()
                 currentEditorFragment = null
-
-                // 恢复占位提示
-                detailPlaceholder.visibility = View.VISIBLE
-                detailContentContainer.visibility = View.GONE
-                detailContentContainer.removeAllViews()
-
-                toolbar.title = getString(R.string.title_projects)
+                restoreDetailPlaceholder()
             }
         } ?: run {
-            // 没有 EditorFragment，直接恢复占位
-            detailPlaceholder.visibility = View.VISIBLE
-            detailContentContainer.visibility = View.GONE
-            toolbar.title = getString(R.string.title_projects)
-        }
-    }
-
-    /**
-     * 章节列表项数据类（用于右侧面板的章节列表）
-     */
-    private sealed class ChapterListItem {
-        data class VolumeHeader(val volumeId: String, val title: String) : ChapterListItem()
-        data class ChapterItem(val volumeId: String, val chapterId: String, val title: String, val wordCount: Int) : ChapterListItem()
-        data class EmptyHint(val volumeId: String) : ChapterListItem()
-    }
-
-    /**
-     * 右侧面板章节列表的 ViewHolder 类型常量
-     */
-    companion object {
-        private const val TYPE_VOLUME_HEADER = 0
-        private const val TYPE_CHAPTER = 1
-        private const val TYPE_EMPTY_HINT = 2
-    }
-
-    /**
-     * 右侧面板章节列表的 Adapter
-     */
-    private inner class DetailChapterAdapter(
-        private val items: List<ChapterListItem>,
-        private val onChapterClick: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit
-    ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-
-        override fun getItemViewType(position: Int): Int = when (items[position]) {
-            is ChapterListItem.VolumeHeader -> TYPE_VOLUME_HEADER
-            is ChapterListItem.ChapterItem -> TYPE_CHAPTER
-            is ChapterListItem.EmptyHint -> TYPE_EMPTY_HINT
-        }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-            val textView = TextView(this@MainActivity).apply {
-                layoutParams = RecyclerView.LayoutParams(
-                    RecyclerView.LayoutParams.MATCH_PARENT,
-                    RecyclerView.LayoutParams.WRAP_CONTENT
-                )
+            // 清除所有 Fragment（可能是 DetailChapterListFragment）
+            val currentFragment = supportFragmentManager.findFragmentById(R.id.detailContentContainer)
+            if (currentFragment != null) {
+                supportFragmentManager.beginTransaction()
+                    .remove(currentFragment)
+                    .commitNow()
             }
-            return object : RecyclerView.ViewHolder(textView) {}
+            restoreDetailPlaceholder()
         }
-
-        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-            val textView = holder.itemView as TextView
-            when (val item = items[position]) {
-                is ChapterListItem.VolumeHeader -> {
-                    textView.text = "📖 ${item.title}"
-                    textView.textSize = 16f
-                    textView.setPadding(32, 24, 32, 8)
-                    textView.setTextColor(resources.getColor(android.R.color.black, theme))
-                    textView.setOnClickListener(null)
-                }
-                is ChapterListItem.ChapterItem -> {
-                    textView.text = "  ${item.title}  (${item.wordCount}字)"
-                    textView.textSize = 14f
-                    textView.setPadding(48, 12, 32, 12)
-                    textView.setOnClickListener {
-                        onChapterClick(item.volumeId, item.chapterId, item.title)
-                    }
-                }
-                is ChapterListItem.EmptyHint -> {
-                    textView.text = "  （空卷，点击新建章节）"
-                    textView.textSize = 12f
-                    textView.setPadding(48, 8, 32, 8)
-                    textView.setTextColor(resources.getColor(android.R.color.darker_gray, theme))
-                    textView.setOnClickListener(null)
-                }
-            }
-        }
-
-        override fun getItemCount() = items.size
     }
+
+    /**
+     * 恢复右侧面板占位提示状态
+     */
+    private fun restoreDetailPlaceholder() {
+        detailPlaceholder.visibility = View.VISIBLE
+        detailContentContainer.visibility = View.GONE
+        detailContentContainer.removeAllViews()
+        toolbar.title = getString(R.string.title_projects)
+    }
+
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)

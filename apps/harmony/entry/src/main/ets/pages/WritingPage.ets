@@ -50,6 +50,7 @@ struct WritingPage {
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State sessionOldText: string = ''
   @State sessionId: string = ''
+  @State sessionStartTime: number = 0
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
   private bridge: IWriterCoreBridge = getBridge()
@@ -94,6 +95,7 @@ struct WritingPage {
     // 上报写作编辑事件（让 Core 统一计算统计）
     if (this.sessionOldText !== this.content && this.chapterId) {
       const deviceId = this.settings.statsDeviceId || 'unknown'
+      const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
       this.bridge.processWritingEvent(
         deviceId,
         'harmony',
@@ -102,6 +104,7 @@ struct WritingPage {
         this.chapterId,
         this.sessionOldText,
         this.content,
+        durationSeconds,
         this.sessionId
       )
     }
@@ -137,6 +140,7 @@ struct WritingPage {
         // 记录编辑前文本，用于写作统计
         this.sessionOldText = result.data.content
         this.sessionId = `hm-${this.chapterId}-${Date.now()}`
+        this.sessionStartTime = Date.now()
       } else {
         this.errorMessage = result.userMessage || '加载章节失败'
       }

@@ -78,7 +78,7 @@ export interface IWriterCoreBridge {
   getWritingStats(): Promise<ResultEnvelope<WritingStats>>
   calculateWordCount(text: string): Promise<number>
   processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
-    chapterId: string, oldText: string, newText: string, sessionId: string): Promise<ResultEnvelope<boolean>>
+    chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
 
   // Layout Policy

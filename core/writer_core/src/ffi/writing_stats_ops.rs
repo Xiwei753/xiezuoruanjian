@@ -30,17 +30,14 @@ pub unsafe extern "C" fn writer_core_process_writing_event(event_json: *const c_
         let project_id = val.get("projectId").and_then(|v| v.as_str()).unwrap_or("");
         let volume_id = val.get("volumeId").and_then(|v| v.as_str()).unwrap_or("");
         let chapter_id = val.get("chapterId").and_then(|v| v.as_str()).unwrap_or("");
-        let chars_added = val.get("charsAdded").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
+        let old_text = val.get("oldText").and_then(|v| v.as_str()).unwrap_or("");
+        let new_text = val.get("newText").and_then(|v| v.as_str()).unwrap_or("");
         let duration_seconds = val.get("durationSeconds").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
         let session_id = val.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
 
-        let old_text = "";
-        let new_text_len = chars_added as usize;
-        let new_text = if new_text_len > 0 { "x".repeat(new_text_len) } else { String::new() };
-
         core.process_writing_event(
             device_id, platform, project_id, volume_id, chapter_id,
-            &old_text, &new_text, duration_seconds, session_id,
+            old_text, new_text, duration_seconds, session_id,
         ).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
