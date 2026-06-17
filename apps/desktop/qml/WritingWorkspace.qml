@@ -808,12 +808,18 @@ Rectangle {
                     // for viewport clipping. Flickable only holds a transparent spacer
                     // for scrollbar / contentHeight.
                     //
-                    // ⚠️ LayoutPlan 边界守卫 ⚠️
-                    // SujianEditorItem 的所有渲染属性（font_pixel_size, line_spacing,
-                    // text_indent, cursor_color, scroll_y 等）由 settingsBackend 和
-                    // EditorController 独立驱动。LayoutPlan 的属性（contentMaxWidthVp,
-                    // shellMode 等）绝对禁止传递到此处。编辑器渲染遵守 Qt QSG 线程
-                    // 边界，不受 LayoutPlan 影响。
+                    // ⚠️ 边界守卫：LayoutPlan 只影响壳层布局（侧栏宽度、内容最大宽度、padding），
+                    // 不传入 SujianEditorItem。编辑器宽度变化只通过 QML layout 系统自然传递。
+                    //
+                    // 具体约束：
+                    //   - LayoutPlan 属性（contentMaxWidthVp, shellMode, contentPaddingVp）
+                    //     绝对禁止作为 SujianEditorItem 的 Q_PROPERTY 传入
+                    //   - 编辑器渲染属性（font_pixel_size, line_spacing, text_indent,
+                    //     cursor_color, scroll_y 等）由 settingsBackend 和 EditorController
+                    //     独立驱动，不受 LayoutPlan 影响
+                    //   - 编辑器宽度变化由 paperBg 容器尺寸改变 → QML layout 系统自然
+                    //     传递到 SujianEditorItem 的 geometry_changed，不经过 LayoutPlan
+                    //   - updatePaintNode / QSG 渲染线程不做业务或布局判断
                     SujianEditorItem {
                         id: sujianEditor
                         anchors.fill: editorScroll

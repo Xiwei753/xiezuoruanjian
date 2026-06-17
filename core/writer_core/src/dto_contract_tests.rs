@@ -581,3 +581,97 @@ fn writing_event_dto_fields_match_harmony() {
     let actual_keys = sorted_keys(&ffi_event);
     assert_eq!(actual_keys, expected_keys, "WritingEvent DTO field names must match Harmony CoreDtos.ets");
 }
+
+// ── StarMap Motion Policy / Layout / Graph / Viewport DTO contract tests ──
+
+#[test]
+fn starmap_motion_policy_dto_fields_match_harmony() {
+    let policy = crate::starmap::types::StarMapMotionPolicyDto::default();
+    let json = serde_json::to_value(&policy).unwrap();
+    // 验证 camelCase 字段名
+    let expected_keys = vec![
+        "dragLiftScale",
+        "dragShadowBoost",
+        "enabled",
+        "idleAmplitudeVp",
+        "idlePeriodMs",
+        "idleWobbleEnabled",
+        "reduceMotion",
+        "settleDurationMs",
+    ];
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys, "StarMapMotionPolicyDto DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn starmap_layout_dto_fields_match_harmony() {
+    let layout = crate::starmap::types::StarMapLayout::default();
+    let json = serde_json::to_value(&layout).unwrap();
+    let expected_keys = vec!["kind", "nodes"];
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys, "StarMapLayout DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn starmap_layout_node_dto_fields_match_harmony() {
+    let ffi_node = json!({
+        "nodeId": "n1",
+        "x": 100.0,
+        "y": 200.0,
+        "width": 160.0,
+        "height": 80.0,
+        "radius": 16.0,
+        "collapsed": false,
+        "zIndex": 0,
+        "scale": 1.0,
+        "depth": 0.0,
+        "focusWeight": 0.0,
+        "orbitGroup": null
+    });
+    let expected_keys = vec![
+        "collapsed",
+        "depth",
+        "focusWeight",
+        "height",
+        "nodeId",
+        "orbitGroup",
+        "radius",
+        "scale",
+        "width",
+        "x",
+        "y",
+        "zIndex",
+    ];
+    let actual_keys = sorted_keys(&ffi_node);
+    assert_eq!(actual_keys, expected_keys, "StarMapLayoutNode DTO field names must match Harmony CoreDtos.ets");
+}
+
+#[test]
+fn starmap_graph_dto_serialization_contract() {
+    let graph = crate::starmap::types::StarMapGraph::default();
+    let json = serde_json::to_value(&graph).unwrap();
+    // Core 内部使用 camelCase (因为 #[serde(rename_all = "camelCase")])
+    assert!(json.get("schemaVersion").is_some(), "StarMapGraph must serialize schemaVersion in camelCase");
+    assert!(json.get("starmapId").is_some());
+    assert!(json.get("nodes").is_some());
+    assert!(json.get("edges").is_some());
+    assert!(json.get("embeds").is_some());
+    assert!(json.get("links").is_some());
+    assert!(json.get("createdAt").is_some());
+    assert!(json.get("updatedAt").is_some());
+}
+
+#[test]
+fn starmap_viewport_dto_fields_match_harmony() {
+    let viewport = crate::starmap::types::StarMapViewport::default();
+    let json = serde_json::to_value(&viewport).unwrap();
+    let expected_keys = vec![
+        "height",
+        "offsetX",
+        "offsetY",
+        "scale",
+        "width",
+    ];
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys, "StarMapViewport DTO field names must match Harmony CoreDtos.ets");
+}

@@ -87,10 +87,22 @@ Rectangle {
                 spacing: dt ? dt.sp8 : 8
 
                 StarMapCard {
+                    id: starMapCard
                     dt: root.dt
                     starmapData: starmapObj
                     width: parent.width
                     height: 184
+
+                    // 漂浮动画
+                    property real floatOffset: 0
+                    SequentialAnimation on floatOffset {
+                        loops: Animation.Infinite
+                        NumberAnimation { to: 2; duration: 2100; easing.type: Easing.InOutSine }
+                        NumberAnimation { to: -2; duration: 2100; easing.type: Easing.InOutSine }
+                    }
+
+                    transform: Translate { y: starMapCard.floatOffset }
+
                     onClicked: function(starmapId, title) { root.openStarmap(starmapId, title) }
                     onMenuRequested: function(starmapId, title) {
                         starmapContextMenu.starmapId = starmapId
@@ -125,6 +137,17 @@ Rectangle {
                             color: dt ? dt.surfaceVariant : "#DFE3EB"
                             border.color: dt ? dt.border : "#2A2E36"
                             border.width: 1
+
+                            // chip 漂浮动画
+                            property real chipFloatOffset: 0
+                            SequentialAnimation on chipFloatOffset {
+                                loops: Animation.Infinite
+                                NumberAnimation { to: 1; duration: 2800; easing.type: Easing.InOutSine }
+                                NumberAnimation { to: -1; duration: 2800; easing.type: Easing.InOutSine }
+                            }
+
+                            transform: Translate { y: chipFloatOffset }
+
                             AppText {
                                 anchors.centerIn: parent
                                 text: modelData.title || ""

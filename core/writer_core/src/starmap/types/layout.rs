@@ -77,3 +77,58 @@ impl Default for StarMapViewport {
         }
     }
 }
+
+/// 星图运动策略 DTO — 跨端共享的动画策略参数
+///
+/// 这只是策略参数，不是逐帧坐标。各端根据此策略在本地计算视觉偏移。
+/// idle wobble 只是视觉偏移，不能改 layout.x/y。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapMotionPolicyDto {
+    /// 是否启用动画
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 是否启用静置摇晃
+    #[serde(default = "default_true")]
+    pub idle_wobble_enabled: bool,
+    /// 静置摇晃振幅（vp）
+    #[serde(default = "default_idle_amplitude_vp")]
+    pub idle_amplitude_vp: f32,
+    /// 静置摇晃周期（ms）
+    #[serde(default = "default_idle_period_ms")]
+    pub idle_period_ms: u32,
+    /// 拖动抬起缩放
+    #[serde(default = "default_drag_lift_scale")]
+    pub drag_lift_scale: f32,
+    /// 拖动阴影增强
+    #[serde(default = "default_drag_shadow_boost")]
+    pub drag_shadow_boost: f32,
+    /// 放置后归位动画时长（ms）
+    #[serde(default = "default_settle_duration_ms")]
+    pub settle_duration_ms: u32,
+    /// 减少动态效果（无障碍）
+    #[serde(default)]
+    pub reduce_motion: bool,
+}
+
+fn default_true() -> bool { true }
+fn default_idle_amplitude_vp() -> f32 { 2.0 }
+fn default_idle_period_ms() -> u32 { 4200 }
+fn default_drag_lift_scale() -> f32 { 1.04 }
+fn default_drag_shadow_boost() -> f32 { 8.0 }
+fn default_settle_duration_ms() -> u32 { 220 }
+
+impl Default for StarMapMotionPolicyDto {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            idle_wobble_enabled: true,
+            idle_amplitude_vp: 2.0,
+            idle_period_ms: 4200,
+            drag_lift_scale: 1.04,
+            drag_shadow_boost: 8.0,
+            settle_duration_ms: 220,
+            reduce_motion: false,
+        }
+    }
+}

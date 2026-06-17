@@ -291,6 +291,29 @@ Item {
                 kind: nodeData.kind
                 isSelected: nodeData.isSelected
 
+                // Idle wobble 视觉偏移
+                property real wobbleOffsetX: 0
+                property real wobbleOffsetY: 0
+                property bool isBeingDragged: false
+
+                // 用 index 错开 phase，避免所有节点同步晃
+                SequentialAnimation on wobbleOffsetX {
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 2; duration: 2100 + (index % 7) * 300; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: -2; duration: 2100 + (index % 7) * 300; easing.type: Easing.InOutSine }
+                }
+                SequentialAnimation on wobbleOffsetY {
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 1.2; duration: 2800 + (index % 5) * 200; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: -1.2; duration: 2800 + (index % 5) * 200; easing.type: Easing.InOutSine }
+                }
+
+                // 拖动时停止 wobble，idle 时叠加偏移
+                transform: Translate {
+                    x: isBeingDragged ? 0 : wobbleOffsetX
+                    y: isBeingDragged ? 0 : wobbleOffsetY
+                }
+
                 onXChanged: {
                     if (nodeData) {
                         nodeData.x = x
@@ -306,11 +329,17 @@ Item {
                 }
 
                 onPositionChangeFinished: {
+                    isBeingDragged = false
                     saveLayout()
                 }
 
                 onClicked: {
                     graphController.selectNode(nodesModel[index].id)
+                }
+
+                onPositionChanged: {
+                    // 拖拽开始时停止 idle wobble
+                    isBeingDragged = true
                 }
 
                 onRightPressed: function(mouseX, mouseY) {

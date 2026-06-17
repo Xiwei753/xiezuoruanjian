@@ -400,6 +400,10 @@ pub fn unbind_starmap_from_project(workspace: &Path, starmap_id: &str) -> Result
     Ok(())
 }
 
+pub fn get_motion_policy(_workspace: &Path) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
+    Ok(crate::starmap::types::StarMapMotionPolicyDto::default())
+}
+
 pub fn update_starmap_stats(
     workspace: &Path,
     starmap_id: &str,
@@ -816,5 +820,30 @@ mod tests {
 
         // Try deleting parent -> should succeed (internal edge shouldn't block)
         assert!(delete_starmap(dir.path(), &parent.starmap_id).is_ok());
+    }
+
+    #[test]
+    fn test_motion_policy_default() {
+        let policy = crate::starmap::types::StarMapMotionPolicyDto::default();
+        assert!(policy.enabled);
+        assert!(policy.idle_wobble_enabled);
+        assert_eq!(policy.idle_amplitude_vp, 2.0);
+        assert_eq!(policy.idle_period_ms, 4200);
+        assert_eq!(policy.drag_lift_scale, 1.04);
+        assert_eq!(policy.settle_duration_ms, 220);
+        assert!(!policy.reduce_motion);
+    }
+
+    #[test]
+    fn test_motion_policy_serialization() {
+        let policy = crate::starmap::types::StarMapMotionPolicyDto::default();
+        let json = serde_json::to_value(&policy).unwrap();
+        // camelCase
+        assert!(json.get("idleAmplitudeVp").is_some());
+        assert!(json.get("idlePeriodMs").is_some());
+        assert!(json.get("dragLiftScale").is_some());
+        assert!(json.get("settleDurationMs").is_some());
+        // NOT snake_case
+        assert!(json.get("idle_amplitude_vp").is_none());
     }
 }

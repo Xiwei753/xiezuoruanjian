@@ -17,6 +17,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -111,6 +112,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recentAdapter: RecentEditAdapter
     private var currentLayoutPlan: LayoutPlan? = null
     private var isTwoPaneMode: Boolean = false
+
+    // ── TwoPane 模式下当前嵌入的 EditorFragment 引用 ──
+    private var currentEditorFragment: EditorFragment? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -275,6 +279,21 @@ class MainActivity : AppCompatActivity() {
         btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
+
+        // ── TwoPane 模式下的 Back 行为 ──
+        // 当 EditorFragment 在右侧面板时，Back 键返回章节列表而非退出 MainActivity
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isTwoPaneMode && currentEditorFragment != null) {
+                    // TwoPane 模式下有 EditorFragment：返回章节列表
+                    returnToChapterList()
+                } else {
+                    // 默认行为：退出
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
     }
 
 
@@ -535,14 +554,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            val detailAdapter = DetailChapterAdapter(items) { volumeId, chapterId ->
-                // 点击章节时启动 EditorActivity
-                val intent = Intent(this@MainActivity, EditorActivity::class.java).apply {
-                    putExtra("PROJECT_ID", projectId)
-                    putExtra("VOLUME_ID", volumeId)
-                    putExtra("CHAPTER_ID", chapterId)
-                }
-                startActivity(intent)
+            val detailAdapter = DetailChapterAdapter(items) { volumeId, chapterId, chapterTitle ->
+                // TwoPane 模式下：在右侧面板嵌入 EditorFragment
+                showEditorInRightPane(projectId, volumeId, chapterId, chapterTitle)
             }
             chapterList.adapter = detailAdapter
         }
@@ -552,17 +566,83 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * TwoPane 模式下：在右侧面板显示编辑器。
-     * 当前 MVP 阶段直接启动 EditorActivity，后续可改为内嵌编辑器。
+     * TwoPane 模式下：在右侧面板嵌入 EditorFragment。
+     *
+     * 使用 supportFragmentManager 将 EditorFragment 替换到 detailContentContainer 中。
+     * 切换章节时替换 Fragment（而非启动新 Activity）。
+     * 保存当前 Fragment 引用以便后续操作（如 requestSave）。
      */
-    private fun showEditorInRightPane(projectId: String, volumeId: String, chapterId: String) {
-        // MVP 阶段：直接启动 EditorActivity
-        val intent = Intent(this, EditorActivity::class.java).apply {
-            putExtra("PROJECT_ID", projectId)
-            putExtra("VOLUME_ID", volumeId)
-            putExtra("CHAPTER_ID", chapterId)
+    private fun showEditorInRightPane(projectId: String, volumeId: String, chapterId: String, chapterTitle: String = "") {
+        // 隐藏占位提示，显示内容容器
+        detailPlaceholder.visibility = View.GONE
+        detailContentContainer.visibility = View.VISIBLE
+
+        // 如果已有 EditorFragment 且是同一章节，不重复创建
+        val existingFragment = currentEditorFragment
+        if (existingFragment != null && existingFragment.getCurrentChapterId() == chapterId) {
+            return
         }
-        startActivity(intent)
+
+        // 清除右侧面板中动态添加的视图（如章节列表），避免与 Fragment 冲突
+        detailContentContainer.removeAllViews()
+
+        // 移除旧的 EditorFragment（如果有）
+        currentEditorFragment?.let { oldFragment ->
+            supportFragmentManager.beginTransaction()
+                .remove(oldFragment)
+                .commitNow()
+        }
+
+        // 创建新的 EditorFragment
+        val newFragment = EditorFragment.newInstance(projectId, volumeId, chapterId, chapterTitle)
+        newFragment.setCallback(object : EditorFragment.EditorFragmentCallback {
+            override fun onBackRequested() {
+                // TwoPane 模式下：返回章节列表（不退出 MainActivity）
+                returnToChapterList()
+            }
+        })
+
+        // 替换右侧面板的 Fragment
+        supportFragmentManager.beginTransaction()
+            .replace(R.id.detailContentContainer, newFragment)
+            .commit()
+
+        currentEditorFragment = newFragment
+
+        // 更新 toolbar 标题
+        if (chapterTitle.isNotEmpty()) {
+            toolbar.title = chapterTitle
+        }
+    }
+
+    /**
+     * TwoPane 模式下：从编辑器返回章节列表。
+     * 移除 EditorFragment，恢复章节列表视图。
+     */
+    private fun returnToChapterList() {
+        currentEditorFragment?.let { fragment ->
+            // 先保存当前内容
+            lifecycleScope.launch {
+                fragment.requestSave().await()
+                // 移除 EditorFragment
+                supportFragmentManager.beginTransaction()
+                    .remove(fragment)
+                    .commitNow()
+                currentEditorFragment = null
+
+                // 恢复占位提示
+                detailPlaceholder.visibility = View.VISIBLE
+                detailContentContainer.visibility = View.GONE
+                detailContentContainer.removeAllViews()
+
+                toolbar.title = getString(R.string.title_projects)
+            }
+        } ?: run {
+            // 没有 EditorFragment，直接恢复占位
+            detailPlaceholder.visibility = View.VISIBLE
+            detailContentContainer.visibility = View.GONE
+            toolbar.title = getString(R.string.title_projects)
+        }
     }
 
     /**
@@ -588,7 +668,7 @@ class MainActivity : AppCompatActivity() {
      */
     private inner class DetailChapterAdapter(
         private val items: List<ChapterListItem>,
-        private val onChapterClick: (volumeId: String, chapterId: String) -> Unit
+        private val onChapterClick: (volumeId: String, chapterId: String, chapterTitle: String) -> Unit
     ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
         override fun getItemViewType(position: Int): Int = when (items[position]) {
@@ -622,7 +702,7 @@ class MainActivity : AppCompatActivity() {
                     textView.textSize = 14f
                     textView.setPadding(48, 12, 32, 12)
                     textView.setOnClickListener {
-                        onChapterClick(item.volumeId, item.chapterId)
+                        onChapterClick(item.volumeId, item.chapterId, item.title)
                     }
                 }
                 is ChapterListItem.EmptyHint -> {

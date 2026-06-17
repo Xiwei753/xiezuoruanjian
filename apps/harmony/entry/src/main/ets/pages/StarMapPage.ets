@@ -33,6 +33,19 @@ struct StarMapPage {
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
+  // 动画状态变量
+  @State motionTick: number = 0
+  @State draggingNodeId: string = ''
+  @State motionEnabled: boolean = true
+  @State idleWobbleEnabled: boolean = true
+  @State idleAmplitudeVp: number = 2.0
+  @State idlePeriodMs: number = 4200
+  @State dragLiftScale: number = 1.04
+  @State settleDurationMs: number = 220
+  @State reduceMotion: boolean = false
+
+  private motionTimer: number = -1
+
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
@@ -60,6 +73,9 @@ struct StarMapPage {
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver)
     // 初始化时同步一次状态
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
+
+    // 启动动画定时器
+    this.startMotionTimer()
   }
 
   aboutToDisappear() {
@@ -68,6 +84,11 @@ struct StarMapPage {
     }
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
+    }
+    // 停止动画定时器
+    if (this.motionTimer !== -1) {
+      clearInterval(this.motionTimer)
+      this.motionTimer = -1
     }
   }
 
@@ -144,6 +165,60 @@ struct StarMapPage {
   selectNode(nodeId: string) {
     this.selectedNodeId = nodeId
     this.selectedNode = this.graph?.nodes.find(n => n.id === nodeId) || null
+  }
+
+  /**
+   * 用 nodeId hash 算稳定 phase
+   */
+  stablePhase(nodeId: string): number {
+    let hash = 0
+    for (let i = 0; i < nodeId.length; i++) {
+      hash = ((hash << 5) - hash) + nodeId.charCodeAt(i)
+      hash = hash & hash // Convert to 32bit integer
+    }
+    return (Math.abs(hash) % 360) * Math.PI / 180
+  }
+
+  /**
+   * 计算节点的视觉水平偏移（idle wobble），不修改 node.x/y。
+   * 使用 nodeId hash 算稳定 phase，不用随机数。
+   */
+  wobbleX(nodeId: string, tick: number): number {
+    if (!this.motionEnabled || !this.idleWobbleEnabled || this.reduceMotion || this.draggingNodeId === nodeId) {
+      return 0
+    }
+    const phase = this.stablePhase(nodeId)
+    const period = this.idlePeriodMs
+    const amplitude = this.idleAmplitudeVp
+    return Math.sin((tick / period) * 2 * Math.PI + phase) * amplitude
+  }
+
+  /**
+   * 计算节点的视觉垂直偏移（idle wobble），不修改 node.y。
+   * Y 方向频率略低（0.7x）、振幅更小（0.6x），营造自然漂浮感。
+   */
+  wobbleY(nodeId: string, tick: number): number {
+    if (!this.motionEnabled || !this.idleWobbleEnabled || this.reduceMotion || this.draggingNodeId === nodeId) {
+      return 0
+    }
+    const phase = this.stablePhase(nodeId)
+    const period = this.idlePeriodMs
+    const amplitude = this.idleAmplitudeVp
+    return Math.cos((tick / period) * 0.7 * 2 * Math.PI + phase) * amplitude * 0.6
+  }
+
+  /**
+   * 启动动画定时器，约 33ms 一帧（~30fps），wobble 不需要高频率。
+   */
+  startMotionTimer() {
+    if (this.motionTimer !== -1) {
+      clearInterval(this.motionTimer)
+    }
+    this.motionTimer = setInterval(() => {
+      if (this.motionEnabled && !this.reduceMotion) {
+        this.motionTick = Date.now()
+      }
+    }, 33)
   }
 
   deselectNode() {
@@ -282,10 +357,10 @@ struct StarMapPage {
                 .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
                 .strokeWidth(4)
                 .shadow({
-                  radius: this.selectedNodeId === node.id ? 12 : 4,
-                  color: this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000',
+                  radius: this.draggingNodeId === node.id ? 12 : (this.selectedNodeId === node.id ? 8 : 4),
+                  color: this.draggingNodeId === node.id ? '#40000000' : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
                   offsetX: 0,
-                  offsetY: 2
+                  offsetY: this.draggingNodeId === node.id ? 4 : 2
                 })
 
               Text(node.label)
@@ -298,12 +373,32 @@ struct StarMapPage {
                 .width(80)
             }
             .position({
-              x: (node.x * this.zoomScale) + this.offsetX - 40,
-              y: (node.y * this.zoomScale) + this.offsetY - 40
+              x: (node.x * this.zoomScale) + this.offsetX - 40 + this.wobbleX(node.id, this.motionTick),
+              y: (node.y * this.zoomScale) + this.offsetY - 40 + this.wobbleY(node.id, this.motionTick)
             })
+            .scale(
+              this.draggingNodeId === node.id
+                ? { x: this.dragLiftScale, y: this.dragLiftScale }
+                : { x: 1, y: 1 }
+            )
             .onClick(() => {
               this.selectNode(node.id)
             })
+            .gesture(
+              PanGesture()
+                .onActionStart(() => {
+                  this.draggingNodeId = node.id
+                })
+                .onActionUpdate((event: GestureEvent) => {
+                  // 更新节点位置（实际修改 node.x/y）
+                  node.x += event.offsetX / this.zoomScale
+                  node.y += event.offsetY / this.zoomScale
+                  // 重置 PanGesture 的 offset 避免累积
+                })
+                .onActionEnd(() => {
+                  this.draggingNodeId = ''
+                })
+            )
           }, (node: StarMapNode) => node.id)
 
           // Node info panel — 宽屏下偏右，窄屏下左上角
@@ -528,10 +623,10 @@ struct StarMapPage {
       const tgt = nodeMap.get(edge.targetId)
       if (!src || !tgt) continue
 
-      const x1 = (src.x * this.zoomScale) + this.offsetX
-      const y1 = (src.y * this.zoomScale) + this.offsetY
-      const x2 = (tgt.x * this.zoomScale) + this.offsetX
-      const y2 = (tgt.y * this.zoomScale) + this.offsetY
+      const x1 = (src.x * this.zoomScale) + this.offsetX + this.wobbleX(src.id, this.motionTick)
+      const y1 = (src.y * this.zoomScale) + this.offsetY + this.wobbleY(src.id, this.motionTick)
+      const x2 = (tgt.x * this.zoomScale) + this.offsetX + this.wobbleX(tgt.id, this.motionTick)
+      const y2 = (tgt.y * this.zoomScale) + this.offsetY + this.wobbleY(tgt.id, this.motionTick)
 
       const isSelected = this.selectedNodeId === edge.sourceId || this.selectedNodeId === edge.targetId
 

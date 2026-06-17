@@ -228,3 +228,21 @@ data class StarMapData(
     val edgeRenders: List<StarMapEdgeRenderData> = emptyList(),
     val viewport: StarMapViewportData = StarMapViewportData()
 )
+
+/**
+ * 星图动画策略参数，与 Rust Core 的 StarMapMotionPolicyDto 一一对应。
+ *
+ * ## 架构定位
+ * - 跨端共享的动画策略，由 Core 层下发
+ * - Android 端据此控制 idle wobble、drag lift、settle 等动画行为
+ */
+data class StarMapMotionPolicyData(
+    val enabled: Boolean = true,
+    val idleWobbleEnabled: Boolean = true,
+    val idleAmplitudeVp: Float = 2.0f,
+    val idlePeriodMs: Int = 4200,
+    val dragLiftScale: Float = 1.04f,
+    val dragShadowBoost: Float = 8.0f,
+    val settleDurationMs: Int = 220,
+    val reduceMotion: Boolean = false
+)
