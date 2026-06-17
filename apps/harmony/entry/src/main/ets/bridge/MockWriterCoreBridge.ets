@@ -23,6 +23,7 @@ import {
   WritingStats,
   SyncConfig,
   SyncResult,
+  SyncDiagnosticsResult,
   RecentEdit,
   SyncState,
   SyncConflict,
@@ -629,6 +630,39 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       androidHasAccessNetworkStatePermission: config.androidHasAccessNetworkStatePermission
     }
     return this.success(true)
+  }
+
+  async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+    await this.delay(500)
+    const result: SyncDiagnosticsResult = {
+      success: true,
+      backendType: this.mockSyncConfig.backendType,
+      androidHasInternetPermission: true,
+      androidHasAccessNetworkStatePermission: true,
+      androidNetworkState: 'connected',
+      tcpProbeOk: true,
+      tcpProbeStatus: 'ok',
+      httpConnectProbeOk: true,
+      httpConnectProbeStatus: 'ok',
+      libgit2ProbeOk: true,
+      libgit2ProbeStatus: 'ok',
+      networkOk: true,
+      authOk: true,
+      repoOk: true,
+      branchOk: true,
+      networkStatus: 'connected',
+      authStatus: 'authenticated',
+      repoStatus: 'valid',
+      branchStatus: 'synced',
+      remoteUrlSanitized: 'https://github.com/***',
+      transport: 'https',
+      errorCategory: '',
+      userMessage: '同步诊断完成，一切正常',
+      rawError: undefined,
+      chosenNetworkMode: undefined,
+      networkProbeSummary: undefined
+    }
+    return this.success(result)
   }
 
   async syncDryRun(): Promise<ResultEnvelope<SyncResult>> {

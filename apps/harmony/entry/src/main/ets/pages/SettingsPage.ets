@@ -5,6 +5,7 @@ import {
   SyncableSettings,
   SyncConfig,
   SyncResult,
+  SyncDiagnosticsResult,
   ThemeMode,
   ResultEnvelope
 } from '../model/CoreDtos'
@@ -45,6 +46,8 @@ struct SettingsPage {
   @State isSyncing: boolean = false
   @State saveMessage: string = ''
   @State syncMessage: string = ''
+  @State syncDiagnostics: SyncDiagnosticsResult | null = null
+  @State isDiagnosing: boolean = false
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
@@ -152,6 +155,72 @@ struct SettingsPage {
       this.syncMessage = '同步时发生错误'
     } finally {
       this.isSyncing = false
+    }
+  }
+
+  async runSyncDiagnostics() {
+    this.isDiagnosing = true
+    this.syncDiagnostics = null
+
+    try {
+      const result = await this.bridge.syncDiagnostics()
+      if (result.success && result.data) {
+        this.syncDiagnostics = result.data
+      } else {
+        this.syncDiagnostics = {
+          success: false,
+          backendType: '',
+          androidHasInternetPermission: false,
+          androidHasAccessNetworkStatePermission: false,
+          androidNetworkState: '',
+          tcpProbeOk: false,
+          tcpProbeStatus: '',
+          httpConnectProbeOk: false,
+          httpConnectProbeStatus: '',
+          libgit2ProbeOk: false,
+          libgit2ProbeStatus: '',
+          networkOk: false,
+          authOk: false,
+          repoOk: false,
+          branchOk: false,
+          networkStatus: '',
+          authStatus: '',
+          repoStatus: '',
+          branchStatus: '',
+          remoteUrlSanitized: '',
+          transport: '',
+          errorCategory: 'unknown',
+          userMessage: result.userMessage || '诊断失败'
+        } as SyncDiagnosticsResult
+      }
+    } catch (err) {
+      this.syncDiagnostics = {
+        success: false,
+        backendType: '',
+        androidHasInternetPermission: false,
+        androidHasAccessNetworkStatePermission: false,
+        androidNetworkState: '',
+        tcpProbeOk: false,
+        tcpProbeStatus: '',
+        httpConnectProbeOk: false,
+        httpConnectProbeStatus: '',
+        libgit2ProbeOk: false,
+        libgit2ProbeStatus: '',
+        networkOk: false,
+        authOk: false,
+        repoOk: false,
+        branchOk: false,
+        networkStatus: '',
+        authStatus: '',
+        repoStatus: '',
+        branchStatus: '',
+        remoteUrlSanitized: '',
+        transport: '',
+        errorCategory: 'unknown',
+        userMessage: '诊断时发生错误'
+      } as SyncDiagnosticsResult
+    } finally {
+      this.isDiagnosing = false
     }
   }
 
@@ -509,15 +578,119 @@ struct SettingsPage {
             .backgroundColor(this.themeConfig.colors.primary)
             .enabled(!this.isSyncing)
             .onClick(() => this.performSync())
+
+          Button('诊断')
+            .fontSize(14)
+            .height(36)
+            .backgroundColor(this.themeConfig.colors.secondary || '#6b7280')
+            .fontColor(this.themeConfig.colors.onSecondary || '#ffffff')
+            .margin({ left: 12 })
+            .enabled(!this.isDiagnosing)
+            .onClick(() => this.runSyncDiagnostics())
         }
         .width('100%')
         .margin({ bottom: 16 })
+
+        // Diagnostics result card
+        if (this.syncDiagnostics) {
+          Column() {
+            Text('诊断结果')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.themeConfig.colors.textPrimary)
+              .margin({ bottom: 12 })
+
+            // Four check items
+            Row() {
+              this.DiagnosticItem('网络', this.syncDiagnostics.networkOk, this.syncDiagnostics.networkStatus)
+              this.DiagnosticItem('认证', this.syncDiagnostics.authOk, this.syncDiagnostics.authStatus)
+              this.DiagnosticItem('仓库', this.syncDiagnostics.repoOk, this.syncDiagnostics.repoStatus)
+              this.DiagnosticItem('分支', this.syncDiagnostics.branchOk, this.syncDiagnostics.branchStatus)
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.SpaceAround)
+            .margin({ bottom: 12 })
+
+            // User message
+            Text(this.syncDiagnostics.userMessage)
+              .fontSize(14)
+              .fontColor(this.syncDiagnostics.success ? this.themeConfig.colors.success : this.themeConfig.colors.error)
+              .margin({ bottom: 8 })
+
+            // Error category
+            if (this.syncDiagnostics.errorCategory && this.syncDiagnostics.errorCategory.length > 0) {
+              Row() {
+                Text('错误分类: ')
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.textSecondary)
+                Text(this.syncDiagnostics.errorCategory)
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.error)
+              }
+              .width('100%')
+              .margin({ bottom: 4 })
+            }
+
+            // Remote URL
+            if (this.syncDiagnostics.remoteUrlSanitized) {
+              Row() {
+                Text('远程地址: ')
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.textSecondary)
+                Text(this.syncDiagnostics.remoteUrlSanitized)
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.textSecondary)
+              }
+              .width('100%')
+              .margin({ bottom: 4 })
+            }
+
+            // Transport
+            if (this.syncDiagnostics.transport) {
+              Row() {
+                Text('传输协议: ')
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.textSecondary)
+                Text(this.syncDiagnostics.transport)
+                  .fontSize(12)
+                  .fontColor(this.themeConfig.colors.textSecondary)
+              }
+              .width('100%')
+            }
+          }
+          .width('100%')
+          .padding(12)
+          .backgroundColor(this.themeConfig.colors.background)
+          .borderRadius(8)
+          .margin({ bottom: 16 })
+        }
       }
     }
     .width('100%')
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(12)
+  }
+
+  @Builder
+  DiagnosticItem(label: string, ok: boolean, status: string) {
+    Column() {
+      Text(ok ? 'OK' : 'FAIL')
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(ok ? this.themeConfig.colors.success : this.themeConfig.colors.error)
+      Text(label)
+        .fontSize(12)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ top: 4 })
+      if (status) {
+        Text(status)
+          .fontSize(10)
+          .fontColor(this.themeConfig.colors.textHint)
+          .margin({ top: 2 })
+      }
+    }
+    .alignItems(HorizontalAlign.Center)
   }
 
   getThemeIndex(): number {

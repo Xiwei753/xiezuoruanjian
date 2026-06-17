@@ -15,6 +15,7 @@ import {
   WritingStats,
   SyncConfig,
   SyncResult,
+  SyncDiagnosticsResult,
   RecentEdit,
   ErrorCode,
   WindowMetrics,
@@ -547,6 +548,15 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return this.parseEnvelope<SyncResult>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
+  }
+
+  async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeSyncDiagnostics()
+      return this.parseEnvelope<SyncDiagnosticsResult>(jsonStr)
+    } catch (err) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: `syncDiagnostics failed: ${err}` }
     }
   }
 

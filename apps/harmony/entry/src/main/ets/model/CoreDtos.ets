@@ -184,6 +184,35 @@ export interface NetworkProbeResult {
   [key: string]: string | number | boolean
 }
 
+export interface SyncDiagnosticsResult {
+  success: boolean
+  backendType: string
+  androidHasInternetPermission: boolean
+  androidHasAccessNetworkStatePermission: boolean
+  androidNetworkState: string
+  tcpProbeOk: boolean
+  tcpProbeStatus: string
+  httpConnectProbeOk: boolean
+  httpConnectProbeStatus: string
+  libgit2ProbeOk: boolean
+  libgit2ProbeStatus: string
+  networkOk: boolean
+  authOk: boolean
+  repoOk: boolean
+  branchOk: boolean
+  networkStatus: string
+  authStatus: string
+  repoStatus: string
+  branchStatus: string
+  remoteUrlSanitized: string
+  transport: string
+  errorCategory: string
+  userMessage: string
+  rawError?: string
+  chosenNetworkMode?: string
+  networkProbeSummary?: NetworkProbeResult[]
+}
+
 // ─── Envelope DTOs ───
 
 export interface ResultEnvelope<T> {

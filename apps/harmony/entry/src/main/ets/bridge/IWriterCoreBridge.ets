@@ -14,6 +14,7 @@ import {
   WritingStats,
   SyncConfig,
   SyncResult,
+  SyncDiagnosticsResult,
   RecentEdit,
   WindowMetrics,
   LayoutPlan
@@ -71,6 +72,7 @@ export interface IWriterCoreBridge {
   saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>>
   syncDryRun(): Promise<ResultEnvelope<SyncResult>>
   performSync(): Promise<ResultEnvelope<SyncResult>>
+  syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>>
 
   // Stats
   getWritingStats(): Promise<ResultEnvelope<WritingStats>>
