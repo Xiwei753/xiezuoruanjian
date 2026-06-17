@@ -20,6 +20,7 @@ fn test_human_typed_counts_as_pure_input() {
         0,
         0,
         0,
+        0,
         "s1",
     );
     api.record_event(event).unwrap();
@@ -54,6 +55,7 @@ fn test_pasted_does_not_count_as_human_typed() {
         0,
         20,
         0,
+        0,
         "s1",
     );
     api.record_event(event).unwrap();
@@ -86,6 +88,7 @@ fn test_deleted_does_not_cancel_human_typed() {
         0,
         0,
         0,
+        0,
         "s1",
     );
     api.record_event(event1).unwrap();
@@ -99,6 +102,7 @@ fn test_deleted_does_not_cancel_human_typed() {
         EventSource::Deleted,
         0,
         3,
+        0,
         0,
         0,
         "s1",
@@ -134,6 +138,7 @@ fn test_ai_inserted_not_counted_as_human() {
         0,
         0,
         50,
+        0,
         "s1",
     );
     api.record_event(event).unwrap();
@@ -162,6 +167,7 @@ fn test_sync_remote_not_counted_as_local_input() {
         "vol1",
         "chap1",
         EventSource::SyncRemote,
+        0,
         0,
         0,
         0,
@@ -195,6 +201,7 @@ fn test_daily_aggregation_idempotent() {
         "chap1",
         EventSource::HumanTyped,
         10,
+        0,
         0,
         0,
         0,
@@ -232,6 +239,7 @@ fn test_multi_device_no_overlap() {
         0,
         0,
         0,
+        0,
         "s1",
     );
     api.record_event(event1).unwrap();
@@ -244,6 +252,7 @@ fn test_multi_device_no_overlap() {
         "chap1",
         EventSource::HumanTyped,
         20,
+        0,
         0,
         0,
         0,
@@ -296,6 +305,7 @@ fn test_speed_buckets_generation() {
             pasted_chars: 0,
             ai_inserted_chars: 0,
             net_delta_chars: 5,
+            duration_seconds: 0,
             session_id: "s1".to_string(),
         };
         api.record_event(event).unwrap();
@@ -334,6 +344,7 @@ fn test_per_project_tracking() {
         0,
         0,
         0,
+        0,
         "s1",
     );
     api.record_event(event).unwrap();
@@ -367,6 +378,7 @@ fn test_per_chapter_tracking() {
         0,
         0,
         0,
+        0,
         "s1",
     );
     api.record_event(event).unwrap();
@@ -397,6 +409,7 @@ fn test_event_file_written() {
         "chap1",
         EventSource::HumanTyped,
         10,
+        0,
         0,
         0,
         0,
@@ -455,6 +468,7 @@ fn test_session_gap_detection() {
         pasted_chars: 0,
         ai_inserted_chars: 0,
         net_delta_chars: 5,
+        duration_seconds: 0,
         session_id: "s1".to_string(),
     };
     store.record_event(event1).unwrap();
@@ -473,6 +487,7 @@ fn test_session_gap_detection() {
         pasted_chars: 0,
         ai_inserted_chars: 0,
         net_delta_chars: 5,
+        duration_seconds: 0,
         session_id: "s1".to_string(),
     };
     store.record_event(event2).unwrap();
@@ -502,6 +517,7 @@ fn test_char_count_uses_unicode_scalar() {
         "chap1",
         EventSource::HumanTyped,
         char_count as u32,
+        0,
         0,
         0,
         0,
@@ -537,17 +553,18 @@ fn test_facade_record_writing_event() {
         0,
         0,
         0,
+        0,
         "s1",
     )
     .unwrap();
 
     core.record_writing_event(
-        "dev-1", "linux", "proj1", "vol1", "chap1", "pasted", 0, 0, 20, 0, "s1",
+        "dev-1", "linux", "proj1", "vol1", "chap1", "pasted", 0, 0, 20, 0, 0, "s1",
     )
     .unwrap();
 
     core.record_writing_event(
-        "dev-1", "linux", "proj1", "vol1", "chap1", "deleted", 0, 5, 0, 0, "s1",
+        "dev-1", "linux", "proj1", "vol1", "chap1", "deleted", 0, 5, 0, 0, 0, "s1",
     )
     .unwrap();
 
@@ -562,6 +579,7 @@ fn test_facade_record_writing_event() {
         0,
         0,
         30,
+        0,
         "s1",
     )
     .unwrap();

@@ -10,6 +10,8 @@ import { WidthClass, ShellMode } from '../model/CoreDtos'
 interface WritingPageParams {
   chapterId: string
   chapterTitle: string
+  projectId: string
+  volumeId: string
 }
 
 @Entry
@@ -17,6 +19,8 @@ interface WritingPageParams {
 struct WritingPage {
   @State chapterId: string = ''
   @State chapterTitle: string = ''
+  @State projectId: string = ''
+  @State volumeId: string = ''
   @State content: string = ''
   @State wordCount: number = 0
   @State isLoading: boolean = true
@@ -44,8 +48,8 @@ struct WritingPage {
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
-  @State sessionStartTime: number = Date.now()
-  @State sessionCharsAdded: number = 0
+  @State sessionOldText: string = ''
+  @State sessionId: string = ''
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
   private bridge: IWriterCoreBridge = getBridge()
@@ -60,6 +64,8 @@ struct WritingPage {
     if (params) {
       this.chapterId = params.chapterId
       this.chapterTitle = params.chapterTitle
+      this.projectId = params.projectId || ''
+      this.volumeId = params.volumeId || ''
       this.loadChapter()
       this.loadSettings()
     }
@@ -85,10 +91,19 @@ struct WritingPage {
   }
 
   aboutToDisappear() {
-    // Record writing session
-    const durationSeconds = Math.floor((Date.now() - this.sessionStartTime) / 1000)
-    if (this.sessionCharsAdded > 0 && durationSeconds > 10) {
-      this.bridge.processWritingEvent(this.sessionCharsAdded, durationSeconds)
+    // 上报写作编辑事件（让 Core 统一计算统计）
+    if (this.sessionOldText !== this.content && this.chapterId) {
+      const deviceId = this.settings.statsDeviceId || 'unknown'
+      this.bridge.processWritingEvent(
+        deviceId,
+        'harmony',
+        this.projectId,
+        this.volumeId,
+        this.chapterId,
+        this.sessionOldText,
+        this.content,
+        this.sessionId
+      )
     }
 
     // Save if unsaved changes
@@ -119,6 +134,9 @@ struct WritingPage {
         this.lastSavedContent = result.data.content
         this.wordCount = result.data.meta.wordCount
         this.hasUnsavedChanges = false
+        // 记录编辑前文本，用于写作统计
+        this.sessionOldText = result.data.content
+        this.sessionId = `hm-${this.chapterId}-${Date.now()}`
       } else {
         this.errorMessage = result.userMessage || '加载章节失败'
       }
@@ -182,15 +200,8 @@ struct WritingPage {
   }
 
   onContentChange(text: string) {
-    const oldLength = this.content.length
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
-
-    // Track characters added
-    const lengthDiff = text.length - oldLength
-    if (lengthDiff > 0) {
-      this.sessionCharsAdded += lengthDiff
-    }
 
     // Update word count
     this.bridge.calculateWordCount(text).then(count => {
@@ -328,11 +339,6 @@ struct WritingPage {
         }
 
         Blank()
-
-        Text(`会话: ${this.sessionCharsAdded} 字`)
-          .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
-          .margin({ right: 16 })
 
         Text(this.hasUnsavedChanges ? '未保存' : '已保存')
           .fontSize(12)

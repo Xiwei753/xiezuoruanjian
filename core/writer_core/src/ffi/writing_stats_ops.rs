@@ -31,6 +31,7 @@ pub unsafe extern "C" fn writer_core_process_writing_event(event_json: *const c_
         let volume_id = val.get("volumeId").and_then(|v| v.as_str()).unwrap_or("");
         let chapter_id = val.get("chapterId").and_then(|v| v.as_str()).unwrap_or("");
         let chars_added = val.get("charsAdded").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
+        let duration_seconds = val.get("durationSeconds").and_then(|v| v.as_i64()).unwrap_or(0) as u32;
         let session_id = val.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
 
         let old_text = "";
@@ -39,7 +40,7 @@ pub unsafe extern "C" fn writer_core_process_writing_event(event_json: *const c_
 
         core.process_writing_event(
             device_id, platform, project_id, volume_id, chapter_id,
-            &old_text, &new_text, session_id,
+            &old_text, &new_text, duration_seconds, session_id,
         ).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {

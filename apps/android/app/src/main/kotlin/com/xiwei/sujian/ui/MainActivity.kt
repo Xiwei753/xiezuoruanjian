@@ -4,6 +4,8 @@ import android.content.Intent
 
 import android.widget.Toast
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import androidx.coordinatorlayout.widget.CoordinatorLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import android.os.Bundle
@@ -77,6 +79,24 @@ class MainActivity : AppCompatActivity() {
     private lateinit var canvasView: StarMapCanvasView
     private lateinit var toolbar: MaterialToolbar
 
+    // ── TwoPane 模式的 View 引用 ──
+    private lateinit var twoPaneContainer: LinearLayout
+    private lateinit var leftPane: FrameLayout
+    private lateinit var rightPane: FrameLayout
+    private lateinit var paneDivider: View
+    private lateinit var detailPlaceholder: View
+    private lateinit var detailContentContainer: FrameLayout
+    private lateinit var projectRecyclerViewLeft: RecyclerView
+    private lateinit var recentEditsRecyclerViewLeft: RecyclerView
+    private lateinit var emptyStateLayoutLeft: View
+    private lateinit var recentEditsLayoutLeft: View
+    private lateinit var tabWorksLeft: FrameLayout
+    private lateinit var tabStarMapLeft: FrameLayout
+    private lateinit var tabStatsLeft: FrameLayout
+    private lateinit var canvasViewLeft: StarMapCanvasView
+    private lateinit var leftPaneAdapter: ProjectAdapter
+    private lateinit var leftPaneRecentAdapter: RecentEditAdapter
+
     var starmapId: String = ""
     
     private lateinit var starMapController: StarMapController
@@ -90,6 +110,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adapter: ProjectAdapter
     private lateinit var recentAdapter: RecentEditAdapter
     private var currentLayoutPlan: LayoutPlan? = null
+    private var isTwoPaneMode: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,8 +129,6 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
 
-        // ── LayoutPlan 驱动：通过 Core resolve_layout 获取布局方案 ──
-        applyLayoutPlan()
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
@@ -128,6 +147,22 @@ class MainActivity : AppCompatActivity() {
         bottomNav = findViewById(R.id.bottomNav)
         canvasView = findViewById(R.id.canvasView)
         toolbar = findViewById(R.id.toolbar)
+
+        // ── TwoPane 模式的 View 引用初始化 ──
+        twoPaneContainer = findViewById(R.id.twoPaneContainer)
+        leftPane = findViewById(R.id.leftPane)
+        rightPane = findViewById(R.id.rightPane)
+        paneDivider = findViewById(R.id.paneDivider)
+        detailPlaceholder = findViewById(R.id.detailPlaceholder)
+        detailContentContainer = findViewById(R.id.detailContentContainer)
+        projectRecyclerViewLeft = findViewById(R.id.projectRecyclerViewLeft)
+        recentEditsRecyclerViewLeft = findViewById(R.id.recentEditsRecyclerViewLeft)
+        emptyStateLayoutLeft = findViewById(R.id.emptyStateLayoutLeft)
+        recentEditsLayoutLeft = findViewById(R.id.recentEditsLayoutLeft)
+        tabWorksLeft = findViewById(R.id.tabWorksLeft)
+        tabStarMapLeft = findViewById(R.id.tabStarMapLeft)
+        tabStatsLeft = findViewById(R.id.tabStatsLeft)
+        canvasViewLeft = findViewById(R.id.canvasViewLeft)
 
         starMapController = StarMapController(this, com.xiwei.sujian.data.BridgeProvider.getStarmapBridge(this), tabStarMap, canvasView)
         statsController = StatsController(this, com.xiwei.sujian.data.BridgeProvider.getStatsBridge(this), tabStats)
@@ -210,6 +245,20 @@ class MainActivity : AppCompatActivity() {
         recentEditsRecyclerView.layoutManager = LinearLayoutManager(this)
         recentEditsRecyclerView.adapter = recentAdapter
 
+        // ── TwoPane 左侧面板的 adapter ──
+        leftPaneAdapter = ProjectAdapter()
+        projectRecyclerViewLeft.layoutManager = LinearLayoutManager(this)
+        projectRecyclerViewLeft.adapter = leftPaneAdapter
+
+        leftPaneRecentAdapter = RecentEditAdapter()
+        recentEditsRecyclerViewLeft.layoutManager = LinearLayoutManager(this)
+        recentEditsRecyclerViewLeft.adapter = leftPaneRecentAdapter
+
+        // ── LayoutPlan 驱动：所有 View 引用已初始化，延迟首次应用确保视图已布局 ──
+        window.decorView.post {
+            applyLayoutPlan()
+        }
+
         loadProjects()
         loadRecentEdits()
 
@@ -236,6 +285,11 @@ class MainActivity : AppCompatActivity() {
     /**
      * 通过 Core resolve_layout 获取 LayoutPlan 并应用到 UI。
      * 不允许 Android 端自己判断 isTablet 或自己发明断点。
+     *
+     * 三种 ShellMode 的布局策略：
+     * - SinglePane：底部导航 + 单页跳转（手机竖屏）
+     * - SupportingPane：底部导航 + 内容居中限宽（手机横屏/小平板）
+     * - TwoPane：隐藏底部导航，左右双栏布局（大屏/折叠屏展开）
      */
     private fun applyLayoutPlan() {
         try {
@@ -261,30 +315,11 @@ class MainActivity : AppCompatActivity() {
             currentLayoutPlan = bridge.resolveLayout(metrics)
 
             currentLayoutPlan?.let { plan ->
-                // 根据 showBottomBar 控制底部导航可见性
-                if (!plan.showBottomBar) {
-                    bottomNav.visibility = View.GONE
-                    // 移除底部导航占位
-                    val container = findViewById<View>(R.id.mainContainer)
-                    container.setPadding(0, 0, 0, 0)
+                when (plan.shellMode) {
+                    ShellMode.TwoPane -> applyTwoPaneLayout(plan, widthPx, density)
+                    ShellMode.SupportingPane -> applySupportingPaneLayout(plan, widthPx, density)
+                    ShellMode.SinglePane -> applySinglePaneLayout(plan, density)
                 }
-
-                // 根据 contentMaxWidthVp 限制内容最大宽度
-                if (plan.contentMaxWidthVp > 0f && plan.contentMaxWidthVp < Float.MAX_VALUE) {
-                    val maxPx = (plan.contentMaxWidthVp * density).toInt()
-                    val container = findViewById<View>(R.id.mainContainer)
-                    container.layoutParams = container.layoutParams?.apply {
-                        if (this is ViewGroup.MarginLayoutParams) {
-                            val horizontalMargin = ((widthPx - maxPx) / 2).coerceAtLeast(0f).toInt()
-                            marginStart = horizontalMargin
-                            marginEnd = horizontalMargin
-                        }
-                    }
-                }
-
-                // 根据 pagePaddingVp 设置内边距
-                val paddingPx = (plan.pagePaddingVp * density).toInt()
-                projectRecyclerView.setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
 
                 Log.d("MainActivity", "LayoutPlan applied: shellMode=${plan.shellMode}, " +
                     "widthClass=${plan.widthClass}, showBottomBar=${plan.showBottomBar}, " +
@@ -292,7 +327,315 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             Log.w("MainActivity", "Failed to apply LayoutPlan, using defaults", e)
+            // 降级为 SinglePane
+            applySinglePaneLayout(null, resources.displayMetrics.density)
         }
+    }
+
+    /**
+     * TwoPane 模式：左右双栏布局
+     * - 隐藏底部导航和 SinglePane 主容器
+     * - 显示 twoPaneContainer，左侧列表 + 右侧详情
+     * - 左侧面板占 40%，右侧面板占 60%
+     */
+    private fun applyTwoPaneLayout(plan: LayoutPlan, widthPx: Float, density: Float) {
+        isTwoPaneMode = true
+
+        // 隐藏 SinglePane 的主容器和底部导航
+        mainContainer.visibility = View.GONE
+        bottomNav.visibility = View.GONE
+
+        // 显示 TwoPane 容器
+        twoPaneContainer.visibility = View.VISIBLE
+
+        // 左侧面板权重 2，右侧面板权重 3（约 40%/60%）
+        leftPane.layoutParams = LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.MATCH_PARENT, 2f
+        )
+        rightPane.layoutParams = LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.MATCH_PARENT, 3f
+        )
+        paneDivider.visibility = View.VISIBLE
+
+        // 左侧面板默认显示 Works tab
+        tabWorksLeft.visibility = View.VISIBLE
+        tabStarMapLeft.visibility = View.GONE
+        tabStatsLeft.visibility = View.GONE
+
+        // 根据 pagePaddingVp 设置左侧面板内边距
+        val paddingPx = (plan.pagePaddingVp * density).toInt()
+        projectRecyclerViewLeft.setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+
+        // 根据 contentMaxWidthVp 限制右侧面板最大宽度
+        if (plan.contentMaxWidthVp > 0f && plan.contentMaxWidthVp < Float.MAX_VALUE) {
+            val maxPx = (plan.contentMaxWidthVp * density).toInt()
+            rightPane.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.MATCH_PARENT, 3f
+            ).apply {
+                // 右侧面板限宽居中
+                val availableWidth = (widthPx * 3f / 5f).toInt()  // 右侧面板实际宽度
+                if (maxPx < availableWidth) {
+                    val horizontalMargin = ((availableWidth - maxPx) / 2).coerceAtLeast(0)
+                    marginStart = horizontalMargin
+                    marginEnd = horizontalMargin
+                }
+            }
+        }
+
+        // 同步数据到左侧面板的 RecyclerView
+        leftPaneAdapter.notifyDataSetChanged()
+        leftPaneRecentAdapter.notifyDataSetChanged()
+
+        // 更新 toolbar
+        toolbar.title = getString(R.string.title_projects)
+
+        // TwoPane 模式下 FAB 锚定到 twoPaneContainer
+        val fabLayoutParams = fabNewProject.layoutParams as? CoordinatorLayout.LayoutParams
+        fabLayoutParams?.anchorId = R.id.twoPaneContainer
+        fabNewProject.layoutParams = fabLayoutParams
+        fabNewProject.show()
+        fabNewStarMapNode.hide()
+    }
+
+    /**
+     * SupportingPane 模式：底部导航 + 内容居中限宽
+     * - 保持底部导航
+     * - 内容区域居中并限制最大宽度
+     */
+    private fun applySupportingPaneLayout(plan: LayoutPlan, widthPx: Float, density: Float) {
+        isTwoPaneMode = false
+
+        // 隐藏 TwoPane 容器
+        twoPaneContainer.visibility = View.GONE
+
+        // 显示 SinglePane 主容器和底部导航
+        mainContainer.visibility = View.VISIBLE
+        bottomNav.visibility = View.VISIBLE
+
+        // 恢复底部导航占位
+        mainContainer.setPadding(0, 0, 0, 0)
+        val marginBottomDp = 56
+        val marginBottomPx = (marginBottomDp * density).toInt()
+        mainContainer.layoutParams = mainContainer.layoutParams?.apply {
+            if (this is ViewGroup.MarginLayoutParams) {
+                bottomMargin = marginBottomPx
+            }
+        }
+
+        // 根据 contentMaxWidthVp 限制内容最大宽度并居中
+        if (plan.contentMaxWidthVp > 0f && plan.contentMaxWidthVp < Float.MAX_VALUE) {
+            val maxPx = (plan.contentMaxWidthVp * density).toInt()
+            mainContainer.layoutParams = mainContainer.layoutParams?.apply {
+                if (this is ViewGroup.MarginLayoutParams) {
+                    val horizontalMargin = ((widthPx - maxPx) / 2).coerceAtLeast(0f).toInt()
+                    marginStart = horizontalMargin
+                    marginEnd = horizontalMargin
+                }
+            }
+        }
+
+        // 根据 pagePaddingVp 设置内边距
+        val paddingPx = (plan.pagePaddingVp * density).toInt()
+        projectRecyclerView.setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+
+        // 恢复 FAB 锚定到 mainContainer
+        val fabLayoutParams = fabNewProject.layoutParams as? CoordinatorLayout.LayoutParams
+        fabLayoutParams?.anchorId = R.id.mainContainer
+        fabNewProject.layoutParams = fabLayoutParams
+    }
+
+    /**
+     * SinglePane 模式：底部导航 + 单页跳转（默认）
+     * - 保持底部导航
+     * - 全宽内容区域
+     */
+    private fun applySinglePaneLayout(plan: LayoutPlan?, density: Float) {
+        isTwoPaneMode = false
+
+        // 隐藏 TwoPane 容器
+        twoPaneContainer.visibility = View.GONE
+
+        // 显示 SinglePane 主容器和底部导航
+        mainContainer.visibility = View.VISIBLE
+        bottomNav.visibility = View.VISIBLE
+
+        // 恢复底部导航占位
+        mainContainer.setPadding(0, 0, 0, 0)
+        val marginBottomDp = 56
+        val marginBottomPx = (marginBottomDp * density).toInt()
+        mainContainer.layoutParams = mainContainer.layoutParams?.apply {
+            if (this is ViewGroup.MarginLayoutParams) {
+                bottomMargin = marginBottomPx
+                marginStart = 0
+                marginEnd = 0
+            }
+        }
+
+        // 根据 pagePaddingVp 设置内边距
+        if (plan != null) {
+            val paddingPx = (plan.pagePaddingVp * density).toInt()
+            projectRecyclerView.setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+        }
+
+        // 恢复 FAB 锚定到 mainContainer
+        val fabLayoutParams = fabNewProject.layoutParams as? CoordinatorLayout.LayoutParams
+        fabLayoutParams?.anchorId = R.id.mainContainer
+        fabNewProject.layoutParams = fabLayoutParams
+    }
+
+    /**
+     * TwoPane 模式下：在右侧面板显示指定项目的章节列表。
+     * 动态创建 RecyclerView 加载卷/章结构，点击章节时启动 EditorActivity。
+     */
+    private fun showChapterListInRightPane(projectId: String, projectTitle: String) {
+        // 隐藏占位提示，显示内容容器
+        detailPlaceholder.visibility = View.GONE
+        detailContentContainer.visibility = View.VISIBLE
+
+        // 清空右侧面板旧内容
+        detailContentContainer.removeAllViews()
+
+        // 创建章节列表标题
+        val titleText = TextView(this).apply {
+            text = projectTitle
+            textSize = 20f
+            setPadding(32, 24, 32, 16)
+            setTextColor(resources.getColor(android.R.color.black, theme))
+        }
+        detailContentContainer.addView(titleText)
+
+        // 创建章节列表 RecyclerView
+        val chapterList = RecyclerView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            layoutManager = LinearLayoutManager(this@MainActivity)
+        }
+        detailContentContainer.addView(chapterList)
+
+        // 加载章节列表数据
+        lifecycleScope.launch {
+            val items = ErrorUtil.safeRunSuspend(this@MainActivity, emptyList<ChapterListItem>()) {
+                withContext(Dispatchers.IO) {
+                    val volumes = workspaceRepository.getVolumes(projectId)
+                    val result = mutableListOf<ChapterListItem>()
+                    for (volume in volumes) {
+                        result.add(ChapterListItem.VolumeHeader(volume.id, volume.title))
+                        val chapters = workspaceRepository.getChapters(projectId, volume.id)
+                        if (chapters.isEmpty()) {
+                            result.add(ChapterListItem.EmptyHint(volume.id))
+                        } else {
+                            for (chapter in chapters) {
+                                result.add(ChapterListItem.ChapterItem(volume.id, chapter.id, chapter.title, chapter.wordCount))
+                            }
+                        }
+                    }
+                    result
+                }
+            }
+
+            val detailAdapter = DetailChapterAdapter(items) { volumeId, chapterId ->
+                // 点击章节时启动 EditorActivity
+                val intent = Intent(this@MainActivity, EditorActivity::class.java).apply {
+                    putExtra("PROJECT_ID", projectId)
+                    putExtra("VOLUME_ID", volumeId)
+                    putExtra("CHAPTER_ID", chapterId)
+                }
+                startActivity(intent)
+            }
+            chapterList.adapter = detailAdapter
+        }
+
+        // 更新 toolbar 标题
+        toolbar.title = projectTitle
+    }
+
+    /**
+     * TwoPane 模式下：在右侧面板显示编辑器。
+     * 当前 MVP 阶段直接启动 EditorActivity，后续可改为内嵌编辑器。
+     */
+    private fun showEditorInRightPane(projectId: String, volumeId: String, chapterId: String) {
+        // MVP 阶段：直接启动 EditorActivity
+        val intent = Intent(this, EditorActivity::class.java).apply {
+            putExtra("PROJECT_ID", projectId)
+            putExtra("VOLUME_ID", volumeId)
+            putExtra("CHAPTER_ID", chapterId)
+        }
+        startActivity(intent)
+    }
+
+    /**
+     * 章节列表项数据类（用于右侧面板的章节列表）
+     */
+    private sealed class ChapterListItem {
+        data class VolumeHeader(val volumeId: String, val title: String) : ChapterListItem()
+        data class ChapterItem(val volumeId: String, val chapterId: String, val title: String, val wordCount: Int) : ChapterListItem()
+        data class EmptyHint(val volumeId: String) : ChapterListItem()
+    }
+
+    /**
+     * 右侧面板章节列表的 ViewHolder 类型常量
+     */
+    companion object {
+        private const val TYPE_VOLUME_HEADER = 0
+        private const val TYPE_CHAPTER = 1
+        private const val TYPE_EMPTY_HINT = 2
+    }
+
+    /**
+     * 右侧面板章节列表的 Adapter
+     */
+    private inner class DetailChapterAdapter(
+        private val items: List<ChapterListItem>,
+        private val onChapterClick: (volumeId: String, chapterId: String) -> Unit
+    ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+
+        override fun getItemViewType(position: Int): Int = when (items[position]) {
+            is ChapterListItem.VolumeHeader -> TYPE_VOLUME_HEADER
+            is ChapterListItem.ChapterItem -> TYPE_CHAPTER
+            is ChapterListItem.EmptyHint -> TYPE_EMPTY_HINT
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val textView = TextView(this@MainActivity).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+                )
+            }
+            return object : RecyclerView.ViewHolder(textView) {}
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            val textView = holder.itemView as TextView
+            when (val item = items[position]) {
+                is ChapterListItem.VolumeHeader -> {
+                    textView.text = "📖 ${item.title}"
+                    textView.textSize = 16f
+                    textView.setPadding(32, 24, 32, 8)
+                    textView.setTextColor(resources.getColor(android.R.color.black, theme))
+                    textView.setOnClickListener(null)
+                }
+                is ChapterListItem.ChapterItem -> {
+                    textView.text = "  ${item.title}  (${item.wordCount}字)"
+                    textView.textSize = 14f
+                    textView.setPadding(48, 12, 32, 12)
+                    textView.setOnClickListener {
+                        onChapterClick(item.volumeId, item.chapterId)
+                    }
+                }
+                is ChapterListItem.EmptyHint -> {
+                    textView.text = "  （空卷，点击新建章节）"
+                    textView.textSize = 12f
+                    textView.setPadding(48, 8, 32, 8)
+                    textView.setTextColor(resources.getColor(android.R.color.darker_gray, theme))
+                    textView.setOnClickListener(null)
+                }
+            }
+        }
+
+        override fun getItemCount() = items.size
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
@@ -342,9 +685,16 @@ class MainActivity : AppCompatActivity() {
 
             if (recentEdits.isEmpty()) {
                 recentEditsLayout.visibility = View.GONE
+                if (isTwoPaneMode && ::recentEditsLayoutLeft.isInitialized) {
+                    recentEditsLayoutLeft.visibility = View.GONE
+                }
             } else {
                 recentEditsLayout.visibility = View.VISIBLE
                 recentAdapter.notifyDataSetChanged()
+                if (isTwoPaneMode && ::recentEditsLayoutLeft.isInitialized) {
+                    recentEditsLayoutLeft.visibility = View.VISIBLE
+                    leftPaneRecentAdapter.notifyDataSetChanged()
+                }
             }
         }
     }
@@ -362,10 +712,19 @@ class MainActivity : AppCompatActivity() {
             if (projects.isEmpty()) {
                 projectRecyclerView.visibility = View.GONE
                 emptyStateLayout.visibility = View.VISIBLE
+                if (isTwoPaneMode && ::projectRecyclerViewLeft.isInitialized) {
+                    projectRecyclerViewLeft.visibility = View.GONE
+                    emptyStateLayoutLeft.visibility = View.VISIBLE
+                }
             } else {
                 projectRecyclerView.visibility = View.VISIBLE
                 emptyStateLayout.visibility = View.GONE
                 adapter.notifyDataSetChanged()
+                if (isTwoPaneMode && ::projectRecyclerViewLeft.isInitialized) {
+                    projectRecyclerViewLeft.visibility = View.VISIBLE
+                    emptyStateLayoutLeft.visibility = View.GONE
+                    leftPaneAdapter.notifyDataSetChanged()
+                }
             }
         }
     }
@@ -523,11 +882,15 @@ class MainActivity : AppCompatActivity() {
                     val pos = adapterPosition
                     if (pos != RecyclerView.NO_POSITION) {
                         val selectedProject = projects[pos]
-                        val intent = Intent(this@MainActivity, ChapterListActivity::class.java).apply {
-                            putExtra("PROJECT_ID", selectedProject.id)
-                            putExtra("PROJECT_TITLE", selectedProject.title)
+                        if (isTwoPaneMode) {
+                            showChapterListInRightPane(selectedProject.id, selectedProject.title)
+                        } else {
+                            val intent = Intent(this@MainActivity, ChapterListActivity::class.java).apply {
+                                putExtra("PROJECT_ID", selectedProject.id)
+                                putExtra("PROJECT_TITLE", selectedProject.title)
+                            }
+                            startActivity(intent)
                         }
-                        startActivity(intent)
                     }
                 }
 
@@ -566,13 +929,16 @@ class MainActivity : AppCompatActivity() {
             init {
                 itemView.setOnClickListener {
                     val edit = recentEdits[adapterPosition]
-                    val intent = Intent(this@MainActivity, EditorActivity::class.java).apply {
-                        putExtra("PROJECT_ID", edit.projectId)
-                        putExtra("VOLUME_ID", edit.volumeId)
-                        putExtra("CHAPTER_ID", edit.chapterId)
-                        // Note: chapterTitle is missing here, we'll gracefully fallback in EditorActivity
+                    if (isTwoPaneMode) {
+                        showEditorInRightPane(edit.projectId, edit.volumeId, edit.chapterId)
+                    } else {
+                        val intent = Intent(this@MainActivity, EditorActivity::class.java).apply {
+                            putExtra("PROJECT_ID", edit.projectId)
+                            putExtra("VOLUME_ID", edit.volumeId)
+                            putExtra("CHAPTER_ID", edit.chapterId)
+                        }
+                        startActivity(intent)
                     }
-                    startActivity(intent)
                 }
             }
         }

@@ -111,6 +111,7 @@ mod tests {
                 0,
                 0,
                 0,
+                0,
                 "session-1",
             )
             .unwrap();
@@ -133,6 +134,7 @@ mod tests {
                 "chap1",
                 "old",
                 "old text",
+                0,
                 "session-1",
             )
             .unwrap();
@@ -211,6 +213,7 @@ mod tests {
                 0,
                 0,
                 0,
+                0,
                 "session-1",
             )
             .unwrap();
@@ -233,6 +236,7 @@ mod tests {
                 "human_typed",
                 0,
                 -1,
+                0,
                 0,
                 0,
                 "session-1",
@@ -263,6 +267,7 @@ mod tests {
                 "chap1",
                 "old",
                 "old text",
+                0,
                 "session-1",
             )
             .unwrap_err();

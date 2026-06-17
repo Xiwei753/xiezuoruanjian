@@ -9,6 +9,23 @@
 //   - 通过 WritingTreeController 管理树结构
 //   - 不直接操作文件系统
 //
+// ── LayoutPlan 边界约束 ──
+//
+// LayoutPlan 只影响壳层布局，具体包括：
+//   - 侧栏宽度（sidebarWidth）
+//   - 内容区域最大宽度（contentMaxWidthVp）
+//   - 导航模式切换（shellMode）
+//   - 页面内边距（contentPaddingVp）
+//
+// LayoutPlan 绝对不干预编辑器底层渲染：
+//   - 不传递到 SujianEditorItem 的 QSG 渲染线程
+//   - 不影响光标位置、IME 输入、动画帧率
+//   - 不改变 QTextLayout 的排版计算
+//   - 不驱动 SmoothCursor / EditorAnimationOverlay 的动画属性
+//
+// 编辑器渲染（光标、IME、动画）由 EditorController 和 SujianEditorItem
+// 独立管理，遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
+//
 // 组成：
 //   WorkspaceTree (侧栏) + EditorPage (编辑区) + TopWritingToolbar (工具栏)
 // =============================================================================
@@ -31,6 +48,11 @@ Rectangle {
     property bool aiCapable: false
     property bool aiEnabled: false
     property bool useSujianEditorItem: false
+    // ⚠️ LayoutPlan 边界约束 ⚠️
+    // layoutPlan 只用于壳层布局（侧栏宽度、内容最大宽度、导航模式）。
+    // 绝对禁止将 layoutPlan 的属性传递到编辑器组件（SujianEditorItem / editorArea），
+    // 因为编辑器渲染（光标、IME、动画）由 EditorController 和 SujianEditorItem
+    // 独立管理，遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
     property var layoutPlan: null
 
     // Project-level ID — set by main.qml, used for tree and create volume/chapter
@@ -565,10 +587,14 @@ Rectangle {
                     anchors.bottomMargin: dt ? dt.sp8 : 8
 
                     // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
+                    // ⚠️ LayoutPlan 边界：contentMaxWidthVp 只影响 paperBg 的壳层宽度，
+                    // 不传递到编辑器组件（SujianEditorItem / editorArea）的渲染属性。
+                    // 编辑器渲染由 EditorController + SujianEditorItem 独立管理。
                     Rectangle {
                         id: paperBg
                         width: {
-                            // LayoutPlan 驱动：优先使用 contentMaxWidthVp
+                            // LayoutPlan 驱动：优先使用 contentMaxWidthVp（壳层布局属性）
+                            // 此值只决定 paperBg 容器宽度，不干预编辑器内部渲染
                             var maxW = 820
                             if (root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0) {
                                 maxW = root.layoutPlan.contentMaxWidthVp
@@ -719,6 +745,10 @@ Rectangle {
                             // The Flickable only holds a transparent spacer for scrollbar / contentHeight.
                             // scroll_y is passed to the Rust renderer for viewport clipping.
 
+                            // ⚠️ LayoutPlan 边界守卫 ⚠️
+                            // editorArea (TextArea) 的渲染属性由 settingsBackend 和
+                            // EditorController 独立驱动。LayoutPlan 的属性绝对禁止传递到此处。
+                            // 编辑器渲染遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
                             TextArea {
                                 id: editorArea
                                 property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
@@ -777,6 +807,13 @@ Rectangle {
                     // NOT inside Flickable. scroll_y passes contentY to Rust renderer
                     // for viewport clipping. Flickable only holds a transparent spacer
                     // for scrollbar / contentHeight.
+                    //
+                    // ⚠️ LayoutPlan 边界守卫 ⚠️
+                    // SujianEditorItem 的所有渲染属性（font_pixel_size, line_spacing,
+                    // text_indent, cursor_color, scroll_y 等）由 settingsBackend 和
+                    // EditorController 独立驱动。LayoutPlan 的属性（contentMaxWidthVp,
+                    // shellMode 等）绝对禁止传递到此处。编辑器渲染遵守 Qt QSG 线程
+                    // 边界，不受 LayoutPlan 影响。
                     SujianEditorItem {
                         id: sujianEditor
                         anchors.fill: editorScroll

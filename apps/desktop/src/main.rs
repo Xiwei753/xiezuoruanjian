@@ -17,6 +17,23 @@
 //
 // 被什么引用：
 // - 作为 apps/desktop 二进制项目的独立编译与执行起点（main.rs）。
+//
+// ── LayoutPlan 边界约束 ──
+//
+// LayoutPlan（由 Core resolve_layout 产出）只决定壳层布局，包括：
+//   - 导航模式（shellMode: compact/medium/expanded）
+//   - 内容区域最大宽度（contentMaxWidthVp）
+//   - 页面内边距（contentPaddingVp）
+//   - 侧栏可见性与宽度
+//
+// LayoutPlan 绝对不干预编辑器底层渲染，具体包括：
+//   - 不传递到 SujianEditorItem 的 QSG 渲染线程
+//   - 不影响光标位置、IME 输入、动画帧率
+//   - 不改变 QTextLayout 的排版计算
+//   - 不驱动 SmoothCursor / EditorAnimationOverlay 的动画属性
+//
+// 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
+// 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
 // =============================================================================
 
 #![recursion_limit = "2048"]

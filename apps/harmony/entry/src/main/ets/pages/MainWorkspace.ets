@@ -100,8 +100,9 @@ struct MainWorkspace {
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
-  @State sessionStartTime: number = Date.now()
-  @State sessionCharsAdded: number = 0
+  @State selectedVolumeId: string = ''
+  @State sessionOldText: string = ''
+  @State sessionId: string = ''
 
   // ── 通用状态 ──
   @State isInitialLoading: boolean = true
@@ -145,10 +146,19 @@ struct MainWorkspace {
   }
 
   aboutToDisappear() {
-    // 记录写作会话
-    const durationSeconds = Math.floor((Date.now() - this.sessionStartTime) / 1000)
-    if (this.sessionCharsAdded > 0 && durationSeconds > 10) {
-      this.bridge.processWritingEvent(this.sessionCharsAdded, durationSeconds)
+    // 记录写作编辑事件（让 Core 统一计算统计）
+    if (this.selectedChapterId && this.sessionOldText !== this.content) {
+      const deviceId = this.settings.statsDeviceId || 'unknown'
+      this.bridge.processWritingEvent(
+        deviceId,
+        'harmony',
+        this.selectedProjectId,
+        this.selectedVolumeId,
+        this.selectedChapterId,
+        this.sessionOldText,
+        this.content,
+        this.sessionId
+      )
     }
 
     // 保存未保存的变更
@@ -232,6 +242,9 @@ struct MainWorkspace {
         this.lastSavedContent = result.data.content
         this.wordCount = result.data.meta.wordCount
         this.hasUnsavedChanges = false
+        // 记录编辑前文本，用于写作统计
+        this.sessionOldText = result.data.content
+        this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
       } else {
         this.errorMessage = result.userMessage || '加载章节失败'
       }
@@ -299,15 +312,8 @@ struct MainWorkspace {
   }
 
   onContentChange(text: string) {
-    const oldLength = this.content.length
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
-
-    // 追踪新增字符数
-    const lengthDiff = text.length - oldLength
-    if (lengthDiff > 0) {
-      this.sessionCharsAdded += lengthDiff
-    }
 
     // 更新字数统计
     this.bridge.calculateWordCount(text).then(count => {
@@ -368,8 +374,11 @@ struct MainWorkspace {
         if (this.selectedChapterId === chapterId) {
           this.selectedChapterId = ''
           this.selectedChapterTitle = ''
+          this.selectedVolumeId = ''
           this.content = ''
           this.lastSavedContent = ''
+          this.sessionOldText = ''
+          this.sessionId = ''
           this.hasUnsavedChanges = false
           this.wordCount = 0
         }
@@ -382,16 +391,26 @@ struct MainWorkspace {
 
   // ========== 选中章节 ==========
 
-  selectChapter(chapterId: string, chapterName: string) {
-    // 如果有未保存的变更，先保存
+  selectChapter(chapterId: string, chapterName: string, volumeId: string) {
+    // 如果有未保存的变更，先上报并保存
     if (this.hasUnsavedChanges && this.selectedChapterId) {
+      const deviceId = this.settings.statsDeviceId || 'unknown'
+      this.bridge.processWritingEvent(
+        deviceId,
+        'harmony',
+        this.selectedProjectId,
+        this.selectedVolumeId,
+        this.selectedChapterId,
+        this.sessionOldText,
+        this.content,
+        this.sessionId
+      )
       this.saveChapter()
     }
 
     this.selectedChapterId = chapterId
     this.selectedChapterTitle = chapterName
-    this.sessionStartTime = Date.now()
-    this.sessionCharsAdded = 0
+    this.selectedVolumeId = volumeId
     this.loadChapter()
     this.loadSettings()
   }
@@ -761,7 +780,7 @@ struct MainWorkspace {
               ? this.themeConfig.colors.background
               : 'transparent')
             .borderRadius(4)
-            .onClick(() => this.selectChapter(chapter.id, chapter.title))
+            .onClick(() => this.selectChapter(chapter.id, chapter.title, volumeTree.volume.id))
           }, (chapter: ChapterMeta) => chapter.id)
         }
       }
@@ -915,10 +934,6 @@ struct MainWorkspace {
 
         Blank()
 
-        Text(`会话: ${this.sessionCharsAdded} 字`)
-          .fontSize(12)
-          .fontColor(this.themeConfig.colors.textHint)
-          .margin({ right: 16 })
 
         Text(this.hasUnsavedChanges ? '未保存' : '已保存')
           .fontSize(12)
@@ -1055,7 +1070,9 @@ struct MainWorkspace {
             url: 'pages/WritingPage',
             params: {
               chapterId: edit.chapterId,
-              chapterTitle: `章节 ${edit.chapterId}`
+              chapterTitle: `章节 ${edit.chapterId}`,
+              projectId: edit.projectId,
+              volumeId: edit.volumeId
             }
           })
         })

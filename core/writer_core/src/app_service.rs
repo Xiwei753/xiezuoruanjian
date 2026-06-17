@@ -343,6 +343,7 @@ impl WriterAppService {
         chapter_id: String,
         old_text: String,
         new_text: String,
+        duration_seconds: u32,
         session_id: String,
     ) -> Result<bool, WriterError> {
         self.api.process_writing_event(
@@ -353,6 +354,7 @@ impl WriterAppService {
             &chapter_id,
             &old_text,
             &new_text,
+            duration_seconds,
             &session_id,
         )
     }
@@ -368,6 +370,7 @@ impl WriterAppService {
         deleted_chars: i32,
         pasted_chars: i32,
         ai_inserted_chars: i32,
+        duration_seconds: i32,
         session_id: String,
     ) -> Result<bool, WriterError> {
         self.api.record_writing_event(
@@ -380,6 +383,7 @@ impl WriterAppService {
             deleted_chars,
             pasted_chars,
             ai_inserted_chars,
+            duration_seconds,
             &session_id,
         )
     }

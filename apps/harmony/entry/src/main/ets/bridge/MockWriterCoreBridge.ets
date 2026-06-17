@@ -716,7 +716,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return text.replace(/\s/g, '').length
   }
 
-  async processWritingEvent(charsAdded: number, durationSeconds: number): Promise<ResultEnvelope<boolean>> {
+  async processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
+    chapterId: string, oldText: string, newText: string, sessionId: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(50)
     return this.success(true)
   }

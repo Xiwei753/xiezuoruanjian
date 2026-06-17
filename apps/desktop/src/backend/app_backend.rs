@@ -405,6 +405,23 @@ impl AppBackend {
     }
 
     // ── Layout Policy ──
+    //
+    // ⚠️ LayoutPlan 边界约束 ⚠️
+    //
+    // resolve_layout() 产出的 LayoutPlan 只决定壳层布局：
+    //   - shellMode（导航模式：compact/medium/expanded）
+    //   - contentMaxWidthVp（内容区域最大宽度）
+    //   - contentPaddingVp（页面内边距）
+    //   - sidebarVisible / sidebarWidth
+    //
+    // LayoutPlan 绝对不干预编辑器底层渲染：
+    //   - 不传递到 SujianEditorItem 的 QSG 渲染线程
+    //   - 不影响光标位置、IME 输入、动画帧率
+    //   - 不改变 QTextLayout 的排版计算
+    //   - 不驱动 SmoothCursor / EditorAnimationOverlay 的动画属性
+    //
+    // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
+    // 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
 
     fn resolve_layout(
         &self,

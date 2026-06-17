@@ -134,7 +134,7 @@ pub fn process_writing_event_from_text(
     session_id: &str,
 ) -> Result<bool, WriterError> {
     api.process_writing_event(
-        device_id, "linux", project_id, volume_id, chapter_id, old_text, new_text, session_id,
+        device_id, "linux", project_id, volume_id, chapter_id, old_text, new_text, 0, session_id,
     )
 }
 

@@ -75,12 +75,13 @@ impl WriterCoreApi {
         chapter_id: &str,
         old_text: &str,
         new_text: &str,
+        duration_seconds: u32,
         session_id: &str,
     ) -> ApiResult<bool> {
         self.core()
             .process_writing_event(
                 device_id, platform, project_id, volume_id, chapter_id, old_text, new_text,
-                session_id,
+                duration_seconds, session_id,
             )
             .map(|_| true)
             .map_err(WriterError::from)
@@ -98,6 +99,7 @@ impl WriterCoreApi {
         deleted_chars: i32,
         pasted_chars: i32,
         ai_inserted_chars: i32,
+        duration_seconds: i32,
         session_id: &str,
     ) -> ApiResult<bool> {
         self.record_writing_event_for_platform(
@@ -111,6 +113,7 @@ impl WriterCoreApi {
             deleted_chars,
             pasted_chars,
             ai_inserted_chars,
+            duration_seconds,
             session_id,
         )
     }
@@ -128,12 +131,14 @@ impl WriterCoreApi {
         deleted_chars: i32,
         pasted_chars: i32,
         ai_inserted_chars: i32,
+        duration_seconds: i32,
         session_id: &str,
     ) -> ApiResult<bool> {
         let inserted_chars = Self::non_negative_counter("inserted_chars", inserted_chars)?;
         let deleted_chars = Self::non_negative_counter("deleted_chars", deleted_chars)?;
         let pasted_chars = Self::non_negative_counter("pasted_chars", pasted_chars)?;
         let ai_inserted_chars = Self::non_negative_counter("ai_inserted_chars", ai_inserted_chars)?;
+        let duration_seconds = Self::non_negative_counter("duration_seconds", duration_seconds)?;
 
         self.core()
             .record_writing_event(
@@ -147,6 +152,7 @@ impl WriterCoreApi {
                 deleted_chars,
                 pasted_chars,
                 ai_inserted_chars,
+                duration_seconds,
                 session_id,
             )
             .map(|_| true)

@@ -235,6 +235,7 @@ mod tests {
             0,
             0,
             0,
+            0,
             "session-1",
         );
 
@@ -265,6 +266,7 @@ mod tests {
             0,
             20,
             0,
+            0,
             "session-1",
         );
 
@@ -293,6 +295,7 @@ mod tests {
             0,
             0,
             0,
+            0,
             "session-1",
         );
         agg.aggregate_single_event(&event1).unwrap();
@@ -306,6 +309,7 @@ mod tests {
             EventSource::Deleted,
             0,
             3,
+            0,
             0,
             0,
             "session-1",
@@ -336,6 +340,7 @@ mod tests {
             0,
             0,
             50,
+            0,
             "session-1",
         );
 
@@ -361,6 +366,7 @@ mod tests {
             "chap1",
             EventSource::HumanTyped,
             15,
+            0,
             0,
             0,
             0,
@@ -392,6 +398,7 @@ mod tests {
             0,
             0,
             0,
+            0,
             "session-1",
         );
         agg.aggregate_single_event(&event1).unwrap();
@@ -404,6 +411,7 @@ mod tests {
             "chap1",
             EventSource::HumanTyped,
             20,
+            0,
             0,
             0,
             0,
@@ -449,6 +457,7 @@ mod tests {
             pasted_chars: 0,
             ai_inserted_chars: 0,
             net_delta_chars: 30,
+            duration_seconds: 0,
             session_id: "session-1".to_string(),
         };
 

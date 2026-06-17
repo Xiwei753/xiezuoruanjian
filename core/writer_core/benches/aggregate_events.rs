@@ -20,6 +20,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             pasted_chars: 0,
             ai_inserted_chars: 0,
             net_delta_chars: 10,
+            duration_seconds: 0,
         });
     }
 

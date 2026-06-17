@@ -13,6 +13,7 @@ impl super::WriterCore {
         chapter_id: &str,
         old_text: &str,
         new_text: &str,
+        duration_seconds: u32,
         session_id: &str,
     ) -> Result<()> {
         let old_len = old_text.chars().count() as i32;
@@ -51,6 +52,7 @@ impl super::WriterCore {
             deleted,
             pasted,
             0,
+            duration_seconds,
             session_id,
         )
     }
@@ -67,6 +69,7 @@ impl super::WriterCore {
         deleted_chars: u32,
         pasted_chars: u32,
         ai_inserted_chars: u32,
+        duration_seconds: u32,
         session_id: &str,
     ) -> Result<()> {
         let platform = match platform_str {
@@ -92,6 +95,7 @@ impl super::WriterCore {
             deleted_chars,
             pasted_chars,
             ai_inserted_chars,
+            duration_seconds,
             session_id,
         );
 

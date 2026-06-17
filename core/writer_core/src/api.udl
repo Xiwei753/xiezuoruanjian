@@ -885,10 +885,10 @@ interface WriterAppService {
     u32 calculate_word_count(string text);
 
     [Throws=WriterError]
-    boolean process_writing_event(string device_id, string platform, string project_id, string volume_id, string chapter_id, string old_text, string new_text, string session_id);
+    boolean process_writing_event(string device_id, string platform, string project_id, string volume_id, string chapter_id, string old_text, string new_text, u32 duration_seconds, string session_id);
 
     [Throws=WriterError]
-    boolean record_writing_event(string device_id, string project_id, string volume_id, string chapter_id, string source, i32 inserted_chars, i32 deleted_chars, i32 pasted_chars, i32 ai_inserted_chars, string session_id);
+    boolean record_writing_event(string device_id, string project_id, string volume_id, string chapter_id, string source, i32 inserted_chars, i32 deleted_chars, i32 pasted_chars, i32 ai_inserted_chars, i32 duration_seconds, string session_id);
 
     [Throws=WriterError]
     boolean flush_writing_stats();

@@ -84,6 +84,7 @@ pub struct WritingInputEvent {
     pub pasted_chars: u32,
     pub ai_inserted_chars: u32,
     pub net_delta_chars: i32,
+    pub duration_seconds: u32,
     pub session_id: String,
 }
 
@@ -99,6 +100,7 @@ impl WritingInputEvent {
         deleted_chars: u32,
         pasted_chars: u32,
         ai_inserted_chars: u32,
+        duration_seconds: u32,
         session_id: &str,
     ) -> Self {
         let net = inserted_chars as i32 + pasted_chars as i32 + ai_inserted_chars as i32
@@ -117,6 +119,7 @@ impl WritingInputEvent {
             pasted_chars,
             ai_inserted_chars,
             net_delta_chars: net,
+            duration_seconds,
             session_id: session_id.to_string(),
         }
     }
@@ -153,6 +156,7 @@ mod tests {
             0,
             0,
             0,
+            0,
             "session-1",
         );
         assert_eq!(event.inserted_chars, 10);
@@ -175,6 +179,7 @@ mod tests {
             5,
             0,
             0,
+            0,
             "session-1",
         );
         assert_eq!(event.net_delta_chars, -5);
@@ -193,6 +198,7 @@ mod tests {
             0,
             0,
             20,
+            0,
             0,
             "session-1",
         );
@@ -214,6 +220,7 @@ mod tests {
             0,
             0,
             50,
+            0,
             "session-1",
         );
         assert_eq!(event.ai_inserted_chars, 50);
@@ -230,6 +237,7 @@ mod tests {
             "vol1",
             "chap1",
             EventSource::SyncRemote,
+            0,
             0,
             0,
             0,

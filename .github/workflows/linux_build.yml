@@ -121,6 +121,9 @@ jobs:
           fi
           echo "FCITX_QT_PLUGIN=$FCITX_QT_PLUGIN" >> "$GITHUB_ENV"
 
+      - name: Check Harmony bridge consistency
+        run: bash scripts/check_harmony_bridge_consistency.sh
+
       - name: Test Rust core
         run: cargo test -p writer_core ${{ matrix.features }}
 

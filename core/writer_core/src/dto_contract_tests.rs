@@ -554,3 +554,30 @@ fn chapter_location_dto_fields_match_harmony() {
     let actual_keys = sorted_keys(&ffi_location);
     assert_eq!(actual_keys, expected_keys, "ChapterLocation DTO field names must match Harmony CoreDtos.ets");
 }
+
+#[test]
+fn writing_event_dto_fields_match_harmony() {
+    let ffi_event = json!({
+        "deviceId": "harmony",
+        "platform": "harmony",
+        "projectId": "p1",
+        "volumeId": "v1",
+        "chapterId": "c1",
+        "charsAdded": 100,
+        "durationSeconds": 60,
+        "sessionId": "hm-1234567890"
+    });
+    // 验证所有字段名都是 camelCase
+    let expected_keys = vec![
+        "chapterId",
+        "charsAdded",
+        "deviceId",
+        "durationSeconds",
+        "platform",
+        "projectId",
+        "sessionId",
+        "volumeId",
+    ];
+    let actual_keys = sorted_keys(&ffi_event);
+    assert_eq!(actual_keys, expected_keys, "WritingEvent DTO field names must match Harmony CoreDtos.ets");
+}
