@@ -22,9 +22,16 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
+import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.LocalSettings
+import com.xiwei.sujian.model.LayoutPlan
+import com.xiwei.sujian.model.WindowMetrics
+import com.xiwei.sujian.model.Orientation
+import com.xiwei.sujian.model.PointerKind
+import com.xiwei.sujian.model.FoldPosture
+import com.xiwei.sujian.model.ShellMode
 import androidx.appcompat.app.AppCompatDelegate
 import android.os.Build
 import android.util.Log
@@ -82,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     private var recentEdits = listOf<RecentEdit>()
     private lateinit var adapter: ProjectAdapter
     private lateinit var recentAdapter: RecentEditAdapter
+    private var currentLayoutPlan: LayoutPlan? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,6 +107,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         setContentView(R.layout.activity_main)
+
+        // ── LayoutPlan 驱动：通过 Core resolve_layout 获取布局方案 ──
+        applyLayoutPlan()
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
@@ -220,6 +231,74 @@ class MainActivity : AppCompatActivity() {
 
     fun onStarmapIdInitialized(id: String) {
         this.starmapId = id
+    }
+
+    /**
+     * 通过 Core resolve_layout 获取 LayoutPlan 并应用到 UI。
+     * 不允许 Android 端自己判断 isTablet 或自己发明断点。
+     */
+    private fun applyLayoutPlan() {
+        try {
+            val displayMetrics = resources.displayMetrics
+            val widthPx = window.decorView.width.toFloat().coerceAtLeast(displayMetrics.widthPixels.toFloat())
+            val heightPx = window.decorView.height.toFloat().coerceAtLeast(displayMetrics.heightPixels.toFloat())
+            val density = displayMetrics.density
+            val widthVp = widthPx / density
+            val heightVp = heightPx / density
+
+            val metrics = WindowMetrics(
+                widthVp = widthVp,
+                heightVp = heightVp,
+                safeTopVp = 0f,  // TODO: 从 WindowInsets 获取
+                safeBottomVp = 0f,
+                keyboardVisible = false,
+                foldPosture = FoldPosture.Unknown,
+                orientation = if (widthVp > heightVp) Orientation.Landscape else Orientation.Portrait,
+                pointer = PointerKind.Touch
+            )
+
+            val bridge = BridgeProvider.getLayoutPolicyBridge(this)
+            currentLayoutPlan = bridge.resolveLayout(metrics)
+
+            currentLayoutPlan?.let { plan ->
+                // 根据 showBottomBar 控制底部导航可见性
+                if (!plan.showBottomBar) {
+                    bottomNav.visibility = View.GONE
+                    // 移除底部导航占位
+                    val container = findViewById<View>(R.id.mainContainer)
+                    container.setPadding(0, 0, 0, 0)
+                }
+
+                // 根据 contentMaxWidthVp 限制内容最大宽度
+                if (plan.contentMaxWidthVp > 0f && plan.contentMaxWidthVp < Float.MAX_VALUE) {
+                    val maxPx = (plan.contentMaxWidthVp * density).toInt()
+                    val container = findViewById<View>(R.id.mainContainer)
+                    container.layoutParams = container.layoutParams?.apply {
+                        if (this is ViewGroup.MarginLayoutParams) {
+                            val horizontalMargin = ((widthPx - maxPx) / 2).coerceAtLeast(0f).toInt()
+                            marginStart = horizontalMargin
+                            marginEnd = horizontalMargin
+                        }
+                    }
+                }
+
+                // 根据 pagePaddingVp 设置内边距
+                val paddingPx = (plan.pagePaddingVp * density).toInt()
+                projectRecyclerView.setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+
+                Log.d("MainActivity", "LayoutPlan applied: shellMode=${plan.shellMode}, " +
+                    "widthClass=${plan.widthClass}, showBottomBar=${plan.showBottomBar}, " +
+                    "contentMaxWidth=${plan.contentMaxWidthVp}vp, pagePadding=${plan.pagePaddingVp}vp")
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to apply LayoutPlan, using defaults", e)
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 配置变化（旋转、折叠）时重新应用 LayoutPlan
+        applyLayoutPlan()
     }
 
     override fun onResume() {

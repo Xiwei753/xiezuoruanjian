@@ -31,6 +31,7 @@ Rectangle {
     property bool aiCapable: false
     property bool aiEnabled: false
     property bool useSujianEditorItem: false
+    property var layoutPlan: null
 
     // Project-level ID — set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
@@ -563,12 +564,20 @@ Rectangle {
                     anchors.topMargin: dt ? dt.sp8 : 8
                     anchors.bottomMargin: dt ? dt.sp8 : 8
 
-                    // Paper background - adapts to available space up to 820px, leaving a small side gap
+                    // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
                     Rectangle {
                         id: paperBg
-                        width: settingsBackend && settingsBackend.setting_desktop_editor_width > 0 ?
-                               Math.min(parent.width, settingsBackend.setting_desktop_editor_width) :
-                               Math.min(parent.width, 820)
+                        width: {
+                            // LayoutPlan 驱动：优先使用 contentMaxWidthVp
+                            var maxW = 820
+                            if (root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0) {
+                                maxW = root.layoutPlan.contentMaxWidthVp
+                            }
+                            if (settingsBackend && settingsBackend.setting_desktop_editor_width > 0) {
+                                maxW = Math.min(maxW, settingsBackend.setting_desktop_editor_width)
+                            }
+                            return Math.min(parent.width, maxW)
+                        }
                         height: parent.height
                         anchors.horizontalCenter: parent.horizontalCenter
                         color: dt ? dt.editorBackground : "#191C21"

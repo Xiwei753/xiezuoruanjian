@@ -22,7 +22,7 @@ fn sorted_keys(value: &serde_json::Value) -> Vec<String> {
 fn project_dto_fields_match_harmony() {
     let ffi_project = json!({
         "id": "p1",
-        "name": "Test",
+        "title": "Test",
         "volumeCount": 1,
         "chapterCount": 2,
         "totalWordCount": 100,
@@ -34,7 +34,7 @@ fn project_dto_fields_match_harmony() {
         "chapterCount",
         "createdAt",
         "id",
-        "name",
+        "title",
         "totalWordCount",
         "updatedAt",
         "volumeCount",
@@ -48,7 +48,7 @@ fn volume_dto_fields_match_harmony() {
     let ffi_volume = json!({
         "id": "v1",
         "projectId": "p1",
-        "name": "Volume 1",
+        "title": "Volume 1",
         "order": 0,
         "chapterCount": 3,
         "createdAt": "2024-01-01",
@@ -59,9 +59,9 @@ fn volume_dto_fields_match_harmony() {
         "chapterCount",
         "createdAt",
         "id",
-        "name",
         "order",
         "projectId",
+        "title",
         "updatedAt",
     ];
     let actual_keys = sorted_keys(&ffi_volume);
@@ -73,7 +73,7 @@ fn chapter_dto_fields_match_harmony() {
     let ffi_chapter = json!({
         "id": "c1",
         "volumeId": "v1",
-        "name": "Chapter 1",
+        "title": "Chapter 1",
         "wordCount": 500,
         "order": 0,
         "updatedAt": "2024-01-01",
@@ -83,8 +83,8 @@ fn chapter_dto_fields_match_harmony() {
     let expected_keys = vec![
         "createdAt",
         "id",
-        "name",
         "order",
+        "title",
         "updatedAt",
         "volumeId",
         "wordCount",
@@ -399,16 +399,16 @@ fn recent_edit_dto_fields_match_harmony() {
         "chapterId": "c1",
         "chapterTitle": "Chapter 1",
         "volumeId": "v1",
-        "editedAt": "2024-01-01",
+        "timestamp": "2024-01-01",
         "wordCount": 500
     });
 
     let expected_keys = vec![
         "chapterId",
         "chapterTitle",
-        "editedAt",
         "projectId",
         "projectTitle",
+        "timestamp",
         "volumeId",
         "wordCount",
     ];
@@ -432,7 +432,7 @@ fn core_internal_project_serializes_with_snake_case() {
 }
 
 #[test]
-fn ffi_project_maps_title_to_name() {
+fn ffi_project_maps_title_to_title() {
     let project = crate::project::Project {
         id: "p1".into(),
         title: "My Novel".into(),
@@ -442,12 +442,12 @@ fn ffi_project_maps_title_to_name() {
     };
     let ffi_json = json!({
         "id": project.id,
-        "name": project.title,
+        "title": project.title,
         "createdAt": project.created_at,
         "updatedAt": project.updated_at
     });
-    assert_eq!(ffi_json["name"], "My Novel", "FFI must map core 'title' → 'name' for Harmony");
-    assert!(ffi_json.get("title").is_none(), "FFI should NOT expose 'title' key — use 'name'");
+    assert_eq!(ffi_json["title"], "My Novel", "FFI must output 'title' to match Core DTO");
+    assert!(ffi_json.get("name").is_none(), "FFI should NOT output 'name' key — use 'title'");
 }
 
 // ── Layout Policy DTO contract tests ──

@@ -26,6 +26,7 @@ Rectangle {
     property int currentTab: 0
     property bool aiCapable: false
     property bool aiEnabled: false
+    property var layoutPlan: null
 
     signal openProject(string projectId, string projectTitle)
     signal createProject()

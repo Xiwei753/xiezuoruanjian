@@ -152,7 +152,47 @@ if [[ -f "$arkts_bridge" ]]; then
     done < "$arkts_bridge"
 fi
 
-# ── Summary ──
+# ── Step 8: Check DTO field name consistency (FFI JSON vs CoreDtos.ets) ──
+echo "Step 8: Checking DTO field name consistency (FFI JSON vs CoreDtos.ets)..."
+
+core_dtos="$PROJECT_ROOT/apps/harmony/entry/src/main/ets/model/CoreDtos.ets"
+
+if [[ -f "$core_dtos" ]]; then
+    # Check that FFI does NOT output "name" for Project/Volume/Chapter
+    # (CoreDtos.ets uses "title" for these entities)
+    name_count=0
+    for rs_file in "$FFI_DIR"/*.rs; do
+        while IFS= read -r line; do
+            # Match "name": xxx.title patterns in JSON construction
+            if [[ "$line" =~ \"name\":.*\.title ]]; then
+                echo -e "  ${RED}ERROR${NC}: ${rs_file##*/} outputs \"name\" for a .title field — should be \"title\" to match CoreDtos.ets"
+                ((errors++))
+                ((name_count++))
+            fi
+        done < "$rs_file"
+    done
+
+    if [[ $name_count -eq 0 ]]; then
+        echo "  No 'name' → .title mismatches found (good)"
+    fi
+
+    # Check that FFI does NOT output "editedAt" for RecentEdit
+    # (CoreDtos.ets uses "timestamp" for RecentEdit)
+    edited_at_count=0
+    for rs_file in "$FFI_DIR"/*.rs; do
+        while IFS= read -r line; do
+            if [[ "$line" =~ \"editedAt\":.*\.timestamp ]]; then
+                echo -e "  ${RED}ERROR${NC}: ${rs_file##*/} outputs \"editedAt\" for a .timestamp field — should be \"timestamp\" to match CoreDtos.ets"
+                ((errors++))
+                ((edited_at_count++))
+            fi
+        done < "$rs_file"
+    done
+
+    if [[ $edited_at_count -eq 0 ]]; then
+        echo "  No 'editedAt' → .timestamp mismatches found (good)"
+    fi
+fi
 echo ""
 echo "=== Summary ==="
 echo -e "  Errors:   ${RED}${errors}${NC}"

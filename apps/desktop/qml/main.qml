@@ -92,6 +92,24 @@ ApplicationWindow {
 
     property string previousEditorText: ""
 
+    // ── LayoutPlan 驱动：通过 Core resolve_layout 获取布局方案 ──
+    property var layoutPlan: null
+
+    function applyLayoutPlan() {
+        if (appBackend === null) return;
+        var w = window.width;
+        var h = window.height;
+        // Desktop 默认密度为 1.0（逻辑像素 = vp）
+        var plan = appBackend.resolve_layout(w, h, 0, 0, false, "Unknown",
+            w > h ? "Landscape" : "Portrait", "Mouse");
+        if (plan) {
+            window.layoutPlan = plan;
+        }
+    }
+
+    onWidthChanged: window.applyLayoutPlan()
+    onHeightChanged: window.applyLayoutPlan()
+
     SystemPalette {
         id: systemPalette
         colorGroup: SystemPalette.Active
@@ -327,6 +345,7 @@ ApplicationWindow {
                 tree: window.appState.tree || []
                 aiCapable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled
+                layoutPlan: window.layoutPlan
 
                 onOpenStarmapWorkspace: function(smId, smTitle) {
                     appController.openStarmap(smId, smTitle);
@@ -385,6 +404,7 @@ ApplicationWindow {
                 aiCapable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled
                 useSujianEditorItem: appBackend !== null && appBackend.sujian_editor_item_enabled
+                layoutPlan: window.layoutPlan
 
                 onBackToProjects: {
                     appController.openHub();
