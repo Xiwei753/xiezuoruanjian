@@ -76,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabWorks: FrameLayout
     private lateinit var tabStarMap: FrameLayout
     private lateinit var tabStats: FrameLayout
+    private lateinit var mainContainer: CoordinatorLayout
     private lateinit var bottomNav: BottomNavigationView
     private lateinit var canvasView: StarMapCanvasView
     private lateinit var toolbar: MaterialToolbar
@@ -148,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         tabWorks = findViewById(R.id.tabWorks)
         tabStarMap = findViewById(R.id.tabStarMap)
         tabStats = findViewById(R.id.tabStats)
+        mainContainer = findViewById(R.id.mainContainer)
         bottomNav = findViewById(R.id.bottomNav)
         canvasView = findViewById(R.id.canvasView)
         toolbar = findViewById(R.id.toolbar)

@@ -119,6 +119,7 @@ pub fn report_writing_event(
         deleted_chars as i32,
         pasted_chars as i32,
         ai_inserted_chars as i32,
+        0, // duration_seconds: not tracked on desktop, default to 0
         session_id,
     )
 }
