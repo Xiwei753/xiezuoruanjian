@@ -11,6 +11,7 @@ import com.xiwei.sujian.model.StarMapLayoutData
 import com.xiwei.sujian.model.StarMapLayoutKind
 import com.xiwei.sujian.model.StarMapLayoutNodeData
 import com.xiwei.sujian.model.StarMapMeta
+import com.xiwei.sujian.model.StarMapMotionPolicyData
 import com.xiwei.sujian.model.StarMapNodeKind
 import com.xiwei.sujian.model.StarMapViewportData
 import uniffi.writer_core.StarMapDisplayPolicyDto
@@ -188,6 +189,16 @@ class StarMapBridge(private val appService: AppServiceBridge) {
 
     fun findStarmapReferences(targetStarmapId: String): BridgeResult<List<uniffi.writer_core.StarMapReferenceDto>> {
         return appService.findStarmapReferences(targetStarmapId)
+    }
+
+    /**
+     * 获取星图动画策略参数。
+     *
+     * 从 Core 层获取 StarMapMotionPolicyDto，转换为 Android 端模型。
+     * 如果 UniFFI 绑定尚未暴露 getStarMapMotionPolicy，返回本地默认值。
+     */
+    fun getMotionPolicy(): BridgeResult<StarMapMotionPolicyData> {
+        return appService.getStarMapMotionPolicy()
     }
 
     private fun refreshRawCache(starmapId: String): BridgeResult<StarMapRawCache> {

@@ -259,9 +259,41 @@ class StarMapCanvasView @JvmOverloads constructor(
         val visibleBottom = visibleTop + height / zoom + 200
 
         for (edge in currentData.edgeRenders) {
-            canvas.drawLine(edge.startX, edge.startY, edge.endX, edge.endY, paintEdge)
-            canvas.drawLine(edge.arrowTipX, edge.arrowTipY, edge.arrowLeftX, edge.arrowLeftY, paintEdge)
-            canvas.drawLine(edge.arrowTipX, edge.arrowTipY, edge.arrowRightX, edge.arrowRightY, paintEdge)
+            // 通过 edgeId 找到 graph edge，获取 from/to nodeId，计算 visual offset
+            val graphEdge = currentData.graph.edges.find { it.id == edge.edgeId }
+            val fromNodeId = graphEdge?.from
+            val toNodeId = graphEdge?.to
+
+            // source 端 visual offset
+            val fromVisual = fromNodeId?.let { nid ->
+                val isDragging = draggingNodeId == nid
+                settleOffsetMap[nid] ?: computeVisualOffset(nid, isDragging)
+            } ?: VisualOffset(0f, 0f, 1f)
+
+            // target 端 visual offset
+            val toVisual = toNodeId?.let { nid ->
+                val isDragging = draggingNodeId == nid
+                settleOffsetMap[nid] ?: computeVisualOffset(nid, isDragging)
+            } ?: VisualOffset(0f, 0f, 1f)
+
+            // 修正坐标：edge 基础坐标 + 端点 visual offset
+            val sx = edge.startX + fromVisual.dx
+            val sy = edge.startY + fromVisual.dy
+            val ex = edge.endX + toVisual.dx
+            val ey = edge.endY + toVisual.dy
+
+            canvas.drawLine(sx, sy, ex, ey, paintEdge)
+
+            // 箭头也需要偏移（to 端偏移）
+            val atx = edge.arrowTipX + toVisual.dx
+            val aty = edge.arrowTipY + toVisual.dy
+            val alx = edge.arrowLeftX + toVisual.dx
+            val aly = edge.arrowLeftY + toVisual.dy
+            val arx = edge.arrowRightX + toVisual.dx
+            val ary = edge.arrowRightY + toVisual.dy
+
+            canvas.drawLine(atx, aty, alx, aly, paintEdge)
+            canvas.drawLine(atx, aty, arx, ary, paintEdge)
         }
 
         for (node in currentData.graph.nodes) {

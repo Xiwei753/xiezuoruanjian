@@ -360,6 +360,45 @@ class AppServiceBridge(workspacePath: String) {
         service.findStarmapReferences(targetStarmapId)
     }
 
+    /**
+     * 获取星图动画策略参数。
+     *
+     * 调用 UniFFI 的 getStarmapMotionPolicy()。
+     * 如果 UniFFI 绑定尚未暴露此方法，通过反射检测并返回本地默认值。
+     */
+    fun getStarMapMotionPolicy(): BridgeResult<com.xiwei.sujian.model.StarMapMotionPolicyData> {
+        return try {
+            val method = service.javaClass.getMethod("getStarmapMotionPolicy")
+            val dto = method.invoke(service)
+            if (dto != null) {
+                // 通过反射读取 DTO 字段，避免编译期依赖
+                val dtoClass = dto.javaClass
+                val result = com.xiwei.sujian.model.StarMapMotionPolicyData(
+                    enabled = dtoClass.getField("enabled").getBoolean(dto),
+                    idleWobbleEnabled = dtoClass.getField("idleWobbleEnabled").getBoolean(dto),
+                    idleAmplitudeVp = dtoClass.getField("idleAmplitudeVp").getFloat(dto),
+                    idlePeriodMs = dtoClass.getField("idlePeriodMs").getInt(dto),
+                    dragLiftScale = dtoClass.getField("dragLiftScale").getFloat(dto),
+                    dragShadowBoost = dtoClass.getField("dragShadowBoost").getFloat(dto),
+                    settleDurationMs = dtoClass.getField("settleDurationMs").getInt(dto),
+                    reduceMotion = dtoClass.getField("reduceMotion").getBoolean(dto)
+                )
+                BridgeResult.Success(result)
+            } else {
+                BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
+            }
+        } catch (_: NoSuchMethodException) {
+            // UniFFI 绑定尚未暴露 getStarmapMotionPolicy，返回默认值
+            BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
+        } catch (_: NoSuchFieldException) {
+            // DTO 字段名不匹配，返回默认值
+            BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get motion policy: ${e.message}", e)
+            BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
+        }
+    }
+
     fun listRegisteredActions(): BridgeResult<List<uniffi.writer_core.ActionDescriptorDto>> = wrapResult {
         service.listRegisteredActions()
     }

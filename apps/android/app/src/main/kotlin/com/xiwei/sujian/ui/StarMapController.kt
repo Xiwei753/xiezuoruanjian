@@ -5,6 +5,7 @@ import android.widget.Toast
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.StarMapBridge
 import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapMotionPolicyData
 import com.xiwei.sujian.model.StarMapViewportData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -98,11 +99,17 @@ class StarMapController(
                 is BridgeResult.Success -> viewportResult.data
                 else -> StarMapViewportData()
             }
+            // 从 Core 获取动画策略
+            val motionPolicy = when (val policyResult = bridge.getMotionPolicy()) {
+                is BridgeResult.Success -> policyResult.data
+                else -> StarMapMotionPolicyData()
+            }
             withContext(Dispatchers.Main) {
                 when (result) {
                     is BridgeResult.Success -> {
                         val data = result.data.copy(viewport = viewport).withCoreEdgeRenders()
                         currentData = data
+                        canvasView.setMotionPolicy(motionPolicy)
                         canvasView.setViewport(data.viewport)
                         canvasView.setData(data)
                     }
