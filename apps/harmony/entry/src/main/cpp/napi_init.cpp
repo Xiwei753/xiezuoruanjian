@@ -133,6 +133,40 @@ static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
     return result;
 }
 
+// ── Screen Policy ──
+
+static napi_value NativeResolveScreenPolicy(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    size_t json_len = 0;
+    char* json1 = nullptr;
+    if (argc >= 1) {
+        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
+        json1 = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[0], json1, json_len + 1, &json_len);
+    } else {
+        json1 = new char[1];
+        json1[0] = '\0';
+    }
+
+    char* json2 = nullptr;
+    if (argc >= 2) {
+        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
+        json2 = new char[json_len + 1];
+        napi_get_value_string_utf8(env, args[1], json2, json_len + 1, &json_len);
+    } else {
+        json2 = new char[1];
+        json2[0] = '\0';
+    }
+
+    napi_value result = ReturnJsonString(env, writer_core_resolve_screen_policy(json1, json2));
+    delete[] json1;
+    delete[] json2;
+    return result;
+}
+
 // ── Workspace ──
 
 static napi_value NativeValidateWorkspace(napi_env env, napi_callback_info info) {
@@ -818,6 +852,8 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},
         // Layout Policy
         {"nativeResolveLayout", nullptr, NativeResolveLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // Screen Policy
+        {"nativeResolveScreenPolicy", nullptr, NativeResolveScreenPolicy, nullptr, nullptr, nullptr, napi_default, nullptr},
         // Workspace
         {"nativeValidateWorkspace", nullptr, NativeValidateWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeListWorkspaces", nullptr, NativeListWorkspaces, nullptr, nullptr, nullptr, napi_default, nullptr},

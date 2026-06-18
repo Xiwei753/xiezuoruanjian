@@ -41,20 +41,20 @@ export class ScreenPolicyBridge {
   }
 
   private parseScreenPolicy(data: Record<string, Object>): ScreenPolicy {
-    const rawSlots = data['actionSlots'] as Array<Record<string, Object>>
+    const rawSlots = (data['actionSlots'] ?? data['action_slots'] ?? []) as Array<Record<string, Object>>
     const actionSlots: ActionSlot[] = rawSlots.map((slot: Record<string, Object>) => {
-      const rawVisibleIn = slot['visibleIn'] as string[]
+      const rawVisibleIn = (slot['visibleIn'] ?? slot['visible_in'] ?? []) as string[]
       return {
-        actionId: slot['actionId'] as string,
-        role: this.parseActionRole(slot['role'] as string),
-        placement: this.parseActionPlacement(slot['placement'] as string),
+        actionId: (slot['actionId'] ?? slot['action_id'] ?? '') as string,
+        role: this.parseActionRole((slot['role'] ?? '') as string),
+        placement: this.parseActionPlacement((slot['placement'] ?? '') as string),
         visibleIn: rawVisibleIn.map((s: string) => this.parseShellMode(s)),
-        requiresConfirmation: slot['requiresConfirmation'] as boolean
+        requiresConfirmation: (slot['requiresConfirmation'] ?? slot['requires_confirmation'] ?? false) as boolean
       }
     })
 
     return {
-      screenRole: this.parseScreenRole(data['screenRole'] as string),
+      screenRole: this.parseScreenRole((data['screenRole'] ?? data['screen_role'] ?? 'Home') as string),
       actionSlots: actionSlots
     }
   }

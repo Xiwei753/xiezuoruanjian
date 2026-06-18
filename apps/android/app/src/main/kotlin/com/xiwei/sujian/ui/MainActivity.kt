@@ -34,6 +34,11 @@ import com.xiwei.sujian.model.Orientation
 import com.xiwei.sujian.model.PointerKind
 import com.xiwei.sujian.model.FoldPosture
 import com.xiwei.sujian.model.ShellMode
+import com.xiwei.sujian.model.ScreenRole
+import com.xiwei.sujian.model.ScreenPolicy
+import com.xiwei.sujian.model.ActionSlot
+import com.xiwei.sujian.model.ActionRole
+import com.xiwei.sujian.model.ActionPlacement
 import androidx.appcompat.app.AppCompatDelegate
 import android.os.Build
 import android.util.Log
@@ -112,6 +117,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var recentAdapter: RecentEditAdapter
     private var currentLayoutPlan: LayoutPlan? = null
     private var isTwoPaneMode: Boolean = false
+    private var currentWorkspacePolicy: ScreenPolicy? = null
 
     // ── TwoPane 模式下当前嵌入的 EditorFragment 引用 ──
     private var currentEditorFragment: EditorFragment? = null
@@ -356,6 +362,9 @@ class MainActivity : AppCompatActivity() {
                 Log.d("MainActivity", "LayoutPlan applied: shellMode=${plan.shellMode}, " +
                     "widthClass=${plan.widthClass}, showBottomBar=${plan.showBottomBar}, " +
                     "contentMaxWidth=${plan.contentMaxWidthVp}vp, pagePadding=${plan.pagePaddingVp}vp")
+
+                // ── 消费 ScreenPolicy：根据 Core 指定的 ActionSlot 放置按钮 ──
+                applyWorkspaceScreenPolicy(plan.shellMode)
             }
         } catch (e: Exception) {
             Log.w("MainActivity", "Failed to apply LayoutPlan, using defaults", e)
@@ -513,6 +522,85 @@ class MainActivity : AppCompatActivity() {
         val fabLayoutParams = fabNewProject.layoutParams as? CoordinatorLayout.LayoutParams
         fabLayoutParams?.anchorId = R.id.mainContainer
         fabNewProject.layoutParams = fabLayoutParams
+    }
+
+    /**
+     * 消费 Workspace 页面的 ScreenPolicy。
+     *
+     * 从 Core 获取 ActionSlot 列表，根据 ActionPlacement 语义放置按钮：
+     * - create_project → Floating (SinglePane) / TopTrailing (TwoPane)
+     * - delete → ContextMenu, requiresConfirmation = true
+     *
+     * 不允许硬编码按钮位置，所有位置语义来自 Core。
+     */
+    private fun applyWorkspaceScreenPolicy(shellMode: ShellMode) {
+        try {
+            val screenPolicyBridge = BridgeProvider.getScreenPolicyBridge(this)
+            currentWorkspacePolicy = screenPolicyBridge.resolveScreenPolicy(ScreenRole.Workspace, shellMode)
+
+            currentWorkspacePolicy?.let { policy ->
+                for (slot in policy.actionSlots) {
+                    Log.d("MainActivity", "Workspace ActionSlot: actionId=${slot.actionId}, " +
+                        "role=${slot.role}, placement=${slot.placement}, " +
+                        "visibleIn=${slot.visibleIn}, requiresConfirmation=${slot.requiresConfirmation}")
+                }
+
+                // 根据 ActionSlot 调整 FAB 位置
+                val createProjectSlot = policy.actionSlots.find { it.role == ActionRole.CreateProject }
+                applyCreateProjectPlacement(createProjectSlot, shellMode)
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to apply Workspace ScreenPolicy", e)
+        }
+    }
+
+    /**
+     * 根据 Core 指定的 ActionPlacement 放置"新建项目"按钮。
+     *
+     * - Floating：显示为 FAB（浮动操作按钮）
+     * - TopTrailing：在 toolbar 右侧显示（TwoPane 模式）
+     * - 其他 placement：降级为 FAB
+     */
+    private fun applyCreateProjectPlacement(slot: ActionSlot?, shellMode: ShellMode) {
+        if (slot == null) {
+            // 没有 slot 信息时保持默认 FAB 行为
+            fabNewProject.show()
+            return
+        }
+
+        // 检查当前 shellMode 是否在 visibleIn 列表中
+        val isVisible = slot.visibleIn.contains(shellMode)
+        if (!isVisible) {
+            fabNewProject.hide()
+            return
+        }
+
+        when (slot.placement) {
+            ActionPlacement.Floating -> {
+                // Floating：显示为 FAB
+                fabNewProject.show()
+            }
+            ActionPlacement.TopTrailing -> {
+                // TopTrailing：仍然使用 FAB，但锚定到右上角区域
+                // 第一版先保持 FAB 显示，后续可迁移到 toolbar 菜单
+                fabNewProject.show()
+                Log.d("MainActivity", "create_project placement=TopTrailing, using FAB as fallback for now")
+            }
+            else -> {
+                // 其他 placement 降级为 FAB
+                fabNewProject.show()
+                Log.d("MainActivity", "create_project placement=${slot.placement}, fallback to FAB")
+            }
+        }
+    }
+
+    /**
+     * 检查指定 ActionRole 是否需要确认对话框。
+     * 由 Core 的 ActionSlot.requiresConfirmation 决定，不允许前端硬编码。
+     */
+    fun isActionConfirmationRequired(role: ActionRole): Boolean {
+        val slot = currentWorkspacePolicy?.actionSlots?.find { it.role == role }
+        return slot?.requiresConfirmation ?: false
     }
 
     /**
@@ -806,19 +894,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDeleteProjectDialog(project: Project) {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.confirm_delete_project)
-            .setMessage(getString(R.string.confirm_delete_project_message, project.title))
-            .setPositiveButton(R.string.action_delete) { _, _ ->
-                lifecycleScope.launch {
-                    ErrorUtil.safeRunSuspend(this@MainActivity) {
-                        workspaceUseCase.deleteProject(project.id)
+        // 由 Core ScreenPolicy 决定是否需要确认，不允许前端硬编码
+        val requiresConfirmation = isActionConfirmationRequired(ActionRole.Delete)
+
+        if (requiresConfirmation) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.confirm_delete_project)
+                .setMessage(getString(R.string.confirm_delete_project_message, project.title))
+                .setPositiveButton(R.string.action_delete) { _, _ ->
+                    lifecycleScope.launch {
+                        ErrorUtil.safeRunSuspend(this@MainActivity) {
+                            workspaceUseCase.deleteProject(project.id)
+                        }
+                        loadProjects()
                     }
-                    loadProjects()
                 }
+                .setNegativeButton(R.string.action_cancel, null)
+                .show()
+        } else {
+            // Core 指定不需要确认，直接执行
+            lifecycleScope.launch {
+                ErrorUtil.safeRunSuspend(this@MainActivity) {
+                    workspaceUseCase.deleteProject(project.id)
+                }
+                loadProjects()
             }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
+        }
     }
 
     private fun moveProjectUp(position: Int) {

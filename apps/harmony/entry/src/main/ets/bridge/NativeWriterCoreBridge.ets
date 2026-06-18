@@ -22,7 +22,10 @@ import {
   RecentEdit,
   ErrorCode,
   WindowMetrics,
-  LayoutPlan
+  LayoutPlan,
+  ScreenPolicy,
+  ScreenRole,
+  ShellMode
 } from '../model/CoreDtos'
 
 import nativeModule from 'libwriter_core.so'
@@ -688,6 +691,20 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     try {
       const jsonStr: string = this.getNativeModule().nativeResolveLayout(JSON.stringify(metrics))
       return this.parseEnvelope<LayoutPlan>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
+  }
+
+  // ── Screen Policy ──
+
+  async resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeResolveScreenPolicy(
+        JSON.stringify(screenRole),
+        JSON.stringify(shellMode)
+      )
+      return this.parseEnvelope<ScreenPolicy>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }

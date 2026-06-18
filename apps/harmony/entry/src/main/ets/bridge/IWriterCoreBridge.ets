@@ -20,7 +20,10 @@ import {
   SyncDiagnosticsResult,
   RecentEdit,
   WindowMetrics,
-  LayoutPlan
+  LayoutPlan,
+  ScreenPolicy,
+  ScreenRole,
+  ShellMode
 } from '../model/CoreDtos'
 
 export interface IWriterCoreBridge {
@@ -92,6 +95,9 @@ export interface IWriterCoreBridge {
 
   // Layout Policy
   resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>>
+
+  // Screen Policy
+  resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>>
 
   // Native Status
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>

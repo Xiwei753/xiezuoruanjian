@@ -26,6 +26,13 @@ Rectangle {
     readonly property int minFontSize: 10
     readonly property int maxFontSize: 120
 
+    // ── ScreenPolicyAdapter：从 Core 获取按钮位置语义 ──
+    ScreenPolicyAdapter {
+        id: screenPolicy
+        screenRole: "Writing"
+        shellMode: "SinglePane"
+    }
+
     signal fontSizeChanged(real size)
     signal lineSpacingChanged(real spacing)
     signal firstLineIndentToggled()
@@ -209,6 +216,7 @@ Rectangle {
 
         // Format button
         Rectangle {
+            visible: screenPolicy.isRoleVisible("Format") || screenPolicy.actionSlots.length === 0
             width: formatRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
             radius: dt ? dt.radiusPill : 999
@@ -241,6 +249,7 @@ Rectangle {
 
         // Star map button
         Rectangle {
+            visible: screenPolicy.isRoleVisible("StarMap") || screenPolicy.actionSlots.length === 0
             width: starRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
             radius: dt ? dt.radiusPill : 999
@@ -271,6 +280,7 @@ Rectangle {
 
         // Stats button
         Rectangle {
+            visible: screenPolicy.isRoleVisible("Stats") || screenPolicy.actionSlots.length === 0
             width: statsRow.implicitWidth + (dt ? dt.sp12 : 12)
             height: 32
             radius: dt ? dt.radiusPill : 999
@@ -307,7 +317,7 @@ Rectangle {
             color: dt ? dt.textSecondary : "#8C9198"
             font.pixelSize: dt ? dt.caption : 12
             font.family: dt ? dt.fontFamily : "sans-serif"
-            visible: text !== ""
+            visible: text !== "" && (screenPolicy.isRoleVisible("Save") || screenPolicy.actionSlots.length === 0)
         }
     }
 

@@ -32,7 +32,13 @@ import {
   ChangedEntity,
   ErrorCode,
   WindowMetrics,
-  LayoutPlan
+  LayoutPlan,
+  ScreenPolicy,
+  ActionSlot,
+  ScreenRole,
+  ActionRole,
+  ActionPlacement,
+  ShellMode
 } from '../model/CoreDtos'
 import { resolveLayoutFromMetrics } from '../common/LayoutPolicyHelper'
 
@@ -742,6 +748,54 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       changedPaths: [] as string[],
       changedEntities: [] as ChangedEntity[]
     } as ResultEnvelope<LayoutPlan>)
+  }
+
+  // Screen Policy methods — mock 返回与 Core 一致的策略
+  resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>> {
+    const policy = this.mockResolveScreenPolicy(screenRole, shellMode)
+    return Promise.resolve(this.success(policy))
+  }
+
+  private mockResolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): ScreenPolicy {
+    const allSlots = this.mockBaseSlots(screenRole)
+    const filtered = allSlots.filter((slot: ActionSlot) => slot.visibleIn.includes(shellMode))
+    return {
+      screenRole: screenRole,
+      actionSlots: filtered
+    }
+  }
+
+  private mockBaseSlots(screenRole: ScreenRole): ActionSlot[] {
+    switch (screenRole) {
+      case ScreenRole.Home:
+        return [
+          { actionId: 'settings', role: ActionRole.Settings, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
+          { actionId: 'search', role: ActionRole.Search, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+        ]
+      case ScreenRole.Workspace:
+        return [
+          { actionId: 'create_project', role: ActionRole.CreateProject, placement: ActionPlacement.Floating, visibleIn: [ShellMode.SinglePane], requiresConfirmation: false },
+          { actionId: 'create_project', role: ActionRole.CreateProject, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
+          { actionId: 'delete', role: ActionRole.Delete, placement: ActionPlacement.ContextMenu, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: true },
+          { actionId: 'rename', role: ActionRole.Rename, placement: ActionPlacement.ContextMenu, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+        ]
+      case ScreenRole.Writing:
+        return [
+          { actionId: 'back', role: ActionRole.Back, placement: ActionPlacement.TopLeading, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
+          { actionId: 'save', role: ActionRole.Save, placement: ActionPlacement.TopTrailing, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+        ]
+      case ScreenRole.Settings:
+        return [
+          { actionId: 'back', role: ActionRole.Back, placement: ActionPlacement.TopLeading, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+        ]
+      case ScreenRole.Sync:
+        return [
+          { actionId: 'back', role: ActionRole.Back, placement: ActionPlacement.TopLeading, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false },
+          { actionId: 'sync', role: ActionRole.Sync, placement: ActionPlacement.Floating, visibleIn: [ShellMode.SinglePane, ShellMode.SupportingPane, ShellMode.TwoPane], requiresConfirmation: false }
+        ]
+      default:
+        return []
+    }
   }
 
   // Native Status methods
