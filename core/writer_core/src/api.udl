@@ -953,6 +953,10 @@ interface WriterAppService {
     // ── Layout Policy ──
 
     LayoutPlanDto resolve_layout(WindowMetricsDto metrics);
+
+    // ── Screen Policy ──
+
+    ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role, ShellModeDto shell_mode);
 };
 
 // ── Layout Policy DTOs ──
@@ -1030,4 +1034,57 @@ dictionary LayoutPlanDto {
     float side_panel_width_vp;
     float primary_pane_weight;
     float detail_panel_max_width_vp;
+};
+
+// ── Screen Policy DTOs ──
+
+enum ScreenRoleDto {
+    "Home",
+    "Workspace",
+    "Writing",
+    "Settings",
+    "Sync"
+};
+
+enum PaneRoleDto {
+    "PrimaryList",
+    "Detail",
+    "Editor",
+    "Inspector",
+    "Drawer"
+};
+
+enum ActionRoleDto {
+    "Back",
+    "Save",
+    "CreateProject",
+    "CreateVolume",
+    "CreateChapter",
+    "Delete",
+    "Rename",
+    "Settings",
+    "Sync",
+    "Search"
+};
+
+enum ActionPlacementDto {
+    "TopLeading",
+    "TopTrailing",
+    "Floating",
+    "BottomBar",
+    "ContextMenu",
+    "SidePanel"
+};
+
+dictionary ActionSlotDto {
+    string action_id;
+    ActionRoleDto role;
+    ActionPlacementDto placement;
+    sequence<ShellModeDto> visible_in;
+    boolean requires_confirmation;
+};
+
+dictionary ScreenPolicyDto {
+    ScreenRoleDto screen_role;
+    sequence<ActionSlotDto> action_slots;
 };

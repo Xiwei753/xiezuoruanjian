@@ -549,4 +549,20 @@ impl WriterAppService {
         let plan = crate::layout_policy::resolve_layout(&core_metrics);
         plan.into()
     }
+
+    // ── Screen Policy ──
+
+    pub fn resolve_screen_policy(
+        &self,
+        screen_role: crate::api::ScreenRoleDto,
+        shell_mode: crate::api::ShellModeDto,
+    ) -> crate::api::ScreenPolicyDto {
+        let core_role: crate::screen_policy::ScreenRole = screen_role.into();
+        let core_mode: crate::layout_policy::ShellMode = shell_mode.into();
+        let action_slots = crate::screen_policy::resolve_screen_policy(core_role, core_mode);
+        crate::api::ScreenPolicyDto {
+            screen_role: core_role.into(),
+            action_slots: action_slots.into_iter().map(Into::into).collect(),
+        }
+    }
 }

@@ -862,6 +862,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -996,6 +998,8 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_resolve_layout(`ptr`: Pointer,`metrics`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_resolve_screen_policy(`ptr`: Pointer,`screenRole`: RustBuffer.ByValue,`shellMode`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_save_chapter_content(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,`chapterId`: RustBuffer.ByValue,`content`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1265,6 +1269,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_resolve_layout(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_resolve_screen_policy(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_chapter_content(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_save_local_settings(
@@ -1487,6 +1493,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_resolve_layout() != 1934.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_resolve_screen_policy() != 46991.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_save_chapter_content() != 9144.toShort()) {
@@ -2109,6 +2118,8 @@ public interface WriterAppServiceInterface {
     fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean
     
     fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto
+    
+    fun `resolveScreenPolicy`(`screenRole`: ScreenRoleDto, `shellMode`: ShellModeDto): ScreenPolicyDto
     
     fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto
     
@@ -2935,6 +2946,18 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     }
     
 
+    override fun `resolveScreenPolicy`(`screenRole`: ScreenRoleDto, `shellMode`: ShellModeDto): ScreenPolicyDto {
+            return FfiConverterTypeScreenPolicyDto.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_resolve_screen_policy(
+        it, FfiConverterTypeScreenRoleDto.lower(`screenRole`),FfiConverterTypeShellModeDto.lower(`shellMode`),_status)
+}
+    }
+    )
+    }
+    
+
     
     @Throws(WriterException::class)override fun `saveChapterContent`(`projectId`: kotlin.String, `volumeId`: kotlin.String, `chapterId`: kotlin.String, `content`: kotlin.String): ChapterSaveReceiptDto {
             return FfiConverterTypeChapterSaveReceiptDto.lift(
@@ -3223,6 +3246,50 @@ public object FfiConverterTypeActionResultDto: FfiConverterRustBuffer<ActionResu
             FfiConverterOptionalString.write(value.`data`, buf)
             FfiConverterOptionalString.write(value.`proposedUi`, buf)
             FfiConverterOptionalBoolean.write(value.`requiresConfirmation`, buf)
+    }
+}
+
+
+
+data class ActionSlotDto (
+    var `actionId`: kotlin.String, 
+    var `role`: ActionRoleDto, 
+    var `placement`: ActionPlacementDto, 
+    var `visibleIn`: List<ShellModeDto>, 
+    var `requiresConfirmation`: kotlin.Boolean
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActionSlotDto: FfiConverterRustBuffer<ActionSlotDto> {
+    override fun read(buf: ByteBuffer): ActionSlotDto {
+        return ActionSlotDto(
+            FfiConverterString.read(buf),
+            FfiConverterTypeActionRoleDto.read(buf),
+            FfiConverterTypeActionPlacementDto.read(buf),
+            FfiConverterSequenceTypeShellModeDto.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ActionSlotDto) = (
+            FfiConverterString.allocationSize(value.`actionId`) +
+            FfiConverterTypeActionRoleDto.allocationSize(value.`role`) +
+            FfiConverterTypeActionPlacementDto.allocationSize(value.`placement`) +
+            FfiConverterSequenceTypeShellModeDto.allocationSize(value.`visibleIn`) +
+            FfiConverterBoolean.allocationSize(value.`requiresConfirmation`)
+    )
+
+    override fun write(value: ActionSlotDto, buf: ByteBuffer) {
+            FfiConverterString.write(value.`actionId`, buf)
+            FfiConverterTypeActionRoleDto.write(value.`role`, buf)
+            FfiConverterTypeActionPlacementDto.write(value.`placement`, buf)
+            FfiConverterSequenceTypeShellModeDto.write(value.`visibleIn`, buf)
+            FfiConverterBoolean.write(value.`requiresConfirmation`, buf)
     }
 }
 
@@ -3650,7 +3717,10 @@ data class LayoutPlanDto (
     var `pagePaddingVp`: kotlin.Float, 
     var `gridColumns`: kotlin.UByte, 
     var `showSidePanel`: kotlin.Boolean, 
-    var `showBottomBar`: kotlin.Boolean
+    var `showBottomBar`: kotlin.Boolean, 
+    var `sidePanelWidthVp`: kotlin.Float, 
+    var `primaryPaneWeight`: kotlin.Float, 
+    var `detailPanelMaxWidthVp`: kotlin.Float
 ) {
     
     companion object
@@ -3672,6 +3742,9 @@ public object FfiConverterTypeLayoutPlanDto: FfiConverterRustBuffer<LayoutPlanDt
             FfiConverterUByte.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
+            FfiConverterFloat.read(buf),
         )
     }
 
@@ -3685,7 +3758,10 @@ public object FfiConverterTypeLayoutPlanDto: FfiConverterRustBuffer<LayoutPlanDt
             FfiConverterFloat.allocationSize(value.`pagePaddingVp`) +
             FfiConverterUByte.allocationSize(value.`gridColumns`) +
             FfiConverterBoolean.allocationSize(value.`showSidePanel`) +
-            FfiConverterBoolean.allocationSize(value.`showBottomBar`)
+            FfiConverterBoolean.allocationSize(value.`showBottomBar`) +
+            FfiConverterFloat.allocationSize(value.`sidePanelWidthVp`) +
+            FfiConverterFloat.allocationSize(value.`primaryPaneWeight`) +
+            FfiConverterFloat.allocationSize(value.`detailPanelMaxWidthVp`)
     )
 
     override fun write(value: LayoutPlanDto, buf: ByteBuffer) {
@@ -3699,6 +3775,9 @@ public object FfiConverterTypeLayoutPlanDto: FfiConverterRustBuffer<LayoutPlanDt
             FfiConverterUByte.write(value.`gridColumns`, buf)
             FfiConverterBoolean.write(value.`showSidePanel`, buf)
             FfiConverterBoolean.write(value.`showBottomBar`, buf)
+            FfiConverterFloat.write(value.`sidePanelWidthVp`, buf)
+            FfiConverterFloat.write(value.`primaryPaneWeight`, buf)
+            FfiConverterFloat.write(value.`detailPanelMaxWidthVp`, buf)
     }
 }
 
@@ -4039,6 +4118,38 @@ public object FfiConverterTypeRecentEditDto: FfiConverterRustBuffer<RecentEditDt
             FfiConverterString.write(value.`volumeId`, buf)
             FfiConverterString.write(value.`chapterId`, buf)
             FfiConverterString.write(value.`timestamp`, buf)
+    }
+}
+
+
+
+data class ScreenPolicyDto (
+    var `screenRole`: ScreenRoleDto, 
+    var `actionSlots`: List<ActionSlotDto>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeScreenPolicyDto: FfiConverterRustBuffer<ScreenPolicyDto> {
+    override fun read(buf: ByteBuffer): ScreenPolicyDto {
+        return ScreenPolicyDto(
+            FfiConverterTypeScreenRoleDto.read(buf),
+            FfiConverterSequenceTypeActionSlotDto.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ScreenPolicyDto) = (
+            FfiConverterTypeScreenRoleDto.allocationSize(value.`screenRole`) +
+            FfiConverterSequenceTypeActionSlotDto.allocationSize(value.`actionSlots`)
+    )
+
+    override fun write(value: ScreenPolicyDto, buf: ByteBuffer) {
+            FfiConverterTypeScreenRoleDto.write(value.`screenRole`, buf)
+            FfiConverterSequenceTypeActionSlotDto.write(value.`actionSlots`, buf)
     }
 }
 
@@ -6392,6 +6503,40 @@ public object FfiConverterTypeActionKindDto: FfiConverterRustBuffer<ActionKindDt
 
 
 
+enum class ActionPlacementDto {
+    
+    TOP_LEADING,
+    TOP_TRAILING,
+    FLOATING,
+    BOTTOM_BAR,
+    CONTEXT_MENU,
+    SIDE_PANEL;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActionPlacementDto: FfiConverterRustBuffer<ActionPlacementDto> {
+    override fun read(buf: ByteBuffer) = try {
+        ActionPlacementDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ActionPlacementDto) = 4UL
+
+    override fun write(value: ActionPlacementDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class ActionRiskLevelDto {
     
     SAFE_READ,
@@ -6415,6 +6560,44 @@ public object FfiConverterTypeActionRiskLevelDto: FfiConverterRustBuffer<ActionR
     override fun allocationSize(value: ActionRiskLevelDto) = 4UL
 
     override fun write(value: ActionRiskLevelDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ActionRoleDto {
+    
+    BACK,
+    SAVE,
+    CREATE_PROJECT,
+    CREATE_VOLUME,
+    CREATE_CHAPTER,
+    DELETE,
+    RENAME,
+    SETTINGS,
+    SYNC,
+    SEARCH;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActionRoleDto: FfiConverterRustBuffer<ActionRoleDto> {
+    override fun read(buf: ByteBuffer) = try {
+        ActionRoleDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ActionRoleDto) = 4UL
+
+    override fun write(value: ActionRoleDto, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -6612,6 +6795,39 @@ public object FfiConverterTypeOrientationDto: FfiConverterRustBuffer<Orientation
 
 
 
+enum class PaneRoleDto {
+    
+    PRIMARY_LIST,
+    DETAIL,
+    EDITOR,
+    INSPECTOR,
+    DRAWER;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePaneRoleDto: FfiConverterRustBuffer<PaneRoleDto> {
+    override fun read(buf: ByteBuffer) = try {
+        PaneRoleDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PaneRoleDto) = 4UL
+
+    override fun write(value: PaneRoleDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class PlatformDto {
     
     LINUX,
@@ -6665,6 +6881,39 @@ public object FfiConverterTypePointerKindDto: FfiConverterRustBuffer<PointerKind
     override fun allocationSize(value: PointerKindDto) = 4UL
 
     override fun write(value: PointerKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ScreenRoleDto {
+    
+    HOME,
+    WORKSPACE,
+    WRITING,
+    SETTINGS,
+    SYNC;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeScreenRoleDto: FfiConverterRustBuffer<ScreenRoleDto> {
+    override fun read(buf: ByteBuffer) = try {
+        ScreenRoleDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ScreenRoleDto) = 4UL
+
+    override fun write(value: ScreenRoleDto, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -7741,6 +7990,34 @@ public object FfiConverterSequenceTypeActionDescriptorDto: FfiConverterRustBuffe
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeActionSlotDto: FfiConverterRustBuffer<List<ActionSlotDto>> {
+    override fun read(buf: ByteBuffer): List<ActionSlotDto> {
+        val len = buf.getInt()
+        return List<ActionSlotDto>(len) {
+            FfiConverterTypeActionSlotDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ActionSlotDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeActionSlotDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ActionSlotDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeActionSlotDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeAiAction: FfiConverterRustBuffer<List<AiAction>> {
     override fun read(buf: ByteBuffer): List<AiAction> {
         val len = buf.getInt()
@@ -8347,6 +8624,34 @@ public object FfiConverterSequenceTypeVolumeDto: FfiConverterRustBuffer<List<Vol
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeVolumeDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeShellModeDto: FfiConverterRustBuffer<List<ShellModeDto>> {
+    override fun read(buf: ByteBuffer): List<ShellModeDto> {
+        val len = buf.getInt()
+        return List<ShellModeDto>(len) {
+            FfiConverterTypeShellModeDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ShellModeDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeShellModeDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ShellModeDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeShellModeDto.write(it, buf)
         }
     }
 }

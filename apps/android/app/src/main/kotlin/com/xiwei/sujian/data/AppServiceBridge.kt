@@ -418,5 +418,11 @@ class AppServiceBridge(workspacePath: String) {
     fun resolveLayout(metrics: uniffi.writer_core.WindowMetricsDto): BridgeResult<uniffi.writer_core.LayoutPlanDto> = wrapResult {
         service.resolveLayout(metrics)
     }
+
+    // ── Screen Policy ──
+
+    fun resolveScreenPolicy(screenRole: uniffi.writer_core.ScreenRoleDto, shellMode: uniffi.writer_core.ShellModeDto): BridgeResult<uniffi.writer_core.ScreenPolicyDto> = wrapResult {
+        service.resolveScreenPolicy(screenRole, shellMode)
+    }
 }
 

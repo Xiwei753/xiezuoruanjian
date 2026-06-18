@@ -567,6 +567,10 @@ enum class ActionPlacement {
     TopLeading, TopTrailing, Floating, BottomBar, ContextMenu, SidePanel
 }
 
+enum class PaneRole {
+    PrimaryList, Detail, Editor, Inspector, Drawer
+}
+
 data class ActionSlot(
     val actionId: String,
     val role: ActionRole,

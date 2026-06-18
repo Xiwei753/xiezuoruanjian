@@ -1,7 +1,7 @@
 mod action;
 mod platform;
 mod project;
-mod screen_policy;
+pub mod screen_policy;
 mod settings;
 mod stats;
 mod starmap;
