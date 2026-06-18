@@ -296,6 +296,27 @@ struct MainWorkspace {
     try {
       const result = await this.bridge.saveChapter(this.selectedChapterId, this.content)
       if (result.success && result.data) {
+        // ── 保存成功后上报编辑事件 ──
+        if (this.sessionOldText !== this.content) {
+          const deviceId = this.settings.statsDeviceId || 'unknown'
+          const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
+          this.bridge.processWritingEvent(
+            deviceId,
+            'harmony',
+            this.selectedProjectId,
+            this.selectedVolumeId,
+            this.selectedChapterId,
+            this.sessionOldText,
+            this.content,
+            durationSeconds,
+            this.sessionId
+          )
+          // 重置 session，开始新的统计区间
+          this.sessionOldText = this.content
+          this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
+          this.sessionStartTime = Date.now()
+        }
+
         this.lastSavedContent = this.content
         this.hasUnsavedChanges = false
         this.wordCount = result.data.wordCount
