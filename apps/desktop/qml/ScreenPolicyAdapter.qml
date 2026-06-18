@@ -28,6 +28,7 @@ QtObject {
     id: root
 
     // ── 输入属性 ──
+    property var backendRef: null
     property string screenRole: "Writing"
     property string shellMode: "SinglePane"
 
@@ -40,7 +41,7 @@ QtObject {
 
     function refresh() {
         // 优先使用 backendRef，回退到全局 appBackend
-        var backend = (typeof backendRef !== 'undefined' && backendRef) ? backendRef :
+        var backend = root.backendRef ? root.backendRef :
                       (typeof appBackend !== 'undefined' ? appBackend : null)
         if (!backend || !backend.resolve_screen_policy) return
         try {

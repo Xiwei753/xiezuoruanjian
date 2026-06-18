@@ -132,24 +132,26 @@ done
 # ── Step 7: Check ArkTS native calls → NAPI registration ──
 echo "Step 7: Checking ArkTS native calls → NAPI registration..."
 
-arkts_bridge="$PROJECT_ROOT/apps/harmony/entry/src/main/ets/bridge/NativeWriterCoreBridge.ets"
-if [[ -f "$arkts_bridge" ]]; then
-    while IFS= read -r line; do
-        if [[ "$line" =~ \.native([A-Za-z]+)\( ]]; then
-            arkts_call="native${BASH_REMATCH[1]}"
-            found=false
-            for napi_func in "${napi_registered[@]}"; do
-                if [[ "$napi_func" == "$arkts_call" ]]; then
-                    found=true
-                    break
+arkts_ets_dir="$PROJECT_ROOT/apps/harmony/entry/src/main/ets"
+if [[ -d "$arkts_ets_dir" ]]; then
+    while IFS= read -r -d '' ets_file; do
+        while IFS= read -r line; do
+            if [[ "$line" =~ \.native([A-Za-z]+)\( ]]; then
+                arkts_call="native${BASH_REMATCH[1]}"
+                found=false
+                for napi_func in "${napi_registered[@]}"; do
+                    if [[ "$napi_func" == "$arkts_call" ]]; then
+                        found=true
+                        break
+                    fi
+                done
+                if ! $found; then
+                    echo -e "  ${RED}ERROR${NC}: ${ets_file##*/} calls '${arkts_call}' but it's NOT registered in napi_init.cpp"
+                    errors=$((errors + 1))
                 fi
-            done
-            if ! $found; then
-                echo -e "  ${RED}ERROR${NC}: ArkTS calls '${arkts_call}' but it's NOT registered in napi_init.cpp"
-                errors=$((errors + 1))
             fi
-        fi
-    done < "$arkts_bridge"
+        done < "$ets_file"
+    done < <(find "$arkts_ets_dir" -name "*.ets" -print0)
 fi
 
 # ── Step 8: Check DTO field name consistency (FFI JSON vs CoreDtos.ets) ──
