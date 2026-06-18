@@ -2,6 +2,8 @@ package com.xiwei.sujian.ui
 
 import android.content.Intent
 
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.coordinatorlayout.widget.CoordinatorLayout
@@ -84,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var bottomNav: BottomNavigationView
     private lateinit var canvasView: StarMapCanvasView
     private lateinit var toolbar: MaterialToolbar
+    private var createProjectMenuItem: MenuItem? = null
 
     // ── TwoPane 模式的 View 引用 ──
     private lateinit var twoPaneContainer: LinearLayout
@@ -158,6 +161,17 @@ class MainActivity : AppCompatActivity() {
         bottomNav = findViewById(R.id.bottomNav)
         canvasView = findViewById(R.id.canvasView)
         toolbar = findViewById(R.id.toolbar)
+        toolbar.inflateMenu(R.menu.menu_main_toolbar)
+        createProjectMenuItem = toolbar.menu.findItem(R.id.action_create_project)
+        toolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_create_project -> {
+                    showNewProjectDialog()
+                    true
+                }
+                else -> false
+            }
+        }
 
         // ── TwoPane 模式的 View 引用初始化 ──
         twoPaneContainer = findViewById(R.id.twoPaneContainer)
@@ -557,14 +571,15 @@ class MainActivity : AppCompatActivity() {
     /**
      * 根据 Core 指定的 ActionPlacement 放置"新建项目"按钮。
      *
-     * - Floating：显示为 FAB（浮动操作按钮）
-     * - TopTrailing：在 toolbar 右侧显示（TwoPane 模式）
+     * - Floating：显示为 FAB（浮动操作按钮），隐藏 toolbar 菜单项
+     * - TopTrailing：在 toolbar 右侧显示菜单项，隐藏 FAB
      * - 其他 placement：降级为 FAB
      */
     private fun applyCreateProjectPlacement(slot: ActionSlot?, shellMode: ShellMode) {
         if (slot == null) {
             // 没有 slot 信息时保持默认 FAB 行为
             fabNewProject.show()
+            createProjectMenuItem?.isVisible = false
             return
         }
 
@@ -572,23 +587,25 @@ class MainActivity : AppCompatActivity() {
         val isVisible = slot.visibleIn.contains(shellMode)
         if (!isVisible) {
             fabNewProject.hide()
+            createProjectMenuItem?.isVisible = false
             return
         }
 
         when (slot.placement) {
             ActionPlacement.Floating -> {
-                // Floating：显示为 FAB
+                // Floating：显示为 FAB，隐藏 toolbar 菜单项
                 fabNewProject.show()
+                createProjectMenuItem?.isVisible = false
             }
             ActionPlacement.TopTrailing -> {
-                // TopTrailing：仍然使用 FAB，但锚定到右上角区域
-                // 第一版先保持 FAB 显示，后续可迁移到 toolbar 菜单
-                fabNewProject.show()
-                Log.d("MainActivity", "create_project placement=TopTrailing, using FAB as fallback for now")
+                // TopTrailing：隐藏 FAB，在 toolbar 右侧显示菜单项
+                fabNewProject.hide()
+                createProjectMenuItem?.isVisible = true
             }
             else -> {
                 // 其他 placement 降级为 FAB
                 fabNewProject.show()
+                createProjectMenuItem?.isVisible = false
                 Log.d("MainActivity", "create_project placement=${slot.placement}, fallback to FAB")
             }
         }

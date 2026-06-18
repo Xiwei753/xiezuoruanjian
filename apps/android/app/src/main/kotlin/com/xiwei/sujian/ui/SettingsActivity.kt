@@ -3,12 +3,12 @@ package com.xiwei.sujian.ui
 import android.os.Bundle
 import com.google.android.material.slider.Slider
 import android.widget.ArrayAdapter
-import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.CoreSettingsEvents
@@ -25,7 +25,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var sbLineSpacing: Slider
     private lateinit var switchAutoSave: MaterialSwitch
     private lateinit var sbAutoSaveDelay: Slider
-    private lateinit var spinnerTheme: Spinner
+    private lateinit var actvTheme: MaterialAutoCompleteTextView
     private lateinit var tvWorkspacePath: TextView
     private lateinit var tvVersionInfo: TextView
 
@@ -47,6 +47,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private lateinit var tvAiSection: TextView
     private lateinit var switchAiEnabled: MaterialSwitch
+    private lateinit var cardAi: com.google.android.material.card.MaterialCardView
 
     private lateinit var btnActionRegistry: MaterialButton
 
@@ -88,7 +89,7 @@ class SettingsActivity : AppCompatActivity() {
         sbLineSpacing = findViewById(R.id.sbLineSpacing)
         switchAutoSave = findViewById(R.id.switchAutoSave)
         sbAutoSaveDelay = findViewById(R.id.sbAutoSaveDelay)
-        spinnerTheme = findViewById(R.id.spinnerTheme)
+        actvTheme = findViewById(R.id.actvTheme)
 
         tvFontSizeValue = findViewById(R.id.tvFontSizeValue)
         tvLineSpacingValue = findViewById(R.id.tvLineSpacingValue)
@@ -107,6 +108,7 @@ class SettingsActivity : AppCompatActivity() {
 
         tvAiSection = findViewById(R.id.tvAiSection)
         switchAiEnabled = findViewById(R.id.switchAiEnabled)
+        cardAi = findViewById(R.id.cardAi)
 
         tvWorkspacePath = findViewById(R.id.tvWorkspacePath)
         tvVersionInfo = findViewById(R.id.tvVersionInfo)
@@ -149,14 +151,42 @@ class SettingsActivity : AppCompatActivity() {
         sbSmoothCursorDuration.addOnSliderTouchListener(saveSettingsListener)
 
 
-        // Setup Theme Spinner
+        // Setup Theme AutoCompleteTextView
         val themeOptions = arrayOf(
             getString(R.string.theme_system),
             getString(R.string.theme_light),
             getString(R.string.theme_dark)
         )
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, themeOptions)
-        spinnerTheme.adapter = adapter
+        val themeAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, themeOptions)
+        actvTheme.setAdapter(themeAdapter)
+
+        // Set current selection
+        actvTheme.setText(when (currentSettings.themeMode) {
+            "light" -> getString(R.string.theme_light)
+            "dark" -> getString(R.string.theme_dark)
+            else -> getString(R.string.theme_system)
+        }, false)
+
+        actvTheme.setOnItemClickListener { _, _, position, _ ->
+            val themeStr = when (position) {
+                1 -> "light"
+                2 -> "dark"
+                else -> "system"
+            }
+            if (currentSettings.themeMode != themeStr) {
+                currentSettings = currentSettings.copy(themeMode = themeStr)
+                ErrorUtil.safeRun(this@SettingsActivity) {
+                    if (::settingsRepository.isInitialized) {
+                        settingsRepository.saveLocalSettings(currentSettings)
+                    }
+                }
+                when (themeStr) {
+                    "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                    "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                    else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+                }
+            }
+        }
 
         // Bind existing settings
         sbFontSize.value = effectiveFontSize
@@ -179,16 +209,14 @@ class SettingsActivity : AppCompatActivity() {
             } else false
         } catch (e: Exception) { false }
         if (aiAvailable) {
-            tvAiSection.visibility = android.view.View.VISIBLE
-            switchAiEnabled.visibility = android.view.View.VISIBLE
+            cardAi.visibility = android.view.View.VISIBLE
             switchAiEnabled.isChecked = currentSettings.aiEnabled
             switchAiEnabled.setOnCheckedChangeListener { _, isChecked ->
                 currentSettings = currentSettings.copy(aiEnabled = isChecked)
                 saveAndFinish(false)
             }
         } else {
-            tvAiSection.visibility = android.view.View.GONE
-            switchAiEnabled.visibility = android.view.View.GONE
+            cardAi.visibility = android.view.View.GONE
         }
 
         // Initial texts
@@ -205,36 +233,6 @@ class SettingsActivity : AppCompatActivity() {
         switchSmoothCursor.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
 
 
-        spinnerTheme.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                val themeStr = when (position) {
-                    1 -> "light"
-                    2 -> "dark"
-                    else -> "system"
-                }
-                if (currentSettings.themeMode != themeStr) {
-                    currentSettings = currentSettings.copy(themeMode = themeStr)
-                    ErrorUtil.safeRun(this@SettingsActivity) {
-                        if (::settingsRepository.isInitialized) {
-                            settingsRepository.saveLocalSettings(currentSettings)
-                        }
-                    }
-                    when (themeStr) {
-                        "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
-                        "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
-                        else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
-                    }
-                }
-            }
-
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-        }
-
-        when (currentSettings.themeMode) {
-            "light" -> spinnerTheme.setSelection(1, false)
-            "dark" -> spinnerTheme.setSelection(2, false)
-            else -> spinnerTheme.setSelection(0, false)
-        }
 
 
 
@@ -314,11 +312,11 @@ class SettingsActivity : AppCompatActivity() {
         if (syncable.themeMode.isNotEmpty()) {
             currentSettings = currentSettings.copy(themeMode = syncable.themeMode)
         }
-        when (currentSettings.themeMode) {
-            "light" -> spinnerTheme.setSelection(1, false)
-            "dark" -> spinnerTheme.setSelection(2, false)
-            else -> spinnerTheme.setSelection(0, false)
-        }
+        actvTheme.setText(when (currentSettings.themeMode) {
+            "light" -> getString(R.string.theme_light)
+            "dark" -> getString(R.string.theme_dark)
+            else -> getString(R.string.theme_system)
+        }, false)
 
         syncHelper.loadSyncState()
         syncHelper.bindSyncSettings()
@@ -330,9 +328,11 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun saveAndFinish(finishActivity: Boolean = true) {
-        val themeStr = when (spinnerTheme.selectedItemPosition) {
-            1 -> "light"
-            2 -> "dark"
+        // Derive theme from actvTheme text
+        val currentThemeText = actvTheme.text.toString()
+        val themeStr = when {
+            currentThemeText == getString(R.string.theme_light) -> "light"
+            currentThemeText == getString(R.string.theme_dark) -> "dark"
             else -> "system"
         }
 

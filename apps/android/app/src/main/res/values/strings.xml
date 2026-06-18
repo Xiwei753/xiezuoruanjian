@@ -45,6 +45,7 @@
     <string name="action_retry">重试</string>
 
     <string name="pref_category_editor">写作区设置</string>
+    <string name="pref_category_editor_behavior">动效与光标</string>
     <string name="pref_font_size">正文字号</string>
     <string name="pref_line_spacing">正文行距</string>
     <string name="pref_auto_indent">自动首行缩进</string>
@@ -59,6 +60,7 @@
     <string name="pref_auto_save">自动保存</string>
     <string name="pref_auto_save_delay">自动保存延迟 (毫秒)</string>
 
+    <string name="pref_category_appearance">外观</string>
     <string name="pref_category_theme">显示设置</string>
     <string name="pref_theme_mode">主题模式</string>
     <string name="theme_system">跟随系统</string>
@@ -81,7 +83,9 @@
 
 
     <!-- Sync Settings -->
-    <string name="pref_category_sync">同步设置</string>
+    <string name="pref_category_sync">同步设置 (仅支持 GitHub API 上传同步)</string>
+    <string name="pref_category_ai">AI</string>
+    <string name="pref_ai_enabled">启用 AI</string>
     <string name="pref_enable_sync">启用同步</string>
     <string name="pref_github_repo">GitHub 仓库地址 (HTTPS)</string>
     <string name="pref_branch">分支 (默认 main)</string>
