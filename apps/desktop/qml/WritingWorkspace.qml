@@ -864,6 +864,10 @@ Rectangle {
                                  && !sujianEditor.has_selection
                                  && !editorScroll.editorAnimationSuppressed
                         radius: 1
+
+                        onXChanged: opacity = 1.0
+                        onYChanged: opacity = 1.0
+                        onHeightChanged: opacity = 1.0
                     }
 
                     // 光标闪烁 Timer

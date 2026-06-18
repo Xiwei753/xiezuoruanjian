@@ -55,57 +55,73 @@ Item {
         var cursorRectY = editorItem.cursor_rect_y
         var cursorRectH = editorItem.cursor_rect_height
         var duration = event.durationMs || 160
-        var text = event.text || ""
-        var charCount = text.length
-        if (charCount === 0) return
-
-        var highlightX, highlightY, highlightWidth, highlightHeight
 
         if (event.glyphRects && Array.isArray(event.glyphRects) && event.glyphRects.length > 0) {
-            // 使用 Rust Core 提供的精确 glyph 矩形，计算 bounding rect
-            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            // ── Glyph Ghost 路径 ──
+            var component = Qt.createComponent("EditorGlyphGhost.qml")
+            if (component.status !== Component.Ready) return
+
             for (var i = 0; i < event.glyphRects.length; i++) {
                 var gr = event.glyphRects[i]
-                if (gr.x < minX) minX = gr.x
-                if (gr.y < minY) minY = gr.y
-                if (gr.x + gr.w > maxX) maxX = gr.x + gr.w
-                if (gr.y + gr.h > maxY) maxY = gr.y + gr.h
+                var ghost = component.createObject(root, {
+                    "animKind": "insert",
+                    "startX": cursorRectX,
+                    "startY": cursorRectY,
+                    "endX": gr.x,
+                    "endY": gr.y,
+                    "glyphWidth": gr.w,
+                    "glyphHeight": gr.h,
+                    "width": gr.w,
+                    "height": gr.h,
+                    "duration": duration,
+                    "ghostColor": editorItem.cursor_color || "#006497"
+                })
+
+                if (ghost) {
+                    root._activeAnimations.push(ghost)
+                    ghost.animationFinished.connect(function() {
+                        var idx = root._activeAnimations.indexOf(ghost)
+                        if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                        ghost.destroy()
+                    })
+                    ghost.startAnimation()
+                }
             }
-            highlightX = minX
-            highlightY = minY
-            highlightWidth = maxX - minX
-            highlightHeight = maxY - minY
         } else {
-            // Fallback: 旧估算逻辑（glyphRects 不可用时）
+            // ── Fallback: 旧矩形高亮路径 ──
+            var text = event.text || ""
+            var charCount = text.length
+            if (charCount === 0) return
+
             var fontSize = editorItem.font_pixel_size || 16
             var charWidth = fontSize * 0.6
-            highlightWidth = Math.min(charCount, 8) * charWidth
-            highlightX = cursorRectX - highlightWidth
-            highlightY = cursorRectY
-            highlightHeight = cursorRectH
-        }
+            var highlightWidth = Math.min(charCount, 8) * charWidth
+            var highlightX = cursorRectX - highlightWidth
+            var highlightY = cursorRectY
+            var highlightHeight = cursorRectH
 
-        var component = Qt.createComponent("EditorAnimationHighlight.qml")
-        if (component.status !== Component.Ready) return
+            var component = Qt.createComponent("EditorAnimationHighlight.qml")
+            if (component.status !== Component.Ready) return
 
-        var anim = component.createObject(root, {
-            "x": highlightX,
-            "y": highlightY,
-            "width": highlightWidth,
-            "height": highlightHeight,
-            "duration": duration,
-            "color": editorItem.selection_color || "#006497",
-            "animKind": "insert"
-        })
-
-        if (anim) {
-            root._activeAnimations.push(anim)
-            anim.animationFinished.connect(function() {
-                var idx = root._activeAnimations.indexOf(anim)
-                if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                anim.destroy()
+            var anim = component.createObject(root, {
+                "x": highlightX,
+                "y": highlightY,
+                "width": highlightWidth,
+                "height": highlightHeight,
+                "duration": duration,
+                "color": editorItem.selection_color || "#006497",
+                "animKind": "insert"
             })
-            anim.startAnimation()
+
+            if (anim) {
+                root._activeAnimations.push(anim)
+                anim.animationFinished.connect(function() {
+                    var idx = root._activeAnimations.indexOf(anim)
+                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                    anim.destroy()
+                })
+                anim.startAnimation()
+            }
         }
     }
 
@@ -114,57 +130,73 @@ Item {
         var cursorRectY = editorItem.cursor_rect_y
         var cursorRectH = editorItem.cursor_rect_height
         var duration = event.durationMs || 160
-        var text = event.text || ""
-        var charCount = text.length
-        if (charCount === 0) return
-
-        var ghostX, ghostY, ghostWidth, ghostHeight
 
         if (event.glyphRects && Array.isArray(event.glyphRects) && event.glyphRects.length > 0) {
-            // 使用 Rust Core 提供的精确 glyph 矩形，计算 bounding rect
-            var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+            // ── Glyph Ghost 路径 ──
+            var component = Qt.createComponent("EditorGlyphGhost.qml")
+            if (component.status !== Component.Ready) return
+
             for (var i = 0; i < event.glyphRects.length; i++) {
                 var gr = event.glyphRects[i]
-                if (gr.x < minX) minX = gr.x
-                if (gr.y < minY) minY = gr.y
-                if (gr.x + gr.w > maxX) maxX = gr.x + gr.w
-                if (gr.y + gr.h > maxY) maxY = gr.y + gr.h
+                var ghost = component.createObject(root, {
+                    "animKind": "delete",
+                    "startX": gr.x,
+                    "startY": gr.y,
+                    "endX": cursorRectX,
+                    "endY": cursorRectY,
+                    "glyphWidth": gr.w,
+                    "glyphHeight": gr.h,
+                    "width": gr.w,
+                    "height": gr.h,
+                    "duration": duration,
+                    "ghostColor": editorItem.text_color || "#E2E2E5"
+                })
+
+                if (ghost) {
+                    root._activeAnimations.push(ghost)
+                    ghost.animationFinished.connect(function() {
+                        var idx = root._activeAnimations.indexOf(ghost)
+                        if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                        ghost.destroy()
+                    })
+                    ghost.startAnimation()
+                }
             }
-            ghostX = minX
-            ghostY = minY
-            ghostWidth = maxX - minX
-            ghostHeight = maxY - minY
         } else {
-            // Fallback: 旧估算逻辑（glyphRects 不可用时）
+            // ── Fallback: 旧矩形高亮路径 ──
+            var text = event.text || ""
+            var charCount = text.length
+            if (charCount === 0) return
+
             var fontSize = editorItem.font_pixel_size || 16
             var charWidth = fontSize * 0.6
-            ghostWidth = Math.min(charCount, 8) * charWidth
-            ghostX = cursorRectX
-            ghostY = cursorRectY
-            ghostHeight = cursorRectH
-        }
+            var ghostWidth = Math.min(charCount, 8) * charWidth
+            var ghostX = cursorRectX
+            var ghostY = cursorRectY
+            var ghostHeight = cursorRectH
 
-        var component = Qt.createComponent("EditorAnimationHighlight.qml")
-        if (component.status !== Component.Ready) return
+            var component = Qt.createComponent("EditorAnimationHighlight.qml")
+            if (component.status !== Component.Ready) return
 
-        var anim = component.createObject(root, {
-            "x": ghostX,
-            "y": ghostY,
-            "width": ghostWidth,
-            "height": ghostHeight,
-            "duration": duration,
-            "color": editorItem.text_color || "#E2E2E5",
-            "animKind": "delete"
-        })
-
-        if (anim) {
-            root._activeAnimations.push(anim)
-            anim.animationFinished.connect(function() {
-                var idx = root._activeAnimations.indexOf(anim)
-                if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                anim.destroy()
+            var anim = component.createObject(root, {
+                "x": ghostX,
+                "y": ghostY,
+                "width": ghostWidth,
+                "height": ghostHeight,
+                "duration": duration,
+                "color": editorItem.text_color || "#E2E2E5",
+                "animKind": "delete"
             })
-            anim.startAnimation()
+
+            if (anim) {
+                root._activeAnimations.push(anim)
+                anim.animationFinished.connect(function() {
+                    var idx = root._activeAnimations.indexOf(anim)
+                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                    anim.destroy()
+                })
+                anim.startAnimation()
+            }
         }
     }
 

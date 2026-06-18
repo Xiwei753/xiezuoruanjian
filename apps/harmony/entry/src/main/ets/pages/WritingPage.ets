@@ -47,6 +47,8 @@ struct WritingPage {
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
+  @State isAutoSaving: boolean = false
+  @State lastSaveFailed: boolean = false
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   @State sessionOldText: string = ''
   @State sessionId: string = ''
@@ -85,15 +87,18 @@ struct WritingPage {
 
     // Setup auto-save lifecycle observer
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      (): Promise<void> => this.saveChapter(),
+      (): Promise<void> => this.saveChapter(true),
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
   }
 
   aboutToDisappear() {
-    // 上报写作编辑事件（让 Core 统一计算统计）
-    if (this.sessionOldText !== this.content && this.chapterId) {
+    // 统一统计入口：saveChapter() 成功路径里已有 processWritingEvent()，
+    // 这里只在「没有触发 saveChapter 但确实有统计差异」时兜底上报一次
+    if (this.hasUnsavedChanges) {
+      this.saveChapter()
+    } else if (this.sessionOldText !== this.content && this.chapterId) {
       const deviceId = this.settings.statsDeviceId || 'unknown'
       const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
       this.bridge.processWritingEvent(
@@ -107,11 +112,6 @@ struct WritingPage {
         durationSeconds,
         this.sessionId
       )
-    }
-
-    // Save if unsaved changes
-    if (this.hasUnsavedChanges) {
-      this.saveChapter()
     }
 
     // Cleanup
@@ -166,7 +166,7 @@ struct WritingPage {
         if (this.autoSaveObserver) {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            (): Promise<void> => this.saveChapter(),
+            (): Promise<void> => this.saveChapter(true),
             this.settings.autoSaveDelayMs
           )
           this.lifecycle.addObserver(this.autoSaveObserver)
@@ -177,10 +177,11 @@ struct WritingPage {
     }
   }
 
-  async saveChapter() {
+  async saveChapter(isAutoSave: boolean = false) {
     if (this.isSaving || !this.hasUnsavedChanges) return
 
     this.isSaving = true
+    this.isAutoSaving = isAutoSave
     this.saveMessage = ''
 
     try {
@@ -209,19 +210,38 @@ struct WritingPage {
 
         this.lastSavedContent = this.content
         this.hasUnsavedChanges = false
+        this.lastSaveFailed = false
         this.wordCount = result.data.wordCount
-        this.saveMessage = '已保存'
+        this.saveMessage = isAutoSave ? '已自动保存' : '已保存'
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
       } else {
+        this.lastSaveFailed = true
         this.saveMessage = result.userMessage || '保存失败'
       }
     } catch (err) {
+      this.lastSaveFailed = true
       this.saveMessage = '保存时发生错误'
     } finally {
       this.isSaving = false
+      this.isAutoSaving = false
     }
+  }
+
+  private getSaveStatusText(): string {
+    if (this.lastSaveFailed) return '保存失败'
+    if (this.isSaving && this.isAutoSaving) return '自动保存中'
+    if (this.isSaving) return '保存中'
+    if (this.hasUnsavedChanges) return '未保存'
+    return '已保存'
+  }
+
+  private getSaveStatusColor(): ResourceColor {
+    if (this.lastSaveFailed) return this.themeConfig.colors.error
+    if (this.isSaving) return this.themeConfig.colors.textSecondary
+    if (this.hasUnsavedChanges) return this.themeConfig.colors.secondary
+    return this.themeConfig.colors.success
   }
 
   onContentChange(text: string) {
@@ -235,7 +255,23 @@ struct WritingPage {
   }
 
   async clearContent() {
-    // TODO: Show confirmation dialog
+    AlertDialog.show({
+      title: '确认清空',
+      message: '确认清空本章内容？此操作会保存为空，但可通过同步/历史恢复。',
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '确认清空',
+        action: () => {
+          this.doClearContent()
+        }
+      }
+    })
+  }
+
+  private async doClearContent() {
     this.isSaving = true
     try {
       const result = await this.bridge.clearChapter(this.chapterId)
@@ -243,13 +279,18 @@ struct WritingPage {
         this.content = ''
         this.lastSavedContent = ''
         this.hasUnsavedChanges = false
+        this.lastSaveFailed = false
         this.wordCount = 0
         this.saveMessage = '已清空'
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
+      } else {
+        this.lastSaveFailed = true
+        this.saveMessage = '清空失败'
       }
     } catch (err) {
+      this.lastSaveFailed = true
       this.saveMessage = '清空失败'
     } finally {
       this.isSaving = false
@@ -365,9 +406,9 @@ struct WritingPage {
 
         Blank()
 
-        Text(this.hasUnsavedChanges ? '未保存' : '已保存')
+        Text(this.getSaveStatusText())
           .fontSize(12)
-          .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.secondary : this.themeConfig.colors.success)
+          .fontColor(this.getSaveStatusColor())
       }
       .width('100%')
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

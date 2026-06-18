@@ -146,7 +146,7 @@ Item {
         id: cursorRect
         width: 2
         height: root.fallbackCursorHeight
-        color: root.dt ? root.dt.editorText : "#E2E2E5"
+        color: root.dt ? root.dt.primary : "#006497"
         visible: root.smoothCursorEnabled && root.targetTextArea && root.targetTextArea.focus && root.targetTextArea.enabled && height > 0 && !root.isScrolling && !scrollDebounceTimer.running && !root.hasSelection
         z: 3
 

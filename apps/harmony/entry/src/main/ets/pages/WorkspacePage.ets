@@ -61,9 +61,11 @@ struct WorkspacePage {
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
+  @State lastSaveFailed: boolean = false
 
   @State sessionOldText: string = ''
   @State sessionId: string = ''
+  @State sessionStartTime: number = 0
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -100,9 +102,13 @@ struct WorkspacePage {
   }
 
   aboutToDisappear() {
-    // 双栏模式：上报写作事件
-    if (this.adaptiveState.isTwoPane && this.selectedChapterId && this.sessionOldText !== this.content) {
+    // 双栏模式：保存未保存的变更（saveChapter 成功后会统一上报统计）
+    if (this.hasUnsavedChanges && this.adaptiveState.isTwoPane) {
+      this.saveChapter()
+    } else if (this.adaptiveState.isTwoPane && this.selectedChapterId && this.sessionOldText !== this.content) {
+      // 没有未保存变更但有统计差异时，兜底上报一次
       const deviceId = this.settings.statsDeviceId || 'unknown'
+      const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
       this.bridge.processWritingEvent(
         deviceId,
         'harmony',
@@ -111,13 +117,9 @@ struct WorkspacePage {
         this.selectedChapterId,
         this.sessionOldText,
         this.content,
+        durationSeconds,
         this.sessionId
       )
-    }
-
-    // 保存未保存的变更
-    if (this.hasUnsavedChanges && this.adaptiveState.isTwoPane) {
-      this.saveChapter()
     }
 
     // 清理观察者
@@ -175,6 +177,7 @@ struct WorkspacePage {
         // 记录编辑前文本，用于写作统计
         this.sessionOldText = result.data.content
         this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
+        this.sessionStartTime = Date.now()
 
       } else {
         this.editorErrorMessage = result.userMessage || '加载章节失败'
@@ -223,17 +226,41 @@ struct WorkspacePage {
     try {
       const result = await this.bridge.saveChapter(this.selectedChapterId, this.content)
       if (result.success && result.data) {
+        // ── 保存成功后上报编辑事件 ──
+        if (this.sessionOldText !== this.content) {
+          const deviceId = this.settings.statsDeviceId || 'unknown'
+          const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
+          this.bridge.processWritingEvent(
+            deviceId,
+            'harmony',
+            this.projectId,
+            this.selectedVolumeId,
+            this.selectedChapterId,
+            this.sessionOldText,
+            this.content,
+            durationSeconds,
+            this.sessionId
+          )
+          // 重置 session，开始新的统计区间
+          this.sessionOldText = this.content
+          this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
+          this.sessionStartTime = Date.now()
+        }
+
         this.lastSavedContent = this.content
         this.hasUnsavedChanges = false
+        this.lastSaveFailed = false
         this.wordCount = result.data.wordCount
         this.saveMessage = '已保存'
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
       } else {
+        this.lastSaveFailed = true
         this.saveMessage = result.userMessage || '保存失败'
       }
     } catch (err) {
+      this.lastSaveFailed = true
       this.saveMessage = '保存时发生错误'
     } finally {
       this.isSaving = false
@@ -251,23 +278,21 @@ struct WorkspacePage {
   }
 
   selectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
-    // 如果有未保存的变更，先保存
+    // 如果有未保存的变更，先保存（saveChapter 成功后会统一上报统计）
     if (this.hasUnsavedChanges && this.selectedChapterId) {
-      // 上报当前会话的写作事件
-      const deviceId = this.settings.statsDeviceId || 'unknown'
-      this.bridge.processWritingEvent(
-        deviceId,
-        'harmony',
-        this.projectId,
-        this.selectedVolumeId,
-        this.selectedChapterId,
-        this.sessionOldText,
-        this.content,
-        this.sessionId
-      )
-      this.saveChapter()
+      this.saveChapter().then(() => {
+        if (this.lastSaveFailed) {
+          // 保存失败，不切换章节
+          return
+        }
+        this.doSelectChapter(chapterId, chapterTitle, volumeId)
+      })
+      return
     }
+    this.doSelectChapter(chapterId, chapterTitle, volumeId)
+  }
 
+  doSelectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
     this.selectedChapterId = chapterId
     this.selectedChapterTitle = chapterTitle
     this.selectedVolumeId = volumeId
@@ -308,7 +333,15 @@ struct WorkspacePage {
   }
 
   async deleteVolume(volumeId: string) {
-    // TODO: Show confirmation dialog
+    AlertDialog.show({
+      title: '确认删除',
+      message: '确认删除此卷及其所有章节？此操作不可撤销。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: { value: '删除', action: () => this.doDeleteVolume(volumeId) }
+    })
+  }
+
+  async doDeleteVolume(volumeId: string) {
     try {
       const result = await this.bridge.deleteVolume(this.projectId, volumeId)
       if (result.success) {
@@ -320,7 +353,15 @@ struct WorkspacePage {
   }
 
   async deleteChapter(chapterId: string) {
-    // TODO: Show confirmation dialog
+    AlertDialog.show({
+      title: '确认删除',
+      message: '确认删除此章节？此操作不可撤销。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: { value: '删除', action: () => this.doDeleteChapter(chapterId) }
+    })
+  }
+
+  async doDeleteChapter(chapterId: string) {
     try {
       const result = await this.bridge.deleteChapter(chapterId)
       if (result.success) {
@@ -657,9 +698,23 @@ struct WorkspacePage {
 
           Blank()
 
-          Text(this.hasUnsavedChanges ? '未保存' : '已保存')
-            .fontSize(12)
-            .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.secondary : this.themeConfig.colors.success)
+          if (this.isSaving) {
+            Text('保存中')
+              .fontSize(12)
+              .fontColor(this.themeConfig.colors.textSecondary)
+          } else if (this.hasUnsavedChanges) {
+            Text('未保存')
+              .fontSize(12)
+              .fontColor(this.themeConfig.colors.secondary)
+          } else if (this.lastSaveFailed) {
+            Text('保存失败')
+              .fontSize(12)
+              .fontColor(this.themeConfig.colors.error)
+          } else {
+            Text('已保存')
+              .fontSize(12)
+              .fontColor(this.themeConfig.colors.success)
+          }
         }
         .width('100%')
         .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })

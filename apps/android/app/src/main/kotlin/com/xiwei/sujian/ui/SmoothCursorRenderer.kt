@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui
 
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 
 /**
@@ -20,6 +21,9 @@ import android.graphics.Paint
  * - 编辑器中光标移动时的平滑过渡动画
  */
 class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimationRuntime.Animatable {
+
+    /** 光标颜色，由外部设置。默认使用主题主色。 */
+    var cursorColor: Int = Color.parseColor("#006497")
 
     var cursorRuntimeReady = false
     var smoothCursorEnabled = false
@@ -45,6 +49,12 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
 
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         strokeWidth = 4f
+    }
+
+    init {
+        // 尝试从 EditText 的 highlightColor 获取主题色，否则用默认主色
+        val highlightColor = editText.highlightColor
+        cursorColor = if (highlightColor != 0) highlightColor else Color.parseColor("#006497")
     }
 
     private var isCursorBlinkVisible = true
@@ -312,7 +322,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         if (pausedForScroll) return
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && editText.isFocused && editText.selectionStart == editText.selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
-            cursorPaint.color = editText.currentTextColor
+            cursorPaint.color = cursorColor
             val drawX = currentCursorX + editText.compoundPaddingLeft
             val drawTop = currentCursorTop + editText.compoundPaddingTop
             val drawBottom = currentCursorBottom + editText.compoundPaddingTop
