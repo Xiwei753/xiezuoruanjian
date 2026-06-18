@@ -277,6 +277,13 @@ struct WorkspacePage {
     })
   }
 
+  private getSaveStatusColor(): ResourceColor {
+    if (this.lastSaveFailed) return this.themeConfig.colors.error
+    if (this.isSaving) return this.themeConfig.colors.textSecondary
+    if (this.hasUnsavedChanges) return this.themeConfig.colors.secondary
+    return this.themeConfig.colors.success
+  }
+
   selectChapter(chapterId: string, chapterTitle: string, volumeId: string) {
     // 如果有未保存的变更，先保存（saveChapter 成功后会统一上报统计）
     if (this.hasUnsavedChanges && this.selectedChapterId) {
@@ -616,7 +623,7 @@ struct WorkspacePage {
           if (this.saveMessage) {
             Text(this.saveMessage)
               .fontSize(12)
-              .fontColor(this.saveMessage === '已保存' ? this.themeConfig.colors.success : this.themeConfig.colors.error)
+              .fontColor(this.getSaveStatusColor())
               .margin({ right: 8 })
           }
 

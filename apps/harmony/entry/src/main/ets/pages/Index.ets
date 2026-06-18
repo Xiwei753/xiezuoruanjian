@@ -382,6 +382,20 @@ struct Index {
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
+          // 删除按钮
+          Text('×')
+            .fontSize(18)
+            .fontColor(Color.White)
+            .width(28)
+            .height(28)
+            .textAlign(TextAlign.Center)
+            .borderRadius(14)
+            .backgroundColor(this.themeConfig.colors.error)
+            .margin({ right: 12 })
+            .onClick(() => {
+              this.deleteProject(project.id)
+            })
+
           Image($r('sys.media.ohos_ic_public_arrow_right'))
             .width(18)
             .height(18)
@@ -514,6 +528,31 @@ struct Index {
       .width('100%')
     }
     .width('100%')
+  }
+
+  async deleteProject(projectId: string) {
+    AlertDialog.show({
+      title: '确认删除',
+      message: '确认删除此作品及其所有内容？此操作不可撤销。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: {
+        value: '删除',
+        action: () => {
+          this.doDeleteProject(projectId)
+        }
+      }
+    })
+  }
+
+  async doDeleteProject(projectId: string) {
+    try {
+      const result = await this.bridge.deleteProject(projectId)
+      if (result.success) {
+        this.loadWorkspace()
+      }
+    } catch (err) {
+      console.error('删除作品失败:', err)
+    }
   }
 
   formatTime(isoString: string): string {
