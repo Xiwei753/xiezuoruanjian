@@ -8,6 +8,9 @@ import {
   ChapterSaveReceipt,
   StarMapMeta,
   StarMapGraph,
+  StarMapLayout,
+  StarMapEdgeRender,
+  StarMapMotionPolicy,
   LocalSettings,
   SyncableSettings,
   ResultEnvelope,
@@ -468,6 +471,44 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     try {
       const jsonStr: string = this.getNativeModule().nativeRenameStarMap(starmapId, newTitle)
       return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
+  }
+
+  // ── StarMap Layout & Motion ──
+
+  async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeSaveStarMapLayout(starmapId, JSON.stringify(layout))
+      return this.parseEnvelope<boolean>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
+  }
+
+  async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeGetStarMapLayout(starmapId)
+      return this.parseEnvelope<StarMapLayout>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
+  }
+
+  async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeGetStarMapMotionPolicy()
+      return this.parseEnvelope<StarMapMotionPolicy>(jsonStr)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
+    }
+  }
+
+  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRender[]>> {
+    try {
+      const jsonStr: string = this.getNativeModule().nativeComputeStarMapEdgeRenders(JSON.stringify(graph))
+      return this.parseEnvelope<StarMapEdgeRender[]>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e) }
     }

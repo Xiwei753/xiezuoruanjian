@@ -7,6 +7,9 @@ import {
   ChapterSaveReceipt,
   StarMapMeta,
   StarMapGraph,
+  StarMapLayout,
+  StarMapEdgeRender,
+  StarMapMotionPolicy,
   LocalSettings,
   SyncableSettings,
   ResultEnvelope,
@@ -60,6 +63,12 @@ export interface IWriterCoreBridge {
   createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>>
   deleteStarMap(starmapId: string): Promise<ResultEnvelope<boolean>>
   renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>>
+
+  // StarMap Layout & Motion
+  saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>>
+  getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>>
+  getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>>
+  computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRender[]>>
 
   // Settings
   getLocalSettings(): Promise<ResultEnvelope<LocalSettings>>

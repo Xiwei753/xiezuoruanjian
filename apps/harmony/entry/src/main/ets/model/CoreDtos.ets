@@ -392,6 +392,17 @@ export interface StarMapEdgeRender {
   labelY?: number
 }
 
+export interface StarMapMotionPolicy {
+  enabled: boolean
+  idleWobbleEnabled: boolean
+  idleAmplitudeVp: number
+  idlePeriodMs: number
+  dragLiftScale: number
+  dragShadowBoost: number
+  settleDurationMs: number
+  reduceMotion: boolean
+}
+
 // DO NOT EXPAND StarMap DTOs until Core's StarMap contracts are finalized.
 
 // ========== 布局策略类型（Core layout_policy） ==========

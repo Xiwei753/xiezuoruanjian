@@ -1,6 +1,6 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender } from '../model/CoreDtos'
+import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
@@ -76,6 +76,9 @@ struct StarMapPage {
     // 初始化时同步一次状态
     this.adaptiveState = AdaptiveContext.getInstance().getCurrentState()
 
+    // 加载动画策略
+    this.loadMotionPolicy()
+
     // 启动动画定时器
     this.startMotionTimer()
   }
@@ -126,6 +129,11 @@ struct StarMapPage {
             return layoutNode
           })
         }
+        // 获取 edgeRenders（Core 计算连线几何）
+        const edgeResult = await this.bridge.computeStarMapEdgeRenders(result.data)
+        if (edgeResult.success && edgeResult.data) {
+          this.edgeRenders = edgeResult.data
+        }
       } else {
         this.errorMessage = result.userMessage || '加载星图失败'
       }
@@ -144,6 +152,24 @@ struct StarMapPage {
       }
     } catch (err) {
       // Ignore
+    }
+  }
+
+  async loadMotionPolicy() {
+    try {
+      const result = await this.bridge.getStarMapMotionPolicy()
+      if (result.success && result.data) {
+        const policy = result.data
+        this.motionEnabled = policy.enabled
+        this.idleWobbleEnabled = policy.idleWobbleEnabled
+        this.idleAmplitudeVp = policy.idleAmplitudeVp
+        this.idlePeriodMs = policy.idlePeriodMs
+        this.dragLiftScale = policy.dragLiftScale
+        this.settleDurationMs = policy.settleDurationMs
+        this.reduceMotion = policy.reduceMotion
+      }
+    } catch (err) {
+      // 保留本地默认值
     }
   }
 
@@ -432,6 +458,16 @@ struct StarMapPage {
                 })
                 .onActionEnd(() => {
                   this.draggingNodeId = ''
+                  // debounce 300ms 后保存布局
+                  setTimeout(() => {
+                    if (this.starmapId && this.layoutNodes.length > 0) {
+                      const layout: StarMapLayout = {
+                        kind: 'Freeform',
+                        nodes: this.layoutNodes
+                      }
+                      this.bridge.saveStarMapLayout(this.starmapId, layout)
+                    }
+                  }, 300)
                 })
             )
           }, (node: StarMapNode) => node.id)
@@ -648,36 +684,41 @@ struct StarMapPage {
 
     ctx.clearRect(0, 0, ctx.width, ctx.height)
 
-    const nodeMap = new Map<string, StarMapNode>()
+    // 构建 nodeId → wobble offset 映射
+    const wobbleMap = new Map<string, { dx: number, dy: number }>()
     for (const node of this.graph.nodes) {
-      nodeMap.set(node.id, node)
+      wobbleMap.set(node.id, {
+        dx: this.wobbleX(node.id, this.motionTick),
+        dy: this.wobbleY(node.id, this.motionTick)
+      })
     }
 
-    for (const edge of this.graph.edges) {
-      const src = nodeMap.get(edge.from || '')
-      const tgt = nodeMap.get(edge.to || '')
-      if (!src || !tgt) continue
+    // 遍历 edgeRenders（Core 计算的连线几何）
+    for (const edge of this.edgeRenders) {
+      // 找到对应的 graph edge 以获取 from/to nodeId
+      const graphEdge = this.graph.edges.find(e => e.id === edge.edgeId)
+      if (!graphEdge) continue
 
-      const srcLayout = this.layoutNodes.find(ln => ln.nodeId === src.id)
-      const tgtLayout = this.layoutNodes.find(ln => ln.nodeId === tgt.id)
-      const srcX = srcLayout?.x ?? 0
-      const srcY = srcLayout?.y ?? 0
-      const tgtX = tgtLayout?.x ?? 0
-      const tgtY = tgtLayout?.y ?? 0
+      const fromId = graphEdge.from || ''
+      const toId = graphEdge.to || ''
+      const fromWobble = wobbleMap.get(fromId) || { dx: 0, dy: 0 }
+      const toWobble = wobbleMap.get(toId) || { dx: 0, dy: 0 }
 
-      const x1 = (srcX * this.zoomScale) + this.offsetX + this.wobbleX(src.id, this.motionTick)
-      const y1 = (srcY * this.zoomScale) + this.offsetY + this.wobbleY(src.id, this.motionTick)
-      const x2 = (tgtX * this.zoomScale) + this.offsetX + this.wobbleX(tgt.id, this.motionTick)
-      const y2 = (tgtY * this.zoomScale) + this.offsetY + this.wobbleY(tgt.id, this.motionTick)
+      const sx = (edge.startX + fromWobble.dx) * this.zoomScale + this.offsetX
+      const sy = (edge.startY + fromWobble.dy) * this.zoomScale + this.offsetY
+      const ex = (edge.endX + toWobble.dx) * this.zoomScale + this.offsetX
+      const ey = (edge.endY + toWobble.dy) * this.zoomScale + this.offsetY
 
-      const isSelected = this.selectedNodeId === edge.from || this.selectedNodeId === edge.to
+      const isSelected = this.selectedNodeId === fromId || this.selectedNodeId === toId
 
       ctx.beginPath()
-      ctx.moveTo(x1, y1)
-      ctx.lineTo(x2, y2)
+      ctx.moveTo(sx, sy)
+      ctx.lineTo(ex, ey)
       ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
       ctx.lineWidth = isSelected ? 2.5 : 1.5
-      if (edge.kind === 'DependsOn' || edge.kind === 'ConflictsWith') {
+
+      // 虚线样式
+      if (graphEdge.kind === 'DependsOn' || graphEdge.kind === 'ConflictsWith') {
         ctx.setLineDash([6, 4])
       } else {
         ctx.setLineDash([])
@@ -685,41 +726,33 @@ struct StarMapPage {
       ctx.stroke()
       ctx.setLineDash([])
 
-      this.drawArrow(ctx, x1, y1, x2, y2, isSelected)
+      // 箭头（使用 edgeRenders 的箭头坐标 + wobble offset）
+      const atx = (edge.arrowTipX + toWobble.dx) * this.zoomScale + this.offsetX
+      const aty = (edge.arrowTipY + toWobble.dy) * this.zoomScale + this.offsetY
+      const alx = (edge.arrowLeftX + toWobble.dx) * this.zoomScale + this.offsetX
+      const aly = (edge.arrowLeftY + toWobble.dy) * this.zoomScale + this.offsetY
+      const arx = (edge.arrowRightX + toWobble.dx) * this.zoomScale + this.offsetX
+      const ary = (edge.arrowRightY + toWobble.dy) * this.zoomScale + this.offsetY
 
-      if (edge.label) {
-        const mx = (x1 + x2) / 2
-        const my = (y1 + y2) / 2
+      ctx.beginPath()
+      ctx.moveTo(atx, aty)
+      ctx.lineTo(alx, aly)
+      ctx.moveTo(atx, aty)
+      ctx.lineTo(arx, ary)
+      ctx.strokeStyle = isSelected ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
+      ctx.lineWidth = isSelected ? 2.5 : 1.5
+      ctx.stroke()
+
+      // 边标签
+      if (graphEdge.label && edge.labelX !== undefined && edge.labelY !== undefined) {
+        const lx = (edge.labelX + (fromWobble.dx + toWobble.dx) / 2) * this.zoomScale + this.offsetX
+        const ly = (edge.labelY + (fromWobble.dy + toWobble.dy) / 2) * this.zoomScale + this.offsetY
         ctx.font = '11px HarmonyOS Sans'
         ctx.fillStyle = isSelected ? this.themeConfig.colors.textPrimary : this.themeConfig.colors.textHint
         ctx.textAlign = 'center'
         ctx.textBaseline = 'bottom'
-        ctx.fillText(edge.label, mx, my - 6)
+        ctx.fillText(graphEdge.label, lx, ly - 6)
       }
     }
-  }
-
-  drawArrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, highlight: boolean) {
-    const angle = Math.atan2(y2 - y1, x2 - x1)
-    const arrowLen = 10
-    const arrowAngle = Math.PI / 7
-
-    const tipX = x2 - Math.cos(angle) * 30
-    const tipY = y2 - Math.sin(angle) * 30
-
-    ctx.beginPath()
-    ctx.moveTo(tipX, tipY)
-    ctx.lineTo(
-      tipX - arrowLen * Math.cos(angle - arrowAngle),
-      tipY - arrowLen * Math.sin(angle - arrowAngle)
-    )
-    ctx.moveTo(tipX, tipY)
-    ctx.lineTo(
-      tipX - arrowLen * Math.cos(angle + arrowAngle),
-      tipY - arrowLen * Math.sin(angle + arrowAngle)
-    )
-    ctx.strokeStyle = highlight ? this.themeConfig.colors.primary : this.themeConfig.colors.divider
-    ctx.lineWidth = highlight ? 2.5 : 1.5
-    ctx.stroke()
   }
 }
