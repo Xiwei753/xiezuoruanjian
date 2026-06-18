@@ -55,12 +55,26 @@ struct WritingPage {
   @State sessionStartTime: number = 0
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
+  // ── 动画相关状态 ──
+  @State cursorPosition: number = 0
+  @State cursorX: number = 0
+  @State cursorY: number = 0
+  @State cursorVisible: boolean = true
+  @State typingAnimationEnabled: boolean = false
+  @State smoothCursorEnabled: boolean = false
+  @State lastInsertedText: string = ''
+  @State showInsertAnimation: boolean = false
+  @State insertAnimX: number = 0
+  @State insertAnimY: number = 0
+
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
+  private cursorBlinkTimer: number = -1
+  private insertAnimTimer: number = -1
 
   aboutToAppear() {
     const params = router.getParams() as WritingPageParams
@@ -91,6 +105,11 @@ struct WritingPage {
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
+
+    // Setup cursor blink timer for smooth cursor animation
+    this.cursorBlinkTimer = setInterval(() => {
+      this.cursorVisible = !this.cursorVisible
+    }, 530) as number
   }
 
   aboutToDisappear() {
@@ -115,6 +134,14 @@ struct WritingPage {
     }
 
     // Cleanup
+    if (this.cursorBlinkTimer !== -1) {
+      clearInterval(this.cursorBlinkTimer)
+      this.cursorBlinkTimer = -1
+    }
+    if (this.insertAnimTimer !== -1) {
+      clearTimeout(this.insertAnimTimer)
+      this.insertAnimTimer = -1
+    }
     if (this.autoSaveObserver) {
       this.lifecycle.removeObserver(this.autoSaveObserver)
     }
@@ -156,6 +183,8 @@ struct WritingPage {
       const result = await this.bridge.getLocalSettings()
       if (result.success && result.data) {
         this.settings = result.data
+        this.typingAnimationEnabled = result.data.editorTypingAnimationEnabled ?? false
+        this.smoothCursorEnabled = result.data.editorSmoothCursorEnabled ?? false
         this.themeAdapter.updateFromSettings({
           theme: result.data.themeMode,
           fontSize: result.data.editorFontSize,
@@ -177,8 +206,8 @@ struct WritingPage {
     }
   }
 
-  async saveChapter(isAutoSave: boolean = false) {
-    if (this.isSaving || !this.hasUnsavedChanges) return
+  async saveChapter(isAutoSave: boolean = false): Promise<boolean> {
+    if (this.isSaving || !this.hasUnsavedChanges) return true
 
     this.isSaving = true
     this.isAutoSaving = isAutoSave
@@ -216,13 +245,16 @@ struct WritingPage {
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
+        return true
       } else {
         this.lastSaveFailed = true
         this.saveMessage = result.userMessage || '保存失败'
+        return false
       }
     } catch (err) {
       this.lastSaveFailed = true
       this.saveMessage = '保存时发生错误'
+      return false
     } finally {
       this.isSaving = false
       this.isAutoSaving = false
@@ -244,7 +276,8 @@ struct WritingPage {
     return this.themeConfig.colors.success
   }
 
-  onContentChange(text: string) {
+  onContentChange(text: string, cursorPos?: number) {
+    const oldContent = this.content
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
 
@@ -252,6 +285,52 @@ struct WritingPage {
     this.bridge.calculateWordCount(text).then(count => {
       this.wordCount = count
     })
+
+    // ── 动画触发 ──
+    if (cursorPos !== undefined) {
+      this.cursorPosition = cursorPos
+    }
+
+    // 打字动画：检测新插入的文本
+    if (this.typingAnimationEnabled && text.length > oldContent.length) {
+      const insertedLen = text.length - oldContent.length
+      // 估算插入位置（取光标位置前 insertedLen 个字符）
+      const insertPos = cursorPos !== undefined ? cursorPos - insertedLen : text.length - insertedLen
+      this.lastInsertedText = text.substring(insertPos, insertPos + insertedLen)
+      this.showInsertAnimation = true
+
+      // 估算动画位置：基于字符数和行高
+      const charWidth = this.settings.editorFontSize * 0.6
+      const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
+      const pagePadding = this.adaptiveState.pagePadding
+      const approxLine = Math.floor((insertPos * charWidth) / (360 - pagePadding * 2))
+      this.insertAnimX = pagePadding + (insertPos * charWidth) % (360 - pagePadding * 2)
+      this.insertAnimY = 20 + approxLine * lineHeight
+
+      // 清除之前的定时器
+      if (this.insertAnimTimer !== -1) {
+        clearTimeout(this.insertAnimTimer)
+      }
+      this.insertAnimTimer = setTimeout(() => {
+        this.showInsertAnimation = false
+        this.insertAnimTimer = -1
+      }, 150) as number
+    }
+
+    // 平滑光标：更新光标位置估算
+    if (this.smoothCursorEnabled && cursorPos !== undefined) {
+      const charWidth = this.settings.editorFontSize * 0.6
+      const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
+      const pagePadding = this.adaptiveState.pagePadding
+      const contentWidth = 360 - pagePadding * 2
+      const approxLine = Math.floor((cursorPos * charWidth) / contentWidth)
+      animateTo({ duration: 80, curve: Curve.EaseOut }, () => {
+        this.cursorX = pagePadding + (cursorPos * charWidth) % contentWidth
+        this.cursorY = 20 + approxLine * lineHeight
+      })
+      // 输入时光标可见
+      this.cursorVisible = true
+    }
   }
 
   async clearContent() {
@@ -305,9 +384,13 @@ struct WritingPage {
           .width(24)
           .height(24)
           .fillColor(this.themeConfig.colors.textPrimary)
-          .onClick(() => {
+          .onClick(async () => {
             if (this.hasUnsavedChanges) {
-              this.saveChapter().then(() => router.back())
+              const ok = await this.saveChapter()
+              if (ok) {
+                router.back()
+              }
+              // 保存失败不返回，用户看到错误提示
             } else {
               router.back()
             }
@@ -325,7 +408,7 @@ struct WritingPage {
         if (this.saveMessage) {
           Text(this.saveMessage)
             .fontSize(12)
-            .fontColor(this.saveMessage === '已保存' ? this.themeConfig.colors.success : this.themeConfig.colors.error)
+            .fontColor(this.getSaveStatusColor())
             .margin({ right: 8 })
         }
 
@@ -376,7 +459,7 @@ struct WritingPage {
         .justifyContent(FlexAlign.Center)
       } else {
         Scroll() {
-          Column() {
+          Stack() {
             TextArea({ text: this.content, placeholder: '开始写作...' })
               .width('100%')
               .constraintSize({ minHeight: '100%' })
@@ -387,6 +470,28 @@ struct WritingPage {
               .fontColor(this.themeConfig.colors.textPrimary)
               .placeholderColor(this.themeConfig.colors.textHint)
               .onChange((value: string): void => { this.onContentChange(value) })
+
+            // ── 平滑光标 overlay ──
+            if (this.smoothCursorEnabled && this.cursorVisible) {
+              Column()
+                .width(2)
+                .height(this.settings.editorFontSize * 1.2)
+                .backgroundColor(this.themeConfig.colors.primary)
+                .position({ x: this.cursorX, y: this.cursorY })
+                .opacity(0.8)
+                .animation({ duration: 80, curve: Curve.EaseOut })
+            }
+
+            // ── 打字动画 overlay ──
+            if (this.typingAnimationEnabled && this.showInsertAnimation) {
+              Text(this.lastInsertedText)
+                .fontSize(this.settings.editorFontSize)
+                .fontColor(this.themeConfig.colors.textPrimary)
+                .opacity(0.6)
+                .position({ x: this.insertAnimX, y: this.insertAnimY })
+                .scale({ x: 1.1, y: 1.1 })
+                .animation({ duration: 150, curve: Curve.EaseOut })
+            }
           }
           .width('100%')
           .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
