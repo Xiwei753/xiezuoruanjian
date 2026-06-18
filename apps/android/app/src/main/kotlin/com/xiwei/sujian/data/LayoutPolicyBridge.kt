@@ -115,6 +115,9 @@ class LayoutPolicyBridge(private val appServiceBridge: AppServiceBridge) {
         pagePaddingVp = pagePaddingVp,
         gridColumns = gridColumns.toInt(),
         showSidePanel = showSidePanel,
-        showBottomBar = showBottomBar
+        showBottomBar = showBottomBar,
+        sidePanelWidthVp = sidePanelWidthVp,
+        primaryPaneWeight = primaryPaneWeight,
+        detailPanelMaxWidthVp = detailPanelMaxWidthVp
     )
 }

@@ -1027,4 +1027,7 @@ dictionary LayoutPlanDto {
     u8 grid_columns;
     boolean show_side_panel;
     boolean show_bottom_bar;
+    float side_panel_width_vp;
+    float primary_pane_weight;
+    float detail_panel_max_width_vp;
 };

@@ -64,6 +64,7 @@ pub mod volume;
 pub mod workspace;
 pub mod writing_stats;
 pub mod layout_policy;
+pub mod screen_policy;
 #[cfg(feature = "harmony-ffi")]
 pub mod ffi;
 

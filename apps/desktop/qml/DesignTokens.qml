@@ -19,7 +19,7 @@ QtObject {
     property string monetColor: ""
     property color _monetColorObj: monetColor
 
-    // --- Material 3 color roles (aligned with Android colors.xml) ---
+    // --- Semantic color roles (素笺品牌语义色) ---
     property bool hasMonetColor: monetColor.length === 7 && monetColor.startsWith("#")
     property color primary: hasMonetColor ? _monetColorObj : (isDark ? Qt.rgba(0.573, 0.800, 1.000, 1) : Qt.rgba(0.000, 0.392, 0.592, 1))
     property color onPrimary: isDark ? Qt.rgba(0.000, 0.200, 0.318, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)

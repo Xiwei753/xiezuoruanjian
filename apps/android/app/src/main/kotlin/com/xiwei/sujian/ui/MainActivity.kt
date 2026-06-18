@@ -320,12 +320,24 @@ class MainActivity : AppCompatActivity() {
             val widthVp = widthPx / density
             val heightVp = heightPx / density
 
+            // 从 WindowInsets 获取安全区域和键盘状态
+            val insets = androidx.core.view.ViewCompat.getRootWindowInsets(window.decorView)
+            val safeTopVp = insets?.let {
+                it.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).top / density
+            } ?: 0f
+            val safeBottomVp = insets?.let {
+                it.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom / density
+            } ?: 0f
+            val keyboardVisible = insets?.let {
+                it.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
+            } ?: false
+
             val metrics = WindowMetrics(
                 widthVp = widthVp,
                 heightVp = heightVp,
-                safeTopVp = 0f,  // TODO: 从 WindowInsets 获取
-                safeBottomVp = 0f,
-                keyboardVisible = false,
+                safeTopVp = safeTopVp,
+                safeBottomVp = safeBottomVp,
+                keyboardVisible = keyboardVisible,
                 foldPosture = FoldPosture.Unknown,
                 orientation = if (widthVp > heightVp) Orientation.Landscape else Orientation.Portrait,
                 pointer = PointerKind.Touch
@@ -368,12 +380,14 @@ class MainActivity : AppCompatActivity() {
         // 显示 TwoPane 容器
         twoPaneContainer.visibility = View.VISIBLE
 
-        // 左侧面板权重 2，右侧面板权重 3（约 40%/60%）
+        // 左侧面板权重来自 Core LayoutPlan，右侧面板权重为 (5 - primaryPaneWeight)
+        val primaryWeight = plan.primaryPaneWeight
+        val detailWeight = 5f - primaryWeight
         leftPane.layoutParams = LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.MATCH_PARENT, 2f
+            0, LinearLayout.LayoutParams.MATCH_PARENT, primaryWeight
         )
         rightPane.layoutParams = LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.MATCH_PARENT, 3f
+            0, LinearLayout.LayoutParams.MATCH_PARENT, detailWeight
         )
         paneDivider.visibility = View.VISIBLE
 
@@ -386,14 +400,14 @@ class MainActivity : AppCompatActivity() {
         val paddingPx = (plan.pagePaddingVp * density).toInt()
         projectRecyclerViewLeft.setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
 
-        // 根据 contentMaxWidthVp 限制右侧面板最大宽度
-        if (plan.contentMaxWidthVp > 0f && plan.contentMaxWidthVp < Float.MAX_VALUE) {
-            val maxPx = (plan.contentMaxWidthVp * density).toInt()
+        // 根据 detailPanelMaxWidthVp 限制右侧面板最大宽度
+        if (plan.detailPanelMaxWidthVp > 0f) {
+            val maxPx = (plan.detailPanelMaxWidthVp * density).toInt()
             rightPane.layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.MATCH_PARENT, 3f
+                0, LinearLayout.LayoutParams.MATCH_PARENT, detailWeight
             ).apply {
                 // 右侧面板限宽居中
-                val availableWidth = (widthPx * 3f / 5f).toInt()  // 右侧面板实际宽度
+                val availableWidth = (widthPx * detailWeight / (primaryWeight + detailWeight)).toInt()
                 if (maxPx < availableWidth) {
                     val horizontalMargin = ((availableWidth - maxPx) / 2).coerceAtLeast(0)
                     marginStart = horizontalMargin
@@ -432,10 +446,9 @@ class MainActivity : AppCompatActivity() {
         mainContainer.visibility = View.VISIBLE
         bottomNav.visibility = View.VISIBLE
 
-        // 恢复底部导航占位
+        // 恢复底部导航占位（高度从 bottomNav 控件测量，不硬编码 56dp）
         mainContainer.setPadding(0, 0, 0, 0)
-        val marginBottomDp = 56
-        val marginBottomPx = (marginBottomDp * density).toInt()
+        val marginBottomPx = bottomNav.measuredHeight.coerceAtLeast((56 * density).toInt())
         mainContainer.layoutParams = mainContainer.layoutParams?.apply {
             if (this is ViewGroup.MarginLayoutParams) {
                 bottomMargin = marginBottomPx
@@ -479,10 +492,9 @@ class MainActivity : AppCompatActivity() {
         mainContainer.visibility = View.VISIBLE
         bottomNav.visibility = View.VISIBLE
 
-        // 恢复底部导航占位
+        // 恢复底部导航占位（高度从 bottomNav 控件测量，不硬编码 56dp）
         mainContainer.setPadding(0, 0, 0, 0)
-        val marginBottomDp = 56
-        val marginBottomPx = (marginBottomDp * density).toInt()
+        val marginBottomPx = bottomNav.measuredHeight.coerceAtLeast((56 * density).toInt())
         mainContainer.layoutParams = mainContainer.layoutParams?.apply {
             if (this is ViewGroup.MarginLayoutParams) {
                 bottomMargin = marginBottomPx

@@ -547,5 +547,35 @@ data class LayoutPlan(
     val pagePaddingVp: Float,
     val gridColumns: Int,
     val showSidePanel: Boolean,
-    val showBottomBar: Boolean
+    val showBottomBar: Boolean,
+    val sidePanelWidthVp: Float = 0f,
+    val primaryPaneWeight: Float = 1f,
+    val detailPanelMaxWidthVp: Float = 0f
+)
+
+// ── Screen Policy 类型（Core screen_policy） ──
+
+enum class ScreenRole {
+    Home, Workspace, Writing, Settings, Sync
+}
+
+enum class ActionRole {
+    Back, Save, CreateProject, CreateVolume, CreateChapter, Delete, Rename, Settings, Sync, Search
+}
+
+enum class ActionPlacement {
+    TopLeading, TopTrailing, Floating, BottomBar, ContextMenu, SidePanel
+}
+
+data class ActionSlot(
+    val actionId: String,
+    val role: ActionRole,
+    val placement: ActionPlacement,
+    val visibleIn: List<ShellMode>,
+    val requiresConfirmation: Boolean
+)
+
+data class ScreenPolicy(
+    val screenRole: ScreenRole,
+    val actionSlots: List<ActionSlot>
 )

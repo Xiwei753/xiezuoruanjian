@@ -477,4 +477,60 @@ export interface LayoutPlan {
   gridColumns: number
   showSidePanel: boolean
   showBottomBar: boolean
+  sidePanelWidthVp: number
+  primaryPaneWeight: number
+  detailPanelMaxWidthVp: number
+}
+
+// ========== 页面策略类型（Core screen_policy） ==========
+
+export enum ScreenRole {
+  Home = 'Home',
+  Workspace = 'Workspace',
+  Writing = 'Writing',
+  Settings = 'Settings',
+  Sync = 'Sync'
+}
+
+export enum PaneRole {
+  PrimaryList = 'PrimaryList',
+  Detail = 'Detail',
+  Editor = 'Editor',
+  Inspector = 'Inspector',
+  Drawer = 'Drawer'
+}
+
+export enum ActionRole {
+  Back = 'Back',
+  Save = 'Save',
+  CreateProject = 'CreateProject',
+  CreateVolume = 'CreateVolume',
+  CreateChapter = 'CreateChapter',
+  Delete = 'Delete',
+  Rename = 'Rename',
+  Settings = 'Settings',
+  Sync = 'Sync',
+  Search = 'Search'
+}
+
+export enum ActionPlacement {
+  TopLeading = 'TopLeading',
+  TopTrailing = 'TopTrailing',
+  Floating = 'Floating',
+  BottomBar = 'BottomBar',
+  ContextMenu = 'ContextMenu',
+  SidePanel = 'SidePanel'
+}
+
+export interface ActionSlot {
+  actionId: string
+  role: ActionRole
+  placement: ActionPlacement
+  visibleIn: ShellMode[]
+  requiresConfirmation: boolean
+}
+
+export interface ScreenPolicy {
+  screenRole: ScreenRole
+  actionSlots: ActionSlot[]
 }

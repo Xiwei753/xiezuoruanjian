@@ -151,9 +151,25 @@ export class HarmonyThemeAdapter {
   }
 
   startSystemThemeListener(): void {
-    // TODO: Implement with HarmonyOS Configuration API
-    // This will listen to system theme changes
-    // configuration.getConfiguration().then(config => { ... })
+    try {
+      // 使用 ConfigurationConstant 检测系统深色/浅色模式
+      const config = this.mainWindow?.getWindowProperties().configuration
+      if (config) {
+        const colorMode = config.colorMode
+        this.applySystemColorMode(colorMode)
+      }
+    } catch (err) {
+      // 非支持设备或 API 不可用，保持当前主题
+    }
+  }
+
+  private applySystemColorMode(colorMode: number): void {
+    // ColorMode.COLOR_MODE_DARK = 1, COLOR_MODE_LIGHT = 0
+    if (colorMode === 1) {
+      this.currentTheme.colors = DarkTheme
+    } else {
+      this.currentTheme.colors = LightTheme
+    }
   }
 
   stopSystemThemeListener(): void {
@@ -173,8 +189,19 @@ export class HarmonyThemeAdapter {
         this.currentTheme.colors = DarkTheme
         break
       case 'system':
-        // TODO: Detect system theme
-        this.currentTheme.colors = LightTheme
+        // 检测系统深色/浅色模式
+        try {
+          const config = this.mainWindow?.getWindowProperties().configuration
+          if (config) {
+            const colorMode = config.colorMode
+            // ColorMode.COLOR_MODE_DARK = 1, COLOR_MODE_LIGHT = 0
+            this.currentTheme.colors = if (colorMode === 1) DarkTheme else LightTheme
+          } else {
+            this.currentTheme.colors = LightTheme
+          }
+        } catch (err) {
+          this.currentTheme.colors = LightTheme
+        }
         break
     }
   }

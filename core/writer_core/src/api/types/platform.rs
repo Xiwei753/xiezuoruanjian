@@ -314,6 +314,9 @@ pub struct LayoutPlanDto {
     pub grid_columns: u8,
     pub show_side_panel: bool,
     pub show_bottom_bar: bool,
+    pub side_panel_width_vp: f32,
+    pub primary_pane_weight: f32,
+    pub detail_panel_max_width_vp: f32,
 }
 
 impl From<crate::layout_policy::LayoutPlan> for LayoutPlanDto {
@@ -329,6 +332,9 @@ impl From<crate::layout_policy::LayoutPlan> for LayoutPlanDto {
             grid_columns: p.grid_columns,
             show_side_panel: p.show_side_panel,
             show_bottom_bar: p.show_bottom_bar,
+            side_panel_width_vp: p.side_panel_width_vp,
+            primary_pane_weight: p.primary_pane_weight,
+            detail_panel_max_width_vp: p.detail_panel_max_width_vp,
         }
     }
 }

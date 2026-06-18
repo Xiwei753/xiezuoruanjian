@@ -156,6 +156,15 @@ pub struct LayoutPlan {
     pub show_side_panel: bool,
     /// 是否显示底栏
     pub show_bottom_bar: bool,
+    /// 侧面板宽度（vp），TwoPane 模式下左侧面板的固定宽度。
+    /// 0 表示使用 weight 比例而非固定宽度。
+    pub side_panel_width_vp: f32,
+    /// 主面板权重（TwoPane 模式下左侧面板的 weight 比例）。
+    /// 与 detail 面板 weight（隐含为 5.0 - primary_pane_weight）配合使用。
+    pub primary_pane_weight: f32,
+    /// 详情面板最大宽度（vp），0 表示不限制。
+    /// 用于限制右侧面板在超宽屏幕下无限拉伸。
+    pub detail_panel_max_width_vp: f32,
 }
 
 // ========== 断点阈值 ==========
@@ -176,16 +185,19 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
     let height_class = resolve_height_class(metrics.height_vp);
 
     // 基础策略（按宽度断点）
-    let (shell_mode, navigation_mode, editor_mode, content_max_width_vp, page_padding_vp, grid_columns, show_side_panel, show_bottom_bar) = match width_class {
+    let (shell_mode, navigation_mode, editor_mode, content_max_width_vp, page_padding_vp, grid_columns, show_side_panel, show_bottom_bar, side_panel_width_vp, primary_pane_weight, detail_panel_max_width_vp) = match width_class {
         WidthClass::Compact => (
             ShellMode::SinglePane,
             NavigationMode::Stack,
             EditorMode::FullWidth,
-            0.0,
-            16.0,
-            2,
-            false,
-            true,
+            0.0,    // content_max_width_vp
+            16.0,   // page_padding_vp
+            2,      // grid_columns
+            false,  // show_side_panel
+            true,   // show_bottom_bar
+            0.0,    // side_panel_width_vp
+            1.0,    // primary_pane_weight
+            0.0,    // detail_panel_max_width_vp
         ),
         WidthClass::Medium => (
             ShellMode::SupportingPane,
@@ -196,6 +208,9 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             3,
             false,
             true,
+            0.0,    // side_panel_width_vp
+            1.0,    // primary_pane_weight
+            0.0,    // detail_panel_max_width_vp
         ),
         WidthClass::Expanded => (
             ShellMode::TwoPane,
@@ -206,6 +221,9 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             4,
             true,
             false,
+            0.0,    // side_panel_width_vp
+            2.0,    // primary_pane_weight — 替代 Android 硬编码的 2f
+            960.0,  // detail_panel_max_width_vp
         ),
     };
 
@@ -235,6 +253,9 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
         grid_columns,
         show_side_panel,
         show_bottom_bar,
+        side_panel_width_vp,
+        primary_pane_weight,
+        detail_panel_max_width_vp,
     }
 }
 
@@ -395,5 +416,30 @@ mod tests {
         assert_eq!(m.height_vp, 800.0);
         assert!(!m.keyboard_visible);
         assert_eq!(m.fold_posture, FoldPosture::Unknown);
+    }
+
+    #[test]
+    fn test_layout_plan_new_fields() {
+        // Compact (SinglePane)
+        let mut m = default_metrics();
+        m.width_vp = 360.0;
+        let plan = resolve_layout(&m);
+        assert_eq!(plan.side_panel_width_vp, 0.0);
+        assert_eq!(plan.primary_pane_weight, 1.0);
+        assert_eq!(plan.detail_panel_max_width_vp, 0.0);
+
+        // Medium (SupportingPane)
+        m.width_vp = 700.0;
+        let plan = resolve_layout(&m);
+        assert_eq!(plan.side_panel_width_vp, 0.0);
+        assert_eq!(plan.primary_pane_weight, 1.0);
+        assert_eq!(plan.detail_panel_max_width_vp, 0.0);
+
+        // Expanded (TwoPane)
+        m.width_vp = 1200.0;
+        let plan = resolve_layout(&m);
+        assert_eq!(plan.side_panel_width_vp, 0.0);
+        assert_eq!(plan.primary_pane_weight, 2.0);
+        assert_eq!(plan.detail_panel_max_width_vp, 960.0);
     }
 }

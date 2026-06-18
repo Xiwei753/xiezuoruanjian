@@ -1,6 +1,7 @@
 mod action;
 mod platform;
 mod project;
+mod screen_policy;
 mod settings;
 mod stats;
 mod starmap;
@@ -11,6 +12,7 @@ mod workspace;
 pub use action::*;
 pub use platform::*;
 pub use project::*;
+pub use screen_policy::*;
 pub use settings::*;
 pub use stats::*;
 pub use starmap::*;

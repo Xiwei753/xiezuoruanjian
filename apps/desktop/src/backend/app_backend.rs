@@ -281,6 +281,9 @@ pub struct AppBackend {
 
     // ── Layout Policy ──
     resolve_layout: qt_method!(fn(&self, width_vp: f64, height_vp: f64, safe_top_vp: f64, safe_bottom_vp: f64, keyboard_visible: bool, fold_posture: QString, orientation: QString, pointer: QString) -> QJsonObject),
+
+    // ── Screen Policy ──
+    resolve_screen_policy: qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
 }
 
 impl AppBackend {
@@ -469,6 +472,45 @@ impl AppBackend {
 
         let plan = resolve_layout(&metrics);
         let json = serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string());
+        qjson_object_from_json(&json)
+    }
+
+    /// 根据页面角色和壳层模式解析动作槽位列表
+    ///
+    /// QML 调用：backend.resolve_screen_policy("Writing", "SinglePane")
+    /// 返回：{ screenRole: "Writing", actionSlots: [...] }
+    fn resolve_screen_policy(
+        &self,
+        screen_role: QString,
+        shell_mode: QString,
+    ) -> QJsonObject {
+        use writer_core::screen_policy::{ScreenRole, resolve_screen_policy};
+        use writer_core::layout_policy::ShellMode;
+
+        let role = match screen_role.to_string().as_str() {
+            "Home" => ScreenRole::Home,
+            "Workspace" => ScreenRole::Workspace,
+            "Writing" => ScreenRole::Writing,
+            "Settings" => ScreenRole::Settings,
+            "Sync" => ScreenRole::Sync,
+            _ => ScreenRole::Home,
+        };
+        let mode = match shell_mode.to_string().as_str() {
+            "SinglePane" => ShellMode::SinglePane,
+            "SupportingPane" => ShellMode::SupportingPane,
+            "TwoPane" => ShellMode::TwoPane,
+            _ => ShellMode::SinglePane,
+        };
+
+        let action_slots = resolve_screen_policy(role, mode);
+
+        use writer_core::api::types::screen_policy::*;
+        let dto = ScreenPolicyDto {
+            screen_role: role.into(),
+            action_slots: action_slots.into_iter().map(Into::into).collect(),
+        };
+
+        let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }
 
