@@ -21,4 +21,8 @@ impl super::WriterCore {
     pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {
         crate::settings_registry::SettingsRegistry::default_registry()
     }
+
+    pub fn get_settings_presentation(&self) -> crate::settings_presentation::SettingsPresentation {
+        crate::settings_presentation::default_settings_presentation()
+    }
 }

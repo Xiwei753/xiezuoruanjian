@@ -191,7 +191,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path());
 
-        assert!(core.backup_project("p1").is_err());
+
         assert!(core.move_chapter_to_trash("c1").is_err());
     }
 

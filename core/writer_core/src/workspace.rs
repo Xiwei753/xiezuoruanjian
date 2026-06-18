@@ -1,4 +1,4 @@
-//! # 工作区管理（Core 层）
+﻿//! # 工作区管理（Core 层）
 //!
 //! 负责工作区的创建、验证、最近编辑记录。
 //! 工作区是整个应用的根目录，包含所有项目和配置。
@@ -14,7 +14,6 @@
 //! workspace/
 //!   workspace_manifest.json    # 工作区元数据
 //!   projects/                  # 所有项目
-//!   backups/                   # 备份文件
 //!   trash/                     # 回收站
 //!   app-meta/
 //!     settings/                # 设置文件
@@ -34,7 +33,6 @@ pub fn create_workspace(path: &Path) -> Result<()> {
     fs::create_dir_all(path.join("app-meta/settings"))?;
     fs::create_dir_all(path.join("app-meta/logs"))?;
     fs::create_dir_all(path.join("projects"))?;
-    fs::create_dir_all(path.join("backups"))?;
     fs::create_dir_all(path.join("trash"))?;
     fs::create_dir_all(path.join("sqlite_cache"))?;
 

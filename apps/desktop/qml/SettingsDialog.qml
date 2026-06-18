@@ -8,6 +8,8 @@
 //   - 通过 settingsBackend 兼容入口读写设置属性
 //   - 不直接操作文件系统，通过 backendRef.save_local_settings() 持久化
 //   - 使用 DesignTokens 统一样式
+//   - Section 顺序按 Core settings_presentation 契约：
+//     外观 → 编辑器 → 保存 → 同步 → AI → 关于/高级
 // =============================================================================
 
 import QtQuick
@@ -24,6 +26,7 @@ Dialog {
     y: Math.round((parent.height - height) / 2)
     property var theme: null
     property var backendRef: null
+    property var workspaceBackendRef: null
     property var dt: theme
     property bool updatingValues: false
     signal settingsChanged()
@@ -90,10 +93,26 @@ Dialog {
             width: settingsScroll.availableWidth
             spacing: dt ? dt.cardGap : 16
 
+            // ── 1. 外观 (appearance) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("外观")
                 Layout.fillWidth: true
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("主题模式")
+                    description: qsTr("切换系统、浅色或深色")
+                    ModernComboBox {
+                        id: themeCombo
+                        dt: root.dt
+                        model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
+                        onActivated: function(index) {
+                            if (!backendRef || root.updatingValues) return
+                            backendRef.setting_theme_mode = ["system", "light", "dark"][index]
+                            root.saveAndNotify()
+                        }
+                    }
+                }
                 AppSlider {
                     id: fontSizeSlider
                     Layout.fillWidth: true
@@ -116,27 +135,32 @@ Dialog {
                     stepSize: 0.1
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.saveAndNotify() }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("主题模式")
-                    description: qsTr("切换系统、浅色或深色")
-                    ModernComboBox {
-                        id: themeCombo
-                        dt: root.dt
-                        model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
-                        onActivated: function(index) {
-                            if (!backendRef || root.updatingValues) return
-                            backendRef.setting_theme_mode = ["system", "light", "dark"][index]
-                            root.saveAndNotify()
-                        }
-                    }
-                }
             }
 
+            // ── 2. 编辑器 (editor) ──
             SettingsSection {
                 dt: root.dt
-                title: qsTr("编辑器行为")
+                title: qsTr("编辑器")
                 Layout.fillWidth: true
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("自动首行缩进")
+                    description: qsTr("回车时自动添加缩进")
+                    clickable: true
+                    onClicked: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", !autoIndent.checked)
+                    ModernSwitch { id: autoIndent; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", v) } }
+                }
+                AppSlider {
+                    id: autoIndentWidth
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    label: qsTr("首行缩进宽度")
+                    valueText: Number(value).toFixed(1) + qsTr(" 字符")
+                    from: 0.0
+                    to: 8.0
+                    stepSize: 0.5
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.saveAndNotify() }
+                }
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("打字动画（重构中）")
@@ -175,27 +199,9 @@ Dialog {
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("自动首行缩进")
-                    description: qsTr("回车时自动添加缩进")
-                    clickable: true
-                    onClicked: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", !autoIndent.checked)
-                    ModernSwitch { id: autoIndent; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", v) } }
-                }
-                AppSlider {
-                    id: autoIndentWidth
-                    Layout.fillWidth: true
-                    theme: root.dt
-                    label: qsTr("首行缩进宽度")
-                    valueText: Number(value).toFixed(1) + qsTr(" 字符")
-                    from: 0.0
-                    to: 8.0
-                    stepSize: 0.5
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.saveAndNotify() }
-                }
             }
 
+            // ── 3. 保存 (save) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("保存")
@@ -221,6 +227,7 @@ Dialog {
                 }
             }
 
+            // ── 4. 同步 (sync) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("同步")
@@ -228,14 +235,7 @@ Dialog {
                 SettingsRow { dt: root.dt; title: qsTr("同步配置"); description: qsTr("在同步页面管理仓库与鉴权") }
             }
 
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("统计")
-                Layout.fillWidth: true
-                SettingsRow { dt: root.dt; title: qsTr("统计开关"); description: qsTr("统计功能入口（占位）") }
-                SettingsRow { dt: root.dt; title: qsTr("清理本地统计"); description: qsTr("清理入口（占位）") }
-            }
-
+            // ── 5. AI (ai) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("AI")
@@ -248,6 +248,30 @@ Dialog {
                     clickable: true
                     onClicked: root.setSwitchValue(aiSwitch, "ai_enabled", !aiSwitch.checked)
                     ModernSwitch { id: aiSwitch; dt: root.dt; onToggled: function(v) { root.setSwitchValue(aiSwitch, "ai_enabled", v) } }
+                }
+            }
+
+            // ── 6. 关于/高级 (about) ──
+            SettingsSection {
+                dt: root.dt
+                title: qsTr("关于/高级")
+                Layout.fillWidth: true
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("工作区路径")
+                    description: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("版本信息")
+                    description: qsTr("Qt 桌面客户端")
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("动作注册表")
+                    description: qsTr("查看已注册的动作")
+                    clickable: true
+                    onClicked: { /* 后续可跳转到 ActionRegistryPage */ }
                 }
             }
         }

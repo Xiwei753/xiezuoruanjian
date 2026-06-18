@@ -1,10 +1,10 @@
 //! # 章节管理（Core 层 - 最核心模块）
 //!
-//! 负责章节（Chapter）的 CRUD、内容读写、备份、验证保存。
+//! 负责章节（Chapter）的 CRUD、内容读写、验证保存。
 //!
 //! ## 职责边界
 //!
-//! - **做**：章节创建/列表/重命名/删除/排序/内容读写/备份/验证保存
+//! - **做**：章节创建/列表/重命名/删除/排序/内容读写/验证保存
 //! - **不做**：排版格式化（由客户端 `DocumentHandler` 负责）
 //! - **正文永远是纯文本**：`chapter.md` 文件内容是纯文本，不接受 HTML
 //! - **删除安全**：所有删除操作经过 `delete_guard` 验证，删除后移入 trash 目录并记录 tombstone
@@ -12,9 +12,9 @@
 //! ## 核心安全机制
 //!
 //! 1. **空内容覆盖保护**：`save_chapter_verified` 默认拒绝用空内容覆盖非空章节
-//! 2. **写入后验证**：写入后重新读取文件并计算 hash，确保数据完整性
-//! 3. **备份机制**：每次保存前自动备份旧版本（保留最近 20 个版本）
-//! 4. **原子写入**：所有文件写入通过 `storage::atomic_write_string` 完成
+//! 2. **事务写入**：所有文件写入通过 `SaveTransaction` 事务完成
+//! 3. **写入后验证**：写入后重新读取文件并计算 hash，确保数据完整性
+//! 4. **删除进入 trash/tombstone**：删除的章节移入 trash 目录并记录 tombstone
 //!
 //! ## 目录结构
 //!
@@ -32,8 +32,6 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
-/// 单个章节最多保留的备份数量。
-const CHAPTER_BACKUP_KEEP: usize = 20;
 
 /// 章节元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -335,15 +333,6 @@ fn save_chapter_verified_with_options(
         });
     }
 
-    if !old_content.is_empty() && old_content != content {
-        backup_chapter_content(
-            workspace_path,
-            project_id,
-            volume_id,
-            chapter_id,
-            &old_content,
-        )?;
-    }
 
     let meta_str = fs::read_to_string(&meta_path)?;
     let mut meta: Chapter = serde_json::from_str(&meta_str)?;
@@ -449,78 +438,6 @@ fn save_chapter_verified_with_options(
     })
 }
 
-fn backup_chapter_content(
-    workspace_path: &Path,
-    project_id: &str,
-    volume_id: &str,
-    chapter_id: &str,
-    content: &str,
-) -> Result<()> {
-    let backup_dir = workspace_path.join("backups").join("chapters");
-    fs::create_dir_all(&backup_dir)?;
-
-    let prefix = chapter_backup_prefix(project_id, volume_id, chapter_id);
-    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
-    let backup_path = backup_dir.join(format!("{}{}__{}.md", prefix, timestamp, Uuid::new_v4()));
-
-    crate::storage::atomic_write_string(&backup_path, content)?;
-    prune_chapter_backups(&backup_dir, &prefix, CHAPTER_BACKUP_KEEP)
-}
-
-fn prune_chapter_backups(backup_dir: &Path, prefix: &str, keep: usize) -> Result<()> {
-    let mut backups = Vec::new();
-    for entry in fs::read_dir(backup_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-
-        let file_name = entry.file_name().to_string_lossy().into_owned();
-        if file_name.starts_with(prefix) && file_name.ends_with(".md") {
-            backups.push((file_name, entry.path()));
-        }
-    }
-
-    if backups.len() <= keep {
-        return Ok(());
-    }
-
-    backups.sort_by(|a, b| a.0.cmp(&b.0));
-    let remove_count = backups.len() - keep;
-    for (_, path) in backups.into_iter().take(remove_count) {
-        fs::remove_file(path)?;
-    }
-
-    Ok(())
-}
-
-fn chapter_backup_prefix(project_id: &str, volume_id: &str, chapter_id: &str) -> String {
-    format!(
-        "{}__{}__{}__",
-        backup_file_part(project_id),
-        backup_file_part(volume_id),
-        backup_file_part(chapter_id)
-    )
-}
-
-fn backup_file_part(value: &str) -> String {
-    let safe: String = value
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-
-    if safe.is_empty() {
-        "empty".to_string()
-    } else {
-        safe
-    }
-}
 
 pub fn update_chapter_note(
     workspace_path: &Path,

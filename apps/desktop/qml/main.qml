@@ -597,6 +597,7 @@ ApplicationWindow {
         sourceComponent: SettingsDialog {
             theme: designTokens
             backendRef: settingsBackend
+            workspaceBackendRef: workspaceBackend
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
             }

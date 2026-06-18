@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! Qt 测窗口宽高 -> 调 Core resolve_layout -> QML 按 LayoutPlan 画
-//! Android 测 WindowSizeClass -> 调 Core resolve_layout -> Compose 按 LayoutPlan 画
+//! Android 测窗口尺寸 -> 调 Core resolve_layout -> View/XML 或 Compose 按 LayoutPlan 画
 //! Harmony 测窗口 vp / 折叠状态 -> 调 Core resolve_layout -> ArkUI 按 LayoutPlan 画
 //! ```
 

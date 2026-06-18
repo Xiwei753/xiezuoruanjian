@@ -8,7 +8,7 @@ mod tests {
     use crate::project::{create_project, Project};
     use crate::volume::{create_volume, Volume};
     use crate::workspace::create_workspace;
-    use std::fs;
+
     use tempfile::{tempdir, TempDir};
 
     fn setup_chapter() -> (TempDir, Project, Volume, Chapter) {
@@ -218,48 +218,7 @@ mod tests {
         assert_eq!(content.content, "");
     }
 
-    #[test]
-    fn overwriting_non_empty_content_creates_backup() {
-        let (dir, project, volume, chapter) = setup_chapter();
-        let workspace_path = dir.path();
 
-        save_chapter_verified(
-            workspace_path,
-            &project.id,
-            &volume.id,
-            &chapter.id,
-            "First draft",
-        )
-        .unwrap();
-        save_chapter_verified(
-            workspace_path,
-            &project.id,
-            &volume.id,
-            &chapter.id,
-            "Second draft",
-        )
-        .unwrap();
-
-        let backup_dir = workspace_path.join("backups").join("chapters");
-        let backups: Vec<_> = fs::read_dir(&backup_dir)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .filter(|path| {
-                path.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .contains(&chapter.id)
-            })
-            .collect();
-
-        assert_eq!(backups.len(), 1);
-        let file_name = backups[0].file_name().unwrap().to_string_lossy();
-        assert!(file_name.contains(&project.id));
-        assert!(file_name.contains(&volume.id));
-        assert!(file_name.contains(&chapter.id));
-        assert!(file_name.ends_with(".md"));
-        assert_eq!(fs::read_to_string(&backups[0]).unwrap(), "First draft");
-    }
 
     #[test]
     fn end_to_end_write_save_reopen_verify_hash_and_word_count() {

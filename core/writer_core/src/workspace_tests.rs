@@ -248,13 +248,7 @@ mod tests {
         assert_eq!(service_projects_after.len(), 2);
 
         // 5. repair_workspace should succeed
-        // Let's delete a folder (like backups) and see if repair recreates it
-        let backups_dir = dir.path().join("backups");
-        fs::remove_dir(&backups_dir).unwrap();
-        assert!(!backups_dir.exists());
-
         crate::repair_workspace(path_str.clone()).unwrap();
-        assert!(backups_dir.exists());
     }
 
     #[test]

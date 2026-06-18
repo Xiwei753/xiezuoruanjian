@@ -26,7 +26,7 @@ Supersedes: None
 |------|---------|---------|
 | `UserTextDocument` | `/chapters/*.md`、`note.md`、`outline.md`、`scene.md`、`character_notes.md`、`timeline_notes.md`、`draft.md` | 三路合并，绝不 LWW |
 | `Metadata` | `project.json`、`volume.json`、`chapter.meta.json`、`settings.sync.json`、`starmap.json`、`writing_stats.json` | LWW 或语义合并 |
-| `LocalOnly` | `backups/*`、`app-meta/*` | 不同步 |
+| `LocalOnly` | `app-meta/*`（旧工作区残留 `backups/` 也不同步） | 不同步 |
 | `GeneratedCache` | 其他所有文件 | LWW |
 
 判断函数：`lww::classify_content_path(path)` → `ContentClass`

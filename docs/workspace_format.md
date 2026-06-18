@@ -26,7 +26,7 @@ workspace/
 │     │           ├─ chapter.md  # 正文
 │     │           └─ chapter.meta.json # 章节元数据
 │     └─ characters/             # 角色卡（如适用）
-├─ backups/                      # 备份文件
+
 ├─ trash/                        # 已删除文件
 └─ sqlite_cache/                 # 可重建缓存（非事实来源）
 ```

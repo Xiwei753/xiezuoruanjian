@@ -1,13 +1,8 @@
-use crate::backup;
 use crate::error::Result;
 use crate::index;
 use crate::trash;
 
 impl super::WriterCore {
-    pub fn backup_project(&self, project_id: &str) -> Result<()> {
-        backup::backup_project(&self.workspace_path, project_id)
-    }
-
     pub fn move_chapter_to_trash(&self, chapter_id: &str) -> Result<()> {
         trash::move_chapter_to_trash(&self.workspace_path, chapter_id)
     }

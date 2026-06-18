@@ -226,7 +226,7 @@ struct SettingsPage {
 
   build() {
     Column() {
-      // Header
+      // Header — 无保存按钮，仅返回+标题+保存状态提示
       Row() {
         Image($r('sys.media.ohos_ic_public_arrow_left'))
           .width(24)
@@ -242,18 +242,12 @@ struct SettingsPage {
 
         Blank()
 
+        // 保存状态提示（替代保存按钮）
         if (this.saveMessage) {
           Text(this.saveMessage)
             .fontSize(12)
             .fontColor(this.saveMessage === '设置已保存' ? this.themeConfig.colors.success : this.themeConfig.colors.error)
         }
-
-        Button('保存')
-          .fontSize(14)
-          .height(32)
-          .backgroundColor(this.themeConfig.colors.primary)
-          .enabled(!this.isSaving)
-          .onClick(() => this.saveSettings())
       }
       .width('100%')
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
@@ -276,14 +270,13 @@ struct SettingsPage {
       } else {
         Scroll() {
           Column() {
-            // Editor settings
+            // 按 Core 契约顺序：外观→编辑器→保存→同步→AI→关于/高级
+            this.AppearanceSettingsSection()
             this.EditorSettingsSection()
-
-            // Theme settings
-            this.ThemeSettingsSection()
-
-            // Sync settings
+            this.SaveSettingsSection()
             this.SyncSettingsSection()
+            this.AiSettingsSection()
+            this.AboutSettingsSection()
           }
           .width('100%')
           .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
@@ -299,141 +292,17 @@ struct SettingsPage {
     .backgroundColor(this.themeConfig.colors.background)
   }
 
+  // ── 外观 (appearance) ── 主题模式、字体大小、行距
   @Builder
-  EditorSettingsSection() {
+  AppearanceSettingsSection() {
     Column() {
-      Text('编辑器设置')
+      Text('外观')
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
-      // Font size
-      Row() {
-        Text('字体大小')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Text(`${this.settings.editorFontSize}px`)
-          .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
-          .margin({ right: 16 })
-
-        Slider({
-          value: this.settings.editorFontSize,
-          min: 12,
-          max: 32,
-          step: 1
-        })
-          .width(120)
-          .onChange((value: number) => {
-            this.settings.editorFontSize = value
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Line spacing multiplier
-      Row() {
-        Text('行距倍数')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Text(`${this.settings.editorLineSpacingMultiplier.toFixed(1)}`)
-          .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
-          .margin({ right: 16 })
-
-        Slider({
-          value: this.settings.editorLineSpacingMultiplier,
-          min: 1.0,
-          max: 3.0,
-          step: 0.1
-        })
-          .width(120)
-          .onChange((value: number) => {
-            this.settings.editorLineSpacingMultiplier = Math.round(value * 10) / 10
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Auto save
-      Row() {
-        Text('自动保存')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoSaveEnabled })
-          .onChange((isOn: boolean) => {
-            this.settings.autoSaveEnabled = isOn
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      // Auto save delay
-      if (this.settings.autoSaveEnabled) {
-        Row() {
-          Text('自动保存延迟')
-            .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
-            .layoutWeight(1)
-
-          Text(`${Math.round(this.settings.autoSaveDelayMs / 1000)} 秒`)
-            .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
-            .margin({ right: 16 })
-
-          Slider({
-            value: this.settings.autoSaveDelayMs / 1000,
-            min: 10,
-            max: 120,
-            step: 10
-          })
-            .width(120)
-            .onChange((value: number) => {
-              this.settings.autoSaveDelayMs = value * 1000
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-      }
-
-      // Auto indent
-      Row() {
-        Text('自动缩进')
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-
-        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoIndentEnabled })
-          .onChange((isOn: boolean) => {
-            this.settings.autoIndentEnabled = isOn
-          })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(16)
-    .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
-    .margin({ bottom: 16 })
-  }
-
-  @Builder
-  ThemeSettingsSection() {
-    Column() {
-      Text('主题设置')
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.themeConfig.colors.textPrimary)
-        .margin({ bottom: 16 })
-
-      // Theme mode
+      // 主题模式 — 顺序必须是 跟随系统→浅色→深色
       Row() {
         Text('主题模式')
           .fontSize(16)
@@ -441,16 +310,57 @@ struct SettingsPage {
           .layoutWeight(1)
 
         Select([
+          { value: '跟随系统', icon: '' },
           { value: '浅色', icon: '' },
-          { value: '深色', icon: '' },
-          { value: '跟随系统', icon: '' }
+          { value: '深色', icon: '' }
         ] as SettingsSelectOption[])
           .selected(this.getThemeIndex())
           .value(this.getThemeName())
           .onSelect((index: number) => {
-            const themes: ThemeMode[] = ['light', 'dark', 'system']
+            const themes: ThemeMode[] = ['system', 'light', 'dark']
             this.settings.themeMode = themes[index]
             this.themeAdapter.setMode(this.settings.themeMode)
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 字体大小
+      Row() {
+        Text('字体大小')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text(`${this.settings.editorFontSize}px`)
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 16 })
+        Slider({ value: this.settings.editorFontSize, min: 12, max: 32, step: 1 })
+          .width(120)
+          .onChange((value: number) => {
+            this.settings.editorFontSize = value
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 行距倍数
+      Row() {
+        Text('行距倍数')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text(`${this.settings.editorLineSpacingMultiplier.toFixed(1)}`)
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 16 })
+        Slider({ value: this.settings.editorLineSpacingMultiplier, min: 1.0, max: 3.0, step: 0.1 })
+          .width(120)
+          .onChange((value: number) => {
+            this.settings.editorLineSpacingMultiplier = Math.round(value * 10) / 10
+            this.saveSettings()
           })
       }
       .width('100%')
@@ -462,11 +372,192 @@ struct SettingsPage {
     .margin({ bottom: 16 })
   }
 
+  // ── 编辑器 (editor) ── 自动缩进、缩进宽度、打字动画、动画时长、平滑光标、光标时长
+  @Builder
+  EditorSettingsSection() {
+    Column() {
+      Text('编辑器')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ bottom: 16 })
+
+      // 自动缩进
+      Row() {
+        Text('自动缩进')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoIndentEnabled })
+          .onChange((isOn: boolean) => {
+            this.settings.autoIndentEnabled = isOn
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 缩进宽度
+      Row() {
+        Text('缩进宽度')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text(`${this.settings.autoIndentWidth}`)
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+          .margin({ right: 16 })
+        Slider({ value: this.settings.autoIndentWidth, min: 0, max: 8, step: 1 })
+          .width(120)
+          .onChange((value: number) => {
+            this.settings.autoIndentWidth = value
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 打字动画
+      Row() {
+        Text('打字动画')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.editorTypingAnimationEnabled })
+          .onChange((isOn: boolean) => {
+            this.settings.editorTypingAnimationEnabled = isOn
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 打字动画时长
+      if (this.settings.editorTypingAnimationEnabled) {
+        Row() {
+          Text('打字动画时长')
+            .fontSize(16)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .layoutWeight(1)
+          Text(`${this.settings.editorTypingAnimationDurationMs}ms`)
+            .fontSize(14)
+            .fontColor(this.themeConfig.colors.textSecondary)
+            .margin({ right: 16 })
+          Slider({ value: this.settings.editorTypingAnimationDurationMs, min: 0, max: 1000, step: 10 })
+            .width(120)
+            .onChange((value: number) => {
+              this.settings.editorTypingAnimationDurationMs = value
+              this.saveSettings()
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+      }
+
+      // 平滑光标
+      Row() {
+        Text('平滑光标')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.editorSmoothCursorEnabled })
+          .onChange((isOn: boolean) => {
+            this.settings.editorSmoothCursorEnabled = isOn
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 平滑光标时长
+      if (this.settings.editorSmoothCursorEnabled) {
+        Row() {
+          Text('平滑光标时长')
+            .fontSize(16)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .layoutWeight(1)
+          Text(`${this.settings.editorSmoothCursorDurationMs}ms`)
+            .fontSize(14)
+            .fontColor(this.themeConfig.colors.textSecondary)
+            .margin({ right: 16 })
+          Slider({ value: this.settings.editorSmoothCursorDurationMs, min: 0, max: 1000, step: 10 })
+            .width(120)
+            .onChange((value: number) => {
+              this.settings.editorSmoothCursorDurationMs = value
+              this.saveSettings()
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(this.themeConfig.colors.surface)
+    .borderRadius(12)
+    .margin({ bottom: 16 })
+  }
+
+  // ── 保存 (save) ── 自动保存开关、自动保存延迟
+  @Builder
+  SaveSettingsSection() {
+    Column() {
+      Text('保存')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ bottom: 16 })
+
+      // 自动保存
+      Row() {
+        Text('自动保存')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.autoSaveEnabled })
+          .onChange((isOn: boolean) => {
+            this.settings.autoSaveEnabled = isOn
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 自动保存延迟
+      if (this.settings.autoSaveEnabled) {
+        Row() {
+          Text('自动保存延迟')
+            .fontSize(16)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .layoutWeight(1)
+          Text(`${Math.round(this.settings.autoSaveDelayMs / 1000)} 秒`)
+            .fontSize(14)
+            .fontColor(this.themeConfig.colors.textSecondary)
+            .margin({ right: 16 })
+          Slider({ value: this.settings.autoSaveDelayMs / 1000, min: 1, max: 10, step: 1 })
+            .width(120)
+            .onChange((value: number) => {
+              this.settings.autoSaveDelayMs = value * 1000
+              this.saveSettings()
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(this.themeConfig.colors.surface)
+    .borderRadius(12)
+    .margin({ bottom: 16 })
+  }
+
+  // ── 同步 (sync) ── 同步开关、同步方式、自动同步、同步间隔、同步按钮、诊断
   @Builder
   SyncSettingsSection() {
     Column() {
       Row() {
-        Text('同步设置')
+        Text('同步')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -670,6 +761,76 @@ struct SettingsPage {
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(12)
+    .margin({ bottom: 16 })
+  }
+
+  // ── AI (ai) ── AI 开关
+  @Builder
+  AiSettingsSection() {
+    Column() {
+      Text('AI')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ bottom: 16 })
+
+      Row() {
+        Text('启用 AI')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.settings.aiEnabled })
+          .onChange((isOn: boolean) => {
+            this.settings.aiEnabled = isOn
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(this.themeConfig.colors.surface)
+    .borderRadius(12)
+    .margin({ bottom: 16 })
+  }
+
+  // ── 关于/高级 (about) ── 工作区路径、版本信息
+  @Builder
+  AboutSettingsSection() {
+    Column() {
+      Text('关于/高级')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ bottom: 16 })
+
+      // 工作区路径
+      Row() {
+        Text('工作区路径')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .margin({ bottom: 8 })
+
+      // 版本信息
+      Row() {
+        Text('版本信息')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text('HarmonyOS 客户端')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(this.themeConfig.colors.surface)
+    .borderRadius(12)
+    .margin({ bottom: 16 })
   }
 
   @Builder
@@ -693,12 +854,14 @@ struct SettingsPage {
     .alignItems(HorizontalAlign.Center)
   }
 
+  // 主题选项顺序：system→light→dark
   getThemeIndex(): number {
-    const themes = ['light', 'dark', 'system']
+    const themes = ['system', 'light', 'dark']
     return themes.indexOf(this.settings.themeMode || 'system')
   }
 
   getThemeName(): string {
+    if (this.settings.themeMode === 'system') return '跟随系统'
     if (this.settings.themeMode === 'light') return '浅色'
     if (this.settings.themeMode === 'dark') return '深色'
     return '跟随系统'

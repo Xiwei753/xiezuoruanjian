@@ -18,7 +18,7 @@
 //! | `workspace` | 工作区创建、验证、最近编辑 | 不处理项目内容 |
 //! | `project` | 作品 CRUD、统计、排序、删除 | 删除走 `delete_guard` |
 //! | `volume` | 卷 CRUD、排序、删除 | 删除走 `delete_guard` |
-//! | `chapter` | 章节 CRUD、内容读写、备份、验证保存 | 正文永远是纯文本 |
+//! | `chapter` | 章节 CRUD、内容读写、验证保存 | 正文永远是纯文本 |
 //! | `settings` | 本地设置 & 可同步设置 | 分为 LocalSettings / SyncableSettings |
 //! | `sync` | 同步配置、密钥、状态、诊断、实际同步（合并了 sync） | 唯一同步模块 |
 
@@ -47,7 +47,7 @@ pub mod graph_service;
 pub mod proofreading_service;
 pub mod settings_registry;
 
-pub mod backup;
+
 pub mod chapter;
 pub mod editor;
 pub mod error;
@@ -65,6 +65,7 @@ pub mod workspace;
 pub mod writing_stats;
 pub mod layout_policy;
 pub mod screen_policy;
+pub mod settings_presentation;
 #[cfg(feature = "harmony-ffi")]
 pub mod ffi;
 
@@ -72,8 +73,7 @@ pub use api::*;
 pub use error::{Error, Result};
 
 #[cfg(test)]
-pub mod backup_tests;
-#[cfg(test)]
+
 pub mod chapter_tests;
 pub mod facade;
 #[cfg(test)]
