@@ -166,3 +166,151 @@ pub unsafe extern "C" fn writer_core_rename_starmap(starmap_id: *const c_char, n
         Err(e) => err_json("STARMAP_NOT_FOUND", &e),
     }
 }
+
+/// # Safety
+/// Returns a caller-owned C string containing JSON StarMapMotionPolicyDto. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_starmap_motion_policy() -> *mut c_char {
+    match with_core(|core| {
+        let policy = core.get_motion_policy().map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&policy).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// `starmap_id` must be a valid null-terminated UTF-8 C string.
+/// Returns a caller-owned C string containing JSON StarMapLayoutDto. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_starmap_layout(starmap_id: *const c_char) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    match with_core(|core| {
+        let layout = core.get_starmap_layout(&sid).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::to_value(&layout).unwrap_or_default())
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NOT_FOUND", &e),
+    }
+}
+
+/// # Safety
+/// `starmap_id` must be a valid null-terminated UTF-8 C string.
+/// `layout_json` must be a valid null-terminated UTF-8 C string containing StarMapLayoutDto JSON.
+/// Returns a caller-owned C string containing JSON boolean. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_starmap_layout(
+    starmap_id: *const c_char,
+    layout_json: *const c_char,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    let layout_str = match c_str_to_rust(layout_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid layout_json: error {}", e)),
+    };
+    let layout: crate::starmap::types::StarMapLayout = match serde_json::from_str(&layout_str) {
+        Ok(l) => l,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Failed to parse layout_json: {}", e)),
+    };
+    match with_core(|core| {
+        core.save_starmap_layout(&sid, &layout).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// `starmap_id` must be a valid null-terminated UTF-8 C string.
+/// `viewport_json` must be a valid null-terminated UTF-8 C string containing StarMapViewportDto JSON.
+/// Returns a caller-owned C string containing JSON boolean. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_save_starmap_viewport(
+    starmap_id: *const c_char,
+    viewport_json: *const c_char,
+) -> *mut c_char {
+    let sid = match c_str_to_rust(starmap_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid starmap_id: error {}", e)),
+    };
+    let viewport_str = match c_str_to_rust(viewport_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid viewport_json: error {}", e)),
+    };
+    let viewport: crate::starmap::types::StarMapViewport = match serde_json::from_str(&viewport_str) {
+        Ok(v) => v,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Failed to parse viewport_json: {}", e)),
+    };
+    match with_core(|core| {
+        core.save_starmap_viewport(&sid, &viewport).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}
+
+/// # Safety
+/// `graph_json` must be a valid null-terminated UTF-8 C string containing StarMapGraphDto JSON.
+/// Returns a caller-owned C string containing JSON array of StarMapEdgeRenderDto. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
+    graph_json: *const c_char,
+) -> *mut c_char {
+    let graph_str = match c_str_to_rust(graph_json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid graph_json: error {}", e)),
+    };
+    let graph: crate::starmap::types::StarMapGraph = match serde_json::from_str(&graph_str) {
+        Ok(g) => g,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Failed to parse graph_json: {}", e)),
+    };
+    match with_core(|core| {
+        // Get layout for the starmap to compute node centers
+        let layout = core.get_starmap_layout(&graph.starmap_id).map_err(|e| format!("{}", e))?;
+        let node_centers: std::collections::HashMap<String, (f32, f32)> = layout
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.node_id.clone(),
+                    (node.x + node.width / 2.0, node.y + node.height / 2.0),
+                )
+            })
+            .collect();
+        let edges: Vec<crate::starmap::render::EdgeInput> = graph
+            .edges
+            .into_iter()
+            .filter_map(|edge| {
+                let from = edge.from.filter(|id| !id.is_empty())?;
+                let to = edge.to.filter(|id| !id.is_empty())?;
+                Some(crate::starmap::render::EdgeInput {
+                    id: edge.id,
+                    from,
+                    to,
+                })
+            })
+            .collect();
+        let renders = crate::starmap::render::compute_edge_renders(
+            &edges,
+            &node_centers,
+            &crate::starmap::render::EdgeRenderParams::default(),
+        );
+        let json_arr: Vec<serde_json::Value> = renders
+            .into_iter()
+            .map(|r| serde_json::to_value(&crate::api::types::StarMapEdgeRenderDto::from(r)).unwrap_or_default())
+            .collect();
+        Ok(json_arr)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_ERROR", &e),
+    }
+}

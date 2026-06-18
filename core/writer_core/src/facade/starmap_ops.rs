@@ -220,4 +220,8 @@ impl super::WriterCore {
     ) -> Result<Vec<crate::starmap::StarMapReference>> {
         crate::starmap::find_starmap_references(&self.workspace_path, target_starmap_id)
     }
+
+    pub fn get_motion_policy(&self) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
+        crate::starmap::get_motion_policy(&self.workspace_path)
+    }
 }
