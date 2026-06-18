@@ -271,7 +271,7 @@ Dialog {
                     title: qsTr("动作注册表")
                     description: qsTr("查看已注册的动作")
                     clickable: true
-                    onClicked: { /* 后续可跳转到 ActionRegistryPage */ }
+                    onClicked: { /* Navigate to ActionRegistryPage later */ }
                 }
             }
         }
