@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+
 pub enum ActionKindDto {
     Query,
     Preview,
@@ -27,7 +27,7 @@ impl From<ActionKindDto> for crate::action_registry::ActionKind {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+
 pub enum ActionRiskLevelDto {
     SafeRead,
     SafeWrite,

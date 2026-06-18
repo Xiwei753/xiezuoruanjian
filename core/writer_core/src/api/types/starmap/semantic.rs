@@ -204,7 +204,7 @@ impl Default for StarMapAnchorTargetDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapAnchorRoleDto {
     #[default]
     Source,
@@ -270,7 +270,7 @@ impl From<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapPortalModeDto {
     #[default]
     EnterChild,
@@ -299,7 +299,7 @@ impl From<StarMapPortalModeDto> for crate::starmap::semantic::StarMapPortalMode 
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapPortalPreviewPolicyDto {
     #[default]
     Auto,
@@ -374,7 +374,7 @@ impl From<StarMapDisplayPolicyDto> for crate::starmap::semantic::StarMapDisplayP
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapOpenBehaviorDto {
     #[default]
     Inspector,
@@ -628,7 +628,7 @@ impl Default for StarMapTargetDetailDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapSourceKindDto {
     Human,
     Import,
@@ -666,7 +666,7 @@ impl From<StarMapSourceKindDto> for crate::starmap::semantic::StarMapSourceKind 
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapReviewStatusDto {
     Accepted,
     Draft,

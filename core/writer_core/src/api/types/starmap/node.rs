@@ -196,7 +196,7 @@ impl From<StarMapNodePatchDto> for crate::starmap::types::StarMapNodePatch {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapNodeKindDto {
     Character,
     Event,

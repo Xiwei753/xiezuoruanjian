@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum PlatformDto {
     #[default]
     Linux,
@@ -27,7 +27,7 @@ impl From<PlatformDto> for crate::writing_stats::Platform {
 // ── Layout Policy DTOs ──
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum FoldPostureDto {
     #[default]
     Unknown,
@@ -59,7 +59,7 @@ impl From<FoldPostureDto> for crate::layout_policy::FoldPosture {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum OrientationDto {
     #[default]
     Unknown,
@@ -88,7 +88,7 @@ impl From<OrientationDto> for crate::layout_policy::Orientation {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum PointerKindDto {
     #[default]
     Unknown,
@@ -120,7 +120,7 @@ impl From<PointerKindDto> for crate::layout_policy::PointerKind {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum WidthClassDto {
     #[default]
     Compact,
@@ -149,7 +149,7 @@ impl From<WidthClassDto> for crate::layout_policy::WidthClass {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum HeightClassDto {
     #[default]
     Compact,
@@ -178,7 +178,7 @@ impl From<HeightClassDto> for crate::layout_policy::HeightClass {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum ShellModeDto {
     #[default]
     SinglePane,
@@ -207,7 +207,7 @@ impl From<ShellModeDto> for crate::layout_policy::ShellMode {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum EditorModeDto {
     #[default]
     FullWidth,
@@ -233,7 +233,7 @@ impl From<EditorModeDto> for crate::layout_policy::EditorMode {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
+
 pub enum NavigationModeDto {
     #[default]
     Stack,

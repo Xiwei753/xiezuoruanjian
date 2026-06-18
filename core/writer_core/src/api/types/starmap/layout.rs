@@ -81,7 +81,7 @@ impl From<StarMapLayoutNodeDto> for crate::starmap::types::StarMapLayoutNode {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapLayoutKindDto {
     Freeform,
     AutoRadial,

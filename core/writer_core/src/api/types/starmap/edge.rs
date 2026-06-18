@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+
 pub enum StarMapEdgeKindDto {
     Contains,
     References,

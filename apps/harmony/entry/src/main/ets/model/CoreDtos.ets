@@ -1,5 +1,6 @@
 // 本文件定义鸿蒙端 DTO，字段与 Core api/types/ 真实 DTO 对齐。
-// Core 使用 serde(rename_all = "camelCase")，JSON 输出为 camelCase。
+// Core struct 字段使用 serde(rename_all = "camelCase")，JSON 输出为 camelCase。
+// Core enum 变体使用 PascalCase（如 "Back"、"TopLeading"、"SinglePane"），与 Rust 枚举名一致。
 // 如需新增字段，必须先在 Core api/types/ 中定义，不得自行发明。
 
 // ─── Workspace DTOs ───
