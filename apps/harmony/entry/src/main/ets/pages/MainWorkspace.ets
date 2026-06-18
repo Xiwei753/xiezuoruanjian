@@ -98,10 +98,19 @@ struct MainWorkspace {
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false
+  @State lastSaveFailed: boolean = false
   @State selectedVolumeId: string = ''
   @State sessionOldText: string = ''
   @State sessionId: string = ''
   @State sessionStartTime: number = 0
+
+  // ── 编辑器动画状态 ──
+  @State typingAnimationEnabled: boolean = false
+  @State smoothCursorEnabled: boolean = false
+  @State cursorVisible: boolean = true
+  @State lastInsertedText: string = ''
+  @State showInsertAnimation: boolean = false
+  @State cursorBlinkOpacity: number = 1.0
 
   // ── 通用状态 ──
   @State isInitialLoading: boolean = true
@@ -268,6 +277,10 @@ struct MainWorkspace {
           lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
+        // 读取编辑器动画开关
+        this.typingAnimationEnabled = result.data.editorTypingAnimationEnabled ?? false
+        this.smoothCursorEnabled = result.data.editorSmoothCursorEnabled ?? false
+
         // 更新自动保存间隔
         if (this.autoSaveObserver) {
           this.lifecycle.removeObserver(this.autoSaveObserver)
@@ -285,9 +298,9 @@ struct MainWorkspace {
 
   // ========== 章节操作 ==========
 
-  async saveChapter() {
+  async saveChapter(): Promise<boolean> {
     if (this.isSaving || !this.hasUnsavedChanges || !this.selectedChapterId) {
-      return
+      return true
     }
 
     this.isSaving = true
@@ -319,22 +332,40 @@ struct MainWorkspace {
 
         this.lastSavedContent = this.content
         this.hasUnsavedChanges = false
+        this.lastSaveFailed = false
         this.wordCount = result.data.wordCount
         this.saveMessage = '已保存'
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
+        return true
       } else {
+        this.lastSaveFailed = true
         this.saveMessage = result.userMessage || '保存失败'
+        return false
       }
     } catch (err) {
+      this.lastSaveFailed = true
       this.saveMessage = '保存时发生错误'
+      return false
     } finally {
       this.isSaving = false
     }
   }
 
   onContentChange(text: string) {
+    // 检测新增字符（用于打字动画）
+    if (this.typingAnimationEnabled && text.length > this.content.length) {
+      const insertedLength = text.length - this.content.length
+      this.lastInsertedText = text.substring(text.length - insertedLength)
+      this.showInsertAnimation = true
+      // 短暂显示后隐藏动画
+      setTimeout(() => {
+        this.showInsertAnimation = false
+        this.lastInsertedText = ''
+      }, 300)
+    }
+
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
 
@@ -377,7 +408,15 @@ struct MainWorkspace {
   }
 
   async deleteVolume(volumeId: string) {
-    // TODO: 显示确认对话框
+    AlertDialog.show({
+      title: '确认删除',
+      message: '确认删除此卷及其所有章节？此操作不可撤销。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: { value: '删除', action: () => this.doDeleteVolume(volumeId) }
+    })
+  }
+
+  async doDeleteVolume(volumeId: string) {
     try {
       const result = await this.bridge.deleteVolume(this.selectedProjectId, volumeId)
       if (result.success) {
@@ -389,7 +428,15 @@ struct MainWorkspace {
   }
 
   async deleteChapter(chapterId: string) {
-    // TODO: 显示确认对话框
+    AlertDialog.show({
+      title: '确认删除',
+      message: '确认删除此章节？此操作不可撤销。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: { value: '删除', action: () => this.doDeleteChapter(chapterId) }
+    })
+  }
+
+  async doDeleteChapter(chapterId: string) {
     try {
       const result = await this.bridge.deleteChapter(chapterId)
       if (result.success) {
@@ -409,6 +456,33 @@ struct MainWorkspace {
       }
     } catch (err) {
       console.error('删除章节失败:', err)
+    }
+  }
+
+  async deleteProject(projectId: string) {
+    AlertDialog.show({
+      title: '确认删除',
+      message: '确认删除此作品及其所有内容？此操作不可撤销。',
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: { value: '删除', action: () => this.doDeleteProject(projectId) }
+    })
+  }
+
+  async doDeleteProject(projectId: string) {
+    try {
+      const result = await this.bridge.deleteProject(projectId)
+      if (result.success) {
+        // 如果删除的是当前选中的项目，清空右侧
+        if (this.selectedProjectId === projectId) {
+          this.selectedProjectId = ''
+          this.selectedProjectName = ''
+          this.projectTree = null
+          this.volumeTrees = []
+        }
+        this.loadInitialData()
+      }
+    } catch (err) {
+      console.error('删除作品失败:', err)
     }
   }
 
@@ -610,6 +684,16 @@ struct MainWorkspace {
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
+
+                Button('×')
+                  .fontSize(12)
+                  .width(24)
+                  .height(24)
+                  .padding(0)
+                  .backgroundColor('transparent')
+                  .fontColor(this.themeConfig.colors.textHint)
+                  .margin({ right: 4 })
+                  .onClick(() => this.deleteProject(project.id))
 
                 Image($r('sys.media.ohos_ic_public_arrow_right'))
                   .width(14)
@@ -877,7 +961,7 @@ struct MainWorkspace {
         if (this.saveMessage) {
           Text(this.saveMessage)
             .fontSize(12)
-            .fontColor(this.saveMessage === '已保存' ? this.themeConfig.colors.success : this.themeConfig.colors.error)
+            .fontColor(this.getSaveStatusColor())
             .margin({ right: 8 })
         }
 
@@ -930,16 +1014,48 @@ struct MainWorkspace {
         // 写作区：内容居中，最大宽度约束
         Scroll() {
           Column() {
-            TextArea({ text: this.content, placeholder: '开始写作...' })
-              .width('100%')
-              .constraintSize({ minHeight: '100%' })
-              .fontSize(this.settings.editorFontSize)
-              .lineHeight(this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize)
-              .backgroundColor(this.themeConfig.colors.surface)
-              .padding({ left: 24, right: 24, top: 20, bottom: 20 })
-              .fontColor(this.themeConfig.colors.textPrimary)
-              .placeholderColor(this.themeConfig.colors.textHint)
-              .onChange((value: string): void => { this.onContentChange(value) })
+            Stack() {
+              TextArea({ text: this.content, placeholder: '开始写作...' })
+                .width('100%')
+                .constraintSize({ minHeight: '100%' })
+                .fontSize(this.settings.editorFontSize)
+                .lineHeight(this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize)
+                .backgroundColor(this.themeConfig.colors.surface)
+                .padding({ left: 24, right: 24, top: 20, bottom: 20 })
+                .fontColor(this.themeConfig.colors.textPrimary)
+                .placeholderColor(this.themeConfig.colors.textHint)
+                .onChange((value: string): void => { this.onContentChange(value) })
+
+              // 打字动画 overlay：新字符淡入效果
+              if (this.typingAnimationEnabled && this.showInsertAnimation) {
+                Text(this.lastInsertedText)
+                  .fontSize(this.settings.editorFontSize)
+                  .fontColor(this.themeConfig.colors.primary)
+                  .opacity(0.5)
+                  .fontWeight(FontWeight.Bold)
+                  .margin({ left: 24, top: 20 })
+                  .align(Alignment.TopStart)
+              }
+
+              // 自定义光标 overlay（闪烁竖线）
+              if (this.smoothCursorEnabled) {
+                Column() {
+                  Row() {
+                    Column() {}
+                      .width(2)
+                      .height(this.settings.editorFontSize * 1.2)
+                      .backgroundColor(this.themeConfig.colors.primary)
+                      .opacity(this.cursorBlinkOpacity)
+                      .margin({ left: 24, top: 20 })
+                    Blank()
+                  }
+                  .width('100%')
+                }
+                .width('100%')
+                .hitTestBehavior(HitTestMode.Transparent)
+              }
+            }
+            .width('100%')
           }
           .width('100%')
           .constraintSize({ maxWidth: this.adaptiveState.layoutPlan?.contentMaxWidthVp || 840 })
@@ -963,7 +1079,7 @@ struct MainWorkspace {
 
         Text(this.hasUnsavedChanges ? '未保存' : '已保存')
           .fontSize(12)
-          .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.secondary : this.themeConfig.colors.success)
+          .fontColor(this.getSaveStatusColor())
       }
       .width('100%')
       .padding({ left: 24, right: 24, top: 10, bottom: 10 })
@@ -1145,6 +1261,16 @@ struct MainWorkspace {
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
+          Button('×')
+            .fontSize(14)
+            .width(28)
+            .height(28)
+            .padding(0)
+            .backgroundColor('transparent')
+            .fontColor(this.themeConfig.colors.textHint)
+            .margin({ right: 8 })
+            .onClick(() => this.deleteProject(project.id))
+
           Image($r('sys.media.ohos_ic_public_arrow_right'))
             .width(18)
             .height(18)
@@ -1170,6 +1296,13 @@ struct MainWorkspace {
   }
 
   // ========== 工具方法 ==========
+
+  private getSaveStatusColor(): ResourceColor {
+    if (this.lastSaveFailed) return this.themeConfig.colors.error
+    if (this.isSaving) return this.themeConfig.colors.textSecondary
+    if (this.hasUnsavedChanges) return this.themeConfig.colors.secondary
+    return this.themeConfig.colors.success
+  }
 
   formatTime(isoString: string): string {
     const date = new Date(isoString)
