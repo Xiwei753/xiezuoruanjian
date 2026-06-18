@@ -70,6 +70,7 @@ char*  writer_core_list_starmaps(void);
 char*  writer_core_list_starmaps_for_project(const char* project_id);
 char*  writer_core_get_starmap(const char* starmap_id);
 char*  writer_core_get_starmap_graph(const char* starmap_id);
+char*  writer_core_get_starmap_motion_policy(void);
 char*  writer_core_create_starmap(const char* title, const char* description);
 char*  writer_core_delete_starmap(const char* starmap_id);
 char*  writer_core_rename_starmap(const char* starmap_id, const char* new_title);
