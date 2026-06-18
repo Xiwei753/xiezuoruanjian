@@ -89,7 +89,7 @@ for c_call in "${napi_c_calls[@]}"; do
 
     if ! $found; then
         echo -e "  ${RED}ERROR${NC}: napi_init.cpp calls '${c_call}' but it's NOT declared in writer_core_bridge.h"
-        ((errors++))
+        errors=$((errors + 1))
     fi
 done
 
@@ -107,7 +107,7 @@ for c_func in "${header_declared[@]}"; do
 
     if ! $found; then
         echo -e "  ${RED}ERROR${NC}: C header declares '${c_func}' but it's NOT exported in Rust FFI"
-        ((errors++))
+        errors=$((errors + 1))
     fi
 done
 
@@ -125,7 +125,7 @@ for rust_func in "${rust_exported[@]}"; do
 
     if ! $found; then
         echo -e "  ${YELLOW}WARNING${NC}: Rust FFI exports '${rust_func}' but it's NOT declared in writer_core_bridge.h (may be internal)"
-        ((warnings++))
+        warnings=$((warnings + 1))
     fi
 done
 
@@ -146,7 +146,7 @@ if [[ -f "$arkts_bridge" ]]; then
             done
             if ! $found; then
                 echo -e "  ${RED}ERROR${NC}: ArkTS calls '${arkts_call}' but it's NOT registered in napi_init.cpp"
-                ((errors++))
+                errors=$((errors + 1))
             fi
         fi
     done < "$arkts_bridge"
@@ -166,8 +166,8 @@ if [[ -f "$core_dtos" ]]; then
             # Match "name": xxx.title patterns in JSON construction
             if [[ "$line" =~ \"name\":.*\.title ]]; then
                 echo -e "  ${RED}ERROR${NC}: ${rs_file##*/} outputs \"name\" for a .title field — should be \"title\" to match CoreDtos.ets"
-                ((errors++))
-                ((name_count++))
+                errors=$((errors + 1))
+                name_count=$((name_count + 1))
             fi
         done < "$rs_file"
     done
@@ -183,8 +183,8 @@ if [[ -f "$core_dtos" ]]; then
         while IFS= read -r line; do
             if [[ "$line" =~ \"editedAt\":.*\.timestamp ]]; then
                 echo -e "  ${RED}ERROR${NC}: ${rs_file##*/} outputs \"editedAt\" for a .timestamp field — should be \"timestamp\" to match CoreDtos.ets"
-                ((errors++))
-                ((edited_at_count++))
+                errors=$((errors + 1))
+                edited_at_count=$((edited_at_count + 1))
             fi
         done < "$rs_file"
     done

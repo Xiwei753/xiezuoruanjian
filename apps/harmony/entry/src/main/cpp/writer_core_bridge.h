@@ -17,6 +17,9 @@ void    writer_core_free_string(char* ptr);
 // ── Layout Policy ──
 char*  writer_core_resolve_layout(const char* metrics_json);
 
+// ── Screen Policy ──
+char*  writer_core_resolve_screen_policy(const char* screen_role_json, const char* shell_mode_json);
+
 // ── Workspace ──
 char*  writer_core_validate_workspace(void);
 char*  writer_core_list_workspaces(void);
