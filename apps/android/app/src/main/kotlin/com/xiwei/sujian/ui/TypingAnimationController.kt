@@ -52,6 +52,12 @@ class TypingAnimationController(
     var lastEditorAnimationEvent: AndroidEditorAnimationEvent? = null
         private set
 
+    // 删除动画待提交信息：在 beforeTextChanged 记录起始位置，在 afterTextChanged 提交完整动画
+    private var pendingDeleteStartX = -1f
+    private var pendingDeleteStartY = -1f
+    private var pendingDeleteText = ""
+    private var pendingDeleteStart = -1
+
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         typingAnimationEnabled = enabled
         typingAnimationDurationMs = durationMs
@@ -107,21 +113,14 @@ class TypingAnimationController(
                 durationMs = typingAnimationDurationMs
             )
 
-            // 提交删除动画到 renderLayer
+            // 记录删除动画的起始位置（被删字符位置），等 afterTextChanged 提交
+            // 不能在 beforeTextChanged 里直接提交，因为此时 layout 还未更新，
+            // 删除后光标位置（目标位置）需要在新 layout 中计算
             if (typingAnimationEnabled && editText.layout != null) {
-                val delStart = start
-                val destX = cursorBeforeX
-                val destY = cursorBeforeY
-                renderLayer.addTypingAnim(OverlayAnim(
-                    insertedStart = delStart,
-                    insertedText = deletedText,
-                    startX = editText.layout.getPrimaryHorizontal(start),
-                    startY = editText.layout.getLineBaseline(editText.layout.getLineForOffset(start)).toFloat(),
-                    endX = destX,
-                    endY = destY,
-                    durationMs = typingAnimationDurationMs,
-                    isDeletion = true
-                ))
+                pendingDeleteStartX = editText.layout.getPrimaryHorizontal(start)
+                pendingDeleteStartY = editText.layout.getLineBaseline(editText.layout.getLineForOffset(start)).toFloat()
+                pendingDeleteText = deletedText
+                pendingDeleteStart = start
             }
         }
 
@@ -149,6 +148,30 @@ class TypingAnimationController(
     fun afterTextChanged(editable: Editable?) {
         if (editable == null) return
         if (isSuppressAnimations || isScrollAnimationsSuppressed) return
+
+        // 提交待处理的删除动画（在 afterTextChanged 里才能拿到新光标位置作为目标）
+        if (pendingDeleteStart >= 0 && typingAnimationEnabled && editText.layout != null) {
+            val newCursorOffset = editText.selectionStart
+            if (newCursorOffset >= 0) {
+                val newLine = editText.layout.getLineForOffset(newCursorOffset)
+                val destX = editText.layout.getPrimaryHorizontal(newCursorOffset)
+                val destY = editText.layout.getLineBaseline(newLine).toFloat()
+                renderLayer.addTypingAnim(OverlayAnim(
+                    insertedStart = pendingDeleteStart,
+                    insertedText = pendingDeleteText,
+                    startX = pendingDeleteStartX,
+                    startY = pendingDeleteStartY,
+                    endX = destX,
+                    endY = destY,
+                    durationMs = typingAnimationDurationMs,
+                    isDeletion = true
+                ))
+            }
+            pendingDeleteStart = -1
+            pendingDeleteStartX = -1f
+            pendingDeleteStartY = -1f
+            pendingDeleteText = ""
+        }
 
         val composingStart = BaseInputConnection.getComposingSpanStart(editable)
         val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)

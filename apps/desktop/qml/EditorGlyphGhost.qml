@@ -32,6 +32,9 @@ Item {
     // 颜色
     property color ghostColor: "#E2E2E5"
 
+    // glyph 文字内容
+    property string glyphText: ""
+
     signal animationFinished()
 
     // ── Insert 动画属性 ──
@@ -60,12 +63,12 @@ Item {
     x: root.animKind === "insert" ? root.insertMoveAnim.x : root.deleteMoveAnim.x
     y: root.animKind === "insert" ? root.insertMoveAnim.y : root.deleteMoveAnim.y
 
-    // 用矩形代表 glyph 区域
-    Rectangle {
-        id: ghostRect
-        anchors.fill: parent
+    // 用 Text 渲染真实 glyph 文字
+    Text {
+        id: ghostText
+        text: root.glyphText
         color: root.ghostColor
-        radius: 1
+        font.pixelSize: root.glyphHeight * 0.85
         opacity: root.animKind === "insert" ? root.insertOpacityAnim.currentOpacity : root.deleteOpacityAnim.currentOpacity
     }
 
@@ -100,7 +103,7 @@ Item {
             easing.type: Easing.OutCubic
         }
         ScaleAnimator {
-            target: ghostRect
+            target: ghostText
             from: 0.6
             to: 1.0
             duration: root.duration
@@ -141,7 +144,7 @@ Item {
             easing.type: Easing.InCubic
         }
         ScaleAnimator {
-            target: ghostRect
+            target: ghostText
             from: 1.0
             to: 0.4
             duration: root.duration

@@ -50,6 +50,17 @@ Item {
         }
     }
 
+    function _trackGhost(ghost) {
+        if (!ghost) return
+        root._activeAnimations.push(ghost)
+        ghost.animationFinished.connect(function() {
+            var idx = root._activeAnimations.indexOf(ghost)
+            if (idx >= 0) root._activeAnimations.splice(idx, 1)
+            ghost.destroy()
+        })
+        ghost.startAnimation()
+    }
+
     function _createInsertAnimation(event) {
         var cursorRectX = editorItem.cursor_rect_x
         var cursorRectY = editorItem.cursor_rect_y
@@ -74,18 +85,11 @@ Item {
                     "width": gr.w,
                     "height": gr.h,
                     "duration": duration,
-                    "ghostColor": editorItem.cursor_color || "#006497"
+                    "ghostColor": editorItem.cursor_color || "#006497",
+                    "glyphText": gr.char || ""
                 })
 
-                if (ghost) {
-                    root._activeAnimations.push(ghost)
-                    ghost.animationFinished.connect(function() {
-                        var idx = root._activeAnimations.indexOf(ghost)
-                        if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                        ghost.destroy()
-                    })
-                    ghost.startAnimation()
-                }
+                _trackGhost(ghost)
             }
         } else {
             // ── Fallback: 旧矩形高亮路径 ──
@@ -113,15 +117,7 @@ Item {
                 "animKind": "insert"
             })
 
-            if (anim) {
-                root._activeAnimations.push(anim)
-                anim.animationFinished.connect(function() {
-                    var idx = root._activeAnimations.indexOf(anim)
-                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                    anim.destroy()
-                })
-                anim.startAnimation()
-            }
+            _trackGhost(anim)
         }
     }
 
@@ -149,18 +145,11 @@ Item {
                     "width": gr.w,
                     "height": gr.h,
                     "duration": duration,
-                    "ghostColor": editorItem.text_color || "#E2E2E5"
+                    "ghostColor": editorItem.text_color || "#E2E2E5",
+                    "glyphText": gr.char || ""
                 })
 
-                if (ghost) {
-                    root._activeAnimations.push(ghost)
-                    ghost.animationFinished.connect(function() {
-                        var idx = root._activeAnimations.indexOf(ghost)
-                        if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                        ghost.destroy()
-                    })
-                    ghost.startAnimation()
-                }
+                _trackGhost(ghost)
             }
         } else {
             // ── Fallback: 旧矩形高亮路径 ──
@@ -188,15 +177,7 @@ Item {
                 "animKind": "delete"
             })
 
-            if (anim) {
-                root._activeAnimations.push(anim)
-                anim.animationFinished.connect(function() {
-                    var idx = root._activeAnimations.indexOf(anim)
-                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                    anim.destroy()
-                })
-                anim.startAnimation()
-            }
+            _trackGhost(anim)
         }
     }
 
