@@ -42,8 +42,8 @@ jobs:
         run: |
           node -v || true
           ohpm -v || true
-          ls -la
           ls -la ./hvigorw || true
+          ls -la ./hvigor/hvigor-wrapper.js || true
 
       - name: Check hvigorw
         run: |
@@ -58,14 +58,22 @@ jobs:
           cp build-profile.ci.json5 build-profile.json5
           cp oh-package.ci.json5 oh-package.json5
 
-      - name: Install dependencies via npm from Huawei registry
+      - name: Install hvigor dependencies via npm
         run: |
-          # ohpm.harmonyos.com domain does not exist in DNS.
-          # Use npm to fetch packages from repo.harmonyos.com (Huawei's npm-compatible registry),
-          # then place them where ohpm/hvigor expects them (oh_modules/).
-          npm install --registry=https://repo.harmonyos.com/npm/ --prefix=. || true
-          # npm installs to node_modules, but ohpm expects oh_modules
-          # Try ohpm with openharmony registry for available packages
+          # ohpm.harmonyos.com domain does not exist in public DNS.
+          # Use npm to fetch packages from repo.harmonyos.com (Huawei's npm-compatible registry)
+          # and place them into oh_modules where hvigor expects them.
+          mkdir -p oh_modules/@ohos
+          npm install @ohos/hvigor@5.7.0 @ohos/hvigor-ohos-plugin@5.7.0 \
+            --registry=https://repo.harmonyos.com/npm/ \
+            --prefix=.
+          # npm installs to node_modules, move to oh_modules for ohpm compatibility
+          if [ -d "node_modules/@ohos" ]; then
+            cp -r node_modules/@ohos/* oh_modules/@ohos/
+          fi
+
+      - name: Install OpenHarmony dependencies via ohpm
+        run: |
           ohpm config set registry https://ohpm.openharmony.cn/ohpm/
           ohpm install --all || true
 
