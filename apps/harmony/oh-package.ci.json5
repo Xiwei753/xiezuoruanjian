@@ -1,0 +1,12 @@
+{
+  "modelVersion": "26.0.0",
+  "name": "writer-harmony",
+  "version": "1.0.0",
+  "description": "Writing software HarmonyOS NEXT client (CI build - no test deps)",
+  "main": "",
+  "author": "",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@ohos/hvigor-ohos-plugin": "5.7.0"
+  }
+}
