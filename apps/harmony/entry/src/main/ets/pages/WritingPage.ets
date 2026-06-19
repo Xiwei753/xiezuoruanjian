@@ -66,6 +66,7 @@ struct WritingPage {
   @State showInsertAnimation: boolean = false
   @State insertAnimX: number = 0
   @State insertAnimY: number = 0
+  @State isScrolling: boolean = false
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -292,48 +293,73 @@ struct WritingPage {
     }
 
     // 打字动画：检测新插入的文本
-    if (this.typingAnimationEnabled && text.length > oldContent.length) {
+    if (this.typingAnimationEnabled && text.length > oldContent.length && !this.isScrolling) {
       const insertedLen = text.length - oldContent.length
-      // 估算插入位置（取光标位置前 insertedLen 个字符）
-      const insertPos = cursorPos !== undefined ? cursorPos - insertedLen : text.length - insertedLen
-      this.lastInsertedText = text.substring(insertPos, insertPos + insertedLen)
-      this.showInsertAnimation = true
 
-      // WIP: 以下动画位置计算使用 fontSize * 0.6 估算，不是真实编辑器布局坐标。
-      // 等接入 Core EditorAnimationEvent + 真实 glyph rect 后替换。
-      const charWidth = this.settings.editorFontSize * 0.6
-      const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
-      const pagePadding = this.adaptiveState.pagePadding
-      const approxLine = Math.floor((insertPos * charWidth) / (360 - pagePadding * 2))
-      this.insertAnimX = pagePadding + (insertPos * charWidth) % (360 - pagePadding * 2)
-      this.insertAnimY = 20 + approxLine * lineHeight
-      // WIP END
+      // ── 边界保护 ──
+      // 1. 插入文本长度 > 3，不播放（大段输入如粘贴）
+      if (insertedLen > 3) {
+        // 不播放动画
+      } else {
+        const insertPos = cursorPos !== undefined ? cursorPos - insertedLen : text.length - insertedLen
+        // 2. 插入文本包含换行，不播放
+        const insertedText = text.substring(insertPos, insertPos + insertedLen)
+        if (insertedText.includes('\n') || insertedText.includes('\r')) {
+          // 不播放动画
+        } else {
+          this.lastInsertedText = insertedText
+          this.showInsertAnimation = true
 
-      // 清除之前的定时器
-      if (this.insertAnimTimer !== -1) {
-        clearTimeout(this.insertAnimTimer)
+          // WIP: 以下动画位置计算使用 fontSize * 0.6 估算，不是真实编辑器布局坐标。
+          // 等接入 Core EditorAnimationEvent + 真实 glyph rect 后替换。
+          const charWidth = this.settings.editorFontSize * 0.6
+          const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
+          const pagePadding = this.adaptiveState.pagePadding
+          const contentWidth = 360 - pagePadding * 2
+
+          // 3. contentWidth <= 0，不播放
+          if (contentWidth <= 0 || charWidth <= 0) {
+            this.showInsertAnimation = false
+          } else {
+            const approxLine = Math.floor((insertPos * charWidth) / contentWidth)
+            this.insertAnimX = pagePadding + (insertPos * charWidth) % contentWidth
+            this.insertAnimY = 20 + approxLine * lineHeight
+          }
+          // WIP END
+
+          // 清除之前的定时器
+          if (this.insertAnimTimer !== -1) {
+            clearTimeout(this.insertAnimTimer)
+          }
+          this.insertAnimTimer = setTimeout(() => {
+            this.showInsertAnimation = false
+            this.insertAnimTimer = -1
+          }, 150) as number
+        }
       }
-      this.insertAnimTimer = setTimeout(() => {
-        this.showInsertAnimation = false
-        this.insertAnimTimer = -1
-      }, 150) as number
     }
 
     // 平滑光标：更新光标位置估算
     // WIP: 以下动画位置计算使用 fontSize * 0.6 估算，不是真实编辑器布局坐标。
     // 等接入 Core EditorAnimationEvent + 真实 glyph rect 后替换。
-    if (this.smoothCursorEnabled && cursorPos !== undefined) {
+    if (this.smoothCursorEnabled && cursorPos !== undefined && !this.isScrolling) {
       const charWidth = this.settings.editorFontSize * 0.6
       const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
       const pagePadding = this.adaptiveState.pagePadding
       const contentWidth = 360 - pagePadding * 2
-      const approxLine = Math.floor((cursorPos * charWidth) / contentWidth)
-      animateTo({ duration: 80, curve: Curve.EaseOut }, () => {
-        this.cursorX = pagePadding + (cursorPos * charWidth) % contentWidth
-        this.cursorY = 20 + approxLine * lineHeight
-      })
-      // 输入时光标可见
-      this.cursorVisible = true
+
+      // 边界保护：contentWidth <= 0 或 charWidth <= 0 时不播放
+      if (contentWidth <= 0 || charWidth <= 0) {
+        // 不播放光标动画
+      } else {
+        const approxLine = Math.floor((cursorPos * charWidth) / contentWidth)
+        animateTo({ duration: 80, curve: Curve.EaseOut }, () => {
+          this.cursorX = pagePadding + (cursorPos * charWidth) % contentWidth
+          this.cursorY = 20 + approxLine * lineHeight
+        })
+        // 输入时光标可见
+        this.cursorVisible = true
+      }
     }
     // WIP END
   }
@@ -504,6 +530,13 @@ struct WritingPage {
         .layoutWeight(1)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+        .onScrollFrameBegin((offset: number) => {
+          this.isScrolling = true
+          return { offsetRemain: offset }
+        })
+        .onScrollStop(() => {
+          this.isScrolling = false
+        })
       }
 
       // Bottom toolbar

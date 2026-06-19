@@ -45,7 +45,7 @@ Dialog {
         if (!backendRef) return
         updatingValues = true
         autoSave.checked = backendRef.setting_auto_save_enabled
-        typingAnim.checked = false
+        typingAnim.checked = backendRef.setting_typing_animation_enabled
         smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
         aiSwitch.checked = backendRef.ai_enabled
         autoSaveDelay.value = backendRef.setting_auto_save_delay_ms / 1000.0
@@ -163,17 +163,17 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
-                    title: qsTr("打字动画（重构中）")
-                    description: qsTr("旧 TextArea hidden-range 动画已停用，等待 SujianEditorItem")
-                    clickable: false
-                    ModernSwitch { id: typingAnim; dt: root.dt; enabled: false }
+                    title: qsTr("打字动画")
+                    description: qsTr("输入时字符从光标处吐出")
+                    clickable: true
+                    onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
+                    ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }
                 }
                 AppSlider {
                     id: typingAnimDuration
                     Layout.fillWidth: true
                     theme: root.dt
-                    label: qsTr("打字动画持续时间（当前自研写作区下不可用）")
-                    enabled: false
+                    label: qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
                     from: 0
                     to: 1000

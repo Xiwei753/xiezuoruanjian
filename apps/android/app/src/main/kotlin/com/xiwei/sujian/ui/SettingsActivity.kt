@@ -198,11 +198,7 @@ class SettingsActivity : AppCompatActivity() {
         sbAutoIndentWidth.value = currentSettings.autoIndentWidth
 
         switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
-        // 打字动画功能正在重构中，强制禁用开关（TypingAnimationController 强制 typingAnimationEnabled = false）
-        switchTypingAnimation.isChecked = false
-        switchTypingAnimation.isEnabled = false
-        switchTypingAnimation.text = "打字动画（重构中）"
-        sbTypingAnimationDuration.isEnabled = false
+        sbTypingAnimationDuration.isEnabled = switchTypingAnimation.isChecked
         switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
         sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
         sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
@@ -234,7 +230,10 @@ class SettingsActivity : AppCompatActivity() {
 
         switchAutoSave.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
         switchAutoIndent.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
-        // switchTypingAnimation 监听已移除：打字动画功能重构中，开关已禁用
+        switchTypingAnimation.setOnCheckedChangeListener { _, isChecked ->
+            sbTypingAnimationDuration.isEnabled = isChecked
+            saveAndFinish(false)
+        }
         switchSmoothCursor.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
 
 
@@ -301,11 +300,8 @@ class SettingsActivity : AppCompatActivity() {
         sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
         switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
         sbAutoIndentWidth.value = currentSettings.autoIndentWidth
-        // 打字动画重构中：强制禁用
-        switchTypingAnimation.isChecked = false
-        switchTypingAnimation.isEnabled = false
-        switchTypingAnimation.text = "打字动画（重构中）"
-        sbTypingAnimationDuration.isEnabled = false
+        switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
+        sbTypingAnimationDuration.isEnabled = currentSettings.editorTypingAnimationEnabled
         switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
         sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
         sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
@@ -352,7 +348,7 @@ class SettingsActivity : AppCompatActivity() {
             autoIndentEnabled = switchAutoIndent.isChecked,
             autoIndentWidth = sbAutoIndentWidth.value,
             themeMode = themeStr,
-            editorTypingAnimationEnabled = false, // 打字动画重构中，强制保存 false
+            editorTypingAnimationEnabled = switchTypingAnimation.isChecked,
             editorSmoothCursorEnabled = switchSmoothCursor.isChecked,
             editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
             editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),

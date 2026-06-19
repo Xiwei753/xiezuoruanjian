@@ -706,16 +706,15 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        // TODO: 启用删除动画需要先验证 QTextLine xToCursor/cursorToX roundtrip
-        // if self.current_typing_animation_enabled && !self.current_is_scrolling {
-        //     for event in &events {
-        //         if event.kind == EditorAnimationKind::Delete {
-        //             let anim = self.create_delete_animation(event, &old_text, &new_text);
-        //             self.delete_animation = Some(anim);
-        //             break;
-        //         }
-        //     }
-        // }
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            for event in &events {
+                if event.kind == EditorAnimationKind::Delete {
+                    let anim = self.create_delete_animation(event, &old_text, &new_text);
+                    self.delete_animation = Some(anim);
+                    break;
+                }
+            }
+        }
 
         self.emit_content_changed();
     }
@@ -740,16 +739,15 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        // TODO: 启用删除动画需要先验证 QTextLine xToCursor/cursorToX roundtrip
-        // if self.current_typing_animation_enabled && !self.current_is_scrolling {
-        //     for event in &events {
-        //         if event.kind == EditorAnimationKind::Delete {
-        //             let anim = self.create_delete_animation(event, &old_text, &new_text);
-        //             self.delete_animation = Some(anim);
-        //             break;
-        //         }
-        //     }
-        // }
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            for event in &events {
+                if event.kind == EditorAnimationKind::Delete {
+                    let anim = self.create_delete_animation(event, &old_text, &new_text);
+                    self.delete_animation = Some(anim);
+                    break;
+                }
+            }
+        }
 
         self.emit_content_changed();
     }
@@ -774,16 +772,15 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        // TODO: 启用删除动画需要先验证 QTextLine xToCursor/cursorToX roundtrip
-        // if self.current_typing_animation_enabled && !self.current_is_scrolling {
-        //     for event in &events {
-        //         if event.kind == EditorAnimationKind::Delete {
-        //             let anim = self.create_delete_animation(event, &old_text, &new_text);
-        //             self.delete_animation = Some(anim);
-        //             break;
-        //         }
-        //     }
-        // }
+        if self.current_typing_animation_enabled && !self.current_is_scrolling {
+            for event in &events {
+                if event.kind == EditorAnimationKind::Delete {
+                    let anim = self.create_delete_animation(event, &old_text, &new_text);
+                    self.delete_animation = Some(anim);
+                    break;
+                }
+            }
+        }
 
         self.emit_content_changed();
     }
@@ -982,7 +979,7 @@ impl SujianEditorItem {
         let mut events = self.engine.animation_events(&transaction);
 
         // 为 Insert/Delete 事件填充 glyph_rects（精确字符矩形）
-        self.fill_glyph_rects_for_events(&mut events, &new.text);
+        self.fill_glyph_rects_for_events(&mut events, &new.text, &old.text);
 
         self.last_event_count = events.len() as u32;
         self.last_summary = format!(
@@ -1088,18 +1085,20 @@ impl SujianEditorItem {
         &mut self,
         events: &mut [EditorAnimationEvent],
         text: &str,
+        old_text: &str,
     ) {
         let width = self.bounding_width();
-        let snapshot = self.layout_snapshot(width);
         let font_size = self.current_font_pixel_size as f64;
         let font_family = &self.current_font_family.to_string();
 
         for event in events.iter_mut() {
             match event.kind {
-                EditorAnimationKind::Insert | EditorAnimationKind::Delete => {
+                EditorAnimationKind::Insert => {
                     let range_start = event.range_start;
                     let range_end = range_start + event.range_len;
                     let mut glyph_rects = Vec::new();
+
+                    let snapshot = self.layout_snapshot(width);
 
                     for line in &snapshot.lines {
                         if line.end <= range_start || line.start >= range_end {
@@ -1126,6 +1125,51 @@ impl SujianEditorItem {
                                 continue;
                             }
                             let ch = text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
+                            glyph_rects.push(GlyphRect {
+                                x: line.x + x_pos,
+                                y: line.y,
+                                w: ch_w,
+                                h: line.height,
+                                char_: ch.to_string(),
+                            });
+                        }
+                    }
+
+                    event.glyph_rects = glyph_rects;
+                }
+                EditorAnimationKind::Delete => {
+                    let range_start = event.range_start;
+                    let range_end = range_start + event.range_len;
+                    let mut glyph_rects = Vec::new();
+
+                    // Use old_text layout for Delete events
+                    let delete_snapshot = self.layout_snapshot_for_text(old_text, width);
+
+                    for line in &delete_snapshot.lines {
+                        if line.end <= range_start || line.start >= range_end {
+                            continue;
+                        }
+                        if line.para_text.is_empty() {
+                            continue;
+                        }
+                        let seg_start = range_start.max(line.start);
+                        let seg_end = range_end.min(line.end);
+                        if seg_start >= seg_end {
+                            continue;
+                        }
+
+                        let glyph_data = self.editor_layout.glyph_positions_on_line(
+                            line,
+                            seg_start,
+                            seg_end,
+                            font_size,
+                            font_family,
+                        );
+                        for (abs_byte, x_pos, ch_w) in glyph_data {
+                            if abs_byte >= old_text.len() {
+                                continue;
+                            }
+                            let ch = old_text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
                             glyph_rects.push(GlyphRect {
                                 x: line.x + x_pos,
                                 y: line.y,
