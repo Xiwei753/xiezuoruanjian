@@ -15,7 +15,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: ghcr.io/sanchuanhehe/harmony-next-pipeline-docker/harmonyos-ci-image:latest
 
     defaults:
       run:
@@ -24,6 +23,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Download HarmonyOS command-line tools
+        run: |
+          cd $RUNNER_TEMP
+          wget -q -O commandline-tools-linux.zip https://image.cdn.dog/commandline-tools-linux-x64-6.0.2.642.zip
+          echo "181d283be91392e0a5dc09caf5ebda34c778cccc9985d8a97a814808452e2471  commandline-tools-linux.zip" | sha256sum -c -
+          unzip -q commandline-tools-linux.zip -d harmony-tools
+          echo "COMMANDLINE_TOOL_DIR=$RUNNER_TEMP/harmony-tools/command-line-tools" >> $GITHUB_ENV
+          echo "$RUNNER_TEMP/harmony-tools/command-line-tools/bin" >> $GITHUB_PATH
 
       - name: Show tool versions
         run: |
@@ -44,12 +57,6 @@ jobs:
         run: |
           cp build-profile.ci.json5 build-profile.json5
           cp oh-package.ci.json5 oh-package.json5
-
-      - name: Show ohpm config
-        run: |
-          ohpm -v || true
-          ohpm config get registry || true
-          cat ~/.ohpm/config.json 2>/dev/null || echo "No ohpm config file found"
 
       - name: Install Harmony dependencies
         run: ohpm install --all
