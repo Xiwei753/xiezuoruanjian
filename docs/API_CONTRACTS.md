@@ -257,7 +257,21 @@ EditorInteractionContract 属于平台编辑器交互层，不是 workspace 业�
 
 平台必须根据 `EditorSelectionSnapshot` 判断菜单项 enabled/visible。
 
-会修改正文的命令必须生成 `EditorTransaction`。
+Desktop 当前阶段：
+- SujianEditorItem 已接入 Core EditorTransaction
+- 所有修改正文的操作（insert_text / delete_backward / delete_forward / delete_selection / clipboard_paste 等）通过 Core transaction 执行
+- 动画事件通过 animation_events_json 暴露给 QML overlay
+
+Android 当前阶段：
+- WriterEditText 仍由系统 AppCompatEditText 管正文编辑
+- 菜单动作（cut/paste/delete/selectAll）通过 ActionMode.Callback / onTextContextMenuItem 做动作收口
+- 正文修改通过 TextWatcher / ViewModel / Repository 进入现有保存链路
+- 不要求当前阶段全量 Core transaction，避免强行改坏输入法
+
+Android 最终阶段：
+- 切到 Core EditorTransaction / SujianEditorView 后
+- cut/paste/delete/selectAll 等才全部生成 EditorTransaction
+
 不会修改正文的命令不得触发保存状态。
 
 Core 只管最终正文事务，不管"菜单怎么弹"。

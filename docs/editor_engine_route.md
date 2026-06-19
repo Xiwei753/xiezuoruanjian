@@ -104,9 +104,18 @@ SujianEditorView 仅作为后续阶段，在菜单、选区、IME、保存、动
 
 ### 渲染 overlay 分层
 
-- 基础层（`paint_onto`）：绘制静态文字，不包含动画效果
-- 动画 overlay（`paint_animation_overlay`）：绘制打字动画效果，叠加在基础层之上
-- overlay 的 glyph 位置必须与基础层完全对齐，否则会出现文字抖动或重影
+**当前验收路径（QML overlay）**：
+
+- Layer 0：Rust/QSG/QImage 静态正文（`paint_onto` / `render_to_image` / `update_texture_node`）
+- Cursor：QML Rectangle，绑定 Rust `cursor_rect_x/y/width/height`
+- Animation：QML `EditorAnimationOverlay`，消费 `animation_events_json` 信号，渲染 `EditorGlyphGhost` 组件
+- 正文永远由静态层完整绘制，动画层只画 ghost，不隐藏、不替换、不污染正文
+
+**Future / Experimental（QSG overlay，当前不作为验收路径）**：
+
+- `paint_animation_overlay` / `update_animation_overlay` / QSG 三层 overlay 代码暂时保留，但标记为 experimental
+- 不得在当前阶段作为主动画路径，不得与 QML overlay 同时启用
+- 待第一版 QML overlay 动画稳定后，如需性能优化再评估 QSG overlay 方案
 
 ### text_revision
 
@@ -167,6 +176,23 @@ SujianEditorView 仅作为后续阶段，在菜单、选区、IME、保存、动
 - **方案 C**：混合 texture 方案
 
 具体选择视性能和稳定性决定。
+
+### Desktop 动画路线总结
+
+当前 Desktop 动画唯一主路径：
+
+1. Rust Core 生成 `EditorTransaction` / `EditorAnimationEvent`，填充 `glyph_rects`
+2. `SujianEditorItem` 通过 `animation_events_json` 属性暴露给 QML
+3. QML `EditorAnimationOverlay` 监听 `animationEventsChanged` 信号，解析 JSON 事件
+4. `EditorGlyphGhost` 组件渲染逐字 ghost 动画（insert 从光标吐出，delete 向光标吞回）
+
+Rust 侧只负责：排版、命中、选区、光标、事务、glyph rects。
+QML 侧负责：把 ghost 动画画出来。
+
+禁止：
+- 静态正文层为了动画隐藏文字
+- QSG overlay 和 QML overlay 同时当主路径
+- 正文透明 span / hidden range / ForegroundColorSpan
 
 ### text_revision 机制
 

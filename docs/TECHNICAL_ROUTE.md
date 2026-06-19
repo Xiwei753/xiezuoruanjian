@@ -43,7 +43,10 @@ Supersedes: docs/TECHNICAL_ROUTE.md
 - Core `editor` 模块统一产出 `EditorTransaction`、`EditorAnimationEvent` 等平台无关语义。
 - Android 当前优先接管长按菜单、选区动作、paste/cut/copy/selectAll 行为，不立刻替换完整 EditText。
 - Desktop 因 Qt/QML TextArea 路线已多次踩坑，继续推进 SujianEditorItem。
-- 在新自绘编辑器落地前，Desktop typing animation 必须关闭，不得恢复 hidden-range/reveal 或 QTextDocument 字符格式隐藏方案。
+- Desktop 动画允许开启，但只能走 Core transaction + animation_events_json + QML overlay 路线：
+  Core EditorTransaction / EditorAnimationEvent → SujianEditorItem.animation_events_json → QML EditorAnimationOverlay / EditorGlyphGhost。
+  禁止恢复：hidden range、QTextDocument 字符格式隐藏、正文透明 span、TextArea 补丁动画。
+  QSG 三层 overlay（paint_animation_overlay / update_animation_overlay）标记为 future/experimental，不是当前验收路径。
 
 ## Android 图谱技术路线
 - 图谱不是普通页面，而是大画布图形系统。**图谱最终是与正文并列的创作知识图谱，不仅限于章节树结构。**

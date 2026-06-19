@@ -2,7 +2,7 @@ package com.xiwei.sujian.ui
 
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.text.style.ForegroundColorSpan
+
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.sqrt
 
@@ -34,7 +34,7 @@ data class OverlayAnim(
     var progress: Float = 0f,
     var startTimeNanos: Long = -1L,
     val durationMs: Long,
-    val hiddenSpan: ForegroundColorSpan? = null,
+
     val isDeletion: Boolean = false
 ) {
     val codePoints: List<Int> = buildList {
@@ -68,29 +68,16 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
 
     fun addAnim(anim: OverlayAnim) {
         if (pausedForScroll) {
-            removeSpan(anim)
             return
         }
         if (activeAnims.size >= MAX_ANIMATIONS) {
-            val oldest = activeAnims.removeAt(0)
-            removeSpan(oldest)
+            activeAnims.removeAt(0)
         }
         activeAnims.add(anim)
         editText.animationRuntime?.register(this)
     }
 
-    private fun removeSpan(anim: OverlayAnim) {
-        val span = anim.hiddenSpan ?: return
-        val editable = editText.text ?: return
-        if (editable.getSpanStart(span) >= 0) {
-            editText.isUpdatingSpanWrapper = true
-            editable.removeSpan(span)
-            editText.isUpdatingSpanWrapper = false
-        }
-    }
-
     fun removeAnim(anim: OverlayAnim) {
-        removeSpan(anim)
         activeAnims.remove(anim)
         if (activeAnims.isEmpty()) {
             editText.animationRuntime?.unregister(this)
@@ -98,9 +85,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
     }
 
     fun clear() {
-        for (anim in activeAnims) {
-            removeSpan(anim)
-        }
+
         activeAnims.clear()
         editText.animationRuntime?.unregister(this)
     }
@@ -122,7 +107,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
 
         val iterator = activeAnims.iterator()
         var hasMore = false
-        val currentEditable = editText.text
+
 
         while (iterator.hasNext()) {
             val anim = iterator.next()
@@ -138,33 +123,9 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
             }
 
             if (anim.progress >= 1f) {
-                removeSpan(anim)
                 activeAnims.remove(anim)
             } else {
                 hasMore = true
-            }
-        }
-
-        if (currentEditable != null) {
-            val invalidAnims = activeAnims.filter { anim ->
-                if (anim.isDeletion) {
-                    false // Deletion animations don't track text dynamically via spans
-                } else {
-                    val span = anim.hiddenSpan
-                    if (span != null) {
-                        val start = currentEditable.getSpanStart(span)
-                        val end = currentEditable.getSpanEnd(span)
-                        start < 0 || end < 0 || (end - start) != anim.insertedText.length
-                    } else {
-                        false
-                    }
-                }
-            }
-            if (invalidAnims.isNotEmpty()) {
-                for (invalid in invalidAnims) {
-                    removeSpan(invalid)
-                }
-                activeAnims.removeAll(invalidAnims)
             }
         }
 
