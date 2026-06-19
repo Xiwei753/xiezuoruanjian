@@ -1,0 +1,59 @@
+# 第一阶段：只构建无签名/调试 HAP，签名后续通过 GitHub Secrets 注入
+
+name: Harmony Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/harmony/**"
+      - ".github/workflows/harmony_build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/sanchuanhehe/harmony-next-pipeline-docker/harmonyos-ci-image:latest
+
+    defaults:
+      run:
+        working-directory: apps/harmony
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show tool versions
+        run: |
+          node -v || true
+          ohpm -v || true
+          ls -la
+          ls -la ./hvigorw || true
+
+      - name: Check hvigorw
+        run: |
+          if [ ! -f "./hvigorw" ]; then
+            echo "ERROR: apps/harmony/hvigorw not found. Open the project once in DevEco Studio or add the hvigor wrapper."
+            exit 1
+          fi
+          chmod +x ./hvigorw
+
+      - name: Install Harmony dependencies
+        run: ohpm install --all
+
+      - name: Build HAP
+        run: |
+          ./hvigorw clean --no-daemon
+          ./hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
+
+      - name: List outputs
+        run: |
+          find entry/build -maxdepth 8 -type f | sort
+
+      - name: Upload Harmony output
+        uses: actions/upload-artifact@v4
+        with:
+          name: sujian-harmony-output
+          path: apps/harmony/entry/build/default/outputs/default/**

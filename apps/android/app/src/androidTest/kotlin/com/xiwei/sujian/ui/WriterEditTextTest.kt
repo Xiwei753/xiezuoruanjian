@@ -11,6 +11,10 @@ import org.junit.runner.RunWith
  * WriterEditTextTest — WriterEditText 仪器化测试
  *
  * 测试 WriterEditText 的打字动画、平滑光标等功能在真机/模拟器上的行为。
+ *
+ * ## 重要约束
+ * 打字动画通过 Canvas overlay 绘制，**禁止**向正文 Editable 注入透明 ForegroundColorSpan 隐藏文字。
+ * 以下测试确保没有任何 ForegroundColorSpan 被注入到正文中。
  */
 
 @RunWith(AndroidJUnit4::class)
@@ -41,7 +45,7 @@ class WriterEditTextTest {
     }
 
     @Test
-    fun testTypingAnimationCreatesAndClearsSpan() {
+    fun testTypingAnimationDoesNotInjectForegroundColorSpan() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         val editText = WriterEditText(appContext)
         editText.setTypingAnimationEnabled(true, durationMs = 10)
@@ -51,15 +55,11 @@ class WriterEditTextTest {
 
         val spans = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
         assertNotNull(spans)
-        assertTrue("Hidden span should be added", spans!!.isNotEmpty())
-
-        editText.renderLayer?.clear()
-        val spansAfter = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertTrue("Hidden span should be removed after clear", spansAfter.isNullOrEmpty())
+        assertTrue("Typing animation must NOT inject ForegroundColorSpan into body text", spans!!.isEmpty())
     }
 
     @Test
-    fun testRenderLayerClearRemovesAllSpans() {
+    fun testRenderLayerClearDoesNotLeaveForegroundColorSpans() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         val editText = WriterEditText(appContext)
         editText.setTypingAnimationEnabled(true, durationMs = 10)
@@ -70,17 +70,16 @@ class WriterEditTextTest {
         editText.text?.append("C")
 
         val spansBefore = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertNotNull(spansBefore)
-        assertTrue("Should have hidden spans after typing", spansBefore!!.isNotEmpty())
+        assertTrue("No ForegroundColorSpan should exist before clear", spansBefore.isNullOrEmpty())
 
         editText.renderLayer?.clear()
 
         val spansAfter = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertTrue("All hidden spans should be removed after renderLayer.clear()", spansAfter.isNullOrEmpty())
+        assertTrue("No ForegroundColorSpan should exist after clear", spansAfter.isNullOrEmpty())
     }
 
     @Test
-    fun testMassPasteDoesNotAddSpan() {
+    fun testMassPasteDoesNotInjectForegroundColorSpan() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         val editText = WriterEditText(appContext)
         editText.setTypingAnimationEnabled(true, durationMs = 10)
@@ -90,11 +89,11 @@ class WriterEditTextTest {
         editText.text?.append(longString)
 
         val spans = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertTrue("Mass paste should not add hidden span", spans.isNullOrEmpty())
+        assertTrue("Mass paste must NOT inject ForegroundColorSpan", spans.isNullOrEmpty())
     }
 
     @Test
-    fun testComposingTextDoesNotAddSpan() {
+    fun testComposingTextDoesNotInjectForegroundColorSpan() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         val editText = WriterEditText(appContext)
         editText.setTypingAnimationEnabled(true, durationMs = 10)
@@ -107,11 +106,11 @@ class WriterEditTextTest {
         android.view.inputmethod.BaseInputConnection.setComposingSpans(editText.text!!)
 
         val spans = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertTrue("Composing text should not add hidden span", spans.isNullOrEmpty())
+        assertTrue("Composing text must NOT inject ForegroundColorSpan", spans.isNullOrEmpty())
     }
 
     @Test
-    fun testDeletionDoesNotAddSpan() {
+    fun testDeletionDoesNotInjectForegroundColorSpan() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         val editText = WriterEditText(appContext)
         editText.setTypingAnimationEnabled(true, durationMs = 10)
@@ -121,11 +120,11 @@ class WriterEditTextTest {
         editText.text?.delete(4, 5)
 
         val spans = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertTrue("Deletion should not add hidden span", spans.isNullOrEmpty())
+        assertTrue("Deletion must NOT inject ForegroundColorSpan", spans.isNullOrEmpty())
     }
 
     @Test
-    fun testRunWithoutTextAnimationsClearsSpans() {
+    fun testRunWithoutTextAnimationsDoesNotLeaveForegroundColorSpans() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         val editText = WriterEditText(appContext)
         editText.setTypingAnimationEnabled(true, durationMs = 10)
@@ -134,14 +133,13 @@ class WriterEditTextTest {
         editText.text?.append("A")
 
         val spansBefore = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertNotNull(spansBefore)
-        assertTrue("Should have hidden span before runWithoutTextAnimations", spansBefore!!.isNotEmpty())
+        assertTrue("No ForegroundColorSpan should exist before runWithoutTextAnimations", spansBefore.isNullOrEmpty())
 
         editText.runWithoutTextAnimations {
             editText.text?.append("B")
         }
 
         val spansAfter = editText.text?.getSpans(0, editText.text!!.length, ForegroundColorSpan::class.java)
-        assertTrue("Hidden spans should be cleared after runWithoutTextAnimations", spansAfter.isNullOrEmpty())
+        assertTrue("No ForegroundColorSpan should exist after runWithoutTextAnimations", spansAfter.isNullOrEmpty())
     }
 }

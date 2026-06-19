@@ -196,6 +196,55 @@ IWriterCoreBridge 定义了完整的接口：
 
 > **重要**：Mock 模式仅供开发验证页面结构和接口形状，不是正式功能。Mock 数据不代表真实业务逻辑，不应用于功能测试或用户体验评估。
 
+## 云端构建（CI/CD）
+
+### Workflow 配置
+
+新增 `.github/workflows/harmony_build.yml`，用于自动化构建 HarmonyOS HAP 包。
+
+- **触发条件**：push 到 `apps/harmony/**` 路径，或手动触发（workflow_dispatch）
+- **构建环境**：`ghcr.io/sanchuanhehe/harmony-next-pipeline-docker/harmonyos-ci-image:latest`
+- **构建步骤**：
+  1. `ohpm install --all` — 安装依赖
+  2. `hvigorw assembleHap` — 构建 HAP
+  3. 上传构建产物为 GitHub Artifact
+
+> **注意**：第一阶段只构建无签名/调试 HAP，不代表正式发布包。
+
+## 签名规则
+
+### 签名材料管理
+
+- 签名材料（`.p12`、`.cer`、`.p7b`、密码等）**不得提交到仓库**
+- `build-profile.json5` 中的签名配置已清空为占位符，仅用于本地开发参考
+
+### GitHub Secrets 注入
+
+后续签名通过 GitHub Secrets 注入，所需 Secret 列表：
+
+| Secret 名称 | 说明 |
+|-------------|------|
+| `HARMONY_P12_BASE64` | .p12 证书文件（Base64 编码） |
+| `HARMONY_CERT_BASE64` | .cer 证书文件（Base64 编码） |
+| `HARMONY_PROFILE_BASE64` | .p7b 描述文件（Base64 编码） |
+| `HARMONY_KEY_ALIAS` | 密钥别名 |
+| `HARMONY_KEY_PASSWORD` | 密钥密码 |
+| `HARMONY_STORE_PASSWORD` | 密钥库密码 |
+
+### 文件转 Base64 命令（PowerShell）
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("sujian.p12")) | Set-Content p12.txt
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("sujian.cer")) | Set-Content cert.txt
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("sujian.p7b")) | Set-Content profile.txt
+```
+
+## 重要声明
+
+- 云端构建 artifact 仅用于开发测试，**不代表正式发布包**
+- 签名材料**不得提交到仓库**
+- 第一阶段只构建无签名/调试 HAP
+
 ## 注意事项
 
 1. 当前阶段使用 mock 数据，不涉及真实文件系统，mock 仅供开发验证

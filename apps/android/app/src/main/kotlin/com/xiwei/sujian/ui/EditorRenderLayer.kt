@@ -11,7 +11,7 @@ import android.graphics.Canvas
  * - 在系统文本绘制前后注入自定义视觉逻辑
  * - 管理 smooth cursor 绘制
  * - 管理 typing animation overlay 绘制
- * - 管理动画和 hidden span 的生命周期
+ * - 管理动画的生命周期
  *
  * 未来可扩展（预留接口，本次不实现）：
  * - 段落锚点 / 导图关联节点标识绘制
@@ -77,7 +77,7 @@ class EditorRenderLayer(private val editText: WriterEditText) {
     }
 
     /**
-     * 清理所有 typing animations 和关联的 hidden spans。
+     * 清理所有 typing animations。
      * 必须在 runWithoutTextAnimations()、onDetachedFromWindow()、setText() 等场景调用。
      */
     fun clear() {
