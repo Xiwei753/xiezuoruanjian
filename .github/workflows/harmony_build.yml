@@ -62,7 +62,7 @@ jobs:
         run: |
           # ohpm.harmonyos.com domain does not exist in public DNS.
           # Use npm to fetch packages from repo.harmonyos.com (Huawei's npm-compatible registry)
-          npm install @ohos/hvigor@5.7.0 @ohos/hvigor-ohos-plugin@5.7.0 \
+          npm install @ohos/hvigor@6.26.1 @ohos/hvigor-ohos-plugin@6.26.1 \
             --registry=https://repo.harmonyos.com/npm/ \
             --prefix=.
 
