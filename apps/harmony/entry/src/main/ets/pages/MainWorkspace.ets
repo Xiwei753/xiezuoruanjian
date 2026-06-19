@@ -121,6 +121,20 @@ struct MainWorkspace {
   @State cursorX: number = 0
   @State cursorY: number = 0
 
+  // ── getCaretOffset() 防御性编码 ──
+  @State caretOffsetApiAvailable: boolean = true
+
+  // ── 删除动画"吞回"效果 ──
+  @State preDeleteCaretX: number = 0
+  @State preDeleteCaretY: number = 0
+  @State deleteAnimTranslateX: number = 0
+  @State deleteAnimTranslateY: number = 0
+
+  // ── 滚动偏移补偿 ──
+  // getCaretOffset() 可能返回的是 TextArea 内容坐标（未扣 scroll），
+  // 如果 DevEco 实测发现返回的已是可视区坐标，则不需要扣减 scrollOffsetY
+  @State scrollOffsetY: number = 0
+
   // ── 通用状态 ──
   @State isInitialLoading: boolean = true
   @State initErrorMessage: string = ''
@@ -381,62 +395,113 @@ struct MainWorkspace {
     const newLength = text.length
     const changed = this.findChangedRange(oldContent, text)
 
-    // 插入动画
+    // 插入动画（防御性编码 + 滚动偏移补偿）
     if (this.typingAnimationEnabled && changed.insertedText.length > 0 && changed.insertedText.length <= 3 && !this.isScrolling) {
-      const caretOffset = this.textAreaController.getCaretOffset()
-      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-        const insertedText = changed.insertedText
-        if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
-          this.lastInsertedText = insertedText
-          this.insertAnimX = caretOffset.x
-          this.insertAnimY = caretOffset.y
-          this.showInsertAnimation = true
-          if (this.insertAnimTimer !== -1) {
-            clearTimeout(this.insertAnimTimer)
+      if (this.caretOffsetApiAvailable) {
+        try {
+          const caretOffset = this.textAreaController.getCaretOffset()
+          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+            const insertedText = changed.insertedText
+            if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
+              this.lastInsertedText = insertedText
+              this.insertAnimX = caretOffset.x
+              // 滚动偏移补偿：getCaretOffset() 返回的 y 可能是内容坐标，需扣减 scrollOffsetY
+              this.insertAnimY = caretOffset.y - this.scrollOffsetY
+              this.showInsertAnimation = true
+              if (this.insertAnimTimer !== -1) {
+                clearTimeout(this.insertAnimTimer)
+              }
+              this.insertAnimTimer = setTimeout(() => {
+                this.showInsertAnimation = false
+                this.lastInsertedText = ''
+                this.insertAnimTimer = -1
+              }, this.settings.editorTypingAnimationDurationMs || 150) as number
+            }
           }
-          this.insertAnimTimer = setTimeout(() => {
-            this.showInsertAnimation = false
-            this.lastInsertedText = ''
-            this.insertAnimTimer = -1
-          }, this.settings.editorTypingAnimationDurationMs || 150) as number
+        } catch (err) {
+          // getCaretOffset() API 不可用或异常，优雅降级：不播放动画
+          this.caretOffsetApiAvailable = false
         }
       }
     }
 
-    // 删除动画
+    // 删除动画（防御性编码 + 吞回效果 + 滚动偏移补偿）
     if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
-      const caretOffset = this.textAreaController.getCaretOffset()
-      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-        const deletedText = changed.deletedText
-        if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
-          this.deleteAnimText = deletedText
-          this.deleteAnimX = caretOffset.x
-          this.deleteAnimY = caretOffset.y
-          this.showDeleteAnimation = true
-          if (this.deleteAnimTimer !== -1) {
-            clearTimeout(this.deleteAnimTimer)
+      if (this.caretOffsetApiAvailable) {
+        try {
+          // 先读取删除前的光标位置（即被删文字所在位置）
+          const preDeleteOffset = this.textAreaController.getCaretOffset()
+          if (preDeleteOffset && preDeleteOffset.x >= 0 && preDeleteOffset.y >= 0) {
+            this.preDeleteCaretX = preDeleteOffset.x
+            this.preDeleteCaretY = preDeleteOffset.y - this.scrollOffsetY
           }
-          this.deleteAnimTimer = setTimeout(() => {
-            this.showDeleteAnimation = false
-            this.deleteAnimTimer = -1
-          }, this.settings.editorTypingAnimationDurationMs || 150) as number
+        } catch (err) {
+          this.caretOffsetApiAvailable = false
+        }
+      }
+
+      // 先更新 content 以触发光标移动到新位置
+      this.content = text
+
+      // 删除后获取新光标位置，构建吞回动画
+      if (this.caretOffsetApiAvailable) {
+        try {
+          const caretOffset = this.textAreaController.getCaretOffset()
+          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+            const deletedText = changed.deletedText
+            if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
+              this.deleteAnimText = deletedText
+              this.deleteAnimX = caretOffset.x
+              // 滚动偏移补偿
+              this.deleteAnimY = caretOffset.y - this.scrollOffsetY
+              // 吞回效果：从旧光标位置飞向新光标位置
+              this.deleteAnimTranslateX = this.preDeleteCaretX - this.deleteAnimX
+              this.deleteAnimTranslateY = this.preDeleteCaretY - this.deleteAnimY
+              this.showDeleteAnimation = true
+              if (this.deleteAnimTimer !== -1) {
+                clearTimeout(this.deleteAnimTimer)
+              }
+              // 触发吞回动画：translate 从旧偏移归零
+              animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
+                this.deleteAnimTranslateX = 0
+                this.deleteAnimTranslateY = 0
+              })
+              this.deleteAnimTimer = setTimeout(() => {
+                this.showDeleteAnimation = false
+                this.deleteAnimTimer = -1
+              }, this.settings.editorTypingAnimationDurationMs || 150) as number
+            }
+          }
+        } catch (err) {
+          this.caretOffsetApiAvailable = false
         }
       }
     }
 
-    // 平滑光标
+    // 平滑光标（防御性编码 + 滚动偏移补偿）
     if (this.smoothCursorEnabled && !this.isScrolling) {
-      const caretOffset = this.textAreaController.getCaretOffset()
-      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-        animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
-          this.cursorX = caretOffset.x
-          this.cursorY = caretOffset.y
-        })
-        this.cursorVisible = true
+      if (this.caretOffsetApiAvailable) {
+        try {
+          const caretOffset = this.textAreaController.getCaretOffset()
+          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+            animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
+              this.cursorX = caretOffset.x
+              // 滚动偏移补偿
+              this.cursorY = caretOffset.y - this.scrollOffsetY
+            })
+            this.cursorVisible = true
+          }
+        } catch (err) {
+          // getCaretOffset() API 不可用或异常，优雅降级：不播放动画
+          this.caretOffsetApiAvailable = false
+        }
       }
     }
 
-    this.content = text
+    // 如果删除动画分支已经提前设置了 content，这里不重复设置
+    if (!(this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling)) {
+      this.content = text
+    }
     this.hasUnsavedChanges = text !== this.lastSavedContent
 
     // 更新字数统计
@@ -1107,13 +1172,14 @@ struct MainWorkspace {
                   .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseOut })
               }
 
-              // 删除动画 overlay
+              // 删除动画 overlay（吞回效果：从旧光标位置飞向新光标位置）
               if (this.typingAnimationEnabled && this.showDeleteAnimation) {
                 Text(this.deleteAnimText)
                   .fontSize(this.settings.editorFontSize)
                   .fontColor(this.themeConfig.colors.textPrimary)
                   .opacity(0.4)
                   .position({ x: this.deleteAnimX, y: this.deleteAnimY })
+                  .translate({ x: this.deleteAnimTranslateX, y: this.deleteAnimTranslateY })
                   .scale({ x: 0.7, y: 0.7 })
                   .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
               }
@@ -1141,6 +1207,10 @@ struct MainWorkspace {
         .onScrollFrameBegin((offset: number) => {
           this.isScrolling = true
           return { offsetRemain: offset }
+        })
+        .onScroll((scrollOffset: number, scrollState: ScrollState) => {
+          // 记录滚动偏移，用于动画坐标补偿
+          this.scrollOffsetY = scrollOffset
         })
         .onScrollStop(() => {
           this.isScrolling = false

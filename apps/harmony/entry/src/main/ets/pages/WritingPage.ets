@@ -71,6 +71,14 @@ struct WritingPage {
   @State deleteAnimText: string = ''
   @State deleteAnimX: number = 0
   @State deleteAnimY: number = 0
+  @State preDeleteCaretX: number = 0
+  @State preDeleteCaretY: number = 0
+  @State deleteAnimTranslateX: number = 0
+  @State deleteAnimTranslateY: number = 0
+  @State deleteAnimScale: number = 1.0
+  @State deleteAnimOpacity: number = 0.8
+  @State caretOffsetApiAvailable: boolean = true
+  @State scrollOffsetY: number = 0
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -329,38 +337,75 @@ struct WritingPage {
 
     // 打字动画：检测新插入的文本
     if (this.typingAnimationEnabled && changed.insertedText.length > 0 && changed.insertedText.length <= 3 && !this.isScrolling) {
-      // 用 getCaretOffset 获取真实光标坐标
-      const caretOffset = this.textAreaController.getCaretOffset()
-      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-        const insertedText = changed.insertedText
-        // 包含换行不播放
-        if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
-          this.lastInsertedText = insertedText
-          this.insertAnimX = caretOffset.x
-          this.insertAnimY = caretOffset.y
-          this.showInsertAnimation = true
+      if (!this.caretOffsetApiAvailable) {
+        // API 不可用时优雅降级：不播放动画
+      } else {
+        // 用 getCaretOffset 获取真实光标坐标（防御性编码：try-catch + null 检查）
+        try {
+          const caretOffset = this.textAreaController.getCaretOffset()
+          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+            const insertedText = changed.insertedText
+            // 包含换行不播放
+            if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
+              this.lastInsertedText = insertedText
+              // getCaretOffset() 可能返回 TextArea 内容坐标（未扣 scroll），
+              // 如果 DevEco 实测发现返回的已是可视区坐标，则删除 `- this.scrollOffsetY` 即可
+              this.insertAnimX = caretOffset.x
+              this.insertAnimY = caretOffset.y - this.scrollOffsetY
+              this.showInsertAnimation = true
 
-          if (this.insertAnimTimer !== -1) {
-            clearTimeout(this.insertAnimTimer)
+              if (this.insertAnimTimer !== -1) {
+                clearTimeout(this.insertAnimTimer)
+              }
+              this.insertAnimTimer = setTimeout(() => {
+                this.showInsertAnimation = false
+                this.insertAnimTimer = -1
+              }, this.settings.editorTypingAnimationDurationMs || 150) as number
+            }
           }
-          this.insertAnimTimer = setTimeout(() => {
-            this.showInsertAnimation = false
-            this.insertAnimTimer = -1
-          }, this.settings.editorTypingAnimationDurationMs || 150) as number
+        } catch (e) {
+          this.caretOffsetApiAvailable = false
         }
       }
     }
 
-    // 删除动画：检测被删除的文本
+    // 删除动画：检测被删除的文本 — 吞回效果
     if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
-      // 用 getCaretOffset 获取真实光标坐标（删除后光标位置就是目标位置）
-      const caretOffset = this.textAreaController.getCaretOffset()
-      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+      if (!this.caretOffsetApiAvailable) {
+        // API 不可用时优雅降级：不播放动画
+      } else {
+        // 先获取删除前光标位置（被删字的位置）
+        try {
+          const preCaretOffset = this.textAreaController.getCaretOffset()
+          if (preCaretOffset && preCaretOffset.x >= 0 && preCaretOffset.y >= 0) {
+            // getCaretOffset() 可能返回 TextArea 内容坐标（未扣 scroll），
+            // 如果 DevEco 实测发现返回的已是可视区坐标，则删除 `- this.scrollOffsetY` 即可
+            this.preDeleteCaretX = preCaretOffset.x
+            this.preDeleteCaretY = preCaretOffset.y - this.scrollOffsetY
+          }
+        } catch (e) {
+          this.caretOffsetApiAvailable = false
+        }
+
+        // 获取删除后光标位置（目标位置）—— 注意：此时 content 已经变了，光标已在新位置
+        try {
+          const postCaretOffset = this.textAreaController.getCaretOffset()
+          if (postCaretOffset && postCaretOffset.x >= 0 && postCaretOffset.y >= 0) {
+            this.deleteAnimX = postCaretOffset.x
+            this.deleteAnimY = postCaretOffset.y - this.scrollOffsetY
+          }
+        } catch (e) {
+          this.caretOffsetApiAvailable = false
+        }
+
         const deletedText = changed.deletedText
         if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
           this.deleteAnimText = deletedText
-          this.deleteAnimX = caretOffset.x
-          this.deleteAnimY = caretOffset.y
+          // 吞回效果：初始偏移从旧位置开始，然后 animateTo 归零
+          this.deleteAnimTranslateX = this.preDeleteCaretX - this.deleteAnimX
+          this.deleteAnimTranslateY = this.preDeleteCaretY - this.deleteAnimY
+          this.deleteAnimScale = 1.0
+          this.deleteAnimOpacity = 0.8
           this.showDeleteAnimation = true
 
           if (this.deleteAnimTimer !== -1) {
@@ -370,19 +415,37 @@ struct WritingPage {
             this.showDeleteAnimation = false
             this.deleteAnimTimer = -1
           }, this.settings.editorTypingAnimationDurationMs || 150) as number
+
+          // 吞回动画：从旧位置飞向新光标位置 + 缩小 + 淡出
+          animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
+            this.deleteAnimTranslateX = 0
+            this.deleteAnimTranslateY = 0
+            this.deleteAnimScale = 0.5
+            this.deleteAnimOpacity = 0
+          })
         }
       }
     }
 
-    // 平滑光标：用 getCaretOffset 获取真实坐标
+    // 平滑光标：用 getCaretOffset 获取真实坐标（防御性编码：try-catch + null 检查）
     if (this.smoothCursorEnabled && !this.isScrolling) {
-      const caretOffset = this.textAreaController.getCaretOffset()
-      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-        animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
-          this.cursorX = caretOffset.x
-          this.cursorY = caretOffset.y
-        })
-        this.cursorVisible = true
+      if (!this.caretOffsetApiAvailable) {
+        // API 不可用时优雅降级：不播放动画
+      } else {
+        try {
+          const caretOffset = this.textAreaController.getCaretOffset()
+          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+            animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
+              this.cursorX = caretOffset.x
+              // getCaretOffset() 可能返回 TextArea 内容坐标（未扣 scroll），
+              // 如果 DevEco 实测发现返回的已是可视区坐标，则删除 `- this.scrollOffsetY` 即可
+              this.cursorY = caretOffset.y - this.scrollOffsetY
+            })
+            this.cursorVisible = true
+          }
+        } catch (e) {
+          this.caretOffsetApiAvailable = false
+        }
       }
     }
   }
@@ -550,14 +613,15 @@ struct WritingPage {
                 .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseOut })
             }
 
-            // ── 删除动画 overlay ──
+            // ── 删除动画 overlay — 吞回效果：从旧位置飞向新光标位置 ──
             if (this.typingAnimationEnabled && this.showDeleteAnimation) {
               Text(this.deleteAnimText)
                 .fontSize(this.settings.editorFontSize)
                 .fontColor(this.themeConfig.colors.textPrimary)
-                .opacity(0.4)
+                .opacity(this.deleteAnimOpacity)
                 .position({ x: this.deleteAnimX, y: this.deleteAnimY })
-                .scale({ x: 0.7, y: 0.7 })
+                .scale({ x: this.deleteAnimScale, y: this.deleteAnimScale })
+                .translate({ x: this.deleteAnimTranslateX, y: this.deleteAnimTranslateY })
                 .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
             }
           }
@@ -570,6 +634,9 @@ struct WritingPage {
         .onScrollFrameBegin((offset: number) => {
           this.isScrolling = true
           return { offsetRemain: offset }
+        })
+        .onScroll((scrollOffset: number, scrollState: ScrollState) => {
+          this.scrollOffsetY = scrollOffset
         })
         .onScrollStop(() => {
           this.isScrolling = false
