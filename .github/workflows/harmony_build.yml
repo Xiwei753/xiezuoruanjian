@@ -27,7 +27,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Download HarmonyOS command-line tools
         run: |
@@ -62,25 +62,29 @@ jobs:
         run: |
           # ohpm.harmonyos.com domain does not exist in public DNS.
           # Use npm to fetch packages from repo.harmonyos.com (Huawei's npm-compatible registry)
-          # and place them into oh_modules where hvigor expects them.
-          mkdir -p oh_modules/@ohos
           npm install @ohos/hvigor@5.7.0 @ohos/hvigor-ohos-plugin@5.7.0 \
             --registry=https://repo.harmonyos.com/npm/ \
             --prefix=.
-          # npm installs to node_modules, move to oh_modules for ohpm compatibility
-          if [ -d "node_modules/@ohos" ]; then
-            cp -r node_modules/@ohos/* oh_modules/@ohos/
-          fi
 
       - name: Install OpenHarmony dependencies via ohpm
         run: |
           ohpm config set registry https://ohpm.openharmony.cn/ohpm/
           ohpm install --all || true
 
-      - name: Build HAP
+      - name: Build HAP via hvigor directly
+        env:
+          # Tell hvigor's bundled pnpm to use Huawei's npm-compatible registry
+          # instead of the default ohpm registry which is inaccessible from CI
+          npm_config_registry: https://repo.harmonyos.com/npm/
         run: |
-          ./hvigorw clean --no-daemon || true
-          ./hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
+          # Run hvigor directly from node_modules instead of via hvigorw wrapper.
+          # hvigor's initNodePath() will create a workspace and run pnpm install
+          # there. With npm_config_registry set, pnpm can resolve @ohos packages
+          # from repo.harmonyos.com. Additionally, adaptNode14Module() patches
+          # require() to resolve from the project's node_modules as fallback.
+          export NODE_PATH=$(pwd)/node_modules
+          node ./node_modules/@ohos/hvigor/bin/hvigor.js clean --no-daemon 2>&1 || true
+          node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon 2>&1
 
       - name: List outputs
         run: |
