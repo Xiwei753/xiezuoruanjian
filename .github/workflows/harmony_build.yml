@@ -45,11 +45,13 @@ jobs:
 
       - name: Configure DNS for ohpm.harmonyos.com
         run: |
-          echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+          echo "Overriding container DNS..."
+          echo "nameserver 8.8.8.8" > /etc/resolv.conf
           echo "nameserver 8.8.4.4" >> /etc/resolv.conf
-          echo "Testing DNS resolution..."
-          nslookup ohpm.harmonyos.com || true
-          curl -sI https://ohpm.harmonyos.com/ohpm/ || true
+          echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+          cat /etc/resolv.conf
+          echo "Testing DNS resolution with Python..."
+          python3 -c "import socket; print(socket.gethostbyname('ohpm.harmonyos.com'))" || echo "DNS FAILED: ohpm.harmonyos.com unresolvable"
 
       - name: Configure ohpm registry
         run: ohpm config set registry https://ohpm.harmonyos.com/ohpm/
