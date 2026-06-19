@@ -21,7 +21,7 @@ Item {
 
     signal createWorkspaceWithPath(string path)
     signal openWorkspaceWithPath(string path)
-    signal initFromGithub()
+
 
     Platform.FolderDialog {
         id: createWorkspaceDialog
@@ -121,33 +121,7 @@ Item {
                 onClicked: openWorkspaceDialog.open()
             }
 
-            Rectangle {
-                Layout.fillWidth: true
-                height: 1
-                color: root.appTheme ? root.appTheme.border : "#e2e8f0"
-                Layout.topMargin: root.appTheme ? root.appTheme.sp4 : 4
-                Layout.bottomMargin: root.appTheme ? root.appTheme.sp4 : 4
-            }
 
-            AppButton {
-                Layout.fillWidth: true
-                text: qsTr("从 GitHub 同步仓库初始化")
-                theme: root.appTheme
-                variant: "text"
-                onClicked: {
-                    root.initFromGithub()
-                }
-            }
-
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("点击后会进入同步页面：配置远端仓库地址、分支、Token，然后点击「选择目录并初始化/克隆」。")
-                font.pixelSize: root.appTheme ? root.appTheme.caption : 12
-                font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
-                color: root.appTheme ? root.appTheme.textSecondary : "#8C9198"
-                wrapMode: Text.Wrap
-                horizontalAlignment: Text.AlignHCenter
-            }
         }
     }
 }

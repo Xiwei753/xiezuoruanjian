@@ -348,6 +348,7 @@ impl SujianEditorItem {
         }
         self.current_editor_enabled = value;
         self.editor_enabled_changed();
+        self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -519,6 +520,7 @@ impl SujianEditorItem {
         }
         self.current_scroll_y = value;
         self.cursor_ctrl.force_snap_next = true;
+        self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -531,6 +533,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_viewport_height = value;
+        self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -602,6 +605,7 @@ impl SujianEditorItem {
         self.invalidate_layout_cache();
         self.recalculate_content_height_quiet();
         self.visual_settings_changed();
+        self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -613,6 +617,7 @@ impl SujianEditorItem {
         self.text_changed();
         self.cursor_position_changed();
         self.selection_changed();
+        self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 

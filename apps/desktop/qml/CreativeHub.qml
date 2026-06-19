@@ -31,7 +31,7 @@ Rectangle {
     signal openProject(string projectId, string projectTitle)
     signal createProject()
     signal openSettings()
-    signal openSync()
+
     signal switchWorkspace()
     signal openStarmapWorkspace(string smId, string smTitle)
     signal renameProjectRequested(string projectId, string title)
@@ -168,7 +168,7 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.openSync()
+                            onClicked: root.openSettings()
                         }
                     }
 

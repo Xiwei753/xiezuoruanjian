@@ -78,14 +78,6 @@ ApplicationWindow {
         }
     }
 
-    function openSyncDialog() {
-        if (!syncDialogLoader.active) {
-            syncDialogLoader.active = true;
-        }
-        if (syncDialogLoader.item) {
-            syncDialogLoader.item.open();
-        }
-    }
 
     property alias appState: appController.appState
     readonly property bool rootHasWorkspace: workspaceBackend !== null && workspaceBackend.has_workspace === true
@@ -376,10 +368,6 @@ ApplicationWindow {
                     window.openSettingsDialog();
                 }
 
-                onOpenSync: {
-                    window.debugLog("sync", "sync_dialog_open", "");
-                    window.openSyncDialog();
-                }
 
                 onSwitchWorkspace: {
                     window.debugLog("workspace", "switch_workspace_clicked", "");
@@ -415,9 +403,6 @@ ApplicationWindow {
                     window.openSettingsDialog();
                 }
 
-                onOpenSync: {
-                    window.openSyncDialog();
-                }
 
                 onCreateVolumeRequested: function(projectId) {
                     inputDialog.actionType = "volume";
@@ -477,9 +462,7 @@ ApplicationWindow {
                 onOpenWorkspaceWithPath: (path) => {
                     appController.createWorkspaceWithPath(path, true);
                 }
-                onInitFromGithub: {
-                    openSyncDialog();
-                }
+
             }
         }
     }
@@ -598,44 +581,14 @@ ApplicationWindow {
             theme: designTokens
             backendRef: settingsBackend
             workspaceBackendRef: workspaceBackend
+            syncBackendRef: syncBackend
+            editorBackendRef: editorBackend
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
             }
         }
     }
 
-    Loader {
-        id: syncDialogLoader
-        active: false
-        sourceComponent: Dialog {
-            modal: true
-            title: qsTr("同步设置")
-            width: Math.max(360, Math.min(window.width - 80, 720))
-            height: Math.max(420, Math.min(window.height - 120, 560))
-            parent: Overlay.overlay
-            x: Math.round((parent.width - width) / 2)
-            y: Math.round((parent.height - height) / 2)
-            background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
-
-            header: null
-
-            contentItem: Item {
-                SyncPage {
-                    id: syncPage
-                    anchors.fill: parent
-                    anchors.margins: designTokens.sp16
-                    theme: designTokens
-                    backendRef: syncBackend
-                    beforeSyncHook: function() {
-                        editorBackend.flush_writing_stats();
-                    }
-                    onSettingsChanged: {
-                        appController.refreshState(qsTr("刷新同步设置失败"));
-                    }
-                }
-            }
-        }
-    }
 
     Dialog {
         id: inputDialog

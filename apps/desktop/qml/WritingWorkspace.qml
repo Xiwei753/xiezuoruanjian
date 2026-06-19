@@ -60,7 +60,7 @@ Rectangle {
 
     signal backToProjects()
     signal openSettings()
-    signal openSync()
+
     signal createVolumeRequested(string projectId)
     signal createChapterRequested(string projectId, string volumeId)
     signal renameItemRequested(var itemData)

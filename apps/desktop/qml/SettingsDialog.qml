@@ -27,6 +27,8 @@ Dialog {
     property var theme: null
     property var backendRef: null
     property var workspaceBackendRef: null
+    property var syncBackendRef: null
+    property var editorBackendRef: null
     property var dt: theme
     property bool updatingValues: false
     signal settingsChanged()
@@ -232,12 +234,14 @@ Dialog {
                 dt: root.dt
                 title: qsTr("同步")
                 Layout.fillWidth: true
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("同步配置")
-                    description: qsTr("在同步页面管理仓库与鉴权")
-                    clickable: true
-                    onClicked: { root.close(); /* navigate to sync page */ }
+                SyncPage {
+                    Layout.fillWidth: true
+                    theme: root.dt
+                    backendRef: root.syncBackendRef
+                    beforeSyncHook: function() {
+                        if (root.editorBackendRef) root.editorBackendRef.flush_writing_stats();
+                    }
+                    onSettingsChanged: root.settingsChanged()
                 }
             }
 
