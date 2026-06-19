@@ -61,21 +61,26 @@ jobs:
       - name: Install hvigor dependencies via npm
         run: |
           # ohpm.harmonyos.com domain does not exist in public DNS.
-          # Use npm to fetch packages from repo.harmonyos.com (Huawei's npm-compatible registry)
-          # Use a dedicated package.json.ci with dependencies listed to avoid --prefix issues
-          cp package.json.ci package.json
-          npm install --registry=https://repo.harmonyos.com/npm/ --loglevel verbose
+          # repo.harmonyos.com/npm/ serves metadata but npm install fails against it.
+          # Workaround: download tarballs directly and install from local files.
+          mkdir -p node_modules/@ohos
 
-      - name: Verify npm install
-        run: |
-          echo "=== node_modules contents ==="
-          ls -la node_modules/@ohos/ 2>/dev/null || echo "ERROR: node_modules/@ohos not found"
-          echo "=== hvigor version ==="
-          node -e "console.log(require('./node_modules/@ohos/hvigor/package.json').version)" 2>/dev/null || echo "ERROR: Cannot read hvigor version"
-          echo "=== hvigor-ohos-plugin version ==="
-          node -e "console.log(require('./node_modules/@ohos/hvigor-ohos-plugin/package.json').version)" 2>/dev/null || echo "ERROR: Cannot read plugin version"
-          echo "=== hvigor.js exists ==="
-          ls -la ./node_modules/@ohos/hvigor/bin/hvigor.js 2>/dev/null || echo "ERROR: hvigor.js not found"
+          echo "Downloading @ohos/hvigor@6.26.1..."
+          wget -q -O /tmp/hvigor.tgz "https://repo.harmonyos.com/npm/@ohos/hvigor/-/@ohos/hvigor-6.26.1.tgz"
+          mkdir -p node_modules/@ohos/hvigor
+          tar xzf /tmp/hvigor.tgz -C node_modules/@ohos/hvigor --strip-components=1
+
+          echo "Downloading @ohos/hvigor-ohos-plugin@6.26.1..."
+          wget -q -O /tmp/hvigor-plugin.tgz "https://repo.harmonyos.com/npm/@ohos/hvigor-ohos-plugin/-/@ohos/hvigor-ohos-plugin-6.26.1.tgz"
+          mkdir -p node_modules/@ohos/hvigor-ohos-plugin
+          tar xzf /tmp/hvigor-plugin.tgz -C node_modules/@ohos/hvigor-ohos-plugin --strip-components=1
+
+          echo "Verifying installation..."
+          ls -la node_modules/@ohos/
+          node -e "console.log('hvigor version:', require('./node_modules/@ohos/hvigor/package.json').version)"
+          node -e "console.log('plugin version:', require('./node_modules/@ohos/hvigor-ohos-plugin/package.json').version)"
+          ls -la ./node_modules/@ohos/hvigor/bin/hvigor.js
+
 
       - name: Install OpenHarmony dependencies via ohpm
         run: |
