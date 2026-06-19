@@ -111,6 +111,15 @@ struct MainWorkspace {
   @State lastInsertedText: string = ''
   @State showInsertAnimation: boolean = false
   @State cursorBlinkOpacity: number = 1.0
+  @State insertAnimX: number = 0
+  @State insertAnimY: number = 0
+  @State showDeleteAnimation: boolean = false
+  @State deleteAnimText: string = ''
+  @State deleteAnimX: number = 0
+  @State deleteAnimY: number = 0
+  @State isScrolling: boolean = false
+  @State cursorX: number = 0
+  @State cursorY: number = 0
 
   // ── 通用状态 ──
   @State isInitialLoading: boolean = true
@@ -125,6 +134,9 @@ struct MainWorkspace {
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
+  private insertAnimTimer: number = -1
+  private deleteAnimTimer: number = -1
+  private textAreaController: TextAreaController = new TextAreaController()
 
   // ========== 生命周期 ==========
 
@@ -185,6 +197,16 @@ struct MainWorkspace {
     }
     if (this.adaptiveObserver) {
       this.adaptiveContext.removeObserver(this.adaptiveObserver)
+    }
+
+    // 清理动画定时器
+    if (this.insertAnimTimer !== -1) {
+      clearTimeout(this.insertAnimTimer)
+      this.insertAnimTimer = -1
+    }
+    if (this.deleteAnimTimer !== -1) {
+      clearTimeout(this.deleteAnimTimer)
+      this.deleteAnimTimer = -1
     }
   }
 
@@ -354,16 +376,69 @@ struct MainWorkspace {
   }
 
   onContentChange(text: string) {
-    // 检测新增字符（用于打字动画）
-    if (this.typingAnimationEnabled && text.length > this.content.length) {
-      const insertedLength = text.length - this.content.length
-      this.lastInsertedText = text.substring(text.length - insertedLength)
-      this.showInsertAnimation = true
-      // 短暂显示后隐藏动画
-      setTimeout(() => {
-        this.showInsertAnimation = false
-        this.lastInsertedText = ''
-      }, 300)
+    const oldContent = this.content
+    const oldLength = oldContent.length
+    const newLength = text.length
+
+    // 插入动画
+    if (this.typingAnimationEnabled && newLength > oldLength && !this.isScrolling) {
+      const insertedLen = newLength - oldLength
+      if (insertedLen <= 3) {
+        const caretOffset = this.textAreaController.getCaretOffset()
+        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+          const insertedText = text.substring(newLength - insertedLen)
+          if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
+            this.lastInsertedText = insertedText
+            this.insertAnimX = caretOffset.x
+            this.insertAnimY = caretOffset.y
+            this.showInsertAnimation = true
+            if (this.insertAnimTimer !== -1) {
+              clearTimeout(this.insertAnimTimer)
+            }
+            this.insertAnimTimer = setTimeout(() => {
+              this.showInsertAnimation = false
+              this.lastInsertedText = ''
+              this.insertAnimTimer = -1
+            }, this.settings.editorTypingAnimationDurationMs || 150) as number
+          }
+        }
+      }
+    }
+
+    // 删除动画
+    if (this.typingAnimationEnabled && newLength < oldLength && !this.isScrolling) {
+      const deletedLen = oldLength - newLength
+      if (deletedLen <= 3) {
+        const caretOffset = this.textAreaController.getCaretOffset()
+        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+          const deletedText = oldContent.substring(newLength, oldLength)
+          if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
+            this.deleteAnimText = deletedText
+            this.deleteAnimX = caretOffset.x
+            this.deleteAnimY = caretOffset.y
+            this.showDeleteAnimation = true
+            if (this.deleteAnimTimer !== -1) {
+              clearTimeout(this.deleteAnimTimer)
+            }
+            this.deleteAnimTimer = setTimeout(() => {
+              this.showDeleteAnimation = false
+              this.deleteAnimTimer = -1
+            }, this.settings.editorTypingAnimationDurationMs || 150) as number
+          }
+        }
+      }
+    }
+
+    // 平滑光标
+    if (this.smoothCursorEnabled && !this.isScrolling) {
+      const caretOffset = this.textAreaController.getCaretOffset()
+      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+        animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
+          this.cursorX = caretOffset.x
+          this.cursorY = caretOffset.y
+        })
+        this.cursorVisible = true
+      }
     }
 
     this.content = text
@@ -1015,7 +1090,7 @@ struct MainWorkspace {
         Scroll() {
           Column() {
             Stack() {
-              TextArea({ text: this.content, placeholder: '开始写作...' })
+              TextArea({ text: this.content, placeholder: '开始写作...', controller: this.textAreaController })
                 .width('100%')
                 .constraintSize({ minHeight: '100%' })
                 .fontSize(this.settings.editorFontSize)
@@ -1026,33 +1101,37 @@ struct MainWorkspace {
                 .placeholderColor(this.themeConfig.colors.textHint)
                 .onChange((value: string): void => { this.onContentChange(value) })
 
-              // 打字动画 overlay：新字符淡入效果
+              // 打字动画 overlay：新字符淡入效果（真实光标坐标定位）
               if (this.typingAnimationEnabled && this.showInsertAnimation) {
                 Text(this.lastInsertedText)
                   .fontSize(this.settings.editorFontSize)
                   .fontColor(this.themeConfig.colors.primary)
-                  .opacity(0.5)
-                  .fontWeight(FontWeight.Bold)
-                  .margin({ left: 24, top: 20 })
-                  .align(Alignment.TopStart)
+                  .opacity(0.6)
+                  .position({ x: this.insertAnimX, y: this.insertAnimY })
+                  .scale({ x: 1.1, y: 1.1 })
+                  .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseOut })
               }
 
-              // 自定义光标 overlay（闪烁竖线）
+              // 删除动画 overlay
+              if (this.typingAnimationEnabled && this.showDeleteAnimation) {
+                Text(this.deleteAnimText)
+                  .fontSize(this.settings.editorFontSize)
+                  .fontColor(this.themeConfig.colors.textPrimary)
+                  .opacity(0.4)
+                  .position({ x: this.deleteAnimX, y: this.deleteAnimY })
+                  .scale({ x: 0.7, y: 0.7 })
+                  .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
+              }
+
+              // 自定义光标 overlay（闪烁竖线，真实光标坐标定位）
               if (this.smoothCursorEnabled) {
-                Column() {
-                  Row() {
-                    Column() {}
-                      .width(2)
-                      .height(this.settings.editorFontSize * 1.2)
-                      .backgroundColor(this.themeConfig.colors.primary)
-                      .opacity(this.cursorBlinkOpacity)
-                      .margin({ left: 24, top: 20 })
-                    Blank()
-                  }
-                  .width('100%')
-                }
-                .width('100%')
-                .hitTestBehavior(HitTestMode.Transparent)
+                Column()
+                  .width(2)
+                  .height(this.settings.editorFontSize * 1.2)
+                  .backgroundColor(this.themeConfig.colors.primary)
+                  .opacity(this.cursorBlinkOpacity)
+                  .position({ x: this.cursorX, y: this.cursorY })
+                  .animation({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut })
               }
             }
             .width('100%')
@@ -1064,6 +1143,13 @@ struct MainWorkspace {
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
         .align(Alignment.Top)
+        .onScrollFrameBegin((offset: number) => {
+          this.isScrolling = true
+          return { offsetRemain: offset }
+        })
+        .onScrollStop(() => {
+          this.isScrolling = false
+        })
       }
 
       // 底部工具栏

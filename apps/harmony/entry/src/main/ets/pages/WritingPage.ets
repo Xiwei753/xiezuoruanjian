@@ -67,6 +67,10 @@ struct WritingPage {
   @State insertAnimX: number = 0
   @State insertAnimY: number = 0
   @State isScrolling: boolean = false
+  @State showDeleteAnimation: boolean = false
+  @State deleteAnimText: string = ''
+  @State deleteAnimX: number = 0
+  @State deleteAnimY: number = 0
 
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
@@ -76,6 +80,8 @@ struct WritingPage {
   private adaptiveObserver: AdaptiveObserver | null = null
   private cursorBlinkTimer: number = -1
   private insertAnimTimer: number = -1
+  private deleteAnimTimer: number = -1
+  private textAreaController: TextAreaController = new TextAreaController()
 
   aboutToAppear() {
     const params = router.getParams() as WritingPageParams
@@ -142,6 +148,10 @@ struct WritingPage {
     if (this.insertAnimTimer !== -1) {
       clearTimeout(this.insertAnimTimer)
       this.insertAnimTimer = -1
+    }
+    if (this.deleteAnimTimer !== -1) {
+      clearTimeout(this.deleteAnimTimer)
+      this.deleteAnimTimer = -1
     }
     if (this.autoSaveObserver) {
       this.lifecycle.removeObserver(this.autoSaveObserver)
@@ -277,91 +287,89 @@ struct WritingPage {
     return this.themeConfig.colors.success
   }
 
-  onContentChange(text: string, cursorPos?: number) {
+  onContentChange(text: string) {
     const oldContent = this.content
+    const oldLength = oldContent.length
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
 
-    // Update word count
+    // 更新字数
     this.bridge.calculateWordCount(text).then(count => {
       this.wordCount = count
     })
 
     // ── 动画触发 ──
-    if (cursorPos !== undefined) {
-      this.cursorPosition = cursorPos
-    }
+    const newLength = text.length
 
     // 打字动画：检测新插入的文本
-    if (this.typingAnimationEnabled && text.length > oldContent.length && !this.isScrolling) {
-      const insertedLen = text.length - oldContent.length
+    if (this.typingAnimationEnabled && newLength > oldLength && !this.isScrolling) {
+      const insertedLen = newLength - oldLength
 
-      // ── 边界保护 ──
-      // 1. 插入文本长度 > 3，不播放（大段输入如粘贴）
-      if (insertedLen > 3) {
-        // 不播放动画
-      } else {
-        const insertPos = cursorPos !== undefined ? cursorPos - insertedLen : text.length - insertedLen
-        // 2. 插入文本包含换行，不播放
-        const insertedText = text.substring(insertPos, insertPos + insertedLen)
-        if (insertedText.includes('\n') || insertedText.includes('\r')) {
-          // 不播放动画
-        } else {
-          this.lastInsertedText = insertedText
-          this.showInsertAnimation = true
+      // 边界保护：插入文本长度 > 3 不播放（大段输入如粘贴）
+      if (insertedLen <= 3) {
+        // 用 getCaretOffset 获取真实光标坐标
+        const caretOffset = this.textAreaController.getCaretOffset()
+        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+          const insertedText = text.substring(newLength - insertedLen)
+          // 包含换行不播放
+          if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
+            this.lastInsertedText = insertedText
+            this.insertAnimX = caretOffset.x
+            this.insertAnimY = caretOffset.y
+            this.showInsertAnimation = true
 
-          // WIP: 以下动画位置计算使用 fontSize * 0.6 估算，不是真实编辑器布局坐标。
-          // 等接入 Core EditorAnimationEvent + 真实 glyph rect 后替换。
-          const charWidth = this.settings.editorFontSize * 0.6
-          const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
-          const pagePadding = this.adaptiveState.pagePadding
-          const contentWidth = 360 - pagePadding * 2
-
-          // 3. contentWidth <= 0，不播放
-          if (contentWidth <= 0 || charWidth <= 0) {
-            this.showInsertAnimation = false
-          } else {
-            const approxLine = Math.floor((insertPos * charWidth) / contentWidth)
-            this.insertAnimX = pagePadding + (insertPos * charWidth) % contentWidth
-            this.insertAnimY = 20 + approxLine * lineHeight
+            if (this.insertAnimTimer !== -1) {
+              clearTimeout(this.insertAnimTimer)
+            }
+            this.insertAnimTimer = setTimeout(() => {
+              this.showInsertAnimation = false
+              this.insertAnimTimer = -1
+            }, this.settings.editorTypingAnimationDurationMs || 150) as number
           }
-          // WIP END
-
-          // 清除之前的定时器
-          if (this.insertAnimTimer !== -1) {
-            clearTimeout(this.insertAnimTimer)
-          }
-          this.insertAnimTimer = setTimeout(() => {
-            this.showInsertAnimation = false
-            this.insertAnimTimer = -1
-          }, 150) as number
         }
       }
     }
 
-    // 平滑光标：更新光标位置估算
-    // WIP: 以下动画位置计算使用 fontSize * 0.6 估算，不是真实编辑器布局坐标。
-    // 等接入 Core EditorAnimationEvent + 真实 glyph rect 后替换。
-    if (this.smoothCursorEnabled && cursorPos !== undefined && !this.isScrolling) {
-      const charWidth = this.settings.editorFontSize * 0.6
-      const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
-      const pagePadding = this.adaptiveState.pagePadding
-      const contentWidth = 360 - pagePadding * 2
+    // 删除动画：检测被删除的文本
+    if (this.typingAnimationEnabled && newLength < oldLength && !this.isScrolling) {
+      const deletedLen = oldLength - newLength
 
-      // 边界保护：contentWidth <= 0 或 charWidth <= 0 时不播放
-      if (contentWidth <= 0 || charWidth <= 0) {
-        // 不播放光标动画
-      } else {
-        const approxLine = Math.floor((cursorPos * charWidth) / contentWidth)
-        animateTo({ duration: 80, curve: Curve.EaseOut }, () => {
-          this.cursorX = pagePadding + (cursorPos * charWidth) % contentWidth
-          this.cursorY = 20 + approxLine * lineHeight
+      // 边界保护：删除文本长度 > 3 不播放
+      if (deletedLen <= 3) {
+        // 用 getCaretOffset 获取真实光标坐标（删除后光标位置就是目标位置）
+        const caretOffset = this.textAreaController.getCaretOffset()
+        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+          // 被删除的文本：从旧内容中取
+          const deletedText = oldContent.substring(newLength, oldLength)
+          if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
+            this.deleteAnimText = deletedText
+            this.deleteAnimX = caretOffset.x
+            this.deleteAnimY = caretOffset.y
+            this.showDeleteAnimation = true
+
+            if (this.deleteAnimTimer !== -1) {
+              clearTimeout(this.deleteAnimTimer)
+            }
+            this.deleteAnimTimer = setTimeout(() => {
+              this.showDeleteAnimation = false
+              this.deleteAnimTimer = -1
+            }, this.settings.editorTypingAnimationDurationMs || 150) as number
+          }
+        }
+      }
+    }
+
+    // 平滑光标：用 getCaretOffset 获取真实坐标
+    if (this.smoothCursorEnabled && !this.isScrolling) {
+      const caretOffset = this.textAreaController.getCaretOffset()
+      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+        animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
+          this.cursorX = caretOffset.x
+          this.cursorY = caretOffset.y
         })
-        // 输入时光标可见
         this.cursorVisible = true
       }
     }
-    // WIP END
   }
 
   async clearContent() {
@@ -491,7 +499,7 @@ struct WritingPage {
       } else {
         Scroll() {
           Stack() {
-            TextArea({ text: this.content, placeholder: '开始写作...' })
+            TextArea({ text: this.content, placeholder: '开始写作...', controller: this.textAreaController })
               .width('100%')
               .constraintSize({ minHeight: '100%' })
               .fontSize(this.settings.editorFontSize)
@@ -501,6 +509,9 @@ struct WritingPage {
               .fontColor(this.themeConfig.colors.textPrimary)
               .placeholderColor(this.themeConfig.colors.textHint)
               .onChange((value: string): void => { this.onContentChange(value) })
+              .onTextSelectionChange((selectionStart: number, selectionEnd: number) => {
+                this.cursorPosition = selectionStart
+              })
 
             // ── 平滑光标 overlay ──
             if (this.smoothCursorEnabled && this.cursorVisible) {
@@ -510,7 +521,7 @@ struct WritingPage {
                 .backgroundColor(this.themeConfig.colors.primary)
                 .position({ x: this.cursorX, y: this.cursorY })
                 .opacity(0.8)
-                .animation({ duration: 80, curve: Curve.EaseOut })
+                .animation({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut })
             }
 
             // ── 打字动画 overlay ──
@@ -521,7 +532,18 @@ struct WritingPage {
                 .opacity(0.6)
                 .position({ x: this.insertAnimX, y: this.insertAnimY })
                 .scale({ x: 1.1, y: 1.1 })
-                .animation({ duration: 150, curve: Curve.EaseOut })
+                .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseOut })
+            }
+
+            // ── 删除动画 overlay ──
+            if (this.typingAnimationEnabled && this.showDeleteAnimation) {
+              Text(this.deleteAnimText)
+                .fontSize(this.settings.editorFontSize)
+                .fontColor(this.themeConfig.colors.textPrimary)
+                .opacity(0.4)
+                .position({ x: this.deleteAnimX, y: this.deleteAnimY })
+                .scale({ x: 0.7, y: 0.7 })
+                .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
             }
           }
           .width('100%')
