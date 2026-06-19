@@ -103,6 +103,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/EditorAnimationHighlight.qml" as "EditorAnimationHighlight.qml",
     "qml/EditorGlyphGhost.qml" as "EditorGlyphGhost.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
+    "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/ScreenPolicyAdapter.qml" as "ScreenPolicyAdapter.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
