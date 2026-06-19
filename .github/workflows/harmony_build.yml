@@ -45,8 +45,11 @@ jobs:
           cp build-profile.ci.json5 build-profile.json5
           cp oh-package.ci.json5 oh-package.json5
 
-      - name: Configure ohpm registry
-        run: ohpm config set registry https://repo.harmonyos.com/npm/
+      - name: Show ohpm config
+        run: |
+          ohpm -v || true
+          ohpm config get registry || true
+          cat ~/.ohpm/config.json 2>/dev/null || echo "No ohpm config file found"
 
       - name: Install Harmony dependencies
         run: ohpm install --all
