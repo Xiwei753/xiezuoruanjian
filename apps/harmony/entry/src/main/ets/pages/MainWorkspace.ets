@@ -379,52 +379,47 @@ struct MainWorkspace {
     const oldContent = this.content
     const oldLength = oldContent.length
     const newLength = text.length
+    const changed = this.findChangedRange(oldContent, text)
 
     // 插入动画
-    if (this.typingAnimationEnabled && newLength > oldLength && !this.isScrolling) {
-      const insertedLen = newLength - oldLength
-      if (insertedLen <= 3) {
-        const caretOffset = this.textAreaController.getCaretOffset()
-        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-          const insertedText = text.substring(newLength - insertedLen)
-          if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
-            this.lastInsertedText = insertedText
-            this.insertAnimX = caretOffset.x
-            this.insertAnimY = caretOffset.y
-            this.showInsertAnimation = true
-            if (this.insertAnimTimer !== -1) {
-              clearTimeout(this.insertAnimTimer)
-            }
-            this.insertAnimTimer = setTimeout(() => {
-              this.showInsertAnimation = false
-              this.lastInsertedText = ''
-              this.insertAnimTimer = -1
-            }, this.settings.editorTypingAnimationDurationMs || 150) as number
+    if (this.typingAnimationEnabled && changed.insertedText.length > 0 && changed.insertedText.length <= 3 && !this.isScrolling) {
+      const caretOffset = this.textAreaController.getCaretOffset()
+      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+        const insertedText = changed.insertedText
+        if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
+          this.lastInsertedText = insertedText
+          this.insertAnimX = caretOffset.x
+          this.insertAnimY = caretOffset.y
+          this.showInsertAnimation = true
+          if (this.insertAnimTimer !== -1) {
+            clearTimeout(this.insertAnimTimer)
           }
+          this.insertAnimTimer = setTimeout(() => {
+            this.showInsertAnimation = false
+            this.lastInsertedText = ''
+            this.insertAnimTimer = -1
+          }, this.settings.editorTypingAnimationDurationMs || 150) as number
         }
       }
     }
 
     // 删除动画
-    if (this.typingAnimationEnabled && newLength < oldLength && !this.isScrolling) {
-      const deletedLen = oldLength - newLength
-      if (deletedLen <= 3) {
-        const caretOffset = this.textAreaController.getCaretOffset()
-        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-          const deletedText = oldContent.substring(newLength, oldLength)
-          if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
-            this.deleteAnimText = deletedText
-            this.deleteAnimX = caretOffset.x
-            this.deleteAnimY = caretOffset.y
-            this.showDeleteAnimation = true
-            if (this.deleteAnimTimer !== -1) {
-              clearTimeout(this.deleteAnimTimer)
-            }
-            this.deleteAnimTimer = setTimeout(() => {
-              this.showDeleteAnimation = false
-              this.deleteAnimTimer = -1
-            }, this.settings.editorTypingAnimationDurationMs || 150) as number
+    if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
+      const caretOffset = this.textAreaController.getCaretOffset()
+      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+        const deletedText = changed.deletedText
+        if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
+          this.deleteAnimText = deletedText
+          this.deleteAnimX = caretOffset.x
+          this.deleteAnimY = caretOffset.y
+          this.showDeleteAnimation = true
+          if (this.deleteAnimTimer !== -1) {
+            clearTimeout(this.deleteAnimTimer)
           }
+          this.deleteAnimTimer = setTimeout(() => {
+            this.showDeleteAnimation = false
+            this.deleteAnimTimer = -1
+          }, this.settings.editorTypingAnimationDurationMs || 150) as number
         }
       }
     }
@@ -1382,6 +1377,31 @@ struct MainWorkspace {
   }
 
   // ========== 工具方法 ==========
+
+  private findChangedRange(oldText: string, newText: string): { start: number; oldEnd: number; newEnd: number; insertedText: string; deletedText: string } {
+    const oldLen = oldText.length
+    const newLen = newText.length
+    const minLen = Math.min(oldLen, newLen)
+
+    // 找公共前缀
+    let start = 0
+    while (start < minLen && oldText.charAt(start) === newText.charAt(start)) {
+      start++
+    }
+
+    // 找公共后缀
+    let oldEnd = oldLen
+    let newEnd = newLen
+    while (oldEnd > start && newEnd > start && oldText.charAt(oldEnd - 1) === newText.charAt(newEnd - 1)) {
+      oldEnd--
+      newEnd--
+    }
+
+    const deletedText = oldText.substring(start, oldEnd)
+    const insertedText = newText.substring(start, newEnd)
+
+    return { start, oldEnd, newEnd, insertedText, deletedText }
+  }
 
   private getSaveStatusColor(): ResourceColor {
     if (this.lastSaveFailed) return this.themeConfig.colors.error

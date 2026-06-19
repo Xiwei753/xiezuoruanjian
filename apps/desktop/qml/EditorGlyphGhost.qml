@@ -72,7 +72,7 @@ Item {
         id: ghostText
         text: root.glyphText
         color: root.ghostColor
-        font.family: root.glyphFontFamily || undefined
+        font.family: root.glyphFontFamily || "serif"
         font.pixelSize: root.glyphFontPixelSize > 0 ? root.glyphFontPixelSize : root.glyphHeight * 0.85
         opacity: root.animKind === "insert" ? root.insertOpacityAnim.currentOpacity : root.deleteOpacityAnim.currentOpacity
     }

@@ -39,10 +39,7 @@ class TypingAnimationController(
             if (value) {
                 lastAddedStart = -1
                 lastAddedCount = 0
-                pendingDeleteStart = -1
-                pendingDeleteText = ""
-                pendingDeleteStartX = -1f
-                pendingDeleteStartY = -1f
+                clearPendingDelete()
                 renderLayer.clear()
             }
         }
@@ -62,10 +59,20 @@ class TypingAnimationController(
     private var pendingDeleteText = ""
     private var pendingDeleteStart = -1
 
+    private fun clearPendingDelete() {
+        pendingDeleteStart = -1
+        pendingDeleteText = ""
+        pendingDeleteStartX = -1f
+        pendingDeleteStartY = -1f
+    }
+
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         typingAnimationEnabled = enabled
         typingAnimationDurationMs = durationMs
-        if (!enabled) renderLayer.clear()
+        if (!enabled) {
+            clearPendingDelete()
+            renderLayer.clear()
+        }
     }
 
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
@@ -75,10 +82,7 @@ class TypingAnimationController(
             return
         }
         if (isSuppressAnimations) {
-            pendingDeleteStart = -1
-            pendingDeleteText = ""
-            pendingDeleteStartX = -1f
-            pendingDeleteStartY = -1f
+            clearPendingDelete()
             renderLayer.clear()
             if (DEBUG_ANIM) {
                 android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")
@@ -156,10 +160,7 @@ class TypingAnimationController(
     fun afterTextChanged(editable: Editable?) {
         if (editable == null) return
         if (isSuppressAnimations || isScrollAnimationsSuppressed) {
-            pendingDeleteStart = -1
-            pendingDeleteText = ""
-            pendingDeleteStartX = -1f
-            pendingDeleteStartY = -1f
+            clearPendingDelete()
             return
         }
 
@@ -182,10 +183,7 @@ class TypingAnimationController(
                     isDeletion = true
                 ))
             }
-            pendingDeleteStart = -1
-            pendingDeleteStartX = -1f
-            pendingDeleteStartY = -1f
-            pendingDeleteText = ""
+            clearPendingDelete()
         }
 
         val composingStart = BaseInputConnection.getComposingSpanStart(editable)
@@ -248,6 +246,7 @@ class TypingAnimationController(
     }
 
     fun onDetachedFromWindow() {
+        clearPendingDelete()
         renderLayer.clear()
     }
 }

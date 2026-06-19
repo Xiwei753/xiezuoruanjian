@@ -272,6 +272,31 @@ struct WritingPage {
     }
   }
 
+  private findChangedRange(oldText: string, newText: string): { start: number; oldEnd: number; newEnd: number; insertedText: string; deletedText: string } {
+    const oldLen = oldText.length
+    const newLen = newText.length
+    const minLen = Math.min(oldLen, newLen)
+
+    // 找公共前缀
+    let start = 0
+    while (start < minLen && oldText.charAt(start) === newText.charAt(start)) {
+      start++
+    }
+
+    // 找公共后缀
+    let oldEnd = oldLen
+    let newEnd = newLen
+    while (oldEnd > start && newEnd > start && oldText.charAt(oldEnd - 1) === newText.charAt(newEnd - 1)) {
+      oldEnd--
+      newEnd--
+    }
+
+    const deletedText = oldText.substring(start, oldEnd)
+    const insertedText = newText.substring(start, newEnd)
+
+    return { start, oldEnd, newEnd, insertedText, deletedText }
+  }
+
   private getSaveStatusText(): string {
     if (this.lastSaveFailed) return '保存失败'
     if (this.isSaving && this.isAutoSaving) return '自动保存中'
@@ -300,61 +325,51 @@ struct WritingPage {
 
     // ── 动画触发 ──
     const newLength = text.length
+    const changed = this.findChangedRange(oldContent, text)
 
     // 打字动画：检测新插入的文本
-    if (this.typingAnimationEnabled && newLength > oldLength && !this.isScrolling) {
-      const insertedLen = newLength - oldLength
+    if (this.typingAnimationEnabled && changed.insertedText.length > 0 && changed.insertedText.length <= 3 && !this.isScrolling) {
+      // 用 getCaretOffset 获取真实光标坐标
+      const caretOffset = this.textAreaController.getCaretOffset()
+      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+        const insertedText = changed.insertedText
+        // 包含换行不播放
+        if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
+          this.lastInsertedText = insertedText
+          this.insertAnimX = caretOffset.x
+          this.insertAnimY = caretOffset.y
+          this.showInsertAnimation = true
 
-      // 边界保护：插入文本长度 > 3 不播放（大段输入如粘贴）
-      if (insertedLen <= 3) {
-        // 用 getCaretOffset 获取真实光标坐标
-        const caretOffset = this.textAreaController.getCaretOffset()
-        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-          const insertedText = text.substring(newLength - insertedLen)
-          // 包含换行不播放
-          if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
-            this.lastInsertedText = insertedText
-            this.insertAnimX = caretOffset.x
-            this.insertAnimY = caretOffset.y
-            this.showInsertAnimation = true
-
-            if (this.insertAnimTimer !== -1) {
-              clearTimeout(this.insertAnimTimer)
-            }
-            this.insertAnimTimer = setTimeout(() => {
-              this.showInsertAnimation = false
-              this.insertAnimTimer = -1
-            }, this.settings.editorTypingAnimationDurationMs || 150) as number
+          if (this.insertAnimTimer !== -1) {
+            clearTimeout(this.insertAnimTimer)
           }
+          this.insertAnimTimer = setTimeout(() => {
+            this.showInsertAnimation = false
+            this.insertAnimTimer = -1
+          }, this.settings.editorTypingAnimationDurationMs || 150) as number
         }
       }
     }
 
     // 删除动画：检测被删除的文本
-    if (this.typingAnimationEnabled && newLength < oldLength && !this.isScrolling) {
-      const deletedLen = oldLength - newLength
+    if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
+      // 用 getCaretOffset 获取真实光标坐标（删除后光标位置就是目标位置）
+      const caretOffset = this.textAreaController.getCaretOffset()
+      if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+        const deletedText = changed.deletedText
+        if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
+          this.deleteAnimText = deletedText
+          this.deleteAnimX = caretOffset.x
+          this.deleteAnimY = caretOffset.y
+          this.showDeleteAnimation = true
 
-      // 边界保护：删除文本长度 > 3 不播放
-      if (deletedLen <= 3) {
-        // 用 getCaretOffset 获取真实光标坐标（删除后光标位置就是目标位置）
-        const caretOffset = this.textAreaController.getCaretOffset()
-        if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-          // 被删除的文本：从旧内容中取
-          const deletedText = oldContent.substring(newLength, oldLength)
-          if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
-            this.deleteAnimText = deletedText
-            this.deleteAnimX = caretOffset.x
-            this.deleteAnimY = caretOffset.y
-            this.showDeleteAnimation = true
-
-            if (this.deleteAnimTimer !== -1) {
-              clearTimeout(this.deleteAnimTimer)
-            }
-            this.deleteAnimTimer = setTimeout(() => {
-              this.showDeleteAnimation = false
-              this.deleteAnimTimer = -1
-            }, this.settings.editorTypingAnimationDurationMs || 150) as number
+          if (this.deleteAnimTimer !== -1) {
+            clearTimeout(this.deleteAnimTimer)
           }
+          this.deleteAnimTimer = setTimeout(() => {
+            this.showDeleteAnimation = false
+            this.deleteAnimTimer = -1
+          }, this.settings.editorTypingAnimationDurationMs || 150) as number
         }
       }
     }
