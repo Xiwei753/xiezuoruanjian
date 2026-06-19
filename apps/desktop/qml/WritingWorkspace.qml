@@ -1,33 +1,33 @@
 // =============================================================================
-// WritingWorkspace.qml — 写作工作区
+// WritingWorkspace.qml - ?????
 // =============================================================================
 //
-// 层级：Desktop UI 层（QML 页面）
-// 职责：写作区整体布局（侧栏树 + 编辑区 + 工具栏）
-// 约束：
-//   - 纯布局容器，业务逻辑委托给 EditorController
-//   - 通过 WritingTreeController 管理树结构
-//   - 不直接操作文件系统
+// ??:Desktop UI ?(QML ??)
+// ??:???????(??? + ??? + ???)
+// ??:
+//   - ?????,??????? EditorController
+//   - ?? WritingTreeController ?????
+//   - ?????????
 //
-// ── LayoutPlan 边界约束 ──
+// ?? LayoutPlan ???? ??
 //
-// LayoutPlan 只影响壳层布局，具体包括：
-//   - 侧栏宽度（sidebarWidth）
-//   - 内容区域最大宽度（contentMaxWidthVp）
-//   - 导航模式切换（shellMode）
-//   - 页面内边距（contentPaddingVp）
+// LayoutPlan ???????,????:
+//   - ????(sidebarWidth)
+//   - ????????(contentMaxWidthVp)
+//   - ??????(shellMode)
+//   - ?????(contentPaddingVp)
 //
-// LayoutPlan 绝对不干预编辑器底层渲染：
-//   - 不传递到 SujianEditorItem 的 QSG 渲染线程
-//   - 不影响光标位置、IME 输入、动画帧率
-//   - 不改变 QTextLayout 的排版计算
-//   - 不驱动 SmoothCursor / EditorAnimationOverlay 的动画属性
+// LayoutPlan ????????????:
+//   - ???? SujianEditorItem ? QSG ????
+//   - ????????IME ???????
+//   - ??? QTextLayout ?????
+//   - ??? SmoothCursor / EditorAnimationOverlay ?????
 //
-// 编辑器渲染（光标、IME、动画）由 EditorController 和 SujianEditorItem
-// 独立管理，遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
+// ?????(???IME???)? EditorController ? SujianEditorItem
+// ????,?? Qt QSG ????,?? LayoutPlan ???
 //
-// 组成：
-//   WorkspaceTree (侧栏) + EditorPage (编辑区) + TopWritingToolbar (工具栏)
+// ??:
+//   WorkspaceTree (??) + EditorPage (???) + TopWritingToolbar (???)
 // =============================================================================
 
 import QtQuick
@@ -48,14 +48,14 @@ Rectangle {
     property bool aiCapable: false
     property bool aiEnabled: false
     property bool useSujianEditorItem: false
-    // ⚠️ LayoutPlan 边界约束 ⚠️
-    // layoutPlan 只用于壳层布局（侧栏宽度、内容最大宽度、导航模式）。
-    // 绝对禁止将 layoutPlan 的属性传递到编辑器组件（SujianEditorItem / editorArea），
-    // 因为编辑器渲染（光标、IME、动画）由 EditorController 和 SujianEditorItem
-    // 独立管理，遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
+    // ?? LayoutPlan ???? ??
+    // layoutPlan ???????(????????????????)?
+    // ????? layoutPlan ???????????(SujianEditorItem / editorArea),
+    // ???????(???IME???)? EditorController ? SujianEditorItem
+    // ????,?? Qt QSG ????,?? LayoutPlan ???
     property var layoutPlan: null
 
-    // Project-level ID — set by main.qml, used for tree and create volume/chapter
+    // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
 
     signal backToProjects()
@@ -126,7 +126,7 @@ Rectangle {
             anchors.margins: dt ? dt.sp24 : 24
             spacing: dt ? dt.sp16 : 16
             AppText {
-                text: qsTr("保存被阻止")
+                text: qsTr("?????")
                 color: dt ? dt.textPrimary : "#E2E2E5"
                 font.pixelSize: dt ? dt.subtitle : 18
                 font.family: dt ? dt.fontFamily : "sans-serif"
@@ -135,14 +135,14 @@ Rectangle {
             AppText {
                 id: emptySaveDialogText
                 Layout.fillWidth: true
-                text: qsTr("检测到异常空内容覆盖，已阻止保存。")
+                text: qsTr("??????????,??????")
                 color: dt ? dt.textSecondary : "#8C9198"
                 font.pixelSize: dt ? dt.body : 14
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 wrapMode: Text.Wrap
             }
             AppButton {
-                text: qsTr("确定")
+                text: qsTr("??")
                 theme: dt
                 variant: "primary"
                 Layout.alignment: Qt.AlignRight
@@ -280,7 +280,7 @@ Rectangle {
                             }
 
                             AppText {
-                                text: root.projectTitle || qsTr("作品")
+                                text: root.projectTitle || qsTr("??")
                                 color: dt ? dt.textPrimary : "#E2E2E5"
                                 font.pixelSize: dt ? dt.fontMd : 14
                                 font.family: dt ? dt.fontFamily : "sans-serif"
@@ -422,7 +422,7 @@ Rectangle {
                                 font.weight: Font.Bold
                             }
                             AppText {
-                                text: qsTr("新建卷")
+                                text: qsTr("???")
                                 color: dt ? dt.primary : "#006497"
                                 font.pixelSize: dt ? dt.label : 13
                                 font.family: dt ? dt.fontFamily : "sans-serif"
@@ -455,7 +455,7 @@ Rectangle {
 
                         MenuItem {
                             id: createVolumeMenuItem
-                            text: qsTr("新建卷")
+                            text: qsTr("???")
                             visible: treeContextMenu.itemType === "project"
                             contentItem: AppText {
                                 text: createVolumeMenuItem.text
@@ -471,7 +471,7 @@ Rectangle {
                         }
                         MenuItem {
                             id: createChapterMenuItem
-                            text: qsTr("新建章节")
+                            text: qsTr("????")
                             visible: treeContextMenu.itemType === "volume"
                             contentItem: AppText {
                                 text: createChapterMenuItem.text
@@ -490,7 +490,7 @@ Rectangle {
                         }
                         MenuItem {
                             id: renameMenuItem
-                            text: qsTr("重命名")
+                            text: qsTr("???")
                             visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
                             contentItem: AppText {
                                 text: renameMenuItem.text
@@ -512,7 +512,7 @@ Rectangle {
                         }
                         MenuItem {
                             id: deleteMenuItem
-                            text: qsTr("删除")
+                            text: qsTr("??")
                             visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
                             contentItem: AppText {
                                 text: deleteMenuItem.text
@@ -588,14 +588,14 @@ Rectangle {
                     anchors.bottomMargin: dt ? dt.sp8 : 8
 
                     // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
-                    // ⚠️ LayoutPlan 边界：contentMaxWidthVp 只影响 paperBg 的壳层宽度，
-                    // 不传递到编辑器组件（SujianEditorItem / editorArea）的渲染属性。
-                    // 编辑器渲染由 EditorController + SujianEditorItem 独立管理。
+                    // ?? LayoutPlan ??:contentMaxWidthVp ??? paperBg ?????,
+                    // ?????????(SujianEditorItem / editorArea)??????
+                    // ?????? EditorController + SujianEditorItem ?????
                     Rectangle {
                         id: paperBg
                         width: {
-                            // LayoutPlan 驱动：优先使用 contentMaxWidthVp（壳层布局属性）
-                            // 此值只决定 paperBg 容器宽度，不干预编辑器内部渲染
+                            // LayoutPlan ??:???? contentMaxWidthVp(??????)
+                            // ????? paperBg ????,??????????
                             var maxW = 820
                             if (root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0) {
                                 maxW = root.layoutPlan.contentMaxWidthVp
@@ -741,15 +741,15 @@ Rectangle {
                                     ? Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
                                     : Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight)
 
-                            // NOTE: SujianEditorItem is a "viewport renderer" — it must be
+                            // NOTE: SujianEditorItem is a "viewport renderer" - it must be
                             // a FIXED overlay on paperBg, NOT inside the Flickable contentItem.
                             // The Flickable only holds a transparent spacer for scrollbar / contentHeight.
                             // scroll_y is passed to the Rust renderer for viewport clipping.
 
-                            // ⚠️ LayoutPlan 边界守卫 ⚠️
-                            // editorArea (TextArea) 的渲染属性由 settingsBackend 和
-                            // EditorController 独立驱动。LayoutPlan 的属性绝对禁止传递到此处。
-                            // 编辑器渲染遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
+                            // ?? LayoutPlan ???? ??
+                            // editorArea (TextArea) ?????? settingsBackend ?
+                            // EditorController ?????LayoutPlan ?????????????
+                            // ??????? Qt QSG ????,?? LayoutPlan ???
                             TextArea {
                                 id: editorArea
                                 property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
@@ -804,23 +804,23 @@ Rectangle {
                         }
                     }
 
-                    // SujianEditorItem: viewport renderer — fixed overlay on paperBg,
+                    // SujianEditorItem: viewport renderer - fixed overlay on paperBg,
                     // NOT inside Flickable. scroll_y passes contentY to Rust renderer
                     // for viewport clipping. Flickable only holds a transparent spacer
                     // for scrollbar / contentHeight.
                     //
-                    // ⚠️ 边界守卫：LayoutPlan 只影响壳层布局（侧栏宽度、内容最大宽度、padding），
-                    // 不传入 SujianEditorItem。编辑器宽度变化只通过 QML layout 系统自然传递。
+                    // ?? ????:LayoutPlan ???????(????????????padding),
+                    // ??? SujianEditorItem??????????? QML layout ???????
                     //
-                    // 具体约束：
-                    //   - LayoutPlan 属性（contentMaxWidthVp, shellMode, contentPaddingVp）
-                    //     绝对禁止作为 SujianEditorItem 的 Q_PROPERTY 传入
-                    //   - 编辑器渲染属性（font_pixel_size, line_spacing, text_indent,
-                    //     cursor_color, scroll_y 等）由 settingsBackend 和 EditorController
-                    //     独立驱动，不受 LayoutPlan 影响
-                    //   - 编辑器宽度变化由 paperBg 容器尺寸改变 → QML layout 系统自然
-                    //     传递到 SujianEditorItem 的 geometry_changed，不经过 LayoutPlan
-                    //   - updatePaintNode / QSG 渲染线程不做业务或布局判断
+                    // ????:
+                    //   - LayoutPlan ??(contentMaxWidthVp, shellMode, contentPaddingVp)
+                    //     ?????? SujianEditorItem ? Q_PROPERTY ??
+                    //   - ???????(font_pixel_size, line_spacing, text_indent,
+                    //     cursor_color, scroll_y ?)? settingsBackend ? EditorController
+                    //     ????,?? LayoutPlan ??
+                    //   - ???????? paperBg ?????? ? QML layout ????
+                    //     ??? SujianEditorItem ? geometry_changed,??? LayoutPlan
+                    //   - updatePaintNode / QSG ?????????????
                     SujianEditorItem {
                         id: sujianEditor
                         anchors.fill: editorScroll
@@ -849,9 +849,36 @@ Rectangle {
                         }
 
                         onExplicit_clear_requested: editorController.markPotentialExplicitClear()
+
+                        onContext_menu_requested: function(cx, cy) {
+                            // ?????????????????
+                            var globalPos = sujianEditor.mapToGlobal(cx, cy)
+                            editorContextMenu.popup(globalPos.x, globalPos.y)
+                        }
+
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: function(eventPoint) {
+                                sujianEditor.click_at(eventPoint.position.x, eventPoint.position.y, false)
+                                editorContextMenu.popup()
+                            }
+                        }
+
+                        TapHandler {
+                            acceptedButtons: Qt.LeftButton
+                            onLongPressed: {
+                                sujianEditor.long_press_at(point.position.x, point.position.y)
+                            }
+                        }
                     }
 
-                    // QML 光标 — 绑定 Rust 暴露的 cursor property，GUI 线程渲染
+                    // ????????
+                    EditorContextMenu {
+                        id: editorContextMenu
+                        editorItem: sujianEditor
+                    }
+
+                    // QML ?? - ?? Rust ??? cursor property,GUI ????
                     Rectangle {
                         id: sujianCursorRect
                         x: sujianEditor.cursor_rect_x
@@ -871,7 +898,7 @@ Rectangle {
                         onHeightChanged: opacity = 1.0
                     }
 
-                    // 光标闪烁 Timer
+                    // ???? Timer
                     Timer {
                         id: cursorBlinkTimer
                         interval: 530
@@ -887,7 +914,7 @@ Rectangle {
                         }
                     }
 
-                    // 光标平滑动画 tick — 驱动 Rust 侧 CursorController 的 visual_x/y 更新
+                    // ?????? tick - ?? Rust ? CursorController ? visual_x/y ??
                     Timer {
                         id: cursorAnimationTick
                         interval: 16
@@ -900,7 +927,7 @@ Rectangle {
                         }
                     }
 
-                    // QML overlay 动画层 — 消费 Core animation events，画短生命周期动画
+                    // QML overlay ??? - ?? Core animation events,????????
                     EditorAnimationOverlay {
                         id: sujianAnimationOverlay
                         anchors.fill: editorScroll
@@ -965,7 +992,7 @@ Rectangle {
                         Layout.alignment: Qt.AlignHCenter
                     }
                     AppText {
-                        text: qsTr("选择一个章节开始写作")
+                        text: qsTr("??????????")
                         color: dt ? dt.textSecondary : "#8C9198"
                         font.pixelSize: dt ? dt.fontLg : 16
                         Layout.alignment: Qt.AlignHCenter

@@ -15,20 +15,20 @@ import androidx.appcompat.widget.AppCompatEditText
 import kotlin.math.abs
 
 /**
- * WriterEditText — 自定义写作编辑器
+ * WriterEditText - ????????
  *
- * 继承 AppCompatEditText，集成平滑光标、打字动画、自动缩进等写作增强功能。
+ * ?? AppCompatEditText,????????????????????????
  *
- * ## 架构定位
- * - EditorActivity → WriterEditText → EditorAnimationRuntime / TypingAnimationController / AutoIndentController
+ * ## ????
+ * - EditorActivity ? WriterEditText ? EditorAnimationRuntime / TypingAnimationController / AutoIndentController
  *
- * ## 职责边界
- * - **做**：管理各动画控制器的生命周期、绘制覆盖层
- * - **不做**：业务逻辑（由 EditorViewModel 负责）
+ * ## ????
+ * - **?**:???????????????????
+ * - **??**:????(? EditorViewModel ??)
  *
- * ## 使用场景
- * - 编辑器页面的文本输入区域
- * - 提供平滑光标和打字动画效果
+ * ## ????
+ * - ????????????
+ * - ?????????????
  */
 class WriterEditText @JvmOverloads constructor(
     context: Context,
@@ -52,6 +52,7 @@ class WriterEditText @JvmOverloads constructor(
     private var lastSmoothDuration: Long? = null
     private var lastAutoIndentEnabled: Boolean? = null
     private var lastAutoIndentWidth: Float? = null
+    private lateinit var contextMenuController: EditorContextMenuController
     private var needsDelayedIndentFullRebuild = false
     private var isEditorScrolling = false
     private val scrollIdleDelayMs = 140L
@@ -222,6 +223,8 @@ class WriterEditText @JvmOverloads constructor(
         }
 
         typeface = android.graphics.Typeface.create("sans-serif", typeface?.style ?: android.graphics.Typeface.NORMAL)
+        contextMenuController = EditorContextMenuController(this)
+        contextMenuController.installActionModeCallbacks()
     }
 
     fun onEditorResume() {
@@ -290,14 +293,51 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     override fun onTextContextMenuItem(id: Int): Boolean {
-        return if (id == android.R.id.paste || id == android.R.id.pasteAsPlainText) {
-            var handled = false
-            runWithoutTextAnimations {
-                handled = super.onTextContextMenuItem(id)
+        if (contextMenuController.handleTextContextMenuItem(id)) {
+            return true
+        }
+        return super.onTextContextMenuItem(id)
+    }
+
+    fun performCopy() {
+        val selStart = selectionStart
+        val selEnd = selectionEnd
+        if (selStart != selEnd && selStart >= 0 && selEnd <= text!!.length) {
+            val selectedText = text!!.subSequence(selStart, selEnd).toString()
+            val clipboard = android.content.ClipData.newPlainText("text", selectedText)
+            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(clipboard)
+        }
+    }
+
+    fun onPerformCut() {
+        val selStart = selectionStart
+        val selEnd = selectionEnd
+        if (selStart != selEnd && selStart >= 0 && selEnd <= text!!.length) {
+            val selectedText = text!!.subSequence(selStart, selEnd).toString()
+            val clipboard = android.content.ClipData.newPlainText("text", selectedText)
+            val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(clipboard)
+            // ?????? - ??????,?? TextWatcher
+            text!!.delete(selStart, selEnd)
+        }
+    }
+
+    fun performPasteFromSystem(id: Int) {
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = cm.primaryClip ?: return
+        if (clip.itemCount > 0) {
+            val pasteText = clip.getItemAt(0)?.text?.toString() ?: return
+            val selStart = selectionStart
+            val selEnd = selectionEnd
+            if (selStart >= 0 && selEnd <= text!!.length) {
+                if (id == android.R.id.pasteAsPlainText) {
+                    // ?????:????
+                    text!!.replace(selStart, selEnd, pasteText)
+                } else {
+                    text!!.replace(selStart, selEnd, pasteText)
+                }
             }
-            handled
-        } else {
-            super.onTextContextMenuItem(id)
         }
     }
 

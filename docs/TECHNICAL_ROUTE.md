@@ -39,10 +39,10 @@ Supersedes: docs/TECHNICAL_ROUTE.md
 
 ## 编辑器底层路线
 - 最新路线见 [自绘编辑器与统一事件层路线](editor_engine_route.md)。
-- 停止围绕 QML `TextArea` / Android `EditText` 继续堆文字动画补丁。
+- 编辑器路线是：Core 统一编辑事务 + 平台原生文本能力 + 必要时自绘渲染层。
 - Core `editor` 模块统一产出 `EditorTransaction`、`EditorAnimationEvent` 等平台无关语义。
-- Desktop 最终使用 `SujianEditorItem` 自绘正文、选区、光标和动画，底层优先 `QTextLayout`。
-- Android 最终使用 `SujianEditorView : View` 自绘，并通过 `InputConnection` 接输入法。
+- Android 当前优先接管长按菜单、选区动作、paste/cut/copy/selectAll 行为，不立刻替换完整 EditText。
+- Desktop 因 Qt/QML TextArea 路线已多次踩坑，继续推进 SujianEditorItem。
 - 在新自绘编辑器落地前，Desktop typing animation 必须关闭，不得恢复 hidden-range/reveal 或 QTextDocument 字符格式隐藏方案。
 
 ## Android 图谱技术路线

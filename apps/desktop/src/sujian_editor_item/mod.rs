@@ -1,5 +1,5 @@
 // =============================================================================
-// sujian_editor_item — Desktop self-rendered editor item
+// sujian_editor_item - Desktop self-rendered editor item
 // =============================================================================
 
 pub(crate) mod buffer;
@@ -87,6 +87,7 @@ pub struct SujianEditorItem {
     cursor_rect_changed: qt_signal!(),
     explicit_clear_requested: qt_signal!(),
     animation_events_changed: qt_signal!(),
+    context_menu_requested: qt_signal!(x: f32, y: f32),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
@@ -110,6 +111,8 @@ pub struct SujianEditorItem {
     cancel_preedit: qt_method!(fn(&mut self)),
     flush_content_height: qt_method!(fn(&mut self)),
     tick_cursor_animation: qt_method!(fn(&mut self)),
+    long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -145,7 +148,7 @@ pub struct SujianEditorItem {
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
-    /// Isolated cursor visual state — target position, visual position,
+    /// Isolated cursor visual state - target position, visual position,
     /// animation, IME pending flag.  All cursor-related visual logic
     /// lives in CursorController; SujianEditorItem only dispatches.
     cursor_ctrl: cursor_controller::CursorController,
@@ -190,6 +193,7 @@ impl Default for SujianEditorItem {
             cursor_rect_changed: Default::default(),
             explicit_clear_requested: Default::default(),
             animation_events_changed: Default::default(),
+            context_menu_requested: Default::default(),
             cursor_rect_x: Default::default(),
             cursor_rect_y: Default::default(),
             cursor_rect_width: Default::default(),
@@ -217,6 +221,8 @@ impl Default for SujianEditorItem {
             cancel_preedit: Default::default(),
             flush_content_height: Default::default(),
             tick_cursor_animation: Default::default(),
+            long_press_at: Default::default(),
+            select_word_at: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -655,7 +661,7 @@ impl SujianEditorItem {
         self.preedit_text.clear();
         self.preedit_cursor = 0;
 
-        // 记录插入前的光标位置（动画起点）
+        // ??????????(????)
         let origin_cx = self.cursor_ctrl.target_x;
         let origin_cy = self.cursor_ctrl.target_y;
         let cursor_h = self.editor_layout.cursor_height(
@@ -857,6 +863,67 @@ impl SujianEditorItem {
         self.request_static_repaint();
     }
 
+    fn long_press_at(&mut self, x: f32, y: f32) {
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        self.cursor_ctrl.affinity = affinity;
+        // ??????,??????????
+        if !self.buffer.has_selection() {
+            self.select_word_at_impl(index);
+        }
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+        self.context_menu_requested(x, y);
+    }
+
+    fn select_word_at(&mut self, x: f32, y: f32) {
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        self.cursor_ctrl.affinity = affinity;
+        self.select_word_at_impl(index);
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    fn select_word_at_impl(&mut self, index: usize) {
+        let text = &self.buffer.text;
+        if text.is_empty() || index > text.len() {
+            return;
+        }
+        // ????????,?????????
+        let char_index = byte_to_char_index(text, index);
+        let chars: Vec<char> = text.chars().collect();
+        if chars.is_empty() {
+            return;
+        }
+        let ci = char_index.min(chars.len().saturating_sub(1));
+
+        // ?????:??????????
+        fn is_word_boundary(c: char) -> bool {
+            c.is_whitespace() || c == '\n' || c == ',' || c == '?' || c == '!' || c == '?' || c == ';' || c == ':' || c == '"' || c == '"' || c == '\u{2018}' || c == '\u{2019}' || c == '?' || c == '-' || c == '.' || c == '(' || c == ')' || c == '?' || c == '?'
+        }
+
+        // ????
+        let mut start = ci;
+        while start > 0 && !is_word_boundary(chars[start - 1]) {
+            start -= 1;
+        }
+        // ????
+        let mut end = ci + 1;
+        while end < chars.len() && !is_word_boundary(chars[end]) {
+            end += 1;
+        }
+
+        // ??? byte ??
+        let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
+        let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
+
+        self.buffer.selection_anchor = byte_start;
+        self.buffer.cursor = byte_end;
+    }
+
     fn clipboard_copy(&self) -> bool {
         if !self.buffer.has_selection() {
             return false;
@@ -983,7 +1050,7 @@ impl SujianEditorItem {
         );
         let mut events = self.engine.animation_events(&transaction);
 
-        // 为 Insert/Delete 事件填充 glyph_rects（精确字符矩形）
+        // ? Insert/Delete ???? glyph_rects(??????)
         self.fill_glyph_rects_for_events(&mut events, &new.text, &old.text);
 
         self.last_event_count = events.len() as u32;
@@ -1081,11 +1148,11 @@ impl SujianEditorItem {
         }
     }
 
-    /// 为 Insert/Delete 类型的 animation events 填充 glyph_rects 字段。
+    /// ? Insert/Delete ??? animation events ?? glyph_rects ???
     ///
-    /// 利用 EditorLayout 的 glyph_positions_on_line 获取每个字符的精确
-    /// 矩形（x, y, w, h），写入 event.glyph_rects 供 QML overlay 使用。
-    /// Cursor 类型事件不需要 glyph_rects，保持为空。
+    /// ?? EditorLayout ? glyph_positions_on_line ?????????
+    /// ??(x, y, w, h),?? event.glyph_rects ? QML overlay ???
+    /// Cursor ??????? glyph_rects,?????
     fn fill_glyph_rects_for_events(
         &mut self,
         events: &mut [EditorAnimationEvent],
@@ -1188,7 +1255,7 @@ impl SujianEditorItem {
                     event.glyph_rects = glyph_rects;
                 }
                 EditorAnimationKind::Cursor => {
-                    // Cursor 事件不需要 glyph rects
+                    // Cursor ????? glyph rects
                 }
             }
         }
@@ -1567,12 +1634,12 @@ impl QQuickItem for SujianEditorItem {
 
         let mut final_root = root_raw;
 
-        // 单层场景图：仅 Layer 0 静态正文 texture
+        // ?????:? Layer 0 ???? texture
         if !root_raw.is_null() && !item_ptr.is_null() {
             scene_graph::ensure_single_image_node(root_raw, item_ptr);
         }
 
-        // ── Layer 0: Static text texture ──
+        // ?? Layer 0: Static text texture ??
         if self.render_dirty {
             match self.render_to_image() {
                 Some((image, buf_scroll_y, _buf_h)) => {
@@ -1613,7 +1680,7 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // 清理已完成的动画状态（不渲染 overlay）
+        // ??????????(??? overlay)
         self.cleanup_finished_animations();
 
         let total_elapsed = frame_start.elapsed();
