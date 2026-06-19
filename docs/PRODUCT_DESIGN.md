@@ -245,7 +245,7 @@ Android 星图短期可用 Canvas 自绘验证，长期预留 Surface/OpenGL 后
 - 外部修改提示
 - 未来可导出 replay.html
 
-等真正开始实现事件流，再单独补 creation_replay.md。现在新文档太早。
+等真正开始实现事件流，再单独补创作回放文档。现在新文档太早。
 
 ### 1.14 星图边与关系标签
 
