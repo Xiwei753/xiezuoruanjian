@@ -237,7 +237,7 @@ Dialog {
                     title: qsTr("同步配置")
                     description: qsTr("在同步页面管理仓库与鉴权")
                     clickable: true
-                    onClicked: { root.close(); /* 导航到同步页面 */ }
+                    onClicked: { root.close(); /* navigate to sync page */ }
                 }
             }
 
