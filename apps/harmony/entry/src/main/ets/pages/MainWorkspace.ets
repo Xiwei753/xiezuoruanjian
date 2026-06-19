@@ -128,6 +128,8 @@ struct MainWorkspace {
 
   @State deleteAnimTranslateX: number = 0
   @State deleteAnimTranslateY: number = 0
+  @State deleteAnimScale: number = 1.0
+  @State deleteAnimOpacity: number = 0.8
 
   // ── 滚动偏移补偿 ──
   // getCaretOffset() 可能返回的是 TextArea 内容坐标（未扣 scroll），
@@ -440,6 +442,8 @@ struct MainWorkspace {
               // 起点：从光标右侧偏移 deletedText.length * fontSize * 0.6 处飞回
               this.deleteAnimTranslateX = deletedText.length * this.settings.editorFontSize * 0.6
               this.deleteAnimTranslateY = 0
+              this.deleteAnimScale = 1.0
+              this.deleteAnimOpacity = 0.8
               this.showDeleteAnimation = true
               if (this.deleteAnimTimer !== -1) {
                 clearTimeout(this.deleteAnimTimer)
@@ -448,6 +452,8 @@ struct MainWorkspace {
               animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
                 this.deleteAnimTranslateX = 0
                 this.deleteAnimTranslateY = 0
+                this.deleteAnimScale = 0.5
+                this.deleteAnimOpacity = 0
               })
               this.deleteAnimTimer = setTimeout(() => {
                 this.showDeleteAnimation = false
@@ -1157,10 +1163,10 @@ struct MainWorkspace {
                 Text(this.deleteAnimText)
                   .fontSize(this.settings.editorFontSize)
                   .fontColor(this.themeConfig.colors.textPrimary)
-                  .opacity(0.4)
+                  .opacity(this.deleteAnimOpacity)
                   .position({ x: this.deleteAnimX, y: this.deleteAnimY })
+                  .scale({ x: this.deleteAnimScale, y: this.deleteAnimScale })
                   .translate({ x: this.deleteAnimTranslateX, y: this.deleteAnimTranslateY })
-                  .scale({ x: 0.7, y: 0.7 })
                   .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
               }
 
