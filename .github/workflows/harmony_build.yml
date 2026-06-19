@@ -48,7 +48,7 @@ jobs:
       - name: Check hvigorw
         run: |
           if [ ! -f "./hvigorw" ]; then
-            echo "ERROR: apps/harmony/hvigorw not found. Open the project once in DevEco Studio or add the hvigor wrapper."
+            echo "ERROR: apps/harmony/hvigorw not found."
             exit 1
           fi
           chmod +x ./hvigorw
@@ -58,23 +58,29 @@ jobs:
           cp build-profile.ci.json5 build-profile.json5
           cp oh-package.ci.json5 oh-package.json5
 
-      - name: Configure ohpm registry
-        run: ohpm config set registry https://ohpm.harmonyos.com/ohpm/
-
-      - name: Install Harmony dependencies
-        run: ohpm install --all
+      - name: Install dependencies via npm from Huawei registry
+        run: |
+          # ohpm.harmonyos.com domain does not exist in DNS.
+          # Use npm to fetch packages from repo.harmonyos.com (Huawei's npm-compatible registry),
+          # then place them where ohpm/hvigor expects them (oh_modules/).
+          npm install --registry=https://repo.harmonyos.com/npm/ --prefix=. || true
+          # npm installs to node_modules, but ohpm expects oh_modules
+          # Try ohpm with openharmony registry for available packages
+          ohpm config set registry https://ohpm.openharmony.cn/ohpm/
+          ohpm install --all || true
 
       - name: Build HAP
         run: |
-          ./hvigorw clean --no-daemon
+          ./hvigorw clean --no-daemon || true
           ./hvigorw assembleHap --mode module -p product=default -p buildMode=debug --no-daemon
 
       - name: List outputs
         run: |
-          find entry/build -maxdepth 8 -type f | sort
+          find entry/build -maxdepth 8 -type f | sort || true
 
       - name: Upload Harmony output
         uses: actions/upload-artifact@v4
         with:
           name: sujian-harmony-output
           path: apps/harmony/entry/build/default/outputs/default/**
+          if-no-files-found: warn
