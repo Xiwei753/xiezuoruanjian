@@ -78,6 +78,13 @@ ApplicationWindow {
         }
     }
 
+    function openSyncDialog() {
+        if (syncBackend) {
+            settingsBackend.load_local_settings();
+        }
+        window.openSettingsDialog();
+    }
+
 
     property alias appState: appController.appState
     readonly property bool rootHasWorkspace: workspaceBackend !== null && workspaceBackend.has_workspace === true
@@ -461,6 +468,9 @@ ApplicationWindow {
                 }
                 onOpenWorkspaceWithPath: (path) => {
                     appController.createWorkspaceWithPath(path, true);
+                }
+                onInitFromGithub: {
+                    window.openSyncDialog()
                 }
 
             }

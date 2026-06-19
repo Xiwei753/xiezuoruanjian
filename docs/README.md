@@ -21,6 +21,7 @@ Supersedes: docs/README.md (previous version)
 | [starmap_semantics.md](starmap_semantics.md) | 星图语义模型与独立引用安全机制 |
 | [editor_engine_route.md](editor_engine_route.md) | 自绘编辑器渲染引擎与统一编辑事件事务层路线 |
 | [desktop_ime_notes.md](desktop_ime_notes.md) | Desktop (Linux) 输入法候选闪烁闪退避坑排错指南 |
+| [screen_policy_acceptance.md](screen_policy_acceptance.md) | 三端 UI 布局唯一验收标准（与 Core screen_policy.rs 同步） |
 
 ## 使用说明
 

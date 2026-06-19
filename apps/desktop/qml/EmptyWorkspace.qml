@@ -21,6 +21,7 @@ Item {
 
     signal createWorkspaceWithPath(string path)
     signal openWorkspaceWithPath(string path)
+    signal initFromGithub()
 
 
     Platform.FolderDialog {
