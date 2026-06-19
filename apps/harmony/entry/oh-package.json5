@@ -5,7 +5,7 @@
   "main": "",
   "author": "",
   "license": "Apache-2.0",
-  "dependencies": {
-    "@ohos/hvigor-ohos-arkui-x": "5.0.0"
+  "devDependencies": {
+    "@ohos/hvigor-ohos-plugin": "5.7.0"
   }
 }
