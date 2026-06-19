@@ -39,6 +39,10 @@ class TypingAnimationController(
             if (value) {
                 lastAddedStart = -1
                 lastAddedCount = 0
+                pendingDeleteStart = -1
+                pendingDeleteText = ""
+                pendingDeleteStartX = -1f
+                pendingDeleteStartY = -1f
                 renderLayer.clear()
             }
         }
@@ -71,6 +75,10 @@ class TypingAnimationController(
             return
         }
         if (isSuppressAnimations) {
+            pendingDeleteStart = -1
+            pendingDeleteText = ""
+            pendingDeleteStartX = -1f
+            pendingDeleteStartY = -1f
             renderLayer.clear()
             if (DEBUG_ANIM) {
                 android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")
@@ -147,7 +155,14 @@ class TypingAnimationController(
 
     fun afterTextChanged(editable: Editable?) {
         if (editable == null) return
-        if (isSuppressAnimations || isScrollAnimationsSuppressed) return
+        if (isSuppressAnimations || isScrollAnimationsSuppressed) {
+            pendingDeleteStart = -1
+            pendingDeleteText = ""
+            pendingDeleteStartX = -1f
+            pendingDeleteStartY = -1f
+            return
+        }
+
 
         // 提交待处理的删除动画（在 afterTextChanged 里才能拿到新光标位置作为目标）
         if (pendingDeleteStart >= 0 && typingAnimationEnabled && editText.layout != null) {

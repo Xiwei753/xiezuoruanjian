@@ -35,6 +35,10 @@ Item {
     // glyph 文字内容
     property string glyphText: ""
 
+    // 真实字体信息（由外部传入，确保 ghost 和正文一致）
+    property string glyphFontFamily
+    property real glyphFontPixelSize
+
     signal animationFinished()
 
     // ── Insert 动画属性 ──
@@ -68,7 +72,8 @@ Item {
         id: ghostText
         text: root.glyphText
         color: root.ghostColor
-        font.pixelSize: root.glyphHeight * 0.85
+        font.family: root.glyphFontFamily || undefined
+        font.pixelSize: root.glyphFontPixelSize > 0 ? root.glyphFontPixelSize : root.glyphHeight * 0.85
         opacity: root.animKind === "insert" ? root.insertOpacityAnim.currentOpacity : root.deleteOpacityAnim.currentOpacity
     }
 
