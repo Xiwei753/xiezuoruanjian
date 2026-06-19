@@ -40,6 +40,9 @@ jobs:
           fi
           chmod +x ./hvigorw
 
+      - name: Apply CI build profile (no signing)
+        run: cp build-profile.ci.json5 build-profile.json5
+
       - name: Install Harmony dependencies
         run: ohpm install --all
 
