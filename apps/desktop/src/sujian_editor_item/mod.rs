@@ -661,7 +661,7 @@ impl SujianEditorItem {
         self.preedit_text.clear();
         self.preedit_cursor = 0;
 
-        // ??????????(????)
+        // 保存光标位置（用于动画）
         let origin_cx = self.cursor_ctrl.target_x;
         let origin_cy = self.cursor_ctrl.target_y;
         let cursor_h = self.editor_layout.cursor_height(
@@ -866,7 +866,7 @@ impl SujianEditorItem {
     fn long_press_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.cursor_ctrl.affinity = affinity;
-        // ??????,??????????
+        // 长按时，如果没有选区则选词
         if !self.buffer.has_selection() {
             self.select_word_at_impl(index);
         }
@@ -892,7 +892,7 @@ impl SujianEditorItem {
         if text.is_empty() || index > text.len() {
             return;
         }
-        // ????????,?????????
+        // 将字节位置转为字符索引，处理多字节字符
         let char_index = byte_to_char_index(text, index);
         let chars: Vec<char> = text.chars().collect();
         if chars.is_empty() {
@@ -900,23 +900,23 @@ impl SujianEditorItem {
         }
         let ci = char_index.min(chars.len().saturating_sub(1));
 
-        // ?????:??????????
+        // 判断是否为词边界：包含中英文标点
         fn is_word_boundary(c: char) -> bool {
-            c.is_whitespace() || c == '\n' || c == ',' || c == '?' || c == '!' || c == '?' || c == ';' || c == ':' || c == '"' || c == '"' || c == '\u{2018}' || c == '\u{2019}' || c == '?' || c == '-' || c == '.' || c == '(' || c == ')' || c == '?' || c == '?'
+            c.is_whitespace() || c == '\n' || c == ',' || c == '?' || c == '!' || c == '！' || c == ';' || c == ':' || c == '"' || c == '"' || c == '\u{2018}' || c == '\u{2019}' || c == '？' || c == '-' || c == '.' || c == '(' || c == ')' || c == '（' || c == '）'
         }
 
-        // ????
+        // 向前扫描
         let mut start = ci;
         while start > 0 && !is_word_boundary(chars[start - 1]) {
             start -= 1;
         }
-        // ????
+        // 向后扫描
         let mut end = ci + 1;
         while end < chars.len() && !is_word_boundary(chars[end]) {
             end += 1;
         }
 
-        // ??? byte ??
+        // 转回 byte 位置
         let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
         let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
 
@@ -1050,7 +1050,7 @@ impl SujianEditorItem {
         );
         let mut events = self.engine.animation_events(&transaction);
 
-        // ? Insert/Delete ???? glyph_rects(??????)
+        // 为 Insert/Delete 事件填充 glyph_rects（动画定位用）
         self.fill_glyph_rects_for_events(&mut events, &new.text, &old.text);
 
         self.last_event_count = events.len() as u32;
@@ -1148,11 +1148,11 @@ impl SujianEditorItem {
         }
     }
 
-    /// ? Insert/Delete ??? animation events ?? glyph_rects ???
+    /// 为 Insert/Delete 类型 animation events 填充 glyph_rects 数据
     ///
-    /// ?? EditorLayout ? glyph_positions_on_line ?????????
-    /// ??(x, y, w, h),?? event.glyph_rects ? QML overlay ???
-    /// Cursor ??????? glyph_rects,?????
+    /// 通过 EditorLayout 的 glyph_positions_on_line 获取字符位置
+    /// 转为(x, y, w, h),写入 event.glyph_rects 供 QML overlay 消费
+    /// Cursor 类型不需要 glyph_rects，直接跳过
     fn fill_glyph_rects_for_events(
         &mut self,
         events: &mut [EditorAnimationEvent],
@@ -1255,7 +1255,7 @@ impl SujianEditorItem {
                     event.glyph_rects = glyph_rects;
                 }
                 EditorAnimationKind::Cursor => {
-                    // Cursor ????? glyph rects
+                    // Cursor 类型不需要 glyph rects
                 }
             }
         }
@@ -1634,12 +1634,12 @@ impl QQuickItem for SujianEditorItem {
 
         let mut final_root = root_raw;
 
-        // ?????:? Layer 0 ???? texture
+        // 第一步：确保 Layer 0 有基础 texture
         if !root_raw.is_null() && !item_ptr.is_null() {
             scene_graph::ensure_single_image_node(root_raw, item_ptr);
         }
 
-        // ?? Layer 0: Static text texture ??
+        // 更新 Layer 0: Static text texture 节点
         if self.render_dirty {
             match self.render_to_image() {
                 Some((image, buf_scroll_y, _buf_h)) => {
@@ -1680,7 +1680,7 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // ??????????(??? overlay)
+        // 清理已完成的动画（包括 overlay）
         self.cleanup_finished_animations();
 
         let total_elapsed = frame_start.elapsed();

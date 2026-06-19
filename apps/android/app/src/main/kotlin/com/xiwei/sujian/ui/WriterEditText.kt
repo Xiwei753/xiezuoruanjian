@@ -15,20 +15,20 @@ import androidx.appcompat.widget.AppCompatEditText
 import kotlin.math.abs
 
 /**
- * WriterEditText - ????????
+ * WriterEditText - 素笺写作编辑器
  *
- * ?? AppCompatEditText,????????????????????????
+ * 基于 AppCompatEditText，添加打字动画、平滑光标、自动缩进和滚动增强
  *
- * ## ????
- * - EditorActivity ? WriterEditText ? EditorAnimationRuntime / TypingAnimationController / AutoIndentController
+ * ## 控制器层级
+ * - EditorActivity → WriterEditText → EditorAnimationRuntime / TypingAnimationController / AutoIndentController
  *
- * ## ????
- * - **?**:???????????????????
- * - **??**:????(? EditorViewModel ??)
+ * ## 当前阶段
+ * - **是**：保留原生文本栈和系统菜单外观
+ * - **否**：不接管菜单（通过 EditorViewModel 路由动作）
  *
- * ## ????
- * - ????????????
- * - ?????????????
+ * ## 后续扩展
+ * - 接管长按菜单内容
+ * - 接管选区手柄和命令状态
  */
 class WriterEditText @JvmOverloads constructor(
     context: Context,
@@ -318,7 +318,7 @@ class WriterEditText @JvmOverloads constructor(
             val clipboard = android.content.ClipData.newPlainText("text", selectedText)
             val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
             cm.setPrimaryClip(clipboard)
-            // ?????? - ??????,?? TextWatcher
+            // 删除选中文本 - 需要禁用动画，避免 TextWatcher 冲突
             text!!.delete(selStart, selEnd)
         }
     }
@@ -332,7 +332,7 @@ class WriterEditText @JvmOverloads constructor(
             val selEnd = selectionEnd
             if (selStart >= 0 && selEnd <= text!!.length) {
                 if (id == android.R.id.pasteAsPlainText) {
-                    // ?????:????
+                    // 纯文本粘贴：直接替换
                     text!!.replace(selStart, selEnd, pasteText)
                 } else {
                     text!!.replace(selStart, selEnd, pasteText)
