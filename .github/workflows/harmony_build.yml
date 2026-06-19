@@ -15,9 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/sanchuanhehe/harmony-next-pipeline-docker/harmonyos-ci-image:latest
-      options: --dns 8.8.8.8 --dns 8.8.4.4
+    container: ghcr.io/sanchuanhehe/harmony-next-pipeline-docker/harmonyos-ci-image:latest
 
     defaults:
       run:
@@ -44,6 +42,14 @@ jobs:
 
       - name: Apply CI build profile (no signing)
         run: cp build-profile.ci.json5 build-profile.json5
+
+      - name: Configure DNS for ohpm.harmonyos.com
+        run: |
+          echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+          echo "nameserver 8.8.4.4" >> /etc/resolv.conf
+          echo "Testing DNS resolution..."
+          nslookup ohpm.harmonyos.com || true
+          curl -sI https://ohpm.harmonyos.com/ohpm/ || true
 
       - name: Configure ohpm registry
         run: ohpm config set registry https://ohpm.harmonyos.com/ohpm/
