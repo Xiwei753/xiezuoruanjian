@@ -71,8 +71,7 @@ struct WritingPage {
   @State deleteAnimText: string = ''
   @State deleteAnimX: number = 0
   @State deleteAnimY: number = 0
-  @State preDeleteCaretX: number = 0
-  @State preDeleteCaretY: number = 0
+
   @State deleteAnimTranslateX: number = 0
   @State deleteAnimTranslateY: number = 0
   @State deleteAnimScale: number = 1.0
@@ -374,55 +373,42 @@ struct WritingPage {
       if (!this.caretOffsetApiAvailable) {
         // API 不可用时优雅降级：不播放动画
       } else {
-        // 先获取删除前光标位置（被删字的位置）
+        // 只取一次当前光标坐标（删除后的位置），作为动画终点
         try {
-          const preCaretOffset = this.textAreaController.getCaretOffset()
-          if (preCaretOffset && preCaretOffset.x >= 0 && preCaretOffset.y >= 0) {
-            // getCaretOffset() 可能返回 TextArea 内容坐标（未扣 scroll），
-            // 如果 DevEco 实测发现返回的已是可视区坐标，则删除 `- this.scrollOffsetY` 即可
-            this.preDeleteCaretX = preCaretOffset.x
-            this.preDeleteCaretY = preCaretOffset.y - this.scrollOffsetY
+          const caretOffset = this.textAreaController.getCaretOffset()
+          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
+            const deletedText = changed.deletedText
+            if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
+              this.deleteAnimText = deletedText
+              // 终点：当前光标位置
+              this.deleteAnimX = caretOffset.x
+              this.deleteAnimY = caretOffset.y - this.scrollOffsetY
+              // 起点偏移：从光标右侧开始，用稳定退化方案计算
+              this.deleteAnimTranslateX = deletedText.length * this.settings.editorFontSize * 0.6
+              this.deleteAnimTranslateY = 0
+              this.deleteAnimScale = 1.0
+              this.deleteAnimOpacity = 0.8
+              this.showDeleteAnimation = true
+
+              if (this.deleteAnimTimer !== -1) {
+                clearTimeout(this.deleteAnimTimer)
+              }
+              this.deleteAnimTimer = setTimeout(() => {
+                this.showDeleteAnimation = false
+                this.deleteAnimTimer = -1
+              }, this.settings.editorTypingAnimationDurationMs || 150) as number
+
+              // 吞回动画：从右侧飞回光标位置 + 缩小 + 淡出
+              animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
+                this.deleteAnimTranslateX = 0
+                this.deleteAnimTranslateY = 0
+                this.deleteAnimScale = 0.5
+                this.deleteAnimOpacity = 0
+              })
+            }
           }
         } catch (e) {
           this.caretOffsetApiAvailable = false
-        }
-
-        // 获取删除后光标位置（目标位置）—— 注意：此时 content 已经变了，光标已在新位置
-        try {
-          const postCaretOffset = this.textAreaController.getCaretOffset()
-          if (postCaretOffset && postCaretOffset.x >= 0 && postCaretOffset.y >= 0) {
-            this.deleteAnimX = postCaretOffset.x
-            this.deleteAnimY = postCaretOffset.y - this.scrollOffsetY
-          }
-        } catch (e) {
-          this.caretOffsetApiAvailable = false
-        }
-
-        const deletedText = changed.deletedText
-        if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
-          this.deleteAnimText = deletedText
-          // 吞回效果：初始偏移从旧位置开始，然后 animateTo 归零
-          this.deleteAnimTranslateX = this.preDeleteCaretX - this.deleteAnimX
-          this.deleteAnimTranslateY = this.preDeleteCaretY - this.deleteAnimY
-          this.deleteAnimScale = 1.0
-          this.deleteAnimOpacity = 0.8
-          this.showDeleteAnimation = true
-
-          if (this.deleteAnimTimer !== -1) {
-            clearTimeout(this.deleteAnimTimer)
-          }
-          this.deleteAnimTimer = setTimeout(() => {
-            this.showDeleteAnimation = false
-            this.deleteAnimTimer = -1
-          }, this.settings.editorTypingAnimationDurationMs || 150) as number
-
-          // 吞回动画：从旧位置飞向新光标位置 + 缩小 + 淡出
-          animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
-            this.deleteAnimTranslateX = 0
-            this.deleteAnimTranslateY = 0
-            this.deleteAnimScale = 0.5
-            this.deleteAnimOpacity = 0
-          })
         }
       }
     }

@@ -125,8 +125,7 @@ struct MainWorkspace {
   @State caretOffsetApiAvailable: boolean = true
 
   // ── 删除动画"吞回"效果 ──
-  @State preDeleteCaretX: number = 0
-  @State preDeleteCaretY: number = 0
+
   @State deleteAnimTranslateX: number = 0
   @State deleteAnimTranslateY: number = 0
 
@@ -426,24 +425,8 @@ struct MainWorkspace {
     }
 
     // 删除动画（防御性编码 + 吞回效果 + 滚动偏移补偿）
+    // 只取一次当前光标坐标（删除后位置），起点用稳定退化方案计算
     if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
-      if (this.caretOffsetApiAvailable) {
-        try {
-          // 先读取删除前的光标位置（即被删文字所在位置）
-          const preDeleteOffset = this.textAreaController.getCaretOffset()
-          if (preDeleteOffset && preDeleteOffset.x >= 0 && preDeleteOffset.y >= 0) {
-            this.preDeleteCaretX = preDeleteOffset.x
-            this.preDeleteCaretY = preDeleteOffset.y - this.scrollOffsetY
-          }
-        } catch (err) {
-          this.caretOffsetApiAvailable = false
-        }
-      }
-
-      // 先更新 content 以触发光标移动到新位置
-      this.content = text
-
-      // 删除后获取新光标位置，构建吞回动画
       if (this.caretOffsetApiAvailable) {
         try {
           const caretOffset = this.textAreaController.getCaretOffset()
@@ -451,17 +434,17 @@ struct MainWorkspace {
             const deletedText = changed.deletedText
             if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
               this.deleteAnimText = deletedText
+              // 终点：当前光标位置
               this.deleteAnimX = caretOffset.x
-              // 滚动偏移补偿
               this.deleteAnimY = caretOffset.y - this.scrollOffsetY
-              // 吞回效果：从旧光标位置飞向新光标位置
-              this.deleteAnimTranslateX = this.preDeleteCaretX - this.deleteAnimX
-              this.deleteAnimTranslateY = this.preDeleteCaretY - this.deleteAnimY
+              // 起点：从光标右侧偏移 deletedText.length * fontSize * 0.6 处飞回
+              this.deleteAnimTranslateX = deletedText.length * this.settings.editorFontSize * 0.6
+              this.deleteAnimTranslateY = 0
               this.showDeleteAnimation = true
               if (this.deleteAnimTimer !== -1) {
                 clearTimeout(this.deleteAnimTimer)
               }
-              // 触发吞回动画：translate 从旧偏移归零
+              // 触发吞回动画：translate 从偏移归零（从右侧飞回光标位置）
               animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
                 this.deleteAnimTranslateX = 0
                 this.deleteAnimTranslateY = 0
@@ -498,10 +481,7 @@ struct MainWorkspace {
       }
     }
 
-    // 如果删除动画分支已经提前设置了 content，这里不重复设置
-    if (!(this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling)) {
-      this.content = text
-    }
+    this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
 
     // 更新字数统计
