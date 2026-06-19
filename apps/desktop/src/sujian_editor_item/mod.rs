@@ -706,7 +706,7 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        // 动画创建已禁用 — update_cursor_visual_position 在 GUI 线程入口点调用
+        // TODO: 启用删除动画需要先验证 QTextLine xToCursor/cursorToX roundtrip
         // if self.current_typing_animation_enabled && !self.current_is_scrolling {
         //     for event in &events {
         //         if event.kind == EditorAnimationKind::Delete {
@@ -740,7 +740,7 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        // 动画创建已禁用 — update_cursor_visual_position 在 GUI 线程入口点调用
+        // TODO: 启用删除动画需要先验证 QTextLine xToCursor/cursorToX roundtrip
         // if self.current_typing_animation_enabled && !self.current_is_scrolling {
         //     for event in &events {
         //         if event.kind == EditorAnimationKind::Delete {
@@ -774,7 +774,7 @@ impl SujianEditorItem {
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
-        // 动画创建已禁用 — update_cursor_visual_position 在 GUI 线程入口点调用
+        // TODO: 启用删除动画需要先验证 QTextLine xToCursor/cursorToX roundtrip
         // if self.current_typing_animation_enabled && !self.current_is_scrolling {
         //     for event in &events {
         //         if event.kind == EditorAnimationKind::Delete {

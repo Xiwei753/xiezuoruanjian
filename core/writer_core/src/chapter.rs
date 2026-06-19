@@ -66,20 +66,6 @@ pub struct ChapterSaveReceipt {
     pub word_count: u32,
 }
 
-fn touch_json_updated_at(path: &Path) -> Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let raw = fs::read_to_string(path)?;
-    let mut val: serde_json::Value = serde_json::from_str(&raw)?;
-    if let Some(obj) = val.as_object_mut() {
-        obj.insert(
-            "updated_at".to_string(),
-            serde_json::Value::String(Utc::now().to_rfc3339()),
-        );
-    }
-    crate::storage::atomic_write_string(path, &serde_json::to_string_pretty(&val)?)
-}
 
 pub fn list_valid_chapter_ids(workspace_path: &Path, project_id: &str) -> Result<std::collections::HashSet<String>> {
     let mut chapter_ids = std::collections::HashSet::new();
@@ -362,54 +348,6 @@ fn save_chapter_verified_with_options(
     tx.add_file(&md_relative, content)?;
     tx.add_file(&meta_relative, &updated_meta_str)?;
 
-    let volume_meta_path = workspace_path
-        .join("projects")
-        .join(project_id)
-        .join("volumes")
-        .join(volume_id)
-        .join("volume.json");
-    let project_meta_path = workspace_path
-        .join("projects")
-        .join(project_id)
-        .join("project.json");
-
-    if volume_meta_path.exists() {
-        if let Ok(vol_raw) = fs::read_to_string(&volume_meta_path) {
-            if let Ok(mut vol_val) = serde_json::from_str::<serde_json::Value>(&vol_raw) {
-                if let Some(obj) = vol_val.as_object_mut() {
-                    obj.insert(
-                        "updated_at".to_string(),
-                        serde_json::Value::String(Utc::now().to_rfc3339()),
-                    );
-                    let vol_relative = volume_meta_path
-                        .strip_prefix(workspace_path)
-                        .unwrap_or(&volume_meta_path)
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    let _ = tx.add_file(&vol_relative, &serde_json::to_string_pretty(&vol_val)?);
-                }
-            }
-        }
-    }
-
-    if project_meta_path.exists() {
-        if let Ok(proj_raw) = fs::read_to_string(&project_meta_path) {
-            if let Ok(mut proj_val) = serde_json::from_str::<serde_json::Value>(&proj_raw) {
-                if let Some(obj) = proj_val.as_object_mut() {
-                    obj.insert(
-                        "updated_at".to_string(),
-                        serde_json::Value::String(Utc::now().to_rfc3339()),
-                    );
-                    let proj_relative = project_meta_path
-                        .strip_prefix(workspace_path)
-                        .unwrap_or(&project_meta_path)
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    let _ = tx.add_file(&proj_relative, &serde_json::to_string_pretty(&proj_val)?);
-                }
-            }
-        }
-    }
 
     tx.commit()?;
 
@@ -626,4 +564,154 @@ pub fn reorder_chapters(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// 验证 save_chapter_verified_with_options 只修改 chapter.md 和 chapter.meta.json，
+    /// 不污染父级 volume.json 和 project.json。
+    #[test]
+    fn test_save_chapter_does_not_pollute_parent_json() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        // Create workspace structure
+        crate::workspace::create_workspace(workspace_path).unwrap();
+
+        // Create project and volume
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0]; // create_project auto-creates "第一卷"
+
+        // Create a chapter
+        let chapter = create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+
+        // Record volume.json and project.json content BEFORE saving
+        let vol_json_path = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("volumes")
+            .join(&volume.id)
+            .join("volume.json");
+        let proj_json_path = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("project.json");
+
+        let vol_content_before = fs::read_to_string(&vol_json_path).unwrap();
+        let proj_content_before = fs::read_to_string(&proj_json_path).unwrap();
+
+        // Save chapter content
+        let receipt = save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "Hello world content",
+        )
+        .unwrap();
+
+        // Verify the save receipt is valid
+        assert_eq!(receipt.content_len, "Hello world content".len());
+        assert!(receipt.word_count > 0);
+
+        // Verify chapter.md was written correctly
+        let md_path = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("volumes")
+            .join(&volume.id)
+            .join("chapters")
+            .join(&chapter.id)
+            .join("chapter.md");
+        let md_content = fs::read_to_string(&md_path).unwrap();
+        assert_eq!(md_content, "Hello world content");
+
+        // Verify chapter.meta.json was updated
+        let meta_path = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("volumes")
+            .join(&volume.id)
+            .join("chapters")
+            .join(&chapter.id)
+            .join("chapter.meta.json");
+        let meta_content = fs::read_to_string(&meta_path).unwrap();
+        let meta: Chapter = serde_json::from_str(&meta_content).unwrap();
+        assert_eq!(meta.id, chapter.id);
+        assert!(meta.word_count > 0);
+
+        // CRITICAL: Verify volume.json was NOT modified
+        let vol_content_after = fs::read_to_string(&vol_json_path).unwrap();
+        assert_eq!(
+            vol_content_before, vol_content_after,
+            "volume.json should NOT be modified when saving a chapter"
+        );
+
+        // CRITICAL: Verify project.json was NOT modified
+        let proj_content_after = fs::read_to_string(&proj_json_path).unwrap();
+        assert_eq!(
+            proj_content_before, proj_content_after,
+            "project.json should NOT be modified when saving a chapter"
+        );
+    }
+
+    /// 验证多次保存章节不会污染父级 JSON。
+    #[test]
+    fn test_multiple_saves_do_not_pollute_parent_json() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+
+        let project = crate::project::create_project(workspace_path, "TestProject2").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0];
+
+        let chapter1 = create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+        let chapter2 = create_chapter(workspace_path, &project.id, &volume.id, "Ch2").unwrap();
+
+        let vol_json_path = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("volumes")
+            .join(&volume.id)
+            .join("volume.json");
+        let proj_json_path = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("project.json");
+
+        let vol_content_before = fs::read_to_string(&vol_json_path).unwrap();
+        let proj_content_before = fs::read_to_string(&proj_json_path).unwrap();
+
+        // Save chapter1
+        save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter1.id,
+            "Content for chapter 1",
+        )
+        .unwrap();
+
+        // Save chapter2
+        save_chapter_verified(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter2.id,
+            "Content for chapter 2",
+        )
+        .unwrap();
+
+        // Verify parent JSONs are untouched
+        let vol_content_after = fs::read_to_string(&vol_json_path).unwrap();
+        let proj_content_after = fs::read_to_string(&proj_json_path).unwrap();
+        assert_eq!(vol_content_before, vol_content_after);
+        assert_eq!(proj_content_before, proj_content_after);
+    }
 }

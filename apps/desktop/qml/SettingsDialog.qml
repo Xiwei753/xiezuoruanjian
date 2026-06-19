@@ -232,7 +232,13 @@ Dialog {
                 dt: root.dt
                 title: qsTr("同步")
                 Layout.fillWidth: true
-                SettingsRow { dt: root.dt; title: qsTr("同步配置"); description: qsTr("在同步页面管理仓库与鉴权") }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("同步配置")
+                    description: qsTr("在同步页面管理仓库与鉴权")
+                    clickable: true
+                    onClicked: { root.close(); /* 导航到同步页面 */ }
+                }
             }
 
             // ── 5. AI (ai) ──

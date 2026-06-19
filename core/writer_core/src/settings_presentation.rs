@@ -639,4 +639,60 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_section_item_ids() {
+        let presentation = default_settings_presentation();
+
+        // appearance section items
+        let appearance = &presentation.sections[0];
+        let item_ids: Vec<&str> = appearance.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(item_ids, vec!["theme_mode", "editor_font_size", "editor_line_spacing_multiplier"]);
+
+        // editor section items
+        let editor = &presentation.sections[1];
+        let item_ids: Vec<&str> = editor.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(item_ids, vec!["auto_indent_enabled", "auto_indent_width", "typing_animation_enabled", "typing_animation_duration_ms", "smooth_cursor_enabled", "smooth_cursor_duration_ms"]);
+
+        // save section items
+        let save = &presentation.sections[2];
+        let item_ids: Vec<&str> = save.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(item_ids, vec!["auto_save_enabled", "auto_save_delay_ms"]);
+
+        // sync section items
+        let sync = &presentation.sections[3];
+        let item_ids: Vec<&str> = sync.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(item_ids, vec!["sync_enabled", "github_repo", "branch", "token", "auto_sync", "sync_interval_seconds", "sync_dry_run", "sync_test_connection", "sync_now"]);
+
+        // ai section items
+        let ai = &presentation.sections[4];
+        let item_ids: Vec<&str> = ai.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(item_ids, vec!["ai_enabled"]);
+
+        // stats section items (empty)
+        let stats = &presentation.sections[5];
+        assert!(stats.items.is_empty());
+
+        // about section items
+        let about = &presentation.sections[6];
+        let item_ids: Vec<&str> = about.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(item_ids, vec!["workspace_path", "version", "action_registry"]);
+    }
+
+    #[test]
+    fn test_settings_presentation_json_ffi() {
+        let presentation = default_settings_presentation();
+        let json = serde_json::to_string(&presentation).expect("serialization must succeed");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+
+        // 验证 JSON 结构可被客户端消费
+        assert!(parsed.get("sections").is_some());
+        let sections = parsed.get("sections").unwrap().as_array().unwrap();
+        assert_eq!(sections.len(), 7);
+
+        // 验证第一个 section 的结构
+        let first = &sections[0];
+        assert_eq!(first.get("id").unwrap().as_str().unwrap(), "appearance");
+        assert!(first.get("items").unwrap().as_array().unwrap().len() > 0);
+    }
 }

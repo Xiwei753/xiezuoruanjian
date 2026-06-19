@@ -222,4 +222,21 @@ impl super::WriterCore {
     ) -> crate::error::Result<()> {
         crate::chapter::reorder_chapters(&self.workspace_path, project_id, volume_id, ordered_ids)
     }
+
+    /// 从子章节聚合获取 volume 的最近更新时间。
+    pub fn get_volume_updated_at_aggregated(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+    ) -> crate::error::Result<String> {
+        crate::project::get_volume_updated_at_aggregated(&self.workspace_path, project_id, volume_id)
+    }
+
+    /// 从子章节聚合获取 project 的最近更新时间。
+    pub fn get_project_updated_at_aggregated(
+        &self,
+        project_id: &str,
+    ) -> crate::error::Result<String> {
+        crate::project::get_project_updated_at_aggregated(&self.workspace_path, project_id)
+    }
 }

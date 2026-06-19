@@ -299,13 +299,15 @@ struct WritingPage {
       this.lastInsertedText = text.substring(insertPos, insertPos + insertedLen)
       this.showInsertAnimation = true
 
-      // 估算动画位置：基于字符数和行高
+      // WIP: 以下动画位置计算使用 fontSize * 0.6 估算，不是真实编辑器布局坐标。
+      // 等接入 Core EditorAnimationEvent + 真实 glyph rect 后替换。
       const charWidth = this.settings.editorFontSize * 0.6
       const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
       const pagePadding = this.adaptiveState.pagePadding
       const approxLine = Math.floor((insertPos * charWidth) / (360 - pagePadding * 2))
       this.insertAnimX = pagePadding + (insertPos * charWidth) % (360 - pagePadding * 2)
       this.insertAnimY = 20 + approxLine * lineHeight
+      // WIP END
 
       // 清除之前的定时器
       if (this.insertAnimTimer !== -1) {
@@ -318,6 +320,8 @@ struct WritingPage {
     }
 
     // 平滑光标：更新光标位置估算
+    // WIP: 以下动画位置计算使用 fontSize * 0.6 估算，不是真实编辑器布局坐标。
+    // 等接入 Core EditorAnimationEvent + 真实 glyph rect 后替换。
     if (this.smoothCursorEnabled && cursorPos !== undefined) {
       const charWidth = this.settings.editorFontSize * 0.6
       const lineHeight = this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize
@@ -331,12 +335,13 @@ struct WritingPage {
       // 输入时光标可见
       this.cursorVisible = true
     }
+    // WIP END
   }
 
   async clearContent() {
     AlertDialog.show({
       title: '确认清空',
-      message: '确认清空本章内容？此操作会保存为空，但可通过同步/历史恢复。',
+      message: '确认清空本章内容？此操作会保存为空。',
       primaryButton: {
         value: '取消',
         action: () => {}

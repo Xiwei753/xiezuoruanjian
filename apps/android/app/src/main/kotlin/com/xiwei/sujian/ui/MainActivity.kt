@@ -450,7 +450,7 @@ class MainActivity : AppCompatActivity() {
         val fabLayoutParams = fabNewProject.layoutParams as? CoordinatorLayout.LayoutParams
         fabLayoutParams?.anchorId = R.id.twoPaneContainer
         fabNewProject.layoutParams = fabLayoutParams
-        fabNewProject.show()
+        // FAB 的显示/隐藏由 applyWorkspaceScreenPolicy() 统一管理，此处不主动 show
         fabNewStarMapNode.hide()
     }
 

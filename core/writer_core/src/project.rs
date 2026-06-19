@@ -246,6 +246,87 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// 从子章节聚合获取 volume 的最近更新时间。
+///
+/// 遍历该 volume 下所有 chapter.meta.json，取最大的 updated_at。
+/// 如果没有子章节，返回 volume.json 的 created_at 作为 fallback。
+pub fn get_volume_updated_at_aggregated(
+    workspace_path: &Path,
+    project_id: &str,
+    volume_id: &str,
+) -> Result<String> {
+    let chapters = crate::chapter::list_chapters(workspace_path, project_id, volume_id)?;
+
+    if !chapters.is_empty() {
+        let max_updated = chapters
+            .iter()
+            .map(|c| c.updated_at.as_str())
+            .max()
+            .unwrap();
+        return Ok(max_updated.to_string());
+    }
+
+    // Fallback: no chapters, use volume.json created_at
+    let volume_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id);
+    let meta_path = volume_dir.join("volume.json");
+    if meta_path.exists() {
+        let raw = fs::read_to_string(&meta_path)?;
+        if let Ok(vol) = serde_json::from_str::<crate::volume::Volume>(&raw) {
+            return Ok(vol.created_at);
+        }
+    }
+
+    Ok(Utc::now().to_rfc3339())
+}
+
+/// 从子章节聚合获取 project 的最近更新时间。
+///
+/// 遍历该 project 下所有 volume 下所有 chapter.meta.json，取最大的 updated_at。
+/// 如果没有子章节，返回 project.json 的 created_at 作为 fallback。
+pub fn get_project_updated_at_aggregated(
+    workspace_path: &Path,
+    project_id: &str,
+) -> Result<String> {
+    let volumes = crate::volume::list_volumes(workspace_path, project_id)?;
+
+    let mut max_updated: Option<String> = None;
+
+    for vol in &volumes {
+        let chapters = crate::chapter::list_chapters(workspace_path, project_id, &vol.id)?;
+        for ch in &chapters {
+            match &max_updated {
+                Some(current) if ch.updated_at.as_str() > current.as_str() => {
+                    max_updated = Some(ch.updated_at.clone());
+                }
+                None => {
+                    max_updated = Some(ch.updated_at.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(updated) = max_updated {
+        return Ok(updated);
+    }
+
+    // Fallback: no chapters in any volume, use project.json created_at
+    let project_dir = workspace_path.join("projects").join(project_id);
+    let meta_path = project_dir.join("project.json");
+    if meta_path.exists() {
+        let raw = fs::read_to_string(&meta_path)?;
+        if let Ok(proj) = serde_json::from_str::<Project>(&raw) {
+            return Ok(proj.created_at);
+        }
+    }
+
+    Ok(Utc::now().to_rfc3339())
+}
+
 pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result<()> {
     let projects = list_projects(workspace_path)?;
     let existing_ids: std::collections::HashSet<_> =
@@ -277,4 +358,95 @@ pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// 验证聚合查询：有子章节时返回最大的 chapter updated_at。
+    #[test]
+    fn test_aggregated_volume_updated_at_with_chapters() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0];
+
+        // Create two chapters
+        let ch1 = crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+        let _ch2 = crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch2").unwrap();
+
+        // Save ch1 with content (updates its updated_at)
+        crate::chapter::save_chapter_verified(
+            workspace_path, &project.id, &volume.id, &ch1.id, "Some content",
+        ).unwrap();
+
+        // The aggregated updated_at should be the max of all chapter updated_at values
+        let aggregated = get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
+        assert!(!aggregated.is_empty(), "aggregated updated_at should not be empty");
+
+        // Verify it matches the latest chapter's updated_at
+        let chapters = crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+        let max_updated = chapters.iter().map(|c| c.updated_at.as_str()).max().unwrap();
+        assert_eq!(aggregated, max_updated);
+    }
+
+    /// 验证聚合查询：无子章节时 fallback 到 volume.json 的 created_at。
+    #[test]
+    fn test_aggregated_volume_updated_at_no_chapters() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0];
+
+        // No chapters created — should fallback to volume's created_at
+        let aggregated = get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
+        assert_eq!(aggregated, volume.created_at);
+    }
+
+    /// 验证聚合查询：project 级别，有子章节时返回最大的 chapter updated_at。
+    #[test]
+    fn test_aggregated_project_updated_at_with_chapters() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0];
+
+        let ch1 = crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+        crate::chapter::save_chapter_verified(
+            workspace_path, &project.id, &volume.id, &ch1.id, "Project level content",
+        ).unwrap();
+
+        let aggregated = get_project_updated_at_aggregated(workspace_path, &project.id).unwrap();
+        assert!(!aggregated.is_empty());
+
+        // Verify it matches the latest chapter's updated_at across all volumes
+        let chapters = crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+        let max_updated = chapters.iter().map(|c| c.updated_at.as_str()).max().unwrap();
+        assert_eq!(aggregated, max_updated);
+    }
+
+    /// 验证聚合查询：project 级别，无子章节时 fallback 到 project.json 的 created_at。
+    #[test]
+    fn test_aggregated_project_updated_at_no_chapters() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+
+        // No chapters — should fallback to project's created_at
+        let aggregated = get_project_updated_at_aggregated(workspace_path, &project.id).unwrap();
+        assert_eq!(aggregated, project.created_at);
+    }
 }
