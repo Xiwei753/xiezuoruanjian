@@ -27,7 +27,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Download HarmonyOS command-line tools
         run: |
@@ -62,9 +62,20 @@ jobs:
         run: |
           # ohpm.harmonyos.com domain does not exist in public DNS.
           # Use npm to fetch packages from repo.harmonyos.com (Huawei's npm-compatible registry)
-          npm install @ohos/hvigor@6.26.1 @ohos/hvigor-ohos-plugin@6.26.1 \
-            --registry=https://repo.harmonyos.com/npm/ \
-            --prefix=.
+          # Use a dedicated package.json.ci with dependencies listed to avoid --prefix issues
+          cp package.json.ci package.json
+          npm install --registry=https://repo.harmonyos.com/npm/ --loglevel verbose
+
+      - name: Verify npm install
+        run: |
+          echo "=== node_modules contents ==="
+          ls -la node_modules/@ohos/ 2>/dev/null || echo "ERROR: node_modules/@ohos not found"
+          echo "=== hvigor version ==="
+          node -e "console.log(require('./node_modules/@ohos/hvigor/package.json').version)" 2>/dev/null || echo "ERROR: Cannot read hvigor version"
+          echo "=== hvigor-ohos-plugin version ==="
+          node -e "console.log(require('./node_modules/@ohos/hvigor-ohos-plugin/package.json').version)" 2>/dev/null || echo "ERROR: Cannot read plugin version"
+          echo "=== hvigor.js exists ==="
+          ls -la ./node_modules/@ohos/hvigor/bin/hvigor.js 2>/dev/null || echo "ERROR: hvigor.js not found"
 
       - name: Install OpenHarmony dependencies via ohpm
         run: |
