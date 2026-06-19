@@ -1,0 +1,31 @@
+#!/bin/sh
+# Copyright (c) Huawei Technologies Co., Ltd. 2024-2024. All rights reserved.
+
+# HarmonyOS Hvigor Wrapper Script
+
+APP_HOME=$(dirname $(readlink -f "$0" 2>/dev/null || echo "$0"))
+
+# Use node from PATH or NODE_HOME
+if [ -n "$NODE_HOME" ] ; then
+    NODE="$NODE_HOME/node"
+else
+    NODE="node"
+fi
+
+# hvigor wrapper js location - installed by ohpm
+HVIGOR_WRAPPER_JS="$APP_HOME/hvigor/hvigor-wrapper.js"
+
+if [ ! -f "$HVIGOR_WRAPPER_JS" ]; then
+    echo "Warning: hvigor-wrapper.js not found at $HVIGOR_WRAPPER_JS"
+    echo "Attempting ohpm install to fetch dependencies..."
+    cd "$APP_HOME"
+    ohpm install --all 2>/dev/null || true
+fi
+
+if [ ! -f "$HVIGOR_WRAPPER_JS" ]; then
+    echo "ERROR: hvigor-wrapper.js still not found after ohpm install."
+    echo "Please ensure @ohos/hvigor-ohos is in your dependencies."
+    exit 1
+fi
+
+exec "$NODE" --expose-gc "$HVIGOR_WRAPPER_JS" "$@"

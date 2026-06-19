@@ -96,7 +96,7 @@ WINDOWS_NATIVE_DEPS.md
 # HarmonyOS build artifacts & IDE
 apps/harmony/oh_modules/
 apps/harmony/.hvigor/
-apps/harmony/hvigor/
+apps/harmony/hvigor/wrapper/
 apps/harmony/entry/.cxx/
 apps/harmony/.appanalyzer/
 apps/harmony/.clang-tidy
