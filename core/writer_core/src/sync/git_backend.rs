@@ -68,6 +68,10 @@ impl Git2Backend {
                         let proxy_url = format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port);
                         proxy_opts.url(&proxy_url);
                     }
+                    "https" => {
+                        let proxy_url = format!("https://{}:{}", cfg.proxy_host, cfg.proxy_port);
+                        proxy_opts.url(&proxy_url);
+                    }
                     "socks5" => {
                         let proxy_url = format!("socks5h://{}:{}", cfg.proxy_host, cfg.proxy_port);
                         proxy_opts.url(&proxy_url);
