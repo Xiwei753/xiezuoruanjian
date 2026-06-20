@@ -226,12 +226,12 @@ jobs:
         shell: bash
         run: |
           MISSING=""
-          [ -z "$HARMONY_P12_BASE64" ]    && MISSING="$MISSING HARMONY_P12_BASE64"
-          [ -z "$HARMONY_CERT_BASE64" ]   && MISSING="$MISSING HARMONY_CERT_BASE64"
-          [ -z "$HARMONY_PROFILE_BASE64" ] && MISSING="$MISSING HARMONY_PROFILE_BASE64"
-          [ -z "$HARMONY_KEY_ALIAS" ]     && MISSING="$MISSING HARMONY_KEY_ALIAS"
-          [ -z "$HARMONY_KEY_PASSWORD" ]  && MISSING="$MISSING HARMONY_KEY_PASSWORD"
-          [ -z "$HARMONY_STORE_PASSWORD" ] && MISSING="$MISSING HARMONY_STORE_PASSWORD"
+          [ -z "$HARMONY_P12_BASE64" ]    && MISSING="$MISSING HARMONY_P12_BASE64"    || true
+          [ -z "$HARMONY_CERT_BASE64" ]   && MISSING="$MISSING HARMONY_CERT_BASE64"   || true
+          [ -z "$HARMONY_PROFILE_BASE64" ] && MISSING="$MISSING HARMONY_PROFILE_BASE64" || true
+          [ -z "$HARMONY_KEY_ALIAS" ]     && MISSING="$MISSING HARMONY_KEY_ALIAS"     || true
+          [ -z "$HARMONY_KEY_PASSWORD" ]  && MISSING="$MISSING HARMONY_KEY_PASSWORD"  || true
+          [ -z "$HARMONY_STORE_PASSWORD" ] && MISSING="$MISSING HARMONY_STORE_PASSWORD" || true
 
           if [ -n "$MISSING" ]; then
             echo "Signing secrets not fully configured; unsigned HAP only."
