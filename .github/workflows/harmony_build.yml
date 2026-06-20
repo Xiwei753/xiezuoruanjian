@@ -223,6 +223,7 @@ jobs:
           HARMONY_KEY_ALIAS: ${{ secrets.HARMONY_KEY_ALIAS }}
           HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
           HARMONY_STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
+        shell: bash
         run: |
           MISSING=""
           [ -z "$HARMONY_P12_BASE64" ]    && MISSING="$MISSING HARMONY_P12_BASE64"
@@ -239,17 +240,23 @@ jobs:
             exit 0
           fi
 
-          # add-mask passwords
-          echo "::add-mask::${HARMONY_STORE_PASSWORD}"
-          echo "::add-mask::${HARMONY_KEY_ALIAS}"
-          echo "::add-mask::${HARMONY_KEY_PASSWORD}"
+          # add-mask passwords (use printf to avoid issues with special chars)
+          printf "::add-mask::%s\n" "$HARMONY_STORE_PASSWORD"
+          printf "::add-mask::%s\n" "$HARMONY_KEY_ALIAS"
+          printf "::add-mask::%s\n" "$HARMONY_KEY_PASSWORD"
 
           SIGN_DIR="$RUNNER_TEMP/harmony-sign"
           mkdir -p "$SIGN_DIR"
 
-          echo "$HARMONY_P12_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.p12" || { echo "Failed to decode p12"; exit 1; }
-          echo "$HARMONY_CERT_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.cer" || { echo "Failed to decode cer"; exit 1; }
-          echo "$HARMONY_PROFILE_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.p7b" || { echo "Failed to decode p7b"; exit 1; }
+          # Decode base64 secrets to files (use printf + tr to handle long strings)
+          printf '%s' "$HARMONY_P12_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.p12"
+          if [ ! -s "$SIGN_DIR/sujian.p12" ]; then echo "Failed to decode p12"; exit 1; fi
+
+          printf '%s' "$HARMONY_CERT_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.cer"
+          if [ ! -s "$SIGN_DIR/sujian.cer" ]; then echo "Failed to decode cer"; exit 1; fi
+
+          printf '%s' "$HARMONY_PROFILE_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.p7b"
+          if [ ! -s "$SIGN_DIR/sujian.p7b" ]; then echo "Failed to decode p7b"; exit 1; fi
 
           echo "SIGNING_AVAILABLE=true" >> $GITHUB_ENV
           echo "SIGN_DIR=$SIGN_DIR" >> $GITHUB_ENV
