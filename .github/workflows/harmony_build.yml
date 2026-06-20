@@ -39,26 +39,36 @@ jobs:
           echo "DEVECO_SDK_HOME=$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" >> $GITHUB_ENV
           echo "$RUNNER_TEMP/harmony-tools/command-line-tools/bin" >> $GITHUB_PATH
 
-      - name: Install HarmonyOS SDK via sdkmanager
+      - name: Explore command-line-tools structure
         run: |
-          SDKMGR="$RUNNER_TEMP/harmony-tools/command-line-tools/bin/sdkmanager"
-          chmod +x "$SDKMGR"
-          echo "=== sdkmanager help ==="
-          "$SDKMGR" --help 2>&1 || true
-          echo "=== Listing available SDK packages ==="
-          "$SDKMGR" list 2>&1 || true
-          echo "=== Attempting to install all SDK packages ==="
-          # Try: sdkmanager install <package-id> --accept-license
-          # Common package IDs for HarmonyOS NEXT:
-          #   HarmonyOS-NEXT-API12-OpenHarmony-5.0.0.22-Release
-          #   openharmony
-          "$SDKMGR" install "HarmonyOS-NEXT-API12-OpenHarmony-5.0.0.22-Release" --accept-license 2>&1 || true
-          echo "=== Attempting alternative package names ==="
-          "$SDKMGR" install "openharmony" --accept-license 2>&1 || true
-          echo "=== SDK directory after install ==="
-          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 5 -type d | sort || true
-          echo "=== SDK files ==="
-          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 6 -type f | sort || true
+          echo "=== Full directory tree ==="
+          find "$RUNNER_TEMP/harmony-tools/command-line-tools" -maxdepth 3 -type f | sort || true
+          echo "=== bin/ contents ==="
+          ls -la "$RUNNER_TEMP/harmony-tools/command-line-tools/bin/" || true
+          echo "=== tool/ contents ==="
+          find "$RUNNER_TEMP/harmony-tools/command-line-tools/tool" -maxdepth 2 -type f | sort || true
+          echo "=== sdk/ full tree ==="
+          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 4 | sort || true
+          echo "=== hvigor/ contents ==="
+          find "$RUNNER_TEMP/harmony-tools/command-line-tools/hvigor" -maxdepth 2 -type f | sort || true
+
+      - name: Install HarmonyOS SDK
+        run: |
+          # Look for any sdkmanager-like tool
+          SDKMGR=$(find "$RUNNER_TEMP/harmony-tools" -name "sdkmanager" -o -name "ohsdkmgr" -o -name "ohsdkmanager" 2>/dev/null | head -1)
+          if [ -n "$SDKMGR" ]; then
+            echo "Found SDK manager: $SDKMGR"
+            chmod +x "$SDKMGR"
+            "$SDKMGR" --help 2>&1 || true
+            "$SDKMGR" list 2>&1 || true
+            "$SDKMGR" install --accept-license 2>&1 || true
+          else
+            echo "No sdkmanager found, trying ohpm to install SDK..."
+            # Alternative: use ohpm to install SDK packages
+            ohpm config set registry https://ohpm.openharmony.cn/ohpm/ 2>&1 || true
+          fi
+          echo "=== SDK directory after install attempt ==="
+          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 5 | sort || true
 
       - name: Show tool versions
         run: |
