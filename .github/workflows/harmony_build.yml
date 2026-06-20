@@ -225,37 +225,30 @@ jobs:
           HARMONY_STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
         shell: bash
         run: |
-          MISSING=""
-          [ -z "$HARMONY_P12_BASE64" ]    && MISSING="$MISSING HARMONY_P12_BASE64"    || true
-          [ -z "$HARMONY_CERT_BASE64" ]   && MISSING="$MISSING HARMONY_CERT_BASE64"   || true
-          [ -z "$HARMONY_PROFILE_BASE64" ] && MISSING="$MISSING HARMONY_PROFILE_BASE64" || true
-          [ -z "$HARMONY_KEY_ALIAS" ]     && MISSING="$MISSING HARMONY_KEY_ALIAS"     || true
-          [ -z "$HARMONY_KEY_PASSWORD" ]  && MISSING="$MISSING HARMONY_KEY_PASSWORD"  || true
-          [ -z "$HARMONY_STORE_PASSWORD" ] && MISSING="$MISSING HARMONY_STORE_PASSWORD" || true
-
-          if [ -n "$MISSING" ]; then
+          set +e
+          
+          if [ -z "$HARMONY_P12_BASE64" ] || [ -z "$HARMONY_CERT_BASE64" ] || [ -z "$HARMONY_PROFILE_BASE64" ] || [ -z "$HARMONY_KEY_ALIAS" ] || [ -z "$HARMONY_KEY_PASSWORD" ] || [ -z "$HARMONY_STORE_PASSWORD" ]; then
             echo "Signing secrets not fully configured; unsigned HAP only."
-            echo "Missing:$MISSING"
             echo "SIGNING_AVAILABLE=false" >> $GITHUB_ENV
             exit 0
           fi
 
-          # add-mask passwords (use printf to avoid issues with special chars)
-          printf "::add-mask::%s\n" "$HARMONY_STORE_PASSWORD"
-          printf "::add-mask::%s\n" "$HARMONY_KEY_ALIAS"
-          printf "::add-mask::%s\n" "$HARMONY_KEY_PASSWORD"
+          # add-mask passwords
+          echo "::add-mask::${HARMONY_STORE_PASSWORD}"
+          echo "::add-mask::${HARMONY_KEY_ALIAS}"
+          echo "::add-mask::${HARMONY_KEY_PASSWORD}"
 
           SIGN_DIR="$RUNNER_TEMP/harmony-sign"
           mkdir -p "$SIGN_DIR"
 
-          # Decode base64 secrets to files (use printf + tr to handle long strings)
-          printf '%s' "$HARMONY_P12_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.p12"
+          # Decode base64 secrets to files
+          echo "$HARMONY_P12_BASE64" | base64 -d > "$SIGN_DIR/sujian.p12"
           if [ ! -s "$SIGN_DIR/sujian.p12" ]; then echo "Failed to decode p12"; exit 1; fi
 
-          printf '%s' "$HARMONY_CERT_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.cer"
+          echo "$HARMONY_CERT_BASE64" | base64 -d > "$SIGN_DIR/sujian.cer"
           if [ ! -s "$SIGN_DIR/sujian.cer" ]; then echo "Failed to decode cer"; exit 1; fi
 
-          printf '%s' "$HARMONY_PROFILE_BASE64" | tr -d '\r\n' | base64 -d > "$SIGN_DIR/sujian.p7b"
+          echo "$HARMONY_PROFILE_BASE64" | base64 -d > "$SIGN_DIR/sujian.p7b"
           if [ ! -s "$SIGN_DIR/sujian.p7b" ]; then echo "Failed to decode p7b"; exit 1; fi
 
           echo "SIGNING_AVAILABLE=true" >> $GITHUB_ENV
