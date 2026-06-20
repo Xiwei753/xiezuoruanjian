@@ -159,30 +159,12 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
         let rel_volume_dir = normalize_rel_path(&volume_dir, workspace_path);
         let rel_trash_path = normalize_rel_path(&trash_path, workspace_path);
 
-        for entry in walkdir::WalkDir::new(&trash_path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            let rel_file_path = normalize_rel_path(entry.path(), &trash_path);
-            let original_file_path = format!("{}/{}", rel_volume_dir, rel_file_path);
-            let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
-
-            let tombstone = crate::sync::Tombstone {
-                original_path: original_file_path.clone(),
-                trash_path: new_trash_path,
-                deleted_at: chrono::Utc::now().timestamp(),
-                purge_after: chrono::Utc::now().timestamp() + 30 * 24 * 3600,
-                deleted_by: "local".to_string(),
-                original_hash: state
-                    .known_files
-                    .get(&original_file_path)
-                    .cloned()
-                    .unwrap_or_default(),
-                kind: "local_delete".to_string(),
-            };
-            state.tombstones.push(tombstone);
-        }
+        crate::trash::generate_tombstones(
+            &mut state,
+            &trash_path,
+            &rel_volume_dir,
+            &rel_trash_path,
+        );
         let _ = crate::sync::SyncService::save_sync_state(workspace_path, &state);
     }
     Ok(())
