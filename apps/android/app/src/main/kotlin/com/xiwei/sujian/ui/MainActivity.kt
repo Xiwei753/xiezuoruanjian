@@ -82,7 +82,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabWorks: FrameLayout
     private lateinit var tabStarMap: FrameLayout
     private lateinit var tabStats: FrameLayout
-    private lateinit var mainContainer: CoordinatorLayout
+    private lateinit var mainContainer: FrameLayout
     private lateinit var bottomNav: BottomNavigationView
     private lateinit var canvasView: StarMapCanvasView
     private lateinit var toolbar: MaterialToolbar
