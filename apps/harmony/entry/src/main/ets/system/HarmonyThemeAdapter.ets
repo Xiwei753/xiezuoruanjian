@@ -66,6 +66,7 @@ export interface ThemeUpdateParams {
 export class HarmonyThemeAdapter {
   private static instance: HarmonyThemeAdapter
   private mainWindow: window.Window | null = null
+  private systemColorMode: number = 0 // 0=light, 1=dark (ConfigurationConstant.ColorMode)
   private currentTheme: ThemeConfig = {
     mode: 'system',
     colors: LightTheme,
@@ -157,20 +158,21 @@ export class HarmonyThemeAdapter {
     this.observers.delete(observer)
   }
 
-  startSystemThemeListener(): void {
-    try {
-      // 使用 ConfigurationConstant 检测系统深色/浅色模式
-      const win = this.mainWindow
-      if (win !== null) {
-        const config = win.getWindowProperties().configuration
-        if (config) {
-          const colorMode: number = config.colorMode
-          this.applySystemColorMode(colorMode)
-        }
-      }
-    } catch (err) {
-      // 非支持设备或 API 不可用，保持当前主题
+  /**
+   * 外部（如 EntryAbility.onConfigurationUpdate）注入系统 colorMode 变化。
+   * colorMode: 0 = COLOR_MODE_LIGHT, 1 = COLOR_MODE_DARK
+   */
+  onConfigurationUpdate(colorMode: number): void {
+    this.systemColorMode = colorMode
+    this.applySystemColorMode(colorMode)
+    if (this.currentTheme.mode === 'system') {
+      this.notifyObservers()
     }
+  }
+
+  startSystemThemeListener(): void {
+    // 使用缓存的 systemColorMode，不再从 WindowProperties.configuration 获取
+    this.applySystemColorMode(this.systemColorMode)
   }
 
   private applySystemColorMode(colorMode: number): void {
@@ -199,28 +201,8 @@ export class HarmonyThemeAdapter {
         this.currentTheme.colors = DarkTheme
         break
       case 'system':
-        // 检测系统深色/浅色模式
-        try {
-          const win = this.mainWindow
-          if (win !== null) {
-            const config = win.getWindowProperties().configuration
-            if (config) {
-              const colorMode: number = config.colorMode
-              // ColorMode.COLOR_MODE_DARK = 1, COLOR_MODE_LIGHT = 0
-              if (colorMode === 1) {
-                this.currentTheme.colors = DarkTheme
-              } else {
-                this.currentTheme.colors = LightTheme
-              }
-            } else {
-              this.currentTheme.colors = LightTheme
-            }
-          } else {
-            this.currentTheme.colors = LightTheme
-          }
-        } catch (err) {
-          this.currentTheme.colors = LightTheme
-        }
+        // 使用缓存的 systemColorMode，不再从 WindowProperties.configuration 获取
+        this.applySystemColorMode(this.systemColorMode)
         break
     }
   }

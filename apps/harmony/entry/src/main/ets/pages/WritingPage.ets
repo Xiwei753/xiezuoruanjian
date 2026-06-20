@@ -122,7 +122,7 @@ struct WritingPage {
 
     // Setup auto-save lifecycle observer
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      (): Promise<void> => this.saveChapter(true),
+      (): Promise<void> => this.saveChapter(true).then(() => {}),
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
@@ -221,7 +221,7 @@ struct WritingPage {
         if (this.autoSaveObserver) {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            (): Promise<void> => this.saveChapter(true),
+            (): Promise<void> => this.saveChapter(true).then(() => {}),
             this.settings.autoSaveDelayMs
           )
           this.lifecycle.addObserver(this.autoSaveObserver)

@@ -318,8 +318,9 @@ struct SettingsPage {
           .value(this.getThemeName())
           .onSelect((index: number) => {
             const themes: ThemeMode[] = ['system', 'light', 'dark']
-            this.settings.themeMode = themes[index]
-            this.themeAdapter.setMode(this.settings.themeMode)
+            const selectedTheme: ThemeMode = themes[index]
+            this.settings.themeMode = selectedTheme
+            this.themeAdapter.setMode(selectedTheme)
             this.saveSettings()
           })
       }
@@ -674,7 +675,7 @@ struct SettingsPage {
             .fontSize(14)
             .height(36)
             .backgroundColor(this.themeConfig.colors.secondary || '#6b7280')
-            .fontColor(this.themeConfig.colors.onSecondary || '#ffffff')
+            .fontColor(this.themeConfig.colors.secondary || '#ffffff')
             .margin({ left: 12 })
             .enabled(!this.isDiagnosing)
             .onClick(() => this.runSyncDiagnostics())

@@ -120,13 +120,12 @@ struct StarMapPage {
         } else {
           // 兼容：如果 layout.nodes 为空，从旧数据降级
           this.layoutNodes = result.data.nodes.map((node: StarMapNode): StarMapLayoutNode => {
-            const legacy = node as Record<string, Object>
             const layoutNode: StarMapLayoutNode = {
               nodeId: node.id,
-              x: (legacy['x'] as number) || 0,
-              y: (legacy['y'] as number) || 0,
-              width: (legacy['width'] as number) || 160,
-              height: (legacy['height'] as number) || 80,
+              x: 0,
+              y: 0,
+              width: 160,
+              height: 80,
               radius: 16,
               collapsed: false,
               zIndex: 0,
@@ -291,6 +290,13 @@ struct StarMapPage {
     this.drawEdges()
   }
 
+  /**
+   * 查找节点布局坐标
+   */
+  private getLayoutNode(nodeId: string): StarMapLayoutNode | undefined {
+    return this.layoutNodes.find(ln => ln.nodeId === nodeId)
+  }
+
   build() {
     Column() {
       // Header
@@ -412,73 +418,7 @@ struct StarMapPage {
 
           // Nodes layer
           ForEach(this.graph.nodes, (node: StarMapNode) => {
-            // 从 layoutNodes 查找坐标
-            const layoutNode = this.layoutNodes.find(ln => ln.nodeId === node.id)
-            const nodeX = layoutNode?.x ?? 0
-            const nodeY = layoutNode?.y ?? 0
-            const nodeWidth = layoutNode?.width ?? 160
-            const nodeHeight = layoutNode?.height ?? 80
-
-            Column() {
-              Circle({ width: 56, height: 56 })
-                .fill(this.getNodeColor(node))
-                .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
-                .strokeWidth(4)
-                .shadow({
-                  radius: this.draggingNodeId === node.id ? 12 : (this.selectedNodeId === node.id ? 8 : 4),
-                  color: this.draggingNodeId === node.id ? '#40000000' : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
-                  offsetX: 0,
-                  offsetY: this.draggingNodeId === node.id ? 4 : 2
-                })
-
-              Text(node.title)
-                .fontSize(13)
-                .fontWeight(this.selectedNodeId === node.id ? FontWeight.Bold : FontWeight.Normal)
-                .fontColor(this.themeConfig.colors.textPrimary)
-                .margin({ top: 6 })
-                .maxLines(2)
-                .textAlign(TextAlign.Center)
-                .width(80)
-            }
-            .position({
-              x: (nodeX * this.zoomScale) + this.offsetX - nodeWidth / 2 + this.wobbleX(node.id, this.motionTick),
-              y: (nodeY * this.zoomScale) + this.offsetY - nodeHeight / 2 + this.wobbleY(node.id, this.motionTick)
-            })
-            .scale(
-              this.draggingNodeId === node.id
-                ? { x: this.dragLiftScale, y: this.dragLiftScale }
-                : { x: 1, y: 1 }
-            )
-            .onClick(() => {
-              this.selectNode(node.id)
-            })
-            .gesture(
-              PanGesture()
-                .onActionStart(() => {
-                  this.draggingNodeId = node.id
-                })
-                .onActionUpdate((event: GestureEvent) => {
-                  // 更新 layoutNode 坐标，不修改 StarMapNode
-                  const layoutIndex = this.layoutNodes.findIndex(ln => ln.nodeId === node.id)
-                  if (layoutIndex >= 0) {
-                    this.layoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
-                    this.layoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
-                  }
-                })
-                .onActionEnd(() => {
-                  this.draggingNodeId = ''
-                  // debounce 300ms 后保存布局
-                  setTimeout(() => {
-                    if (this.starmapId && this.layoutNodes.length > 0) {
-                      const layout: StarMapLayout = {
-                        kind: 'Freeform',
-                        nodes: this.layoutNodes
-                      }
-                      this.bridge.saveStarMapLayout(this.starmapId, layout)
-                    }
-                  }, 300)
-                })
-            )
+            this.StarMapNodeItem(node)
           }, (node: StarMapNode) => node.id)
 
           // Node info panel — 宽屏下偏右，窄屏下左上角
@@ -510,6 +450,70 @@ struct StarMapPage {
     .width('100%')
     .height('100%')
     .backgroundColor(this.themeConfig.colors.background)
+  }
+
+  @Builder
+  StarMapNodeItem(node: StarMapNode) {
+    Column() {
+      Circle({ width: 56, height: 56 })
+        .fill(this.getNodeColor(node))
+        .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
+        .strokeWidth(4)
+        .shadow({
+          radius: this.draggingNodeId === node.id ? 12 : (this.selectedNodeId === node.id ? 8 : 4),
+          color: this.draggingNodeId === node.id ? '#40000000' : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
+          offsetX: 0,
+          offsetY: this.draggingNodeId === node.id ? 4 : 2
+        })
+
+      Text(node.title)
+        .fontSize(13)
+        .fontWeight(this.selectedNodeId === node.id ? FontWeight.Bold : FontWeight.Normal)
+        .fontColor(this.themeConfig.colors.textPrimary)
+        .margin({ top: 6 })
+        .maxLines(2)
+        .textAlign(TextAlign.Center)
+        .width(80)
+    }
+    .position({
+      x: ((this.getLayoutNode(node.id)?.x ?? 0) * this.zoomScale) + this.offsetX - (this.getLayoutNode(node.id)?.width ?? 160) / 2 + this.wobbleX(node.id, this.motionTick),
+      y: ((this.getLayoutNode(node.id)?.y ?? 0) * this.zoomScale) + this.offsetY - (this.getLayoutNode(node.id)?.height ?? 80) / 2 + this.wobbleY(node.id, this.motionTick)
+    })
+    .scale(
+      this.draggingNodeId === node.id
+        ? { x: this.dragLiftScale, y: this.dragLiftScale }
+        : { x: 1, y: 1 }
+    )
+    .onClick(() => {
+      this.selectNode(node.id)
+    })
+    .gesture(
+      PanGesture()
+        .onActionStart(() => {
+          this.draggingNodeId = node.id
+        })
+        .onActionUpdate((event: GestureEvent) => {
+          // 更新 layoutNode 坐标，不修改 StarMapNode
+          const layoutIndex = this.layoutNodes.findIndex(ln => ln.nodeId === node.id)
+          if (layoutIndex >= 0) {
+            this.layoutNodes[layoutIndex].x += event.offsetX / this.zoomScale
+            this.layoutNodes[layoutIndex].y += event.offsetY / this.zoomScale
+          }
+        })
+        .onActionEnd(() => {
+          this.draggingNodeId = ''
+          // debounce 300ms 后保存布局
+          setTimeout(() => {
+            if (this.starmapId && this.layoutNodes.length > 0) {
+              const layout: StarMapLayout = {
+                kind: 'Freeform',
+                nodes: this.layoutNodes
+              }
+              this.bridge.saveStarMapLayout(this.starmapId, layout)
+            }
+          }, 300)
+        })
+    )
   }
 
   @Builder

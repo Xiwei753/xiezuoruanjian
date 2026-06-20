@@ -181,7 +181,7 @@ struct MainWorkspace {
 
     // 自动保存观察者
     this.autoSaveObserver = new AutoSaveLifecycleObserver(
-      (): Promise<void> => this.saveChapter(),
+      (): Promise<void> => this.saveChapter().then(() => {}),
       this.settings.autoSaveDelayMs
     )
     this.lifecycle.addObserver(this.autoSaveObserver)
@@ -333,7 +333,7 @@ struct MainWorkspace {
         if (this.autoSaveObserver) {
           this.lifecycle.removeObserver(this.autoSaveObserver)
           this.autoSaveObserver = new AutoSaveLifecycleObserver(
-            (): Promise<void> => this.saveChapter(),
+            (): Promise<void> => this.saveChapter().then(() => {}),
             this.settings.autoSaveDelayMs
           )
           this.lifecycle.addObserver(this.autoSaveObserver)

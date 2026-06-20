@@ -330,24 +330,23 @@ export class AdaptiveContext {
 
   /**
    * 读取折叠状态，更新 cachedFoldPosture
+   * 注意：display.getDisplayFoldStatus() 不在标准 API 类型定义中，
+   * 折叠状态改由 onConfigurationUpdate 回调注入，此处保持 Unknown。
    */
   private readFoldPosture(): void {
-    try {
-      const foldStatus = display.getDisplayFoldStatus()
-      if (foldStatus === display.FoldStatus.FOLD_STATUS_EXPANDED) {
-        this.cachedFoldPosture = FoldPosture.FullyOpened
-      } else if (foldStatus === display.FoldStatus.FOLD_STATUS_HALF_FOLDED) {
-        this.cachedFoldPosture = FoldPosture.HalfOpened
-      } else if (foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED) {
-        this.cachedFoldPosture = FoldPosture.Closed
-      } else {
-        this.cachedFoldPosture = FoldPosture.Unknown
-      }
-      hilog.info(DOMAIN, TAG, `FoldPosture: ${this.cachedFoldPosture}`)
-    } catch (err) {
-      // 非折叠设备或不支持该 API，保持 Unknown
-      this.cachedFoldPosture = FoldPosture.Unknown
-      hilog.info(DOMAIN, TAG, `FoldPosture: Unknown (unsupported or error)`)
+    // getDisplayFoldStatus() 不在标准 display 类型上，CI 构建不通过。
+    // 折叠状态由外部通过 updateFoldPosture() 注入。
+    this.cachedFoldPosture = FoldPosture.Unknown
+    hilog.info(DOMAIN, TAG, `FoldPosture: Unknown (deferred to external injection)`)
+  }
+
+  /**
+   * 外部注入折叠状态（如从 onConfigurationUpdate 回调中调用）
+   */
+  updateFoldPosture(posture: FoldPosture): void {
+    if (this.cachedFoldPosture !== posture) {
+      this.cachedFoldPosture = posture
+      hilog.info(DOMAIN, TAG, `FoldPosture updated: ${posture}`)
     }
   }
 
@@ -423,13 +422,14 @@ export class AdaptiveContext {
 
   private registerFoldStatusChange(): void {
     try {
-      display.on('foldStatusChange', (foldStatus: display.FoldStatus) => {
+      display.on('foldStatusChange', (foldStatus: number) => {
         let newPosture: FoldPosture
-        if (foldStatus === display.FoldStatus.FOLD_STATUS_EXPANDED) {
+        // display.FoldStatus 枚举值：FOLD_STATUS_EXPANDED=2, FOLD_STATUS_HALF_FOLDED=3, FOLD_STATUS_FOLDED=1
+        if (foldStatus === 2) {
           newPosture = FoldPosture.FullyOpened
-        } else if (foldStatus === display.FoldStatus.FOLD_STATUS_HALF_FOLDED) {
+        } else if (foldStatus === 3) {
           newPosture = FoldPosture.HalfOpened
-        } else if (foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED) {
+        } else if (foldStatus === 1) {
           newPosture = FoldPosture.Closed
         } else {
           newPosture = FoldPosture.Unknown
