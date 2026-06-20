@@ -39,6 +39,27 @@ jobs:
           echo "DEVECO_SDK_HOME=$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" >> $GITHUB_ENV
           echo "$RUNNER_TEMP/harmony-tools/command-line-tools/bin" >> $GITHUB_PATH
 
+      - name: Install HarmonyOS SDK via sdkmanager
+        run: |
+          SDKMGR="$RUNNER_TEMP/harmony-tools/command-line-tools/bin/sdkmanager"
+          chmod +x "$SDKMGR"
+          echo "=== sdkmanager help ==="
+          "$SDKMGR" --help 2>&1 || true
+          echo "=== Listing available SDK packages ==="
+          "$SDKMGR" list 2>&1 || true
+          echo "=== Attempting to install all SDK packages ==="
+          # Try: sdkmanager install <package-id> --accept-license
+          # Common package IDs for HarmonyOS NEXT:
+          #   HarmonyOS-NEXT-API12-OpenHarmony-5.0.0.22-Release
+          #   openharmony
+          "$SDKMGR" install "HarmonyOS-NEXT-API12-OpenHarmony-5.0.0.22-Release" --accept-license 2>&1 || true
+          echo "=== Attempting alternative package names ==="
+          "$SDKMGR" install "openharmony" --accept-license 2>&1 || true
+          echo "=== SDK directory after install ==="
+          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 5 -type d | sort || true
+          echo "=== SDK files ==="
+          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 6 -type f | sort || true
+
       - name: Show tool versions
         run: |
           node -v || true
