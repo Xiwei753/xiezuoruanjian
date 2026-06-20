@@ -89,17 +89,23 @@ jobs:
 
       - name: Build HAP via hvigor directly
         env:
-          # Tell hvigor's bundled pnpm to use Huawei's npm-compatible registry
-          # instead of the default ohpm registry which is inaccessible from CI
           npm_config_registry: https://repo.harmonyos.com/npm/
+          OHOS_SDK_HOME: ${{ runner.temp }}/harmony-tools/command-line-tools
+          HOS_SDK_HOME: ${{ runner.temp }}/harmony-tools/command-line-tools
+          NODE_PATH: ${{ github.workspace }}/apps/harmony/node_modules
         run: |
-          # Run hvigor directly from node_modules instead of via hvigorw wrapper.
-          # hvigor's initNodePath() will create a workspace and run pnpm install
-          # there. With npm_config_registry set, pnpm can resolve @ohos packages
-          # from repo.harmonyos.com. Additionally, adaptNode14Module() patches
-          # require() to resolve from the project's node_modules as fallback.
-          export NODE_PATH=$(pwd)/node_modules
+          echo "=== Environment ==="
+          echo "OHOS_SDK_HOME=$OHOS_SDK_HOME"
+          echo "HOS_SDK_HOME=$HOS_SDK_HOME"
+          echo "NODE_PATH=$NODE_PATH"
+          echo "COMMANDLINE_TOOL_DIR=$COMMANDLINE_TOOL_DIR"
+          echo "=== SDK contents ==="
+          ls -la "$RUNNER_TEMP/harmony-tools/command-line-tools/" || true
+          echo "=== node_modules ==="
+          ls node_modules/@ohos/ || true
+          echo "=== Running hvigor clean ==="
           node ./node_modules/@ohos/hvigor/bin/hvigor.js clean --no-daemon 2>&1 || true
+          echo "=== Running hvigor assembleHap ==="
           node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon 2>&1
 
       - name: List outputs
