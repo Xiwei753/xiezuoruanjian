@@ -247,9 +247,9 @@ jobs:
           SIGN_DIR="$RUNNER_TEMP/harmony-sign"
           mkdir -p "$SIGN_DIR"
 
-          echo "$HARMONY_P12_BASE64" | base64 -d > "$SIGN_DIR/sujian.p12"
-          echo "$HARMONY_CERT_BASE64" | base64 -d > "$SIGN_DIR/sujian.cer"
-          echo "$HARMONY_PROFILE_BASE64" | base64 -d > "$SIGN_DIR/sujian.p7b"
+          printf '%s' "$HARMONY_P12_BASE64" | base64 -d > "$SIGN_DIR/sujian.p12" || { echo "Failed to decode p12"; exit 1; }
+          printf '%s' "$HARMONY_CERT_BASE64" | base64 -d > "$SIGN_DIR/sujian.cer" || { echo "Failed to decode cer"; exit 1; }
+          printf '%s' "$HARMONY_PROFILE_BASE64" | base64 -d > "$SIGN_DIR/sujian.p7b" || { echo "Failed to decode p7b"; exit 1; }
 
           echo "SIGNING_AVAILABLE=true" >> $GITHUB_ENV
           echo "SIGN_DIR=$SIGN_DIR" >> $GITHUB_ENV
@@ -332,6 +332,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload Harmony output
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sujian-harmony-output
