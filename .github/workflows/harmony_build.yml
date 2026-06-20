@@ -35,6 +35,7 @@ jobs:
         with:
           version: '5.0.0'
           cache: 'true'
+          fixup-path: 'true'
 
       - name: Download HarmonyOS command-line tools (for ohpm)
         run: |
@@ -45,6 +46,50 @@ jobs:
           echo "COMMANDLINE_TOOL_DIR=$RUNNER_TEMP/harmony-tools/command-line-tools" >> $GITHUB_ENV
           echo "$RUNNER_TEMP/harmony-tools/command-line-tools/bin" >> $GITHUB_PATH
 
+      - name: Reorganize SDK for hvigor compatibility
+        run: |
+          # setup-ohos-sdk puts components under ~/setup-ohos-sdk/linux/{component}/
+          # hvigor expects DEVECO_SDK_HOME to have structure:
+          #   {sdk-root}/default/openharmony/{api-version}/ets/
+          #   {sdk-root}/default/openharmony/{api-version}/native/
+          #
+          # With fixup-path=true, components are under ~/setup-ohos-sdk/linux/{api-version}/{component}/
+          # We need to reorganize this into the expected structure.
+
+          SDK_SRC="$HOME/setup-ohos-sdk/linux"
+          SDK_DST="$RUNNER_TEMP/harmony-sdk"
+
+          echo "=== Source SDK structure ==="
+          find "$SDK_SRC" -maxdepth 3 -type d | sort || true
+
+          API_VERSION="${{ steps.setup-sdk.outputs.api-version }}"
+          echo "API version from action: $API_VERSION"
+
+          # If API_VERSION is empty, try to detect it from directory
+          if [ -z "$API_VERSION" ]; then
+            API_VERSION=$(ls "$SDK_SRC" | head -1)
+            echo "Detected API version from directory: $API_VERSION"
+          fi
+
+          # Create the hvigor-expected directory structure
+          mkdir -p "$SDK_DST/default/openharmony/$API_VERSION"
+
+          # Copy all component directories into the expected structure
+          if [ -d "$SDK_SRC/$API_VERSION" ]; then
+            # fixup-path=true: components are under {api-version}/
+            cp -r "$SDK_SRC/$API_VERSION"/* "$SDK_DST/default/openharmony/$API_VERSION/" 2>/dev/null || true
+          else
+            # fixup-path=false: components are directly under linux/
+            cp -r "$SDK_SRC"/* "$SDK_DST/default/openharmony/$API_VERSION/" 2>/dev/null || true
+          fi
+
+          echo "=== Reorganized SDK structure ==="
+          find "$SDK_DST" -maxdepth 4 -type d | sort || true
+
+          echo "DEVECO_SDK_HOME=$SDK_DST" >> $GITHUB_ENV
+          echo "OHOS_SDK_HOME=$SDK_DST" >> $GITHUB_ENV
+          echo "HOS_SDK_HOME=$SDK_DST" >> $GITHUB_ENV
+
       - name: Show tool versions
         run: |
           node -v || true
@@ -52,9 +97,8 @@ jobs:
           echo "SDK path: ${{ steps.setup-sdk.outputs.sdk-path }}"
           echo "SDK version: ${{ steps.setup-sdk.outputs.sdk-version }}"
           echo "API version: ${{ steps.setup-sdk.outputs.api-version }}"
+          echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
           echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME"
-          echo "OHOS_SDK_NATIVE=$OHOS_SDK_NATIVE"
-          ls -la "$OHOS_BASE_SDK_HOME" || true
 
       - name: Check hvigorw
         run: |
@@ -97,18 +141,14 @@ jobs:
       - name: Build HAP via hvigor directly
         env:
           npm_config_registry: https://repo.harmonyos.com/npm/
-          DEVECO_SDK_HOME: ${{ steps.setup-sdk.outputs.sdk-path }}
-          OHOS_SDK_HOME: ${{ steps.setup-sdk.outputs.sdk-path }}
-          HOS_SDK_HOME: ${{ steps.setup-sdk.outputs.sdk-path }}
           NODE_PATH: ${{ github.workspace }}/apps/harmony/node_modules
         run: |
           echo "=== Environment ==="
           echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
           echo "OHOS_SDK_HOME=$OHOS_SDK_HOME"
-          echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME"
           echo "NODE_PATH=$NODE_PATH"
           echo "=== SDK structure ==="
-          find "$DEVECO_SDK_HOME" -maxdepth 3 -type d | sort || true
+          find "$DEVECO_SDK_HOME" -maxdepth 4 -type d | sort || true
           echo "=== Running hvigor clean ==="
           node ./node_modules/@ohos/hvigor/bin/hvigor.js clean --no-daemon 2>&1 || true
           echo "=== Running hvigor assembleHap ==="
