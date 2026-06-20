@@ -16,6 +16,7 @@ import {
   StarMapLayout,
   StarMapLayoutNode,
   StarMapEdgeRender,
+  StarMapMotionPolicy,
   LocalSettings,
   SyncableSettings,
   ResultEnvelope,
@@ -530,6 +531,45 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     starmap.title = newTitle
     starmap.updatedAt = new Date().toISOString()
     return this.success(true)
+  }
+
+  async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
+    await this.delay(150)
+    const starmap = this.mockStarMaps.find(sm => sm.id === starmapId)
+    if (!starmap) {
+      return this.error('STARMAP_NOT_FOUND', '星图不存在')
+    }
+    this.mockStarMapLayout = layout
+    return this.success(true)
+  }
+
+  async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
+    await this.delay(100)
+    const starmap = this.mockStarMaps.find(sm => sm.id === starmapId)
+    if (!starmap) {
+      return this.error('STARMAP_NOT_FOUND', '星图不存在')
+    }
+    return this.success(this.mockStarMapLayout)
+  }
+
+  async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
+    await this.delay(100)
+    const policy: StarMapMotionPolicy = {
+      enabled: true,
+      idleWobbleEnabled: true,
+      idleAmplitudeVp: 2,
+      idlePeriodMs: 3000,
+      dragLiftScale: 1.05,
+      dragShadowBoost: 1.2,
+      settleDurationMs: 300,
+      reduceMotion: false
+    }
+    return this.success(policy)
+  }
+
+  async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRender[]>> {
+    await this.delay(100)
+    return this.success([] as StarMapEdgeRender[])
   }
 
   // Settings methods

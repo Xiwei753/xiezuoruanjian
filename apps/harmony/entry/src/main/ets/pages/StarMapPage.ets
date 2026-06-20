@@ -4,7 +4,7 @@ import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode,
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
-import { WidthClass, ShellMode } from '../model/CoreDtos'
+import { WidthClass } from '../model/CoreDtos'
 
 interface StarMapPageParams {
   starmapId: string
@@ -14,6 +14,11 @@ interface StarMapPageParams {
 interface SelectOption {
   value: string
   icon: string
+}
+
+interface WobbleOffset {
+  dx: number
+  dy: number
 }
 
 @Entry
@@ -45,6 +50,10 @@ struct StarMapPage {
   @State dragLiftScale: number = 1.04
   @State settleDurationMs: number = 220
   @State reduceMotion: boolean = false
+
+  // Stack 容器尺寸（用于 position 数值计算）
+  @State stackWidth: number = 0
+  @State stackHeight: number = 0
 
   private motionTimer: number = -1
 
@@ -485,6 +494,10 @@ struct StarMapPage {
         }
         .layoutWeight(1)
         .width('100%')
+        .onAreaChange((_oldArea: Area, newArea: Area) => {
+          this.stackWidth = Number(newArea.width)
+          this.stackHeight = Number(newArea.height)
+        })
         .gesture(
           PanGesture()
             .onActionUpdate((event: GestureEvent) => {
@@ -603,7 +616,7 @@ struct StarMapPage {
     .borderRadius(12)
     .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
     .position({
-      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? 'right' : 16,
+      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 300 - 16 : 16,
       y: 16
     })
   }
@@ -636,8 +649,8 @@ struct StarMapPage {
     .borderRadius(8)
     .shadow({ radius: 4, color: '#1A000000', offsetX: 0, offsetY: 2 })
     .position({
-      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? 'right' : 16,
-      y: 'bottom'
+      x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 200 - 16 : 16,
+      y: this.stackHeight - 120 - 16
     })
   }
 
@@ -668,7 +681,7 @@ struct StarMapPage {
     .backgroundColor(this.themeConfig.colors.surface)
     .borderRadius(4)
     .shadow({ radius: 2, color: '#1A000000', offsetX: 0, offsetY: 1 })
-    .position({ x: 'right', y: 'bottom' })
+    .position({ x: this.stackWidth - 160 - 16, y: this.stackHeight - 40 - 16 })
   }
 
   private canvasCtx: CanvasRenderingContext2D | null = null
@@ -685,12 +698,13 @@ struct StarMapPage {
     ctx.clearRect(0, 0, ctx.width, ctx.height)
 
     // 构建 nodeId → wobble offset 映射
-    const wobbleMap = new Map<string, { dx: number, dy: number }>()
+    const wobbleMap = new Map<string, WobbleOffset>()
     for (const node of this.graph.nodes) {
-      wobbleMap.set(node.id, {
+      const offset: WobbleOffset = {
         dx: this.wobbleX(node.id, this.motionTick),
         dy: this.wobbleY(node.id, this.motionTick)
-      })
+      }
+      wobbleMap.set(node.id, offset)
     }
 
     // 遍历 edgeRenders（Core 计算的连线几何）
@@ -701,8 +715,9 @@ struct StarMapPage {
 
       const fromId = graphEdge.from || ''
       const toId = graphEdge.to || ''
-      const fromWobble = wobbleMap.get(fromId) || { dx: 0, dy: 0 }
-      const toWobble = wobbleMap.get(toId) || { dx: 0, dy: 0 }
+      const defaultWobble: WobbleOffset = { dx: 0, dy: 0 }
+      const fromWobble = wobbleMap.get(fromId) || defaultWobble
+      const toWobble = wobbleMap.get(toId) || defaultWobble
 
       const sx = (edge.startX + fromWobble.dx) * this.zoomScale + this.offsetX
       const sy = (edge.startY + fromWobble.dy) * this.zoomScale + this.offsetY

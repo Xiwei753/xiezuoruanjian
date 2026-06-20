@@ -128,7 +128,10 @@ export function resolveLayoutFromMetrics(metrics: WindowMetrics): LayoutPlan {
     pagePaddingVp,
     gridColumns,
     showSidePanel,
-    showBottomBar
+    showBottomBar,
+    sidePanelWidthVp: showSidePanel ? 320 : 0,
+    primaryPaneWeight: showSidePanel ? 0.35 : 1.0,
+    detailPanelMaxWidthVp: contentMaxWidthVp
   }
 
   return plan

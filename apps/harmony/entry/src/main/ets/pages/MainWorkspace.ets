@@ -39,6 +39,16 @@ import {
   getAdaptiveState
 } from '../common/AdaptiveContext'
 
+// ========== 辅助接口 ==========
+
+interface ChangedRange {
+  start: number
+  oldEnd: number
+  newEnd: number
+  insertedText: string
+  deletedText: string
+}
+
 // ========== 常量 ==========
 
 /** 左侧面板宽度（Expanded 双栏模式） */
@@ -311,6 +321,7 @@ struct MainWorkspace {
         this.themeAdapter.updateFromSettings({
           theme: result.data.themeMode,
           fontSize: result.data.editorFontSize,
+          fontFamily: 'HarmonyOS Sans',
           lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
@@ -1434,7 +1445,7 @@ struct MainWorkspace {
 
   // ========== 工具方法 ==========
 
-  private findChangedRange(oldText: string, newText: string): { start: number; oldEnd: number; newEnd: number; insertedText: string; deletedText: string } {
+  private findChangedRange(oldText: string, newText: string): ChangedRange {
     const oldLen = oldText.length
     const newLen = newText.length
     const minLen = Math.min(oldLen, newLen)
@@ -1456,7 +1467,8 @@ struct MainWorkspace {
     const deletedText = oldText.substring(start, oldEnd)
     const insertedText = newText.substring(start, newEnd)
 
-    return { start, oldEnd, newEnd, insertedText, deletedText }
+    const result: ChangedRange = { start: start, oldEnd: oldEnd, newEnd: newEnd, insertedText: insertedText, deletedText: deletedText }
+    return result
   }
 
   private getSaveStatusColor(): ResourceColor {

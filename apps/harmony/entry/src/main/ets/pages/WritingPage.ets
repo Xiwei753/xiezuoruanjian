@@ -5,13 +5,20 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, The
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
-import { WidthClass, ShellMode } from '../model/CoreDtos'
 
 interface WritingPageParams {
   chapterId: string
   chapterTitle: string
   projectId: string
   volumeId: string
+}
+
+interface ChangedRange {
+  start: number
+  oldEnd: number
+  newEnd: number
+  insertedText: string
+  deletedText: string
 }
 
 @Entry
@@ -206,6 +213,7 @@ struct WritingPage {
         this.themeAdapter.updateFromSettings({
           theme: result.data.themeMode,
           fontSize: result.data.editorFontSize,
+          fontFamily: 'HarmonyOS Sans',
           lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
@@ -279,7 +287,7 @@ struct WritingPage {
     }
   }
 
-  private findChangedRange(oldText: string, newText: string): { start: number; oldEnd: number; newEnd: number; insertedText: string; deletedText: string } {
+  private findChangedRange(oldText: string, newText: string): ChangedRange {
     const oldLen = oldText.length
     const newLen = newText.length
     const minLen = Math.min(oldLen, newLen)
@@ -301,7 +309,8 @@ struct WritingPage {
     const deletedText = oldText.substring(start, oldEnd)
     const insertedText = newText.substring(start, newEnd)
 
-    return { start, oldEnd, newEnd, insertedText, deletedText }
+    const result: ChangedRange = { start: start, oldEnd: oldEnd, newEnd: newEnd, insertedText: insertedText, deletedText: deletedText }
+    return result
   }
 
   private getSaveStatusText(): string {

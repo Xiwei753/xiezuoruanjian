@@ -182,7 +182,11 @@ export interface SyncResult {
 
 export interface NetworkProbeResult {
   // 待 Core NetworkProbeResultDto 字段稳定后补充
-  [key: string]: string | number | boolean
+  // ArkTS 不支持索引签名，以下为占位字段，Core 字段稳定后替换
+  mode: string
+  success: boolean
+  latencyMs: number
+  errorMessage: string
 }
 
 export interface SyncDiagnosticsResult {
@@ -242,6 +246,7 @@ export type ErrorCode =
   | 'PROJECT_NOT_FOUND'
   | 'VOLUME_NOT_FOUND'
   | 'CHAPTER_NOT_FOUND'
+  | 'STARMAP_NOT_FOUND'
   | 'EMPTY_OVERWRITE_BLOCKED'
   | 'NOT_IMPLEMENTED'
   | 'REFUSE_DELETE_WORKSPACE_ROOT'

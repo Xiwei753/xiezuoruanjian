@@ -1,3 +1,5 @@
+import window from '@ohos.window'
+
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 export interface ThemeColors {
@@ -63,6 +65,7 @@ export interface ThemeUpdateParams {
 
 export class HarmonyThemeAdapter {
   private static instance: HarmonyThemeAdapter
+  private mainWindow: window.Window | null = null
   private currentTheme: ThemeConfig = {
     mode: 'system',
     colors: LightTheme,
@@ -78,6 +81,10 @@ export class HarmonyThemeAdapter {
       HarmonyThemeAdapter.instance = new HarmonyThemeAdapter()
     }
     return HarmonyThemeAdapter.instance
+  }
+
+  setMainWindow(win: window.Window): void {
+    this.mainWindow = win
   }
 
   getCurrentTheme(): ThemeConfig {
@@ -153,10 +160,13 @@ export class HarmonyThemeAdapter {
   startSystemThemeListener(): void {
     try {
       // 使用 ConfigurationConstant 检测系统深色/浅色模式
-      const config = this.mainWindow?.getWindowProperties().configuration
-      if (config) {
-        const colorMode = config.colorMode
-        this.applySystemColorMode(colorMode)
+      const win = this.mainWindow
+      if (win !== null) {
+        const config = win.getWindowProperties().configuration
+        if (config) {
+          const colorMode: number = config.colorMode
+          this.applySystemColorMode(colorMode)
+        }
       }
     } catch (err) {
       // 非支持设备或 API 不可用，保持当前主题
@@ -191,11 +201,20 @@ export class HarmonyThemeAdapter {
       case 'system':
         // 检测系统深色/浅色模式
         try {
-          const config = this.mainWindow?.getWindowProperties().configuration
-          if (config) {
-            const colorMode = config.colorMode
-            // ColorMode.COLOR_MODE_DARK = 1, COLOR_MODE_LIGHT = 0
-            this.currentTheme.colors = if (colorMode === 1) DarkTheme else LightTheme
+          const win = this.mainWindow
+          if (win !== null) {
+            const config = win.getWindowProperties().configuration
+            if (config) {
+              const colorMode: number = config.colorMode
+              // ColorMode.COLOR_MODE_DARK = 1, COLOR_MODE_LIGHT = 0
+              if (colorMode === 1) {
+                this.currentTheme.colors = DarkTheme
+              } else {
+                this.currentTheme.colors = LightTheme
+              }
+            } else {
+              this.currentTheme.colors = LightTheme
+            }
           } else {
             this.currentTheme.colors = LightTheme
           }

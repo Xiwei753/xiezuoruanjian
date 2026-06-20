@@ -268,7 +268,10 @@ export class AdaptiveContext {
       pagePaddingVp: 16,
       gridColumns: 2,
       showSidePanel: false,
-      showBottomBar: true
+      showBottomBar: true,
+      sidePanelWidthVp: 0,
+      primaryPaneWeight: 0.5,
+      detailPanelMaxWidthVp: 0
     }
     return {
       widthVp: 0,
