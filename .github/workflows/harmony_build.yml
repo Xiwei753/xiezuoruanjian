@@ -112,6 +112,9 @@ jobs:
         run: |
           cp build-profile.ci.json5 build-profile.json5
           cp oh-package.ci.json5 oh-package.json5
+          # OpenHarmony SDK doesn't have device-define for "phone"/"tablet",
+          # must use "default" to avoid SyscapTransform error 00303060
+          sed -i 's/"phone"/"default"/g; s/"tablet"/"default"/g' entry/src/main/module.json5
 
       - name: Install hvigor dependencies via npm
         run: |
