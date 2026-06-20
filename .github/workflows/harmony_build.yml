@@ -29,53 +29,32 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Download HarmonyOS command-line tools
+      - name: Setup OpenHarmony SDK
+        id: setup-sdk
+        uses: openharmony-rs/setup-ohos-sdk@v1.0.0
+        with:
+          version: '5.0.0'
+          cache: 'true'
+
+      - name: Download HarmonyOS command-line tools (for ohpm)
         run: |
           cd $RUNNER_TEMP
           wget -q -O commandline-tools-linux.zip https://image.cdn.dog/commandline-tools-linux-x64-6.0.2.642.zip
           echo "181d283be91392e0a5dc09caf5ebda34c778cccc9985d8a97a814808452e2471  commandline-tools-linux.zip" | sha256sum -c -
           unzip -q commandline-tools-linux.zip -d harmony-tools
           echo "COMMANDLINE_TOOL_DIR=$RUNNER_TEMP/harmony-tools/command-line-tools" >> $GITHUB_ENV
-          echo "DEVECO_SDK_HOME=$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" >> $GITHUB_ENV
           echo "$RUNNER_TEMP/harmony-tools/command-line-tools/bin" >> $GITHUB_PATH
-
-      - name: Explore command-line-tools structure
-        run: |
-          echo "=== Full directory tree ==="
-          find "$RUNNER_TEMP/harmony-tools/command-line-tools" -maxdepth 3 -type f | sort || true
-          echo "=== bin/ contents ==="
-          ls -la "$RUNNER_TEMP/harmony-tools/command-line-tools/bin/" || true
-          echo "=== tool/ contents ==="
-          find "$RUNNER_TEMP/harmony-tools/command-line-tools/tool" -maxdepth 2 -type f | sort || true
-          echo "=== sdk/ full tree ==="
-          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 4 | sort || true
-          echo "=== hvigor/ contents ==="
-          find "$RUNNER_TEMP/harmony-tools/command-line-tools/hvigor" -maxdepth 2 -type f | sort || true
-
-      - name: Install HarmonyOS SDK
-        run: |
-          # Look for any sdkmanager-like tool
-          SDKMGR=$(find "$RUNNER_TEMP/harmony-tools" -name "sdkmanager" -o -name "ohsdkmgr" -o -name "ohsdkmanager" 2>/dev/null | head -1)
-          if [ -n "$SDKMGR" ]; then
-            echo "Found SDK manager: $SDKMGR"
-            chmod +x "$SDKMGR"
-            "$SDKMGR" --help 2>&1 || true
-            "$SDKMGR" list 2>&1 || true
-            "$SDKMGR" install --accept-license 2>&1 || true
-          else
-            echo "No sdkmanager found, trying ohpm to install SDK..."
-            # Alternative: use ohpm to install SDK packages
-            ohpm config set registry https://ohpm.openharmony.cn/ohpm/ 2>&1 || true
-          fi
-          echo "=== SDK directory after install attempt ==="
-          find "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk" -maxdepth 5 | sort || true
 
       - name: Show tool versions
         run: |
           node -v || true
           ohpm -v || true
-          ls -la ./hvigorw || true
-          ls -la ./hvigor/hvigor-wrapper.js || true
+          echo "SDK path: ${{ steps.setup-sdk.outputs.sdk-path }}"
+          echo "SDK version: ${{ steps.setup-sdk.outputs.sdk-version }}"
+          echo "API version: ${{ steps.setup-sdk.outputs.api-version }}"
+          echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME"
+          echo "OHOS_SDK_NATIVE=$OHOS_SDK_NATIVE"
+          ls -la "$OHOS_BASE_SDK_HOME" || true
 
       - name: Check hvigorw
         run: |
@@ -92,9 +71,6 @@ jobs:
 
       - name: Install hvigor dependencies via npm
         run: |
-          # ohpm.harmonyos.com domain does not exist in public DNS.
-          # repo.harmonyos.com/npm/ serves metadata but npm install fails against it.
-          # Workaround: download tarballs directly and install from local files.
           mkdir -p node_modules/@ohos
 
           echo "Downloading @ohos/hvigor@6.26.1..."
@@ -113,7 +89,6 @@ jobs:
           node -e "console.log('plugin version:', require('./node_modules/@ohos/hvigor-ohos-plugin/package.json').version)"
           ls -la ./node_modules/@ohos/hvigor/bin/hvigor.js
 
-
       - name: Install OpenHarmony dependencies via ohpm
         run: |
           ohpm config set registry https://ohpm.openharmony.cn/ohpm/
@@ -122,23 +97,18 @@ jobs:
       - name: Build HAP via hvigor directly
         env:
           npm_config_registry: https://repo.harmonyos.com/npm/
-          OHOS_SDK_HOME: ${{ runner.temp }}/harmony-tools/command-line-tools
-          HOS_SDK_HOME: ${{ runner.temp }}/harmony-tools/command-line-tools
-          DEVECO_SDK_HOME: ${{ runner.temp }}/harmony-tools/command-line-tools/sdk
+          DEVECO_SDK_HOME: ${{ steps.setup-sdk.outputs.sdk-path }}
+          OHOS_SDK_HOME: ${{ steps.setup-sdk.outputs.sdk-path }}
+          HOS_SDK_HOME: ${{ steps.setup-sdk.outputs.sdk-path }}
           NODE_PATH: ${{ github.workspace }}/apps/harmony/node_modules
         run: |
           echo "=== Environment ==="
-          echo "OHOS_SDK_HOME=$OHOS_SDK_HOME"
-          echo "HOS_SDK_HOME=$HOS_SDK_HOME"
           echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
+          echo "OHOS_SDK_HOME=$OHOS_SDK_HOME"
+          echo "OHOS_BASE_SDK_HOME=$OHOS_BASE_SDK_HOME"
           echo "NODE_PATH=$NODE_PATH"
-          echo "COMMANDLINE_TOOL_DIR=$COMMANDLINE_TOOL_DIR"
-          echo "=== SDK contents ==="
-          ls -la "$RUNNER_TEMP/harmony-tools/command-line-tools/" || true
-          echo "=== SDK sub-contents ==="
-          ls -la "$RUNNER_TEMP/harmony-tools/command-line-tools/sdk/" || true
-          echo "=== node_modules ==="
-          ls node_modules/@ohos/ || true
+          echo "=== SDK structure ==="
+          find "$DEVECO_SDK_HOME" -maxdepth 3 -type d | sort || true
           echo "=== Running hvigor clean ==="
           node ./node_modules/@ohos/hvigor/bin/hvigor.js clean --no-daemon 2>&1 || true
           echo "=== Running hvigor assembleHap ==="
