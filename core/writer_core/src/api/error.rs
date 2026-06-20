@@ -150,3 +150,68 @@ impl From<serde_json::Error> for WriterError {
         WriterError::Json(e.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_code_and_message() {
+        let err = WriterError::Io("test".to_string());
+        assert_eq!(err.code(), "IO_ERROR");
+        assert_eq!(err.user_message(), "文件读写失败，请检查工作区权限和磁盘状态");
+
+        let err = WriterError::Json("test".to_string());
+        assert_eq!(err.code(), "JSON_ERROR");
+        assert_eq!(err.user_message(), "数据文件格式异常，请检查工作区文件是否损坏");
+
+        let err = WriterError::InvalidWorkspace;
+        assert_eq!(err.code(), "INVALID_WORKSPACE");
+        assert_eq!(err.user_message(), "不是有效的工作区");
+
+        let err = WriterError::ProjectNotFound;
+        assert_eq!(err.code(), "PROJECT_NOT_FOUND");
+        assert_eq!(err.user_message(), "作品不存在或已被删除");
+
+        let err = WriterError::VolumeNotFound;
+        assert_eq!(err.code(), "VOLUME_NOT_FOUND");
+        assert_eq!(err.user_message(), "卷不存在或已被删除");
+
+        let err = WriterError::ChapterNotFound;
+        assert_eq!(err.code(), "CHAPTER_NOT_FOUND");
+        assert_eq!(err.user_message(), "章节不存在或已被删除");
+
+        let err = WriterError::EmptyOverwriteBlocked {
+            chapter_id: "ch1".to_string(),
+            old_len: 100,
+            new_len: 0,
+            reason: "empty".to_string(),
+        };
+        assert_eq!(err.code(), "EMPTY_OVERWRITE_BLOCKED");
+        assert_eq!(err.user_message(), "已阻止空内容覆盖现有章节");
+
+        let err = WriterError::NotImplemented;
+        assert_eq!(err.code(), "NOT_IMPLEMENTED");
+        assert_eq!(err.user_message(), "该功能尚未实现");
+
+        let err = WriterError::RefuseToDeleteWorkspaceRoot;
+        assert_eq!(err.code(), "REFUSE_DELETE_WORKSPACE_ROOT");
+        assert_eq!(err.user_message(), "拒绝删除工作区根目录");
+
+        let err = WriterError::InvalidDeleteTarget("target".to_string());
+        assert_eq!(err.code(), "INVALID_DELETE_TARGET");
+        assert_eq!(err.user_message(), "删除目标无效");
+
+        let err = WriterError::SyncConflict("conflict".to_string());
+        assert_eq!(err.code(), "SYNC_CONFLICT");
+        assert_eq!(err.user_message(), "同步冲突，请手动处理冲突文件后重试");
+
+        let err = WriterError::SyncFailed("failed".to_string());
+        assert_eq!(err.code(), "SYNC_FAILED");
+        assert_eq!(err.user_message(), "同步失败，请检查网络和配置");
+
+        let err = WriterError::Other("other".to_string());
+        assert_eq!(err.code(), "OTHER");
+        assert_eq!(err.user_message(), "操作失败");
+    }
+}
