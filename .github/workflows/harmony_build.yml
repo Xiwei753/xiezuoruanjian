@@ -123,7 +123,9 @@ jobs:
 
       - name: Install cross-compilation toolchain
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu zlib1g-dev:arm64 libunwind-dev:arm64
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu zlib1g-dev:arm64 libunwind-dev:arm64
         env:
           DEBIAN_FRONTEND: noninteractive
 
