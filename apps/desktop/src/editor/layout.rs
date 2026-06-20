@@ -595,7 +595,11 @@ pub fn layout_lines(
     indent: f64,
     font_family: &str,
 ) -> Vec<VisualLine> {
-    let line_height = (font_size * line_spacing).max(font_size + 4.0);
+    let metrics_h = get_font_ascent(font_family, font_size as f32)
+        + get_font_descent(font_family, font_size as f32);
+    let line_height = (font_size * line_spacing)
+        .max(font_size + 4.0)
+        .max(metrics_h);
     let available = (width - padding * 2.0).max(font_size);
     let mut result = Vec::new();
     let mut y = padding;
@@ -608,6 +612,8 @@ pub fn layout_lines(
         let paragraph_text_end = paragraph_start + paragraph_text.len();
 
         if paragraph_text.is_empty() {
+            let empty_ascent = get_font_ascent(font_family, font_size as f32);
+            let empty_descent = get_font_descent(font_family, font_size as f32);
             result.push(VisualLine {
                 id: line_id,
                 start: paragraph_start,
@@ -626,8 +632,8 @@ pub fn layout_lines(
                 line_indent_x: indent,
                 para_indent: indent,
                 x_end_trailing: 0.0,
-                qt_ascent: 0.0,
-                qt_descent: 0.0,
+                qt_ascent: empty_ascent,
+                qt_descent: empty_descent,
             });
             line_id += 1;
             y += line_height;
@@ -1291,7 +1297,7 @@ pub fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str
     let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { get_font_ascent(font_family, font_size as f32) };
     let descent = if line.qt_descent > 0.0 { line.qt_descent } else { get_font_descent(font_family, font_size as f32) };
     let baseline = text_baseline_y(line, font_size, font_family);
-    let h = ascent + descent;
+    let h = (ascent + descent).min(line.height);
     let mut top_y = baseline - ascent;
     if top_y < line.y {
         top_y = line.y;

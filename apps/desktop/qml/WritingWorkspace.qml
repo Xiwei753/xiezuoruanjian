@@ -594,16 +594,15 @@ Rectangle {
                     Rectangle {
                         id: paperBg
                         width: {
-                            // LayoutPlan 策略：优先使用 contentMaxWidthVp（来自屏幕策略）
-                            // 如果 paperBg 宽度受限，编辑区也受限
-                            var maxW = 820
-                            if (root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0) {
-                                maxW = root.layoutPlan.contentMaxWidthVp
-                            }
-                            if (settingsBackend && settingsBackend.setting_desktop_editor_width > 0) {
-                                maxW = Math.min(maxW, settingsBackend.setting_desktop_editor_width)
-                            }
-                            return Math.min(parent.width, maxW)
+                            // 用户拖拽宽度优先；未拖过才用布局策略默认宽度
+                            var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
+                                    ? root.layoutPlan.contentMaxWidthVp
+                                    : 820
+                            var userW = settingsBackend && settingsBackend.setting_desktop_editor_width > 0
+                                    ? settingsBackend.setting_desktop_editor_width
+                                    : 0
+                            var targetW = userW > 0 ? userW : planW
+                            return Math.max(480, Math.min(parent.width, targetW))
                         }
                         height: parent.height
                         anchors.horizontalCenter: parent.horizontalCenter
@@ -830,7 +829,7 @@ Rectangle {
                         font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
                         font_family: "serif"
                         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-                        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.round((settingsBackend.setting_font_size || 16) * 2) : 0
+                        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.max(Math.round((settingsBackend.setting_font_size || 16) * 2), 28) : 0
                         padding: dt ? dt.sp16 : 16
                         text_color: editorController.colorToHex(dt ? dt.editorText : "#E2E2E5", "#E2E2E5")
                         selection_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
@@ -870,6 +869,42 @@ Rectangle {
                                 sujianEditor.long_press_at(point.position.x, point.position.y)
                             }
                         }
+
+                        // QML 光标 - 作为 SujianEditorItem 子项，坐标系与编辑器一致
+                        Rectangle {
+                            id: sujianCursorRect
+                            x: sujianEditor.cursor_rect_x
+                            y: sujianEditor.cursor_rect_y
+                            width: 2
+                            height: sujianEditor.cursor_rect_height
+                            color: sujianEditor.cursor_color
+                            visible: root.useSujianEditorItem
+                                     && sujianEditor.cursor_visible
+                                     && sujianEditor.editor_enabled
+                                     && !sujianEditor.has_selection
+                                     && !editorScroll.editorAnimationSuppressed
+                            radius: 1
+
+                            onXChanged: opacity = 1.0
+                            onYChanged: opacity = 1.0
+                            onHeightChanged: opacity = 1.0
+                        }
+
+                        // 光标闪烁 Timer - 跟随光标矩形放在编辑器内部
+                        Timer {
+                            id: cursorBlinkTimer
+                            interval: 530
+                            running: root.useSujianEditorItem
+                                     && sujianEditor.cursor_visible
+                                     && sujianEditor.editor_enabled
+                                     && !sujianEditor.has_selection
+                                     && !editorScroll.editorAnimationSuppressed
+                                     && sujianEditor.focus
+                            repeat: true
+                            onTriggered: {
+                                sujianCursorRect.opacity = sujianCursorRect.opacity > 0.5 ? 0.0 : 1.0
+                            }
+                        }
                     }
 
                     // 编辑器上下文菜单
@@ -877,42 +912,6 @@ Rectangle {
                         id: editorContextMenu
                         editorItem: sujianEditor
                         dt: root.dt
-                    }
-
-                    // QML 光标 - 消费 Rust 侧 cursor property，GUI 负责渲染
-                    Rectangle {
-                        id: sujianCursorRect
-                        x: sujianEditor.cursor_rect_x
-                        y: sujianEditor.cursor_rect_y
-                        width: 2
-                        height: sujianEditor.cursor_rect_height
-                        color: sujianEditor.cursor_color
-                        visible: root.useSujianEditorItem
-                                 && sujianEditor.cursor_visible
-                                 && sujianEditor.editor_enabled
-                                 && !sujianEditor.has_selection
-                                 && !editorScroll.editorAnimationSuppressed
-                        radius: 1
-
-                        onXChanged: opacity = 1.0
-                        onYChanged: opacity = 1.0
-                        onHeightChanged: opacity = 1.0
-                    }
-
-                    // 光标闪烁 Timer
-                    Timer {
-                        id: cursorBlinkTimer
-                        interval: 530
-                        running: root.useSujianEditorItem
-                                 && sujianEditor.cursor_visible
-                                 && sujianEditor.editor_enabled
-                                 && !sujianEditor.has_selection
-                                 && !editorScroll.editorAnimationSuppressed
-                                 && sujianEditor.focus
-                        repeat: true
-                        onTriggered: {
-                            sujianCursorRect.opacity = sujianCursorRect.opacity > 0.5 ? 0.0 : 1.0
-                        }
                     }
 
                     // 光标动画 tick - 消费 Rust 侧 CursorController 的 visual_x/y 更新

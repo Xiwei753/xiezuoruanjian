@@ -1564,6 +1564,8 @@ impl QQuickItem for SujianEditorItem {
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
         self.scroll_buffer = None;
         self.recalculate_content_height_quiet();
+        self.cursor_ctrl.force_snap_next = true;
+        let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
