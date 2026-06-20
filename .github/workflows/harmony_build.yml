@@ -216,25 +216,42 @@ jobs:
           find entry/build -maxdepth 8 -type f | sort || true
 
       - name: Restore signing secrets
-        if: ${{ secrets.HARMONY_P12_BASE64 != '' }}
+        env:
+          HARMONY_P12_BASE64: ${{ secrets.HARMONY_P12_BASE64 }}
+          HARMONY_CERT_BASE64: ${{ secrets.HARMONY_CERT_BASE64 }}
+          HARMONY_PROFILE_BASE64: ${{ secrets.HARMONY_PROFILE_BASE64 }}
+          HARMONY_KEY_ALIAS: ${{ secrets.HARMONY_KEY_ALIAS }}
+          HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
+          HARMONY_STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
         run: |
+          if [ -z "$HARMONY_P12_BASE64" ]; then
+            echo "Signing secrets not configured; unsigned HAP only."
+            echo "SIGNING_AVAILABLE=false" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # add-mask passwords
+          echo "::add-mask::${HARMONY_STORE_PASSWORD}"
+          echo "::add-mask::${HARMONY_KEY_ALIAS}"
+          echo "::add-mask::${HARMONY_KEY_PASSWORD}"
+
           SIGN_DIR="$RUNNER_TEMP/harmony-sign"
           mkdir -p "$SIGN_DIR"
 
-          echo "::add-mask::${{ secrets.HARMONY_STORE_PASSWORD }}"
-          echo "::add-mask::${{ secrets.HARMONY_KEY_ALIAS }}"
-          echo "::add-mask::${{ secrets.HARMONY_KEY_PASSWORD }}"
-
-          echo "${{ secrets.HARMONY_P12_BASE64 }}" | base64 -d > "$SIGN_DIR/sujian.p12"
-          echo "${{ secrets.HARMONY_CERT_BASE64 }}" | base64 -d > "$SIGN_DIR/sujian.cer"
-          echo "${{ secrets.HARMONY_PROFILE_BASE64 }}" | base64 -d > "$SIGN_DIR/sujian.p7b"
+          echo "$HARMONY_P12_BASE64" | base64 -d > "$SIGN_DIR/sujian.p12"
+          echo "$HARMONY_CERT_BASE64" | base64 -d > "$SIGN_DIR/sujian.cer"
+          echo "$HARMONY_PROFILE_BASE64" | base64 -d > "$SIGN_DIR/sujian.p7b"
 
           echo "SIGNING_AVAILABLE=true" >> $GITHUB_ENV
           echo "SIGN_DIR=$SIGN_DIR" >> $GITHUB_ENV
           echo "Signing secrets restored successfully."
 
       - name: Sign HAP
-        if: ${{ env.SIGNING_AVAILABLE == 'true' }}
+        if: env.SIGNING_AVAILABLE == 'true'
+        env:
+          HARMONY_KEY_ALIAS: ${{ secrets.HARMONY_KEY_ALIAS }}
+          HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
+          HARMONY_STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
         shell: bash
         run: |
           # Find unsigned HAP
@@ -272,27 +289,22 @@ jobs:
 
           SIGNED_HAP="entry/build/default/outputs/default/sujian-entry-signed.hap"
 
-          # Mask passwords in command output
-          STORE_PWD="${{ secrets.HARMONY_STORE_PASSWORD }}"
-          KEY_ALIAS="${{ secrets.HARMONY_KEY_ALIAS }}"
-          KEY_PWD="${{ secrets.HARMONY_KEY_PASSWORD }}"
-
           java -jar "$HAPSIGNTOOL" sign-app \
             -mode localSign \
             -appCertFile "$SIGN_DIR/sujian.cer" \
             -profileFile "$SIGN_DIR/sujian.p7b" \
             -keystoreFile "$SIGN_DIR/sujian.p12" \
-            -keystorePwd "$STORE_PWD" \
-            -keyAlias "$KEY_ALIAS" \
-            -keyPwd "$KEY_PWD" \
+            -keystorePwd "$HARMONY_STORE_PASSWORD" \
+            -keyAlias "$HARMONY_KEY_ALIAS" \
+            -keyPwd "$HARMONY_KEY_PASSWORD" \
             -inFile "$UNSIGNED_HAP" \
             -outFile "$SIGNED_HAP" \
             -signAlg SHA256withECDSA \
             -profileSigned 1 \
             2>&1 | sed \
-              -e "s|${STORE_PWD}|***|g" \
-              -e "s|${KEY_PWD}|***|g" \
-              -e "s|${KEY_ALIAS}|***|g"
+              -e "s|${HARMONY_STORE_PASSWORD}|***|g" \
+              -e "s|${HARMONY_KEY_PASSWORD}|***|g" \
+              -e "s|${HARMONY_KEY_ALIAS}|***|g"
 
           if [ ! -f "$SIGNED_HAP" ]; then
             echo "::error::Signed HAP not found after signing"
@@ -303,7 +315,7 @@ jobs:
           ls -lh "$SIGNED_HAP"
 
       - name: Upload signed HAP
-        if: ${{ env.SIGNING_AVAILABLE == 'true' }}
+        if: env.SIGNING_AVAILABLE == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: sujian-harmony-signed-hap
