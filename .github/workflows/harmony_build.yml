@@ -278,11 +278,12 @@ jobs:
 
           echo "Unsigned HAP: $UNSIGNED_HAP"
 
-          # Find or download hapsigntool.jar
+          # Find or download hap-sign-tool.jar
           HAPSIGNTOOL=""
+          # Search with both possible names: hap-sign-tool.jar and hapsigntool.jar
           for search_dir in "$COMMANDLINE_TOOL_DIR" "$DEVECO_SDK_HOME"; do
             if [ -d "$search_dir" ]; then
-              HAPSIGNTOOL=$(find "$search_dir" -name "hapsigntool.jar" -type f 2>/dev/null | head -1)
+              HAPSIGNTOOL=$(find "$search_dir" \( -name "hap-sign-tool.jar" -o -name "hapsigntool.jar" \) -type f 2>/dev/null | head -1)
               if [ -n "$HAPSIGNTOOL" ]; then
                 break
               fi
@@ -290,21 +291,22 @@ jobs:
           done
 
           if [ -z "$HAPSIGNTOOL" ]; then
-            echo "hapsigntool.jar not found in SDK, downloading from Maven..."
+            echo "hap-sign-tool.jar not found in SDK, downloading from Gitee..."
             HAPSIGNTOOL_DIR="$RUNNER_TEMP/hapsigntool"
             mkdir -p "$HAPSIGNTOOL_DIR"
-            wget -q -O "$HAPSIGNTOOL_DIR/hapsigntool.jar" \
-              "https://repo.harmonyos.com/maven/hap_sign_tool/hapsigntool.jar" \
-              || wget -q -O "$HAPSIGNTOOL_DIR/hapsigntool.jar" \
-              "https://developer.huawei.com/repo/hap_sign_tool/hapsigntool.jar" \
-              || curl -sL -o "$HAPSIGNTOOL_DIR/hapsigntool.jar" \
-              "https://ohpm.openharmony.cn/ohpm/hapsigntool.jar"
-            if [ ! -s "$HAPSIGNTOOL_DIR/hapsigntool.jar" ]; then
-              echo "::error::Failed to download hapsigntool.jar"
+            cd "$HAPSIGNTOOL_DIR"
+            git init
+            git remote add origin https://gitee.com/openharmony/developtools_hapsigner.git
+            git config core.sparseCheckout true
+            echo "dist/*" >> .git/info/sparse-checkout
+            git pull origin master --depth 1
+            HAPSIGNTOOL="$HAPSIGNTOOL_DIR/dist/hap-sign-tool.jar"
+            if [ ! -s "$HAPSIGNTOOL" ]; then
+              echo "::error::Failed to download hap-sign-tool.jar"
               exit 1
             fi
-            HAPSIGNTOOL="$HAPSIGNTOOL_DIR/hapsigntool.jar"
-            echo "Downloaded hapsigntool.jar"
+            echo "Downloaded hap-sign-tool.jar from Gitee"
+            cd "$GITHUB_WORKSPACE/apps/harmony"
           fi
 
           echo "Using hapsigntool.jar: $HAPSIGNTOOL"
