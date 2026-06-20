@@ -265,14 +265,22 @@ cd apps/desktop && cargo check && cargo test
 
 ### 11.3 查询 GitHub 信息必须用 GitHub API
 
-- **查询 GitHub Actions 构建状态、日志、PR、Issue 等信息时，必须使用 `GitHub_*` 系列 API 工具或 `webfetch` 调用 `https://api.github.com/...` REST API**。
+- **查询 GitHub Actions 构建状态、日志、PR、Issue 等信息时，必须使用 `webfetch` 调用 `https://api.github.com/...` REST API**。
 - **禁止使用 `gh` CLI 命令**：本机未安装 GitHub CLI（`gh.exe`），PATH 中的 `gh` 是一个无关的 Python 脚本，无法执行 GitHub 操作。
-- 示例：
-  - 查询 Actions 运行列表：`webfetch` → `https://api.github.com/repos/{owner}/{repo}/actions/runs`
-  - 查询某个 job 的步骤和结果：`webfetch` → `https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs`
-  - 查询 check-run annotations：`webfetch` → `https://api.github.com/repos/{owner}/{repo}/check-runs/{check_run_id}/annotations`
-  - 下载日志需要认证 token，从项目根目录 `.github-token` 文件读取（已加入 `.gitignore`，不会提交）。
-  - 用法：`$token = Get-Content .github-token; Invoke-WebRequest -Headers @{ Authorization = "Bearer $token" } ...`
+- 本项目仓库：`Xiwei753/xiezuoruanjian`
+- 认证 token 在项目根目录 `.github-token` 文件（已加入 `.gitignore`，不会提交）。
+
+#### GitHub Actions 日志查询流程
+
+1. **获取 workflow 列表**：`webfetch` → `https://api.github.com/repos/Xiwei753/xiezuoruanjian/actions/workflows`
+2. **获取某 workflow 的运行列表**：`webfetch` → `https://api.github.com/repos/Xiwei753/xiezuoruanjian/actions/workflows/{workflow_id}/runs?per_page=5`
+3. **获取某次运行的 jobs**：`webfetch` → `https://api.github.com/repos/Xiwei753/xiezuoruanjian/actions/runs/{run_id}/jobs`
+4. **获取 check-run annotations**：`webfetch` → `https://api.github.com/repos/Xiwei753/xiezuoruanjian/check-runs/{check_run_id}/annotations`
+5. **下载日志**（需要认证）：
+   - 日志 API：`https://api.github.com/repos/Xiwei753/xiezuoruanjian/actions/jobs/{job_id}/logs`
+   - `webfetch` 不支持自定义 Authorization header，且 URL 嵌入 token 的方式 (`x-access-token:token@`) 也被 GitHub 拒绝（403）。
+   - **如果 PAT 没有 `actions:read` 权限，无法通过 API 下载日志**，此时需要用户手动从 GitHub 网页复制日志内容。
+   - 替代方案：在 CI workflow 中将关键输出写入 `$GITHUB_STEP_SUMMARY`，这样可以通过 check-run annotations 或 job 步骤结果间接获取。
 
 ### 11.4 本地依赖
 

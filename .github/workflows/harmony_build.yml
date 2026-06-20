@@ -148,11 +148,11 @@ jobs:
           echo "OHOS_SDK_HOME=$OHOS_SDK_HOME"
           echo "NODE_PATH=$NODE_PATH"
           echo "=== SDK structure ==="
-          find "$DEVECO_SDK_HOME" -maxdepth 4 -type d | sort || true
-          echo "=== Running hvigor clean ==="
-          node ./node_modules/@ohos/hvigor/bin/hvigor.js clean --no-daemon 2>&1 || true
-          echo "=== Running hvigor assembleHap ==="
-          node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon 2>&1
+          find "$DEVECO_SDK_HOME" -maxdepth 5 -type d | sort || true
+          echo "=== SDK oh-uni-package.json ==="
+          find "$DEVECO_SDK_HOME" -name "oh-uni-package.json" -exec cat {} \; 2>/dev/null || true
+          echo "=== Running hvigor assembleHap with stacktrace ==="
+          node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon --stacktrace 2>&1
 
       - name: List outputs
         run: |
