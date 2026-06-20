@@ -123,18 +123,28 @@ jobs:
 
       - name: Install cross-compilation toolchain
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu zlib1g-dev:arm64 libunwind-dev:arm64
+        env:
+          DEBIAN_FRONTEND: noninteractive
 
       - name: Build Rust writer_core FFI for OHOS
         working-directory: ${{ github.workspace }}
         run: |
           # Use Ubuntu's aarch64-linux-gnu-gcc as cross-linker for OHOS target.
-          # The OpenHarmony SDK only provides headers/libs, not a C compiler.
-          # aarch64-linux-gnu-gcc produces compatible ELF binaries for aarch64-linux-ohos.
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="aarch64-linux-gnu-gcc"
 
           echo "Using linker: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER"
           aarch64-linux-gnu-gcc --version | head -1
+
+          # Add SDK native lib paths to linker search + install cross-compiled zlib/libunwind
+          SDK_NATIVE="$DEVECO_SDK_HOME/default/openharmony/12/native"
+          RUSTFLAGS="-L $SDK_NATIVE/sysroot/usr/lib/aarch64-linux-ohos"
+          # Also add any .so dirs found in the SDK
+          for dir in $(find "$SDK_NATIVE" -name "*.so" -exec dirname {} \; 2>/dev/null | sort -u); do
+            RUSTFLAGS="$RUSTFLAGS -L $dir"
+          done
+          export RUSTFLAGS
+          echo "RUSTFLAGS=$RUSTFLAGS"
 
           cd core/writer_core
           cargo build --target aarch64-unknown-linux-ohos --release --no-default-features --features harmony-ffi
