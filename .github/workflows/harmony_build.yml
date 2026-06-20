@@ -121,37 +121,20 @@ jobs:
         run: |
           rustup target add aarch64-unknown-linux-ohos
 
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
       - name: Build Rust writer_core FFI for OHOS
         working-directory: ${{ github.workspace }}
         run: |
-          # Debug: show full SDK structure
-          echo "=== Full SDK structure ==="
-          find "$DEVECO_SDK_HOME" -maxdepth 6 -type d | sort || true
-          echo "=== Looking for ohos-clang ==="
-          find "$DEVECO_SDK_HOME" -name "ohos-clang" -o -name "clang" 2>/dev/null | head -20 || true
-          echo "=== Looking for llvm-ar ==="
-          find "$DEVECO_SDK_HOME" -name "llvm-ar" 2>/dev/null | head -10 || true
+          # Use Ubuntu's aarch64-linux-gnu-gcc as cross-linker for OHOS target.
+          # The OpenHarmony SDK only provides headers/libs, not a C compiler.
+          # aarch64-linux-gnu-gcc produces compatible ELF binaries for aarch64-linux-ohos.
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="aarch64-linux-gnu-gcc"
 
-          # Try to find ohos-clang dynamically
-          OHOS_CLANG=$(find "$DEVECO_SDK_HOME" -name "ohos-clang" -type f 2>/dev/null | head -1)
-          if [ -z "$OHOS_CLANG" ]; then
-            echo "ohos-clang not found, trying clang as fallback..."
-            OHOS_CLANG=$(find "$DEVECO_SDK_HOME" -name "clang" -path "*/bin/clang" -type f 2>/dev/null | head -1)
-          fi
-          LLVM_AR=$(find "$DEVECO_SDK_HOME" -name "llvm-ar" -type f 2>/dev/null | head -1)
-
-          if [ -z "$OHOS_CLANG" ]; then
-            echo "ERROR: No suitable C compiler found in SDK"
-            exit 1
-          fi
-
-          echo "Using linker: $OHOS_CLANG"
-          echo "Using ar: $LLVM_AR"
-
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="$OHOS_CLANG"
-          if [ -n "$LLVM_AR" ]; then
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR="$LLVM_AR"
-          fi
+          echo "Using linker: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER"
+          aarch64-linux-gnu-gcc --version | head -1
 
           cd core/writer_core
           cargo build --target aarch64-unknown-linux-ohos --release --no-default-features --features harmony-ffi
