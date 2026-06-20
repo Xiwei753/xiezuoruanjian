@@ -224,8 +224,17 @@ jobs:
           HARMONY_KEY_PASSWORD: ${{ secrets.HARMONY_KEY_PASSWORD }}
           HARMONY_STORE_PASSWORD: ${{ secrets.HARMONY_STORE_PASSWORD }}
         run: |
-          if [ -z "$HARMONY_P12_BASE64" ]; then
-            echo "Signing secrets not configured; unsigned HAP only."
+          MISSING=""
+          [ -z "$HARMONY_P12_BASE64" ]    && MISSING="$MISSING HARMONY_P12_BASE64"
+          [ -z "$HARMONY_CERT_BASE64" ]   && MISSING="$MISSING HARMONY_CERT_BASE64"
+          [ -z "$HARMONY_PROFILE_BASE64" ] && MISSING="$MISSING HARMONY_PROFILE_BASE64"
+          [ -z "$HARMONY_KEY_ALIAS" ]     && MISSING="$MISSING HARMONY_KEY_ALIAS"
+          [ -z "$HARMONY_KEY_PASSWORD" ]  && MISSING="$MISSING HARMONY_KEY_PASSWORD"
+          [ -z "$HARMONY_STORE_PASSWORD" ] && MISSING="$MISSING HARMONY_STORE_PASSWORD"
+
+          if [ -n "$MISSING" ]; then
+            echo "Signing secrets not fully configured; unsigned HAP only."
+            echo "Missing:$MISSING"
             echo "SIGNING_AVAILABLE=false" >> $GITHUB_ENV
             exit 0
           fi
