@@ -215,6 +215,101 @@ jobs:
         run: |
           find entry/build -maxdepth 8 -type f | sort || true
 
+      - name: Restore signing secrets
+        if: ${{ secrets.HARMONY_P12_BASE64 != '' }}
+        run: |
+          SIGN_DIR="$RUNNER_TEMP/harmony-sign"
+          mkdir -p "$SIGN_DIR"
+
+          echo "::add-mask::${{ secrets.HARMONY_STORE_PASSWORD }}"
+          echo "::add-mask::${{ secrets.HARMONY_KEY_ALIAS }}"
+          echo "::add-mask::${{ secrets.HARMONY_KEY_PASSWORD }}"
+
+          echo "${{ secrets.HARMONY_P12_BASE64 }}" | base64 -d > "$SIGN_DIR/sujian.p12"
+          echo "${{ secrets.HARMONY_CERT_BASE64 }}" | base64 -d > "$SIGN_DIR/sujian.cer"
+          echo "${{ secrets.HARMONY_PROFILE_BASE64 }}" | base64 -d > "$SIGN_DIR/sujian.p7b"
+
+          echo "SIGNING_AVAILABLE=true" >> $GITHUB_ENV
+          echo "SIGN_DIR=$SIGN_DIR" >> $GITHUB_ENV
+          echo "Signing secrets restored successfully."
+
+      - name: Sign HAP
+        if: ${{ env.SIGNING_AVAILABLE == 'true' }}
+        shell: bash
+        run: |
+          # Find unsigned HAP
+          UNSIGNED_HAP=""
+          if [ -f "entry/build/default/outputs/default/entry-default-signed.hap" ]; then
+            UNSIGNED_HAP="entry/build/default/outputs/default/entry-default-signed.hap"
+          else
+            UNSIGNED_HAP=$(ls entry/build/default/outputs/default/*.hap 2>/dev/null | head -1)
+          fi
+
+          if [ -z "$UNSIGNED_HAP" ]; then
+            echo "::error::No HAP file found for signing"
+            exit 1
+          fi
+
+          echo "Unsigned HAP: $UNSIGNED_HAP"
+
+          # Find hapsigntool.jar
+          HAPSIGNTOOL=""
+          for search_dir in "$COMMANDLINE_TOOL_DIR" "$DEVECO_SDK_HOME"; do
+            if [ -d "$search_dir" ]; then
+              HAPSIGNTOOL=$(find "$search_dir" -name "hapsigntool.jar" -type f 2>/dev/null | head -1)
+              if [ -n "$HAPSIGNTOOL" ]; then
+                break
+              fi
+            fi
+          done
+
+          if [ -z "$HAPSIGNTOOL" ]; then
+            echo "::error::hapsigntool.jar not found in COMMANDLINE_TOOL_DIR or DEVECO_SDK_HOME"
+            exit 1
+          fi
+
+          echo "hapsigntool.jar found at: $HAPSIGNTOOL"
+
+          SIGNED_HAP="entry/build/default/outputs/default/sujian-entry-signed.hap"
+
+          # Mask passwords in command output
+          STORE_PWD="${{ secrets.HARMONY_STORE_PASSWORD }}"
+          KEY_ALIAS="${{ secrets.HARMONY_KEY_ALIAS }}"
+          KEY_PWD="${{ secrets.HARMONY_KEY_PASSWORD }}"
+
+          java -jar "$HAPSIGNTOOL" sign-app \
+            -mode localSign \
+            -appCertFile "$SIGN_DIR/sujian.cer" \
+            -profileFile "$SIGN_DIR/sujian.p7b" \
+            -keystoreFile "$SIGN_DIR/sujian.p12" \
+            -keystorePwd "$STORE_PWD" \
+            -keyAlias "$KEY_ALIAS" \
+            -keyPwd "$KEY_PWD" \
+            -inFile "$UNSIGNED_HAP" \
+            -outFile "$SIGNED_HAP" \
+            -signAlg SHA256withECDSA \
+            -profileSigned 1 \
+            2>&1 | sed \
+              -e "s|${STORE_PWD}|***|g" \
+              -e "s|${KEY_PWD}|***|g" \
+              -e "s|${KEY_ALIAS}|***|g"
+
+          if [ ! -f "$SIGNED_HAP" ]; then
+            echo "::error::Signed HAP not found after signing"
+            exit 1
+          fi
+
+          echo "Signed HAP created: $SIGNED_HAP"
+          ls -lh "$SIGNED_HAP"
+
+      - name: Upload signed HAP
+        if: ${{ env.SIGNING_AVAILABLE == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sujian-harmony-signed-hap
+          path: apps/harmony/entry/build/default/outputs/default/sujian-entry-signed.hap
+          if-no-files-found: warn
+
       - name: Upload Harmony output
         uses: actions/upload-artifact@v4
         with:
