@@ -11,7 +11,7 @@
             "caseSensitiveCheck": true
           }
         },
-        "targetSdkVersion": "26.0.0"
+        "targetSdkVersion": "5.0.0(12)"
       }
     ],
     "buildModeSet": [

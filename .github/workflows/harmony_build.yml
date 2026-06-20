@@ -143,16 +143,19 @@ jobs:
           npm_config_registry: https://repo.harmonyos.com/npm/
           NODE_PATH: ${{ github.workspace }}/apps/harmony/node_modules
         run: |
-          echo "=== Environment ==="
           echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
           echo "OHOS_SDK_HOME=$OHOS_SDK_HOME"
           echo "NODE_PATH=$NODE_PATH"
-          echo "=== SDK structure ==="
           find "$DEVECO_SDK_HOME" -maxdepth 5 -type d | sort || true
-          echo "=== SDK oh-uni-package.json ==="
           find "$DEVECO_SDK_HOME" -name "oh-uni-package.json" -exec cat {} \; 2>/dev/null || true
-          echo "=== Running hvigor assembleHap with stacktrace ==="
-          node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon --stacktrace 2>&1
+          node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon --stacktrace 2>&1 | tee /tmp/hvigor-output.txt
+          BUILD_EXIT=${PIPESTATUS[0]}
+          # Write output to step summary for visibility without log download
+          echo "### hvigor build output" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/hvigor-output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          exit $BUILD_EXIT
 
       - name: List outputs
         run: |
