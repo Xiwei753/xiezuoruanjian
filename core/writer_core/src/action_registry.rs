@@ -124,6 +124,15 @@ impl ActionRegistry {
     }
 
     fn register_editor_settings_actions(&mut self) {
+        self.register_font_size_actions();
+        self.register_auto_save_actions();
+        self.register_line_spacing_actions();
+        self.register_auto_indent_actions();
+        self.register_typing_animation_actions();
+        self.register_smooth_cursor_actions();
+    }
+
+    fn register_font_size_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.editor.font_size.get".to_string(),
             title: "获取字号".to_string(),
@@ -161,6 +170,9 @@ impl ActionRegistry {
                 "step": 1
             })),
         });
+    }
+
+    fn register_auto_save_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.editor.auto_save.get".to_string(),
             title: "获取自动保存状态".to_string(),
@@ -219,6 +231,9 @@ impl ActionRegistry {
                 "step": 500
             })),
         });
+    }
+
+    fn register_line_spacing_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.editor.line_spacing.get".to_string(),
             title: "获取行距".to_string(),
@@ -257,6 +272,9 @@ impl ActionRegistry {
                 "displayScale": 0.01
             })),
         });
+    }
+
+    fn register_auto_indent_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.editor.auto_indent.get".to_string(),
             title: "获取自动缩进".to_string(),
@@ -292,6 +310,9 @@ impl ActionRegistry {
                 "type": "switch"
             })),
         });
+    }
+
+    fn register_typing_animation_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.editor.typing_animation.get".to_string(),
             title: "获取输入动画".to_string(),
@@ -327,6 +348,9 @@ impl ActionRegistry {
                 "type": "switch"
             })),
         });
+    }
+
+    fn register_smooth_cursor_actions(&mut self) {
         self.actions.push(ActionDescriptor {
             id: "settings.editor.smooth_cursor.get".to_string(),
             title: "获取平滑光标".to_string(),
