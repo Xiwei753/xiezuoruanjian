@@ -100,6 +100,24 @@ impl GitHubApiBackend {
                     port,
                 )]
             }
+            "https" => {
+                let host = if config.proxy_host.is_empty() {
+                    "127.0.0.1"
+                } else {
+                    &config.proxy_host
+                };
+                let port = if config.proxy_port > 0 {
+                    config.proxy_port
+                } else {
+                    7890
+                };
+                vec![(
+                    format!("https_{}:{}", host, port),
+                    "https".to_string(),
+                    host.to_string(),
+                    port,
+                )]
+            }
             "socks5" => {
                 let host = if config.proxy_host.is_empty() {
                     "127.0.0.1"
@@ -159,8 +177,9 @@ impl GitHubApiBackend {
             if *p_type != "none" && !p_host.is_empty() && *p_port > 0 {
                 let proxy_url = match p_type.as_str() {
                     "http" => format!("http://{}:{}", p_host, p_port),
+                    "https" => format!("https://{}:{}", p_host, p_port),
                     "socks5" => format!("socks5h://{}:{}", p_host, p_port),
-                    _ => format!("http://{}:{}", p_host, p_port),
+                    _ => format!("https://{}:{}", p_host, p_port),
                 };
                 if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
                     builder = builder.proxy(proxy);
