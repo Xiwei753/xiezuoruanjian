@@ -117,6 +117,42 @@ jobs:
           # Replace the entire deviceTypes array to avoid duplicate "default" values.
           sed -i '/"deviceTypes"/,/]/c\      "deviceTypes": [\n        "default"\n      ],' entry/src/main/module.json5
 
+      - name: Install Rust target for OHOS
+        run: |
+          rustup target add aarch64-unknown-linux-ohos
+
+      - name: Build Rust writer_core FFI for OHOS
+        working-directory: ${{ github.workspace }}
+        run: |
+          # Find the OHOS NDK (ohos-clang) from the installed SDK
+          SDK_NATIVE="$DEVECO_SDK_HOME/default/openharmony/12/native"
+          if [ ! -d "$SDK_NATIVE" ]; then
+            echo "ERROR: OHOS native SDK not found at $SDK_NATIVE"
+            find "$DEVECO_SDK_HOME" -maxdepth 5 -type d | sort || true
+            exit 1
+          fi
+
+          export OHOS_NDK_HOME="$SDK_NATIVE/llvm"
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="$OHOS_NDK_HOME/bin/ohos-clang"
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR="$OHOS_NDK_HOME/bin/llvm-ar"
+
+          echo "OHOS_NDK_HOME=$OHOS_NDK_HOME"
+          echo "LINKER=$CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER"
+          echo "AR=$CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR"
+          ls "$OHOS_NDK_HOME/bin/ohos-clang" || true
+          ls "$OHOS_NDK_HOME/bin/llvm-ar" || true
+
+          cd core/writer_core
+          cargo build --target aarch64-unknown-linux-ohos --release --features harmony-ffi
+
+          # Copy .so to prebuilt directory
+          PREBUILT_DIR="$GITHUB_WORKSPACE/apps/harmony/entry/src/main/prebuilt/arm64-v8a"
+          mkdir -p "$PREBUILT_DIR"
+          cp "$GITHUB_WORKSPACE/target/aarch64-unknown-linux-ohos/release/libwriter_core.so" \
+             "$PREBUILT_DIR/libwriter_core_ffi.so"
+          echo "Built libwriter_core_ffi.so:"
+          ls -lh "$PREBUILT_DIR/libwriter_core_ffi.so"
+
       - name: Install hvigor dependencies via npm
         run: |
           mkdir -p node_modules/@ohos
