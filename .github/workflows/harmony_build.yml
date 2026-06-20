@@ -124,23 +124,34 @@ jobs:
       - name: Build Rust writer_core FFI for OHOS
         working-directory: ${{ github.workspace }}
         run: |
-          # Find the OHOS NDK (ohos-clang) from the installed SDK
-          SDK_NATIVE="$DEVECO_SDK_HOME/default/openharmony/12/native"
-          if [ ! -d "$SDK_NATIVE" ]; then
-            echo "ERROR: OHOS native SDK not found at $SDK_NATIVE"
-            find "$DEVECO_SDK_HOME" -maxdepth 5 -type d | sort || true
+          # Debug: show full SDK structure
+          echo "=== Full SDK structure ==="
+          find "$DEVECO_SDK_HOME" -maxdepth 6 -type d | sort || true
+          echo "=== Looking for ohos-clang ==="
+          find "$DEVECO_SDK_HOME" -name "ohos-clang" -o -name "clang" 2>/dev/null | head -20 || true
+          echo "=== Looking for llvm-ar ==="
+          find "$DEVECO_SDK_HOME" -name "llvm-ar" 2>/dev/null | head -10 || true
+
+          # Try to find ohos-clang dynamically
+          OHOS_CLANG=$(find "$DEVECO_SDK_HOME" -name "ohos-clang" -type f 2>/dev/null | head -1)
+          if [ -z "$OHOS_CLANG" ]; then
+            echo "ohos-clang not found, trying clang as fallback..."
+            OHOS_CLANG=$(find "$DEVECO_SDK_HOME" -name "clang" -path "*/bin/clang" -type f 2>/dev/null | head -1)
+          fi
+          LLVM_AR=$(find "$DEVECO_SDK_HOME" -name "llvm-ar" -type f 2>/dev/null | head -1)
+
+          if [ -z "$OHOS_CLANG" ]; then
+            echo "ERROR: No suitable C compiler found in SDK"
             exit 1
           fi
 
-          export OHOS_NDK_HOME="$SDK_NATIVE/llvm"
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="$OHOS_NDK_HOME/bin/ohos-clang"
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR="$OHOS_NDK_HOME/bin/llvm-ar"
+          echo "Using linker: $OHOS_CLANG"
+          echo "Using ar: $LLVM_AR"
 
-          echo "OHOS_NDK_HOME=$OHOS_NDK_HOME"
-          echo "LINKER=$CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER"
-          echo "AR=$CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR"
-          ls "$OHOS_NDK_HOME/bin/ohos-clang" || true
-          ls "$OHOS_NDK_HOME/bin/llvm-ar" || true
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER="$OHOS_CLANG"
+          if [ -n "$LLVM_AR" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_AR="$LLVM_AR"
+          fi
 
           cd core/writer_core
           cargo build --target aarch64-unknown-linux-ohos --release --no-default-features --features harmony-ffi
