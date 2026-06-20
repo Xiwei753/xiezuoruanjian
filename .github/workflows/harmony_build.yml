@@ -142,20 +142,26 @@ jobs:
         env:
           npm_config_registry: https://repo.harmonyos.com/npm/
           NODE_PATH: ${{ github.workspace }}/apps/harmony/node_modules
+        shell: bash
         run: |
           echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
           echo "OHOS_SDK_HOME=$OHOS_SDK_HOME"
           echo "NODE_PATH=$NODE_PATH"
           find "$DEVECO_SDK_HOME" -maxdepth 5 -type d | sort || true
           find "$DEVECO_SDK_HOME" -name "oh-uni-package.json" -exec cat {} \; 2>/dev/null || true
-          node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon --stacktrace 2>&1 | tee /tmp/hvigor-output.txt
-          BUILD_EXIT=${PIPESTATUS[0]}
+          node ./node_modules/@ohos/hvigor/bin/hvigor.js assembleHap --mode module -p product=default -p buildMode=debug --no-daemon --stacktrace > /tmp/hvigor-output.txt 2>&1 || true
           # Write output to step summary for visibility without log download
           echo "### hvigor build output" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat /tmp/hvigor-output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          exit $BUILD_EXIT
+          # Also print to job log
+          cat /tmp/hvigor-output.txt
+          # Check if build failed
+          if grep -q "ERROR" /tmp/hvigor-output.txt; then
+            echo "::error::hvigor build failed, see Step Summary for details"
+            exit 1
+          fi
 
       - name: List outputs
         run: |
