@@ -278,7 +278,7 @@ jobs:
 
           echo "Unsigned HAP: $UNSIGNED_HAP"
 
-          # Find hapsigntool.jar
+          # Find or download hapsigntool.jar
           HAPSIGNTOOL=""
           for search_dir in "$COMMANDLINE_TOOL_DIR" "$DEVECO_SDK_HOME"; do
             if [ -d "$search_dir" ]; then
@@ -290,11 +290,24 @@ jobs:
           done
 
           if [ -z "$HAPSIGNTOOL" ]; then
-            echo "::error::hapsigntool.jar not found in COMMANDLINE_TOOL_DIR or DEVECO_SDK_HOME"
-            exit 1
+            echo "hapsigntool.jar not found in SDK, downloading from Maven..."
+            HAPSIGNTOOL_DIR="$RUNNER_TEMP/hapsigntool"
+            mkdir -p "$HAPSIGNTOOL_DIR"
+            wget -q -O "$HAPSIGNTOOL_DIR/hapsigntool.jar" \
+              "https://repo.harmonyos.com/maven/hap_sign_tool/hapsigntool.jar" \
+              || wget -q -O "$HAPSIGNTOOL_DIR/hapsigntool.jar" \
+              "https://developer.huawei.com/repo/hap_sign_tool/hapsigntool.jar" \
+              || curl -sL -o "$HAPSIGNTOOL_DIR/hapsigntool.jar" \
+              "https://ohpm.openharmony.cn/ohpm/hapsigntool.jar"
+            if [ ! -s "$HAPSIGNTOOL_DIR/hapsigntool.jar" ]; then
+              echo "::error::Failed to download hapsigntool.jar"
+              exit 1
+            fi
+            HAPSIGNTOOL="$HAPSIGNTOOL_DIR/hapsigntool.jar"
+            echo "Downloaded hapsigntool.jar"
           fi
 
-          echo "hapsigntool.jar found at: $HAPSIGNTOOL"
+          echo "Using hapsigntool.jar: $HAPSIGNTOOL"
 
           SIGNED_HAP="entry/build/default/outputs/default/sujian-entry-signed.hap"
 
