@@ -123,11 +123,7 @@ jobs:
 
       - name: Install cross-compilation toolchain
         run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu zlib1g-dev:arm64 libunwind-dev:arm64
-        env:
-          DEBIAN_FRONTEND: noninteractive
+          sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Build Rust writer_core FFI for OHOS
         working-directory: ${{ github.workspace }}
@@ -138,11 +134,17 @@ jobs:
           echo "Using linker: $CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER"
           aarch64-linux-gnu-gcc --version | head -1
 
-          # Add SDK native lib paths to linker search + install cross-compiled zlib/libunwind
+          # Debug: show SDK native library structure
+          echo "=== SDK native .so files ==="
+          find "$DEVECO_SDK_HOME" -name "*.so" 2>/dev/null | head -30 || true
+          echo "=== SDK native .a files ==="
+          find "$DEVECO_SDK_HOME" -name "*.a" 2>/dev/null | head -30 || true
+
+          # Build RUSTFLAGS with SDK native lib paths for linking
           SDK_NATIVE="$DEVECO_SDK_HOME/default/openharmony/12/native"
-          RUSTFLAGS="-L $SDK_NATIVE/sysroot/usr/lib/aarch64-linux-ohos"
-          # Also add any .so dirs found in the SDK
-          for dir in $(find "$SDK_NATIVE" -name "*.so" -exec dirname {} \; 2>/dev/null | sort -u); do
+          RUSTFLAGS=""
+          # Add all directories containing .so or .a files to linker search
+          for dir in $(find "$SDK_NATIVE" \( -name "*.so" -o -name "*.a" \) -exec dirname {} \; 2>/dev/null | sort -u); do
             RUSTFLAGS="$RUSTFLAGS -L $dir"
           done
           export RUSTFLAGS
