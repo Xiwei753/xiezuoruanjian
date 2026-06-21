@@ -160,8 +160,9 @@ impl GitHubApiBackend {
             if *p_type != "none" && !p_host.is_empty() && *p_port > 0 {
                 let proxy_url = match p_type.as_str() {
                     "http" => format!("http://{}:{}", p_host, p_port),
+                    "https" => format!("https://{}:{}", p_host, p_port),
                     "socks5" => format!("socks5h://{}:{}", p_host, p_port),
-                    _ => format!("http://{}:{}", p_host, p_port),
+                    _ => format!("https://{}:{}", p_host, p_port),
                 };
                 if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
                     builder = builder.proxy(proxy);
