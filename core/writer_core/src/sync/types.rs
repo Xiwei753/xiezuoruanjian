@@ -155,7 +155,7 @@ pub struct SyncDiagnosticsResult {
     /// Transport type: https/ssh/unknown
     pub transport: String,
 
-    /// Error category for proxy_enabled=false failures
+    /// Error category for sync failures
     pub error_category: String,
     /// 已废弃：UI 应使用 `error_category` 做本地化映射。
     #[deprecated(note = "Use error_category for i18n lookup instead")]
