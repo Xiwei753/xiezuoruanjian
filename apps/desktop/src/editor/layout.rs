@@ -337,6 +337,46 @@ cpp! {{
         }
         layout.endLayout();
     }
+
+    // Draw a full line of text using QTextLine::draw().
+    // This ensures the text rendering uses the same shaping data as
+    // cursorToX() / xToCursor(), fixing mixed-script cursor issues
+    // (e.g. "]\"" where cursor lands inside the Chinese quote).
+    void editor_draw_line_text(
+        QPainter* painter, const QString& paraText,
+        double fs, const QString& ff,
+        double paragraph_wrap_w, double indent_w, int qtextline_idx,
+        double x, double baseline_y, const QColor& textColor
+    ) {
+        if (!painter) return;
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+
+        int cur_idx = 0;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
+            line.setLineWidth(lineWrap);
+            if (cur_idx == qtextline_idx) {
+                // Use QTextLine::draw() with the same layout that cursorToX uses.
+                // This guarantees cursor position and text rendering are consistent.
+                painter->setPen(QPen(textColor));
+                QPointF pos(x, baseline_y - line.ascent());
+                line.draw(painter, pos);
+                break;
+            }
+            first = false;
+            cur_idx++;
+        }
+        layout.endLayout();
+    }
 }}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1031,16 +1071,9 @@ pub fn calculate_cursor_x_for_line(
             line.x
         }
     } else {
-        if affinity == CaretAffinity::Upstream && cursor == line.end && line.x_end_trailing > 0.0 {
-            let x = line.x + line.x_end_trailing;
-            if sujian_editor_debug_enabled() {
-                eprintln!(
-                    "[calculate_cursor_x] using cached x_end_trailing: cursor={}, line.end={}, x_end_trailing={:.4}, result_x={:.4}",
-                    cursor, line.end, line.x_end_trailing, x
-                );
-            }
-            return x;
-        }
+        // Always use real-time QTextLine::cursorToX() for cursor position.
+        // The cached x_end_trailing is only used as a fallback when the
+        // real-time calculation fails (returns 0 for non-empty lines).
         let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.end;
         let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
         let x = line.x
@@ -1055,6 +1088,19 @@ pub fn calculate_cursor_x_for_line(
                 line.qtextline_idx,
                 use_trailing,
             );
+
+        // Fallback: if real-time cursorToX returns near-zero for a non-empty
+        // line, use the cached x_end_trailing as a last resort.
+        if x <= line.x + 0.5 && line.start != line.end && affinity == CaretAffinity::Upstream && cursor == line.end && line.x_end_trailing > 0.0 {
+            let fallback_x = line.x + line.x_end_trailing;
+            if sujian_editor_debug_enabled() {
+                eprintln!(
+                    "[calculate_cursor_x] fallback to cached x_end_trailing: cursor={}, line.end={}, x_end_trailing={:.4}, realtime_x={:.4}, fallback_x={:.4}",
+                    cursor, line.end, line.x_end_trailing, x, fallback_x
+                );
+            }
+            return fallback_x;
+        }
 
         if x <= 1.0 && line.start != line.end && std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
             let cursor_in_para = cursor.saturating_sub(line.para_start);
@@ -1235,6 +1281,44 @@ pub fn qtextlayout_glyph_positions_on_line(
         result.push((abs_byte, x_pos, w));
     }
     result
+}
+
+/// Draw a full line of text using QTextLine::draw().
+/// This ensures the text rendering uses the same shaping data as
+/// cursorToX() / xToCursor(), fixing mixed-script cursor issues.
+pub fn draw_line_text(
+    painter: &mut qmetaobject::QPainter,
+    para_text: &str,
+    font_size: f64,
+    font_family: &str,
+    paragraph_wrap_w: f64,
+    indent_w: f64,
+    qtextline_idx: i32,
+    x: f64,
+    baseline_y: f64,
+    text_color: &str,
+) {
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    let color = qmetaobject::QColor::from_name(text_color);
+    cpp!(unsafe [
+        painter as "QPainter*",
+        para as "QString",
+        fs as "float",
+        ff as "QString",
+        paragraph_wrap_w as "double",
+        indent_w as "double",
+        qtextline_idx as "int",
+        x as "double",
+        baseline_y as "double",
+        color as "QColor"
+    ] {
+        editor_draw_line_text(
+            painter, para, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx,
+            x, baseline_y, color
+        );
+    });
 }
 
 pub fn byte_offset_to_qchar_offset(text: &str, byte_offset: usize) -> usize {

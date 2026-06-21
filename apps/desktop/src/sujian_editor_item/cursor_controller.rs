@@ -136,21 +136,36 @@ impl CursorController {
             || self.force_snap_next
             || scroll_changed;
 
+        // Large-distance snap: if the cursor moved more than 80px or more
+        // than one line height, snap immediately instead of animating.
+        // Only small same-line movements (keyboard left/right) should animate.
+        let dx = (cursor_x - self.visual_x).abs();
+        let dy = (cursor_y - self.visual_y).abs();
+        let large_distance = dx > 80.0 || dy > 80.0;
+
         let now = Instant::now();
 
-        let (visual_x, visual_y, new_animation) = if should_snap || !smooth_enabled {
+        // Clamp smooth cursor duration to 80~160ms regardless of user setting.
+        // The user-facing "smooth cursor duration" slider should not make
+        // the cursor feel sluggish — it's capped for responsiveness.
+        let effective_duration_ms = if smooth_enabled {
+            (smooth_duration_ms as u64).clamp(80, 160)
+        } else {
+            0
+        };
+
+        let (visual_x, visual_y, new_animation) = if should_snap || !smooth_enabled || large_distance {
             (cursor_x, cursor_y, None)
         } else if let Some(ref anim) = self.animation {
             if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
                 let (cur_x, cur_y) = anim.current_position(now);
-                let duration = smooth_duration_ms.max(30) as u64;
                 let new_anim = CursorAnimationState {
                     start_x: cur_x,
                     start_y: cur_y,
                     target_x: cursor_x,
                     target_y: cursor_y,
                     start_time: now,
-                    duration_ms: duration,
+                    duration_ms: effective_duration_ms,
                 };
                 (cur_x, cur_y, Some(new_anim))
             } else if anim.is_finished(now) {
@@ -163,14 +178,13 @@ impl CursorController {
             let prev_vx = self.visual_x;
             let prev_vy = self.visual_y;
             if (prev_vx - cursor_x).abs() > 0.01 || (prev_vy - cursor_y).abs() > 0.01 {
-                let duration = smooth_duration_ms.max(30) as u64;
                 let new_anim = CursorAnimationState {
                     start_x: prev_vx,
                     start_y: prev_vy,
                     target_x: cursor_x,
                     target_y: cursor_y,
                     start_time: now,
-                    duration_ms: duration,
+                    duration_ms: effective_duration_ms,
                 };
                 (prev_vx, prev_vy, Some(new_anim))
             } else {

@@ -31,12 +31,27 @@ Dialog {
     property var editorBackendRef: null
     property var dt: theme
     property bool updatingValues: false
+    property var _saveTimer: null
     signal settingsChanged()
 
     background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; border.width: 1; radius: dt ? dt.radiusXl : 24 }
     header: null
 
     function saveAndNotify() { if (!backendRef) return; backendRef.save_local_settings(); root.settingsChanged() }
+    // Debounced save: only saves after 300ms of inactivity.
+    // Slider onMoved should call this instead of saveAndNotify()
+    // to avoid saving on every slider tick.
+    function debouncedSave() {
+        if (!backendRef) return
+        if (_saveTimer) _saveTimer.destroy()
+        _saveTimer = Qt.createQmlObject('import QtQuick; Timer { interval: 300; onTriggered: { root.saveAndNotify() } }', root)
+        _saveTimer.start()
+    }
+    // Force-save: called when dialog closes or slider is released
+    function flushSave() {
+        if (_saveTimer) { _saveTimer.stop(); _saveTimer.destroy(); _saveTimer = null }
+        saveAndNotify()
+    }
     function setSwitchValue(control, key, value) {
         control.checked = value
         if (!backendRef || updatingValues) return
@@ -62,6 +77,7 @@ Dialog {
         updatingValues = false
     }
     onOpened: updateValues()
+    onClosed: flushSave()
 
     Rectangle {
         id: topBar
@@ -125,7 +141,7 @@ Dialog {
                     from: 12.0
                     to: 72.0
                     stepSize: 1.0
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.saveAndNotify() }
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.debouncedSave() }
                 }
                 AppSlider {
                     id: lineSpacingSlider
@@ -137,7 +153,7 @@ Dialog {
                     from: 1.0
                     to: 3.0
                     stepSize: 0.1
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.saveAndNotify() }
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.debouncedSave() }
                 }
             }
 
@@ -164,7 +180,7 @@ Dialog {
                     from: 0.0
                     to: 8.0
                     stepSize: 0.5
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.saveAndNotify() }
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.debouncedSave() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -184,7 +200,7 @@ Dialog {
                     from: 0
                     to: 1000
                     stepSize: 10
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.saveAndNotify() }
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
                 }
                 SettingsRow {
                     dt: root.dt
@@ -204,7 +220,7 @@ Dialog {
                     from: 0
                     to: 1000
                     stepSize: 10
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
                 }
             }
 
@@ -231,7 +247,7 @@ Dialog {
                     from: 1
                     to: 10
                     stepSize: 1
-                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000; root.saveAndNotify() }
+                    onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000; root.debouncedSave() }
                 }
             }
 

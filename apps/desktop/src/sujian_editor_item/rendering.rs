@@ -11,9 +11,9 @@ use std::time::Instant;
 use super::{sujian_editor_debug_enabled, SujianEditorItem};
 use super::cursor_controller::CursorUpdateResult;
 
-/// A byte range that should be skipped during static text rendering
-/// because an animation is currently animating those glyphs.
-/// When the animation finishes, the skip range is cleared and the
+/// AnimatedSkipRange is retained as a struct definition for API compatibility
+/// but is no longer used for skipping glyphs in the static layer.
+/// The static layer now always renders the full text.
 /// static layer repaints with the full text.
 #[derive(Clone, Debug)]
 pub struct AnimatedSkipRange {
@@ -188,27 +188,18 @@ impl SujianEditorItem {
 
     pub(crate) fn cleanup_finished_animations(&mut self) {
         let now = Instant::now();
-        let mut insert_done = false;
-        let mut delete_done = false;
         if let Some(ref anim) = self.insert_animation {
             if anim.is_finished(now) {
                 self.insert_animation = None;
-                insert_done = true;
             }
         }
         if let Some(ref anim) = self.delete_animation {
             if anim.is_finished(now) {
                 self.delete_animation = None;
-                delete_done = true;
             }
         }
-        // When animations finish, clear skip ranges and invalidate the
-        // scroll buffer so the static layer repaints with full text.
-        if (insert_done || delete_done) && !self.animated_skip_ranges.is_empty() {
-            self.animated_skip_ranges.clear();
-            self.scroll_buffer = None;
-            self.render_dirty = true;
-        }
+        // animated_skip_ranges is disabled for stability — the static
+        // layer always renders the full text. No skip range cleanup needed.
     }
 
     /// 渲染静态正文到 painter。不包含任何动画内容。
@@ -284,12 +275,11 @@ impl SujianEditorItem {
         }
 
         // ── Layer 2: Base text ──
-        // When animated_skip_ranges is non-empty, skip rendering the glyphs
-        // that are being animated by the QML ghost overlay. This makes insert
-        // animations look like the characters fly from the cursor to their
-        // final position, rather than appearing instantly in the static layer
-        // with a ghost on top.
-        let skip_ranges = &self.animated_skip_ranges;
+        // The static layer always renders the full text without masks.
+        // Uses QTextLine::draw() via layout::draw_line_text() to ensure
+        // the text rendering uses the same shaping data as cursorToX(),
+        // fixing mixed-script cursor issues (e.g. "]\"" where cursor
+        // lands inside the Chinese quote).
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
             let text_y = self
@@ -297,83 +287,24 @@ impl SujianEditorItem {
                 .text_baseline_y(line, font_size, &font_family)
                 + paint_offset_y;
 
-            if skip_ranges.is_empty() {
-                // Fast path: no animations active, render the full line
-                let text = self.buffer.text[line.start..line.end].to_string();
-                renderer::draw_text(
-                    painter,
-                    line.x,
-                    text_y,
-                    fs,
-                    self.current_text_color.clone(),
-                    text.into(),
-                );
-            } else {
-                // Slow path: skip animated byte ranges within this line
-                let line_start = line.start;
-                let line_end = line.end;
-                let mut seg_start = line_start;
-
-                // Collect skip ranges that overlap this line, sorted
-                let mut line_skips: Vec<(usize, usize)> = skip_ranges.iter()
-                    .filter_map(|r| {
-                        let overlap_start = r.byte_start.max(line_start);
-                        let overlap_end = r.byte_end.min(line_end);
-                        if overlap_start < overlap_end {
-                            Some((overlap_start, overlap_end))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                line_skips.sort_by_key(|(s, _)| *s);
-
-                // Render segments between skip ranges
-                for (skip_s, skip_e) in &line_skips {
-                    if seg_start < *skip_s {
-                        let text = self.buffer.text[seg_start..*skip_s].to_string();
-                        let x_offset = if seg_start > line_start {
-                            self.editor_layout.text_width(
-                                &self.buffer.text[line_start..seg_start],
-                                font_size,
-                                &font_family,
-                            )
-                        } else {
-                            0.0
-                        };
-                        renderer::draw_text(
-                            painter,
-                            line.x + x_offset,
-                            text_y,
-                            fs,
-                            self.current_text_color.clone(),
-                            text.into(),
-                        );
-                    }
-                    seg_start = *skip_e;
-                }
-                // Render remaining text after last skip
-                if seg_start < line_end {
-                    let text = self.buffer.text[seg_start..line_end].to_string();
-                    let x_offset = if seg_start > line_start {
-                        self.editor_layout.text_width(
-                            &self.buffer.text[line_start..seg_start],
-                            font_size,
-                            &font_family,
-                        )
-                    } else {
-                        0.0
-                    };
-                    renderer::draw_text(
-                        painter,
-                        line.x + x_offset,
-                        text_y,
-                        fs,
-                        self.current_text_color.clone(),
-                        text.into(),
-                    );
-                }
+            if line.para_text.is_empty() {
+                continue;
             }
+
+            // Use QTextLine::draw() for consistent shaping with cursor positions
+            let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
+            crate::editor::layout::draw_line_text(
+                painter,
+                &line.para_text,
+                font_size,
+                &font_family,
+                paragraph_wrap_w,
+                line.para_indent,
+                line.qtextline_idx,
+                line.x,
+                text_y,
+                &self.current_text_color.to_string(),
+            );
         }
 
         // ── Layer 3: Preedit ──
@@ -493,7 +424,10 @@ impl SujianEditorItem {
         let scroll_y = self.current_scroll_y as f64;
         let content_h = self.current_content_height as f64;
 
-        let overscan = vp_h * 2.5;
+        // Use larger overscan (3.5x viewport) to reduce buffer rebuilds
+        // during scrolling, especially at large font sizes where content
+        // height changes significantly per line.
+        let overscan = vp_h * 3.5;
         let min_y = (scroll_y - overscan).max(0.0);
         let max_y = (scroll_y + vp_h + overscan).min(content_h.max(vp_h));
         let buffer_h = max_y - min_y;
@@ -568,135 +502,6 @@ impl SujianEditorItem {
             );
         }
 
-        Some((image, min_y, buffer_h))
-    }
-
-    /// 渲染动画 overlay（插入/删除 ghost 字）到独立的 painter。
-    /// 返回 Some(image) 如果有活跃动画，None 表示没有动画需要绘制。
-    pub(crate) fn paint_animation_overlay(&mut self) -> Option<(QImage, f64, f64)> {
-        let now = Instant::now();
-        let has_insert = self.insert_animation.as_ref().is_some_and(|a| !a.is_finished(now));
-        let has_delete = self.delete_animation.as_ref().is_some_and(|a| !a.is_finished(now));
-
-        if !has_insert && !has_delete {
-            return None;
-        }
-
-        let item_ptr = self.get_cpp_object();
-        let dpr = if !item_ptr.is_null() {
-            renderer::sujian_item_dpr(item_ptr)
-        } else {
-            1.0
-        };
-        let width = self.bounding_width();
-        let vp_h = self.current_viewport_height.max(1.0) as f64;
-        let scroll_y = self.current_scroll_y as f64;
-        let text = self.buffer.text.clone();
-        let snapshot = self.layout_snapshot_for_text(&text, width);
-        let content_h = snapshot.lines.last().map(|l| l.y + l.height + self.current_padding as f64).unwrap_or(vp_h);
-
-        let overscan = vp_h * 2.5;
-        let min_y = (scroll_y - overscan).max(0.0);
-        let max_y = (scroll_y + vp_h + overscan).min(content_h.max(vp_h));
-        let buffer_h = max_y - min_y;
-
-        let img_w = (width as i32).max(1);
-        let phys_w = ((img_w as f64 * dpr) as i32).max(1);
-        let phys_h = ((buffer_h * dpr) as i32).max(1);
-        let mut image = QImage::new(
-            qmetaobject::QSize {
-                width: phys_w as u32,
-                height: phys_h as u32,
-            },
-            qmetaobject::ImageFormat::ARGB32_Premultiplied,
-        );
-        image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
-
-        let painter_ptr = renderer::sujian_create_painter_scaled(&mut image, dpr);
-        if painter_ptr.is_null() {
-            return Some((image, min_y, buffer_h));
-        }
-
-        let painter: &mut QPainter = unsafe { &mut *painter_ptr };
-
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = self.current_font_family.to_string();
-        let fs = font_size as f32;
-        let ff: QString = font_family.clone().into();
-        cpp!(unsafe [painter as "QPainter*", fs as "float", ff as "QString"] {
-            QFont f(ff);
-            f.setPixelSize(static_cast<int>(fs));
-            painter->setFont(f);
-        });
-
-        let paint_offset_y = -min_y;
-        let now_anim = Instant::now();
-
-        // Draw insert animation ghosts — glyphs fly from cursor origin to
-        // their final position. Since the static layer skips these glyphs
-        // (via animated_skip_ranges), the ghost is the only rendering of
-        // these characters during the animation.
-        if let Some(ref insert_anim) = self.insert_animation {
-            let eased = 1.0 - (1.0 - insert_anim.progress(now_anim)).powi(3);
-            let origin_x = insert_anim.origin_cursor_rect.0;
-            let origin_y = insert_anim.origin_cursor_rect.1;
-            let base_color = renderer::color_from_qstring(self.current_text_color.clone());
-
-            for glyph in &insert_anim.glyphs {
-                let (gx, gy, _gw, gh) = glyph.rect;
-                if gy + gh < scroll_y || gy > scroll_y + vp_h {
-                    continue;
-                }
-                // Interpolate from cursor origin to final glyph position
-                let current_x = origin_x + (gx - origin_x) * eased;
-                let current_y = origin_y + (gy - origin_y) * eased;
-                // Fade in: 0 → 255
-                let alpha = (eased * 255.0).round() as i32;
-                renderer::draw_text_color(
-                    painter,
-                    current_x,
-                    glyph.baseline_y + (current_y - gy) + paint_offset_y,
-                    QColor::from_rgba(
-                        base_color.red(),
-                        base_color.green(),
-                        base_color.blue(),
-                        alpha,
-                    ),
-                    glyph.text.clone().into(),
-                );
-            }
-        }
-
-        // Draw delete animation ghosts
-        if let Some(ref delete_anim) = self.delete_animation {
-            let eased = 1.0 - (1.0 - delete_anim.progress(now_anim)).powi(3);
-            let target_x = delete_anim.target_cursor_rect.0;
-            let target_y_top = delete_anim.target_cursor_rect.1;
-            let base_color = renderer::color_from_qstring(self.current_text_color.clone());
-            for glyph in &delete_anim.glyphs {
-                let (gx, gy, _gw, gh) = glyph.rect;
-                if gy + gh < scroll_y || gy > scroll_y + vp_h {
-                    continue;
-                }
-                let offset_x = (target_x - gx) * eased;
-                let offset_y = (target_y_top - gy) * eased;
-                let alpha = ((1.0 - eased) * 255.0).round() as i32;
-                renderer::draw_text_color(
-                    painter,
-                    gx + offset_x,
-                    glyph.baseline_y + offset_y + paint_offset_y,
-                    QColor::from_rgba(
-                        base_color.red(),
-                        base_color.green(),
-                        base_color.blue(),
-                        alpha,
-                    ),
-                    glyph.text.clone().into(),
-                );
-            }
-        }
-
-        renderer::sujian_delete_painter(painter_ptr);
         Some((image, min_y, buffer_h))
     }
 

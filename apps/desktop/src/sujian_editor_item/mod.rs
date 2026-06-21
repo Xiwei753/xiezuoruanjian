@@ -547,6 +547,8 @@ impl SujianEditorItem {
             return;
         }
         self.current_viewport_height = value;
+        self.cursor_ctrl.animation = None;
+        self.cursor_ctrl.force_snap_next = true;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }
@@ -617,6 +619,8 @@ impl SujianEditorItem {
 
     fn visual_changed(&mut self) {
         self.invalidate_layout_cache();
+        self.cursor_ctrl.animation = None;
+        self.cursor_ctrl.force_snap_next = true;
         self.recalculate_content_height_and_emit();
         self.visual_settings_changed();
         self.update_cursor_visual_position();
@@ -626,6 +630,8 @@ impl SujianEditorItem {
     fn emit_content_changed(&mut self) {
         self.text_revision = self.text_revision.wrapping_add(1);
         self.invalidate_layout_cache();
+        self.cursor_ctrl.animation = None;
+        self.cursor_ctrl.force_snap_next = true;
         self.recalculate_content_height_and_emit();
         self.plain_text_changed();
         self.text_changed();
@@ -653,9 +659,7 @@ impl SujianEditorItem {
         }
     }
 
-    /// Tick the typing animation (insert/delete). When the animation finishes,
-    /// clear the animated_skip_ranges and request a repaint so the static
-    /// layer renders the full text again.
+    /// Tick the typing animation (insert/delete).
     fn tick_typing_animation(&mut self) {
         let now = Instant::now();
         let insert_done = self.insert_animation.as_ref().is_some_and(|a| a.is_finished(now));
@@ -666,17 +670,6 @@ impl SujianEditorItem {
         }
         if delete_done {
             self.delete_animation = None;
-        }
-
-        if insert_done || delete_done {
-            let had_skips = !self.animated_skip_ranges.is_empty();
-            self.animated_skip_ranges.clear();
-            if had_skips {
-                // Invalidate scroll buffer so the static layer repaints
-                // with the full text (no more skipped ranges).
-                self.scroll_buffer = None;
-                self.request_static_repaint();
-            }
         }
 
         // If any animation is still running, keep ticking
@@ -729,15 +722,11 @@ impl SujianEditorItem {
             for event in &events {
                 if event.kind == EditorAnimationKind::Insert {
                     let anim = self.create_insert_animation(event, origin_cx, origin_cy, cursor_h);
-                    // Set skip range: during insert animation, skip rendering
-                    // the newly inserted glyphs in the static layer so the
-                    // QML ghost overlay can animate them from cursor position.
-                    let range_start = event.range_start;
-                    let range_end = range_start + event.range_len;
-                    self.animated_skip_ranges.push(AnimatedSkipRange {
-                        byte_start: range_start,
-                        byte_end: range_end,
-                    });
+                    // NOTE: animated_skip_ranges is disabled for stability.
+                    // The static layer now always renders the full text.
+                    // The QML ghost overlay is purely additive — it draws
+                    // on top of the static text, so a glyph-calculation
+                    // error in the overlay can never cause text to disappear.
                     self.insert_animation = Some(anim);
                     break;
                 }
@@ -886,9 +875,8 @@ impl SujianEditorItem {
     fn click_at(&mut self, x: f32, y: f32, extend: bool) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.cursor_ctrl.affinity = affinity;
-        if extend {
-            self.cursor_ctrl.force_snap_next = true;
-        }
+        // All click operations must snap — click, extend, drag, etc.
+        self.cursor_ctrl.force_snap_next = true;
         if sujian_editor_debug_enabled() {
             eprintln!(
                 "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
@@ -919,6 +907,7 @@ impl SujianEditorItem {
     fn long_press_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.force_snap_next = true;
         // 长按时，如果没有选区则选词
         if !self.buffer.has_selection() {
             self.select_word_at_impl(index);
@@ -933,6 +922,7 @@ impl SujianEditorItem {
     fn select_word_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.force_snap_next = true;
         self.select_word_at_impl(index);
         self.cursor_position_changed();
         self.selection_changed();
@@ -1751,7 +1741,7 @@ impl QQuickItem for SujianEditorItem {
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {
             eprintln!(
-                "sujian_update_paint_node: total_ms={}, layer0_only=true",
+                "sujian_update_paint_node: total_ms={}",
                 total_elapsed.as_millis(),
             );
         }
