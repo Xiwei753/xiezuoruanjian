@@ -139,7 +139,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const result: ResultEnvelope<T> = {
       success: false,
       errorCode: errorCode,
-      userMessage,
+      messageKey: 'error.other',
+      rawError: userMessage,
       warnings: [] as string[],
       changedPaths: [] as string[],
       changedEntities: [] as ChangedEntity[]
@@ -372,7 +373,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       const result: ResultEnvelope<ChapterSaveReceipt> = {
         success: false,
         errorCode: 'EMPTY_OVERWRITE_BLOCKED',
-        userMessage: '不能保存空内容',
+        messageKey: 'error.empty_overwrite_blocked',
+        rawError: 'Cannot save empty content',
         warnings: [] as string[],
         changedPaths: [] as string[],
         changedEntities: [] as ChangedEntity[]

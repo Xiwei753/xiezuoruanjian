@@ -507,9 +507,12 @@ impl AppBackend {
                 let error_code = local_envelope["errorCode"]
                     .as_str()
                     .unwrap_or("UNKNOWN");
-                let user_message = local_envelope["userMessage"]
-                    .as_str()
-                    .unwrap_or("保存本地设置失败");
+                let message_key = local_envelope["messageKey"].as_str().unwrap_or("");
+                let user_message = if !message_key.is_empty() {
+                    crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                } else {
+                    local_envelope["userMessage"].as_str().unwrap_or("保存本地设置失败")
+                };
                 error_msg = Some(format!("{} ({})", user_message, error_code));
             }
 
@@ -542,9 +545,12 @@ impl AppBackend {
                 let error_code = syncable_envelope["errorCode"]
                     .as_str()
                     .unwrap_or("UNKNOWN");
-                let user_message = syncable_envelope["userMessage"]
-                    .as_str()
-                    .unwrap_or("保存同步设置失败");
+                let message_key = syncable_envelope["messageKey"].as_str().unwrap_or("");
+                let user_message = if !message_key.is_empty() {
+                    crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                } else {
+                    syncable_envelope["userMessage"].as_str().unwrap_or("保存同步设置失败")
+                };
                 error_msg = Some(format!("{} ({})", user_message, error_code));
             }
         } else {

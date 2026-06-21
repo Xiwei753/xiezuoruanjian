@@ -1206,4 +1206,71 @@
         <translation>请选择或新建章节</translation>
     </message>
 </context>
+<context>
+    <name>ErrorMessages</name>
+    <message>
+        <source>文件读写失败，请检查工作区权限和磁盘状态</source>
+        <translation>文件读写失败，请检查工作区权限和磁盘状态</translation>
+    </message>
+    <message>
+        <source>数据文件格式异常，请检查工作区文件是否损坏</source>
+        <translation>数据文件格式异常，请检查工作区文件是否损坏</translation>
+    </message>
+    <message>
+        <source>不是有效的工作区</source>
+        <translation>不是有效的工作区</translation>
+    </message>
+    <message>
+        <source>作品不存在或已被删除</source>
+        <translation>作品不存在或已被删除</translation>
+    </message>
+    <message>
+        <source>卷不存在或已被删除</source>
+        <translation>卷不存在或已被删除</translation>
+    </message>
+    <message>
+        <source>章节不存在或已被删除</source>
+        <translation>章节不存在或已被删除</translation>
+    </message>
+    <message>
+        <source>已阻止空内容覆盖现有章节</source>
+        <translation>已阻止空内容覆盖现有章节</translation>
+    </message>
+    <message>
+        <source>该功能尚未实现</source>
+        <translation>该功能尚未实现</translation>
+    </message>
+    <message>
+        <source>拒绝删除工作区根目录</source>
+        <translation>拒绝删除工作区根目录</translation>
+    </message>
+    <message>
+        <source>删除目标无效</source>
+        <translation>删除目标无效</translation>
+    </message>
+    <message>
+        <source>同步冲突，请手动处理冲突文件后重试</source>
+        <translation>同步冲突，请手动处理冲突文件后重试</translation>
+    </message>
+    <message>
+        <source>同步失败，请检查网络和配置</source>
+        <translation>同步失败，请检查网络和配置</translation>
+    </message>
+    <message>
+        <source>操作失败</source>
+        <translation>操作失败</translation>
+    </message>
+    <message>
+        <source>核心模块错误</source>
+        <translation>核心模块错误</translation>
+    </message>
+    <message>
+        <source>复制失败：未找到可用的剪贴板后端</source>
+        <translation>复制失败：未找到可用的剪贴板后端</translation>
+    </message>
+    <message>
+        <source>数据解析失败</source>
+        <translation>数据解析失败</translation>
+    </message>
+</context>
 </TS>

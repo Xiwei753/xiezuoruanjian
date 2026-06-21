@@ -117,7 +117,9 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const errResult: ResultEnvelope<T> = {
         success: false,
         errorCode: 'PARSE_ERROR',
-        userMessage: `JSON parse error: ${e}`,
+        messageKey: 'error.parse_error',
+        messageArgs: { 'detail': `${e}` } as Record<string, string>,
+        rawError: `JSON parse error: ${e}`,
         warnings: [] as string[],
         changedPaths: [] as string[],
         changedEntities: [] as ChangedEntity[]
@@ -130,7 +132,8 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     const result: ResultEnvelope<T> = {
       success: false,
       errorCode: 'NOT_IMPLEMENTED',
-      userMessage: 'Native bridge not implemented yet',
+      messageKey: 'error.not_implemented_bridge',
+      rawError: 'Native bridge not implemented yet',
       warnings: [] as string[],
       changedPaths: [] as string[],
       changedEntities: [] as ChangedEntity[]
@@ -238,7 +241,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeValidateWorkspace()
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -258,7 +261,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeListProjects()
       return this.parseEnvelope<Project[]>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -267,7 +270,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetProjectTree(projectId)
       return this.parseEnvelope<ProjectTree>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -276,7 +279,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeCreateProject(name)
       return this.parseEnvelope<Project>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -285,7 +288,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeRenameProject(projectId, newName)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -294,7 +297,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeDeleteProject(projectId)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -303,7 +306,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetProjectStats(projectId)
       return this.parseEnvelope<WritingStats>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -314,7 +317,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeListVolumes(projectId)
       return this.parseEnvelope<Volume[]>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -323,7 +326,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeCreateVolume(projectId, name)
       return this.parseEnvelope<Volume>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -332,7 +335,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeRenameVolume(projectId, volumeId, newName)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -341,7 +344,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeDeleteVolume(projectId, volumeId)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -350,7 +353,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeReorderVolumes(projectId, JSON.stringify(orderedVolumeIds))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -359,104 +362,104 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   async listChapters(volumeId: string): Promise<ResultEnvelope<ChapterMeta[]>> {
     const projectId = await this.resolveVolumeProjectId(volumeId)
     if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', userMessage: `卷 ${volumeId} 未找到对应项目`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeListChapters(projectId, volumeId)
       return this.parseEnvelope<ChapterMeta[]>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
   async loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterContent>> {
     const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeOpenChapter(loc.projectId, loc.volumeId, chapterId)
       return this.parseEnvelope<ChapterContent>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeSaveChapter(loc.projectId, loc.volumeId, chapterId, text)
       return this.parseEnvelope<ChapterSaveReceipt>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
     const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeClearChapter(loc.projectId, loc.volumeId, chapterId)
       return this.parseEnvelope<ChapterSaveReceipt>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
   async createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>> {
     const projectId = await this.resolveVolumeProjectId(volumeId)
     if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', userMessage: `卷 ${volumeId} 未找到对应项目`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeCreateChapter(projectId, volumeId, name)
       return this.parseEnvelope<ChapterMeta>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
     const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeRenameChapter(loc.projectId, loc.volumeId, chapterId, newName)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
     const loc = await this.resolveChapterLocation(chapterId)
     if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', userMessage: `章节 ${chapterId} 未找到`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeDeleteChapter(loc.projectId, loc.volumeId, chapterId)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
   async reorderChapters(volumeId: string, orderedChapterIds: string[]): Promise<ResultEnvelope<boolean>> {
     const projectId = await this.resolveVolumeProjectId(volumeId)
     if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', userMessage: `卷 ${volumeId} 未找到对应项目`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
     try {
       const jsonStr: string = this.getNativeModule().nativeReorderChapters(projectId, volumeId, JSON.stringify(orderedChapterIds))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -467,7 +470,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeListStarMaps()
       return this.parseEnvelope<StarMapMeta[]>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -476,7 +479,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeListStarMapsForProject(projectId)
       return this.parseEnvelope<StarMapMeta[]>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -485,7 +488,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetStarMap(starmapId)
       return this.parseEnvelope<StarMapMeta>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -494,7 +497,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetStarMapGraph(starmapId)
       return this.parseEnvelope<StarMapGraph>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -503,7 +506,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeCreateStarMap(title, description)
       return this.parseEnvelope<StarMapMeta>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -512,7 +515,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeDeleteStarMap(starmapId)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -521,7 +524,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeRenameStarMap(starmapId, newTitle)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -532,7 +535,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeSaveStarMapLayout(starmapId, JSON.stringify(layout))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -541,7 +544,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetStarMapLayout(starmapId)
       return this.parseEnvelope<StarMapLayout>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -550,7 +553,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetStarMapMotionPolicy()
       return this.parseEnvelope<StarMapMotionPolicy>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -559,7 +562,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeComputeStarMapEdgeRenders(JSON.stringify(graph))
       return this.parseEnvelope<StarMapEdgeRender[]>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -570,7 +573,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeLoadLocalSettings()
       return this.parseEnvelope<LocalSettings>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -579,7 +582,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeSaveLocalSettings(JSON.stringify(settings))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -588,7 +591,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeLoadSyncableSettings()
       return this.parseEnvelope<SyncableSettings>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -597,7 +600,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeSaveSyncableSettings(JSON.stringify(settings))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -609,7 +612,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeLoadSyncConfig()
       return this.parseEnvelope<SyncConfig>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -618,7 +621,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeSaveSyncConfig(JSON.stringify(config))
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -627,7 +630,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeSyncDryRun()
       return this.parseEnvelope<SyncResult>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -637,7 +640,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativePerformSync()
       return this.parseEnvelope<SyncResult>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -646,7 +649,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeSyncDiagnostics()
       return this.parseEnvelope<SyncDiagnosticsResult>(jsonStr)
     } catch (err) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: `syncDiagnostics failed: ${err}`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.sync_failed', messageArgs: { 'detail': String(err) } as Record<string, string>, rawError: `syncDiagnostics failed: ${err}`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -657,7 +660,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetWritingStats()
       return this.parseEnvelope<WritingStats>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -690,7 +693,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeProcessWritingEvent(eventJson)
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -699,7 +702,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeGetRecentEdits()
       return this.parseEnvelope<RecentEdit[]>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -717,7 +720,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       }
       return result
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -726,7 +729,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeValidateWorkspace() as string
       return this.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -742,7 +745,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       }
       return result
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -753,7 +756,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       const jsonStr: string = this.getNativeModule().nativeResolveLayout(JSON.stringify(metrics))
       return this.parseEnvelope<LayoutPlan>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 
@@ -767,7 +770,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       )
       return this.parseEnvelope<ScreenPolicy>(jsonStr)
     } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
+      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
   }
 }

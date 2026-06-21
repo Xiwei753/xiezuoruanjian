@@ -645,9 +645,12 @@ impl AppBackend {
                 .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
             if config_envelope["success"] != true {
                 let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-                let user_message = config_envelope["userMessage"]
-                    .as_str()
-                    .unwrap_or("保存同步配置失败");
+                let message_key = config_envelope["messageKey"].as_str().unwrap_or("");
+                let user_message = if !message_key.is_empty() {
+                    crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                } else {
+                    config_envelope["userMessage"].as_str().unwrap_or("保存同步配置失败")
+                };
                 error_msg = Some(format!("{} ({})", user_message, error_code));
             } else {
                 let secrets_result = api.save_sync_secrets(s);
@@ -665,9 +668,12 @@ impl AppBackend {
                     let error_code = secrets_envelope["errorCode"]
                         .as_str()
                         .unwrap_or("UNKNOWN");
-                    let user_message = secrets_envelope["userMessage"]
-                        .as_str()
-                        .unwrap_or("保存同步凭证失败");
+                    let message_key = secrets_envelope["messageKey"].as_str().unwrap_or("");
+                    let user_message = if !message_key.is_empty() {
+                        crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                    } else {
+                        secrets_envelope["userMessage"].as_str().unwrap_or("保存同步凭证失败")
+                    };
                     error_msg = Some(format!("{} ({})", user_message, error_code));
                 }
             }

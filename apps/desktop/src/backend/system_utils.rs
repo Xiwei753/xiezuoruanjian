@@ -248,6 +248,7 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
     serde_json::json!({
         "success": false,
         "errorCode": "CLIPBOARD_UNAVAILABLE",
+        "messageKey": "error.clipboard_unavailable",
         "userMessage": "复制失败：未找到可用的剪贴板后端。请安装 wl-copy (Wayland)、xclip 或 xsel (X11)。",
         "rawError": "No clipboard backend available",
         "warnings": [],

@@ -19,6 +19,7 @@
 
 pub mod app_backend;
 pub mod json_utils;
+pub(crate) mod message_key_mapper;
 
 use qmetaobject::prelude::*;
 

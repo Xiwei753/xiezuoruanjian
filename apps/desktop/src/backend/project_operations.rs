@@ -267,6 +267,7 @@ impl AppBackend {
         serde_json::json!({
             "success": false,
             "errorCode": "CORE_ERROR",
+            "messageKey": "error.core_error",
             "userMessage": user_message,
             "rawError": raw_error,
             "state": self.current_app_state_value(),
@@ -291,16 +292,27 @@ impl AppBackend {
                     envelope["state"] = self.current_app_state_value();
                     envelope.to_string().into()
                 } else {
-                    let user_msg = envelope
-                        .get("userMessage")
+                    // 优先使用 messageKey 做本地化映射
+                    let message_key = envelope
+                        .get("messageKey")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("操作失败")
-                        .to_string();
+                        .unwrap_or("");
+                    let user_msg = if !message_key.is_empty() {
+                        crate::backend::message_key_mapper::message_key_to_qstr_key(message_key).to_string()
+                    } else {
+                        envelope
+                            .get("userMessage")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("操作失败")
+                            .to_string()
+                    };
                     let raw_error = envelope
                         .get("rawError")
                         .and_then(|v| v.as_str())
-                        .unwrap_or(&user_msg)
+                        .unwrap_or("")
                         .to_string();
+                    // 保留 messageKey 到 envelope 中，供 QML 侧做进一步分支
+                    envelope["messageKey"] = serde_json::Value::String(message_key.to_string());
                     self.mutation_error_json(user_msg, raw_error)
                 }
             }

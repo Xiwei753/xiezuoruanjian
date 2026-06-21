@@ -78,6 +78,7 @@ impl AppBackend {
                 Err(e) => serde_json::json!({
                     "success": false,
                     "errorCode": "CORE_ERROR",
+                    "messageKey": "error.io",
                     "userMessage": format!("读取章节失败: {}", e),
                     "rawError": format!("{}", e),
                     "warnings": [],
@@ -91,6 +92,7 @@ impl AppBackend {
         serde_json::json!({
             "success": false,
             "errorCode": "INVALID_WORKSPACE",
+            "messageKey": "error.invalid_workspace",
             "userMessage": "后端未初始化",
             "rawError": "Core not initialized",
             "warnings": [],
@@ -212,6 +214,7 @@ impl AppBackend {
                         serde_to_qjson_object(serde_json::json!({
                             "success": false,
                             "errorCode": blocked_empty_overwrite_error_code(),
+                            "messageKey": "error.empty_overwrite_blocked",
                             "userMessage": msg,
                             "rawError": e.to_string(),
                             "changedEntities": []
@@ -221,6 +224,7 @@ impl AppBackend {
                         serde_to_qjson_object(serde_json::json!({
                             "success": false,
                             "errorCode": "CORE_ERROR",
+                            "messageKey": "error.core_error",
                             "userMessage": format!("保存失败: {}", e),
                             "rawError": e.to_string(),
                             "changedEntities": []

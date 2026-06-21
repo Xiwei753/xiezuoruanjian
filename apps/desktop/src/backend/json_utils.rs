@@ -57,9 +57,12 @@ pub(crate) fn serde_to_qjson_array(value: serde_json::Value) -> QJsonArray {
 }
 
 pub(crate) fn bridge_error_object(message: &str, code: &str) -> QJsonObject {
+    // message 现在是本地化后的用户可见文案（来自 message_key_mapper 或调用方传入）
+    // rawError 放技术细节
     serde_to_qjson_object(serde_json::json!({
         "success": false,
         "errorCode": code,
+        "messageKey": "error.core_error",
         "userMessage": message,
         "rawError": message,
         "warnings": [],

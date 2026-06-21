@@ -47,9 +47,29 @@ data class ResultEnvelope<out T>(
         fun error(errorCode: String, userMessage: String): ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
             errorCode = errorCode,
+            messageKey = errorCodeToMessageKey(errorCode),
             userMessage = null,
             rawError = userMessage
         )
+
+        private fun errorCodeToMessageKey(errorCode: String): String = when (errorCode) {
+            "IO_ERROR" -> "error.io"
+            "JSON_ERROR" -> "error.json"
+            "INVALID_WORKSPACE" -> "error.invalid_workspace"
+            "PROJECT_NOT_FOUND" -> "error.project_not_found"
+            "VOLUME_NOT_FOUND" -> "error.volume_not_found"
+            "CHAPTER_NOT_FOUND" -> "error.chapter_not_found"
+            "EMPTY_OVERWRITE_BLOCKED" -> "error.empty_overwrite_blocked"
+            "NOT_IMPLEMENTED" -> "error.not_implemented"
+            "REFUSE_DELETE_WORKSPACE_ROOT" -> "error.refuse_delete_workspace_root"
+            "INVALID_DELETE_TARGET" -> "error.invalid_delete_target"
+            "SYNC_CONFLICT" -> "error.sync_conflict"
+            "SYNC_FAILED" -> "error.sync_failed"
+            "NATIVE_ERROR" -> "error.native_error"
+            "PARSE_ERROR" -> "error.parse_error"
+            "NOT_IMPLEMENTED_BRIDGE" -> "error.not_implemented_bridge"
+            else -> "error.other"
+        }
     }
 }
 
@@ -63,7 +83,7 @@ internal inline fun <reified T> BridgeResult<String>.parseJsonResult(
             BridgeResult.Success(gson.fromJson<T>(data, type))
         } catch (e: Exception) {
             BridgeResult.Error(
-                ResultEnvelope.error("JSON_ERROR", "解析 $label JSON 失败: ${e.message ?: e.javaClass.simpleName}")
+                ResultEnvelope.error("JSON_ERROR", "JSON parse error for $label: ${e.message ?: e.javaClass.simpleName}")
             )
         }
         is BridgeResult.Error -> this
