@@ -125,10 +125,6 @@ dictionary SyncConfigDto {
     string branch;
     boolean auto_sync;
     u32 sync_interval_seconds;
-    boolean proxy_enabled;
-    string proxy_type;
-    string proxy_host;
-    u16 proxy_port;
     string username;
     boolean android_has_internet_permission;
     boolean android_has_access_network_state_permission;

@@ -252,10 +252,6 @@ mod tests {
   "branch": "main",
   "auto_sync": false,
   "sync_interval_seconds": 300,
-  "proxy_enabled": false,
-  "proxy_type": "auto",
-  "proxy_host": "127.0.0.1",
-  "proxy_port": 7890,
   "username": ""
 }"#,
         )

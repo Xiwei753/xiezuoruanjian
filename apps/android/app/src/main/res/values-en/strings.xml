@@ -71,12 +71,6 @@
     <string name="pref_https_token">HTTPS Token (PAT)</string>
     <string name="pref_auto_sync">Auto Sync</string>
     <string name="pref_sync_interval">Sync Interval (seconds)</string>
-    <string name="pref_proxy_enable">Enable Proxy</string>
-    <string name="pref_proxy_type">Proxy Type</string>
-    <string name="pref_proxy_host">Proxy Host</string>
-    <string name="pref_proxy_port">Proxy Port</string>
-    <string name="pref_proxy_hint">Automatic detection is recommended. The app tries system network, VPN/TUN, and common local Clash ports (7890/7891). If no proxy is found, it shows the full probe summary.</string>
-    <string name="sync_error_proxy_unavailable">Proxy unavailable or port unreachable. Check your configuration.</string>
     <string name="token_configured">Token configured</string>
     <string name="token_input_active">Token entered and will be used when saving or testing</string>
     <string name="token_not_configured">Token not configured</string>
@@ -102,12 +96,6 @@
     <string name="action_more_project">More project actions</string>
     <string name="action_more_volume">More volume actions</string>
     <string name="action_more_chapter">More chapter actions</string>
-    <string-array name="proxy_types">
-        <item>Auto Detect (Recommended)</item>
-        <item>Off / Force Direct</item>
-        <item>HTTP</item>
-        <item>SOCKS5 (Experimental)</item>
-    </string-array>
     <string name="action_registry_title">Action Registry</string>
     <string name="action_registry_entry">Action Debug</string>
     <string name="action_kind_query">Query</string>

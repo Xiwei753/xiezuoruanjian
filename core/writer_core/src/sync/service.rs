@@ -22,12 +22,9 @@ use std::path::Path;
 fn map_git_error(e: crate::Error) -> crate::Error {
     if let crate::Error::Io(io_err) = &e {
         let msg = io_err.to_string();
-        if msg.contains("unsupported proxy protocol")
-            || msg.contains("failed to resolve address")
-            || msg.contains("SOCKS5")
-        {
+        if msg.contains("failed to resolve address") {
             return crate::Error::Io(std::io::Error::other(format!(
-                "代理不可用/端口不通: {}",
+                "DNS 解析失败: {}",
                 msg
             )));
         }
@@ -44,7 +41,6 @@ fn classify_error(e_str: &str) -> SyncStatus {
     } else if lower.contains("auth")
         || lower.contains("token")
         || lower.contains("credential")
-        || lower.contains("proxy")
         || lower.contains("resolve")
         || lower.contains("network")
         || lower.contains("unborn")
@@ -496,7 +492,7 @@ impl SyncService {
                 result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
                 result.user_message = None;
                 if let Err(e) = backend
-                    .clone_repo(&sanitized_url, workspace_path, auth.as_ref(), Some(config))
+                    .clone_repo(&sanitized_url, workspace_path, auth.as_ref())
                     .map_err(map_git_error)
                 {
                     return Ok(SyncResult::error(
@@ -599,7 +595,7 @@ impl SyncService {
 
         let mut pull_branch_missing = false;
         let pull_failed = backend
-            .pull(workspace_path, &config.branch, auth.as_ref(), Some(config))
+            .pull(workspace_path, &config.branch, auth.as_ref())
             .map_err(map_git_error)
             .err();
         if let Some(e) = pull_failed {
@@ -668,7 +664,7 @@ impl SyncService {
             }
 
             if let Err(e) = backend
-                .push(workspace_path, &config.branch, auth.as_ref(), Some(config))
+                .push(workspace_path, &config.branch, auth.as_ref())
                 .map_err(map_git_error)
             {
                 return Ok(SyncResult::error(

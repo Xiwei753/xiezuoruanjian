@@ -127,10 +127,6 @@ data class SyncConfig(
     val branch: String? = "main",
     @SerializedName("auto_sync") val autoSync: Boolean? = false,
     @SerializedName("sync_interval_seconds") val syncIntervalSeconds: Int? = 300,
-    @SerializedName("proxy_enabled") val proxyEnabled: Boolean? = false,
-    @SerializedName("proxy_type") val proxyType: String? = "auto",
-    @SerializedName("proxy_host") val proxyHost: String? = "127.0.0.1",
-    @SerializedName("proxy_port") val proxyPort: Int? = 7890,
     val username: String? = "",
     @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean? = null,
     @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean? = null
@@ -144,10 +140,6 @@ data class SyncConfig(
             branch = if (branch.isNullOrEmpty()) "main" else branch,
             autoSync = autoSync ?: false,
             syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
-            proxyEnabled = proxyEnabled ?: false,
-            proxyType = if (proxyType.isNullOrBlank()) "auto" else proxyType,
-            proxyHost = if (proxyHost.isNullOrBlank()) "127.0.0.1" else proxyHost,
-            proxyPort = if (proxyPort == null || proxyPort <= 0) 7890 else proxyPort,
             username = username ?: "",
             androidHasInternetPermission = androidHasInternetPermission ?: true,
             androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission ?: true

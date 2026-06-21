@@ -111,10 +111,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     branch: 'main',
     autoSync: false,
     syncIntervalSeconds: 300,
-    proxyEnabled: false,
-    proxyType: 'http',
-    proxyHost: '',
-    proxyPort: 0,
     username: '',
     androidHasInternetPermission: false,
     androidHasAccessNetworkStatePermission: false
@@ -653,10 +649,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       branch: this.mockSyncConfig.branch,
       autoSync: this.mockSyncConfig.autoSync,
       syncIntervalSeconds: this.mockSyncConfig.syncIntervalSeconds,
-      proxyEnabled: this.mockSyncConfig.proxyEnabled,
-      proxyType: this.mockSyncConfig.proxyType,
-      proxyHost: this.mockSyncConfig.proxyHost,
-      proxyPort: this.mockSyncConfig.proxyPort,
       username: this.mockSyncConfig.username,
       androidHasInternetPermission: this.mockSyncConfig.androidHasInternetPermission,
       androidHasAccessNetworkStatePermission: this.mockSyncConfig.androidHasAccessNetworkStatePermission
@@ -674,10 +666,6 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       branch: config.branch,
       autoSync: config.autoSync,
       syncIntervalSeconds: config.syncIntervalSeconds,
-      proxyEnabled: config.proxyEnabled,
-      proxyType: config.proxyType,
-      proxyHost: config.proxyHost,
-      proxyPort: config.proxyPort,
       username: config.username,
       androidHasInternetPermission: config.androidHasInternetPermission,
       androidHasAccessNetworkStatePermission: config.androidHasAccessNetworkStatePermission

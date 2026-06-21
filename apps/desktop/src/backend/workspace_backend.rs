@@ -65,9 +65,6 @@ pub struct WorkspaceBackend {
             remote_url: QString,
             branch: QString,
             token: QString,
-            proxy_type: QString,
-            proxy_host: QString,
-            proxy_port: u16,
         )
     ),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
@@ -216,9 +213,6 @@ impl WorkspaceBackend {
         remote_url: QString,
         branch: QString,
         token: QString,
-        proxy_type: QString,
-        proxy_host: QString,
-        proxy_port: u16,
     ) {
         crate::backend::app_backend::debug_log_static(
             "workspace",
@@ -231,9 +225,7 @@ impl WorkspaceBackend {
             &format!("path={}", path.to_string()),
         );
         self.with_app_mut((), |app| {
-            app.execute_github_init(
-                path, remote_url, branch, token, proxy_type, proxy_host, proxy_port,
-            )
+            app.execute_github_init(path, remote_url, branch, token)
         });
         self.emit_workspace_changed();
         let has = self.has_workspace();

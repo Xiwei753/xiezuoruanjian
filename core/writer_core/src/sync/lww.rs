@@ -172,9 +172,8 @@ pub(crate) fn perform_lww_sync(
     }
 
     let api_base = GitHubApiBackend::api_base_url(&config.remote_url);
-    let probed_res = GitHubApiBackend::build_auto_client(config, secrets, Some(workspace_path));
-    let (client, mode, probe_summary) = match probed_res {
-        Ok((p, summary)) => (p.client, p.mode, summary),
+    let client = match GitHubApiBackend::build_direct_client() {
+        Ok(c) => c,
         Err(e) => {
             result.error = Some(e.to_string());
             result.user_message = None;
@@ -182,8 +181,7 @@ pub(crate) fn perform_lww_sync(
             return Ok(result);
         }
     };
-    result.chosen_network_mode = Some(mode.clone());
-    result.network_probe_summary = probe_summary;
+    result.chosen_network_mode = Some("direct".to_string());
 
     let max_retries = 2;
     let mut attempt = 0;
@@ -194,7 +192,6 @@ pub(crate) fn perform_lww_sync(
             &token,
             &api_base,
             &client,
-            &mode,
             &mut state,
             &mut result,
         ) {
@@ -230,7 +227,6 @@ fn execute_lww_sync_attempt(
     token: &str,
     api_base: &str,
     client: &reqwest::blocking::Client,
-    mode: &str,
     state: &mut SyncState,
     result: &mut SyncResult,
 ) -> crate::Result<SyncResult> {
@@ -716,7 +712,7 @@ fn execute_lww_sync_attempt(
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
     state.last_synced_commit = None;
     state.last_error = None;
-    state.last_successful_network_mode = Some(mode.to_string());
+    state.last_successful_network_mode = Some("direct".to_string());
 
     let post_local_entries = scan_workspace_for_sync(workspace_path)?;
     state.known_files.clear();

@@ -1,7 +1,6 @@
 use crate::sync::conflict::build_conflict_summary;
 use crate::sync::conflict::collect_index_conflicts;
 use crate::sync::service::SyncService;
-use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncConflictSummary;
 use std::path::Path;
 
@@ -20,7 +19,6 @@ pub trait GitBackend {
         remote_url: &str,
         local_repo_path: &Path,
         auth: Option<&GitAuth>,
-        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()>;
     fn open_repo(&self, local_repo_path: &Path) -> crate::Result<()>;
     fn pull(
@@ -28,7 +26,6 @@ pub trait GitBackend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
-        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()>;
     fn stage_paths(&self, local_repo_path: &Path, paths: &[&str]) -> crate::Result<()>;
     fn commit(&self, local_repo_path: &Path, message: &str) -> crate::Result<Option<String>>;
@@ -37,7 +34,6 @@ pub trait GitBackend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
-        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()>;
     fn current_head(&self, local_repo_path: &Path) -> crate::Result<Option<String>>;
     fn status(&self, local_repo_path: &Path) -> crate::Result<Vec<String>>; // Returns changed files
@@ -46,42 +42,6 @@ pub trait GitBackend {
 pub struct Git2Backend;
 
 impl Git2Backend {
-    fn build_proxy_options<'a>(
-        config: Option<&'a SyncConfig>,
-    ) -> crate::Result<git2::ProxyOptions<'a>> {
-        let mut proxy_opts = git2::ProxyOptions::new();
-        if let Some(cfg) = config {
-            if cfg.proxy_enabled {
-                if cfg.proxy_host.is_empty() {
-                    return Err(crate::Error::Other(
-                        "Proxy host cannot be empty".to_string(),
-                    ));
-                }
-                if cfg.proxy_port == 0 {
-                    return Err(crate::Error::Other("Proxy port is invalid".to_string()));
-                }
-                match cfg.proxy_type.as_str() {
-                    "auto" => {
-                        proxy_opts.auto();
-                    }
-                    "http" => {
-                        let proxy_url = format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port);
-                        proxy_opts.url(&proxy_url);
-                    }
-                    "socks5" => {
-                        let proxy_url = format!("socks5h://{}:{}", cfg.proxy_host, cfg.proxy_port);
-                        proxy_opts.url(&proxy_url);
-                    }
-                    "none" => {}
-                    _ => {
-                        return Err(crate::Error::Other("Invalid proxy type".to_string()));
-                    }
-                }
-            }
-        }
-        Ok(proxy_opts)
-    }
-
     fn build_callbacks<'a>(
         auth: Option<&'a GitAuth>,
         username_override: Option<&'a str>,
@@ -145,20 +105,10 @@ impl GitBackend for Git2Backend {
         remote_url: &str,
         local_repo_path: &Path,
         auth: Option<&GitAuth>,
-        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let mut fetch_options = git2::FetchOptions::new();
-        let username_override = proxy_config.and_then(|c| {
-            if c.username.is_empty() {
-                None
-            } else {
-                Some(c.username.as_str())
-            }
-        });
-        let callbacks = Self::build_callbacks(auth, username_override);
+        let callbacks = Self::build_callbacks(auth, None);
         fetch_options.remote_callbacks(callbacks);
-        let proxy_opts = Self::build_proxy_options(proxy_config)?;
-        fetch_options.proxy_options(proxy_opts);
 
         let mut builder = git2::build::RepoBuilder::new();
         builder.fetch_options(fetch_options);
@@ -180,7 +130,6 @@ impl GitBackend for Git2Backend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
-        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
@@ -218,15 +167,7 @@ impl GitBackend for Git2Backend {
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let mut fetch_options = git2::FetchOptions::new();
-        let username_override = proxy_config.and_then(|c| {
-            if c.username.is_empty() {
-                None
-            } else {
-                Some(c.username.as_str())
-            }
-        });
-        fetch_options.remote_callbacks(Self::build_callbacks(auth, username_override));
-        fetch_options.proxy_options(Self::build_proxy_options(proxy_config)?);
+        fetch_options.remote_callbacks(Self::build_callbacks(auth, None));
 
         if let Err(e) = remote.fetch(&[branch], Some(&mut fetch_options), None) {
             rollback(&repo);
@@ -746,7 +687,6 @@ impl GitBackend for Git2Backend {
         local_repo_path: &Path,
         branch: &str,
         auth: Option<&GitAuth>,
-        proxy_config: Option<&SyncConfig>,
     ) -> crate::Result<()> {
         let repo = git2::Repository::open(local_repo_path)
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
@@ -794,15 +734,7 @@ impl GitBackend for Git2Backend {
             .map_err(|e: git2::Error| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
         let mut push_options = git2::PushOptions::new();
-        let username_override = proxy_config.and_then(|c| {
-            if c.username.is_empty() {
-                None
-            } else {
-                Some(c.username.as_str())
-            }
-        });
-        push_options.remote_callbacks(Self::build_callbacks(auth, username_override));
-        push_options.proxy_options(Self::build_proxy_options(proxy_config)?);
+        push_options.remote_callbacks(Self::build_callbacks(auth, None));
 
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
         remote
@@ -865,12 +797,6 @@ pub(crate) fn fetch_and_reset_local_repo(
                     git2::Cred::userpass_plaintext(user, &token_clone)
                 });
                 fetch_opts.remote_callbacks(callbacks);
-            }
-
-            if config.proxy_enabled {
-                if let Ok(proxy_opts) = Git2Backend::build_proxy_options(Some(config)) {
-                    fetch_opts.proxy_options(proxy_opts);
-                }
             }
 
             let refspec = format!(

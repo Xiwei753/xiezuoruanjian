@@ -14,9 +14,6 @@ impl AppBackend {
         remote_url: QString,
         branch: QString,
         token: QString,
-        proxy_type: QString,
-        proxy_host: QString,
-        proxy_port: u16,
     ) {
         let path_str = path.to_string();
         let path_obj = std::path::Path::new(&path_str);
@@ -41,9 +38,6 @@ impl AppBackend {
             branch.to_string()
         };
         let token_str = token.to_string();
-        let proxy_type_str = proxy_type.to_string();
-        let proxy_host_str = proxy_host.to_string();
-        let proxy_port_val = proxy_port;
 
         let op_id = uuid::Uuid::new_v4().to_string();
         self.current_sync_operation_id = op_id.clone();
@@ -69,9 +63,6 @@ impl AppBackend {
                 &remote_url_str,
                 &branch_str,
                 &token_str,
-                &proxy_type_str,
-                &proxy_host_str,
-                proxy_port_val,
             );
             callback(result);
         });
@@ -83,9 +74,6 @@ impl AppBackend {
         remote_url: &str,
         branch: &str,
         token: &str,
-        proxy_type: &str,
-        proxy_host: &str,
-        proxy_port: u16,
     ) -> SyncTaskOutcome {
         use writer_core::sync::{
             sanitize_remote_url, BackendType, SyncConfig, SyncSecrets,
@@ -126,13 +114,6 @@ impl AppBackend {
             branch: branch.to_string(),
             auto_sync: false,
             sync_interval_seconds: 300,
-            proxy_enabled: !proxy_type.is_empty()
-                && proxy_type != "none"
-                && !proxy_host.is_empty()
-                && proxy_port > 0,
-            proxy_type: proxy_type.to_string(),
-            proxy_host: proxy_host.to_string(),
-            proxy_port,
             username: parsed.extracted_username.clone().unwrap_or_default(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,

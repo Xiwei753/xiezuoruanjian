@@ -40,13 +40,6 @@ pub(crate) fn get_user_friendly_error(err: &str) -> String {
     if e.contains("conflict") {
         return "同步代码冲突。请在另一端解决冲突后重试。".to_string();
     }
-    if e.contains("operation not permitted") && e.contains("127.0.0.1") {
-        return "代理 127.0.0.1:7890 连接被拒绝，请确认手机代理 App 开启本机 HTTP 端口，或选择不使用手动代理，改走系统 VPN/全局模式。".to_string();
-    }
-    if e.contains("unsupported proxy protocol") && e.contains("socks5") {
-        return "当前构建版本的底层网络库不支持 SOCKS5 代理。请尝试使用 HTTP 代理或更新应用。"
-            .to_string();
-    }
     format!("同步失败，请检查网络重试。({})", err)
 }
 
@@ -100,13 +93,6 @@ impl crate::sync::SyncService {
             result.repo_status = "skipped".to_string();
             result.branch_status = "skipped".to_string();
             return Ok(result);
-        }
-
-        if config.proxy_enabled {
-            result.app_proxy_status =
-                "已启用 (注意：底层网络探测已精简，实际以最终请求结果为准)".to_string();
-        } else {
-            result.app_proxy_status = "未启用".to_string();
         }
 
         if sanitized_url.is_empty() {

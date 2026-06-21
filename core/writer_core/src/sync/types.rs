@@ -40,14 +40,7 @@ pub struct SyncConfig {
     pub branch: String,
     pub auto_sync: bool,
     pub sync_interval_seconds: u32,
-    #[serde(default)]
-    pub proxy_enabled: bool,
-    #[serde(default = "default_proxy_type")]
-    pub proxy_type: String,
-    #[serde(default = "default_proxy_host")]
-    pub proxy_host: String,
-    #[serde(default = "default_proxy_port")]
-    pub proxy_port: u16,
+
     /// GitHub username for HTTPS credential callback.
     /// Defaults to "x-access-token" when empty.
     #[serde(default)]
@@ -66,17 +59,7 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
-pub(crate) fn default_proxy_type() -> String {
-    "auto".to_string()
-}
 
-pub(crate) fn default_proxy_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-pub(crate) fn default_proxy_port() -> u16 {
-    7890
-}
 
 pub(crate) fn default_branch() -> String {
     "main".to_string()
@@ -171,8 +154,7 @@ pub struct SyncDiagnosticsResult {
     pub remote_url_sanitized: String,
     /// Transport type: https/ssh/unknown
     pub transport: String,
-    /// App-level proxy status: "未启用"/"已启用"
-    pub app_proxy_status: String,
+
     /// Error category for proxy_enabled=false failures
     pub error_category: String,
     /// 已废弃：UI 应使用 `error_category` 做本地化映射。
@@ -208,7 +190,6 @@ impl SyncDiagnosticsResult {
             branch_status: "unchecked".to_string(),
             remote_url_sanitized: "".to_string(),
             transport: "unknown".to_string(),
-            app_proxy_status: "未启用".to_string(),
             error_category: "none".to_string(),
             user_message: None,
             raw_error: None,

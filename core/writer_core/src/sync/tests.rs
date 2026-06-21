@@ -30,10 +30,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -126,7 +123,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -135,7 +131,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -147,7 +142,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -167,10 +161,7 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -225,10 +216,7 @@ mod tests {
         std::fs::write(dir.path().join("some_file.txt"), "hello").unwrap();
 
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://github.com/test/test.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -252,7 +240,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -264,7 +251,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -279,7 +265,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -333,10 +318,7 @@ mod tests {
     #[test]
     fn test_sync_config_state_no_token() {
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "url".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -397,10 +379,7 @@ mod tests {
     #[test]
     fn test_sync_config_no_token() {
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -511,10 +490,7 @@ mod tests {
     fn test_sync_dry_run_disabled_config() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: false,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -536,10 +512,7 @@ mod tests {
     fn test_sync_dry_run_enabled_config_scans() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -571,10 +544,7 @@ mod tests {
     fn test_perform_sync_empty_remote_url() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -605,10 +575,7 @@ mod tests {
     fn test_perform_sync_non_empty_remote() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -632,7 +599,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -644,7 +610,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -662,7 +627,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -703,10 +667,7 @@ mod tests {
         std::fs::write(state_dir.join("state.local.json"), "{}").unwrap();
 
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -730,7 +691,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -742,7 +702,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -757,7 +716,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -794,10 +752,7 @@ mod tests {
     fn test_first_sync_mode_clone_into_empty_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -821,7 +776,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -833,7 +787,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -848,7 +801,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -880,10 +832,7 @@ mod tests {
     fn test_first_sync_mode_init_existing_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -907,7 +856,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -919,7 +867,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -934,7 +881,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -966,10 +912,7 @@ mod tests {
     fn test_first_sync_mode_already_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -993,7 +936,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -1005,7 +947,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -1020,7 +961,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -1095,10 +1035,7 @@ mod tests {
         std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
 
         let config = SyncConfig {
-            proxy_enabled: false,
-            proxy_type: "http".to_string(),
-            proxy_host: "127.0.0.1".to_string(),
-            proxy_port: 7890,
+
             enabled: true,
             remote_url: "https://github.com/test/empty-repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1122,7 +1059,6 @@ mod tests {
                 _: &str,
                 _: &Path,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -1134,7 +1070,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -1152,7 +1087,6 @@ mod tests {
                 _: &Path,
                 _: &str,
                 _: Option<&GitAuth>,
-                _: Option<&SyncConfig>,
             ) -> crate::Result<()> {
                 Ok(())
             }
@@ -1670,10 +1604,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -1750,10 +1681,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -1823,10 +1751,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -1921,10 +1846,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -1997,10 +1919,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2109,10 +2028,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2203,10 +2119,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2296,10 +2209,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2370,10 +2280,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,
@@ -2446,10 +2353,7 @@ mod tests {
             branch: "main".to_string(),
             auto_sync: false,
             sync_interval_seconds: 0,
-            proxy_enabled: false,
-            proxy_type: "none".to_string(),
-            proxy_host: String::new(),
-            proxy_port: 0,
+
             username: String::new(),
             android_has_internet_permission: true,
             android_has_access_network_state_permission: true,

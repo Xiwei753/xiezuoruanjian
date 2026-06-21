@@ -131,10 +131,6 @@ export interface SyncConfig {
   branch: string
   autoSync: boolean
   syncIntervalSeconds: number
-  proxyEnabled: boolean
-  proxyType: string
-  proxyHost: string
-  proxyPort: number
   username: string
   androidHasInternetPermission: boolean
   androidHasAccessNetworkStatePermission: boolean

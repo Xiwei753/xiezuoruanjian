@@ -80,29 +80,3 @@ pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
         BackendType::GithubApi => Box::new(GitHubApiBackend),
     }
 }
-
-pub(crate) fn build_http_client(
-    config: Option<&SyncConfig>,
-) -> crate::Result<reqwest::blocking::Client> {
-    let mut builder = reqwest::blocking::Client::builder()
-        .user_agent("WriterApp/1.0")
-        .timeout(std::time::Duration::from_secs(15));
-
-    if let Some(cfg) = config {
-        if cfg.proxy_enabled && !cfg.proxy_host.is_empty() && cfg.proxy_port > 0 {
-            let proxy_url = match cfg.proxy_type.as_str() {
-                "http" => format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port),
-                "socks5" => format!("socks5h://{}:{}", cfg.proxy_host, cfg.proxy_port),
-                _ => format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port),
-            };
-            let proxy = reqwest::Proxy::all(&proxy_url)
-                .map_err(|e| crate::Error::Other(format!("Failed to configure proxy: {}", e)))?;
-            builder = builder.proxy(proxy);
-        }
-    }
-
-    let client = builder
-        .build()
-        .map_err(|e| crate::Error::Other(format!("Failed to build HTTP client: {}", e)))?;
-    Ok(client)
-}

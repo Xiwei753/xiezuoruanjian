@@ -1,9 +1,7 @@
 #![allow(deprecated)]
-use crate::sync::backends::build_http_client;
 use crate::sync::backends::SyncBackend;
 use crate::sync::service::SyncService;
 use crate::sync::types::FirstSyncMode;
-use crate::sync::types::NetworkProbeResult;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;
 use crate::sync::types::SyncResult;
@@ -14,11 +12,6 @@ use crate::sync::url::sanitize_remote_url;
 use std::path::Path;
 
 pub struct GitHubApiBackend;
-
-pub(crate) struct ProbedClient {
-    pub(crate) client: reqwest::blocking::Client,
-    pub(crate) mode: String,
-}
 
 impl GitHubApiBackend {
     fn classify_reqwest_error(e: &reqwest::Error) -> (String, String) {
@@ -39,239 +32,12 @@ impl GitHubApiBackend {
         }
     }
 
-    pub(crate) fn build_auto_client(
-        config: &SyncConfig,
-        secrets: &SyncSecrets,
-        workspace_path: Option<&Path>,
-    ) -> crate::Result<(ProbedClient, Vec<NetworkProbeResult>)> {
-        let mut probe_summary = Vec::new();
-        let token = secrets.token.clone().unwrap_or_default();
-        let api_base = Self::api_base_url(&config.remote_url);
-        let test_url = format!(
-            "{}/rate_limit",
-            if api_base.starts_with("https://api.github.com/repos/") {
-                "https://api.github.com"
-            } else {
-                &api_base
-            }
-        );
-
-        let mut candidates = match config.proxy_type.as_str() {
-            "auto" | "" => vec![
-                (
-                    "direct".to_string(),
-                    "none".to_string(),
-                    "".to_string(),
-                    0u16,
-                ),
-                (
-                    "http_local_7890".to_string(),
-                    "http".to_string(),
-                    "127.0.0.1".to_string(),
-                    7890u16,
-                ),
-                (
-                    "socks5_local_7891".to_string(),
-                    "socks5".to_string(),
-                    "127.0.0.1".to_string(),
-                    7891u16,
-                ),
-            ],
-            "none" => vec![(
-                "direct".to_string(),
-                "none".to_string(),
-                "".to_string(),
-                0u16,
-            )],
-            "http" => {
-                let host = if config.proxy_host.is_empty() {
-                    "127.0.0.1"
-                } else {
-                    &config.proxy_host
-                };
-                let port = if config.proxy_port > 0 {
-                    config.proxy_port
-                } else {
-                    7890
-                };
-                vec![(
-                    format!("http_{}:{}", host, port),
-                    "http".to_string(),
-                    host.to_string(),
-                    port,
-                )]
-            }
-            "socks5" => {
-                let host = if config.proxy_host.is_empty() {
-                    "127.0.0.1"
-                } else {
-                    &config.proxy_host
-                };
-                let port = if config.proxy_port > 0 {
-                    config.proxy_port
-                } else {
-                    7891
-                };
-                vec![(
-                    format!("socks5_{}:{}", host, port),
-                    "socks5".to_string(),
-                    host.to_string(),
-                    port,
-                )]
-            }
-            _ => vec![
-                (
-                    "direct".to_string(),
-                    "none".to_string(),
-                    "".to_string(),
-                    0u16,
-                ),
-                (
-                    "http_local_7890".to_string(),
-                    "http".to_string(),
-                    "127.0.0.1".to_string(),
-                    7890u16,
-                ),
-                (
-                    "socks5_local_7891".to_string(),
-                    "socks5".to_string(),
-                    "127.0.0.1".to_string(),
-                    7891u16,
-                ),
-            ],
-        };
-
-        if let Some(wp) = workspace_path {
-            if let Ok(state) = SyncService::load_sync_state(wp) {
-                if let Some(last_mode) = state.last_successful_network_mode {
-                    if let Some(pos) = candidates.iter().position(|c| c.0 == last_mode) {
-                        let c = candidates.remove(pos);
-                        candidates.insert(0, c);
-                    }
-                }
-            }
-        }
-
-        for (mode_name, p_type, p_host, p_port) in &candidates {
-            let mut builder = reqwest::blocking::Client::builder()
-                .user_agent("WriterApp/1.0")
-                .timeout(std::time::Duration::from_secs(3));
-
-            if *p_type != "none" && !p_host.is_empty() && *p_port > 0 {
-                let proxy_url = match p_type.as_str() {
-                    "http" => format!("http://{}:{}", p_host, p_port),
-                    "socks5" => format!("socks5h://{}:{}", p_host, p_port),
-                    _ => format!("http://{}:{}", p_host, p_port),
-                };
-                if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
-                    builder = builder.proxy(proxy);
-                }
-            }
-
-            match builder.build() {
-                Ok(client) => {
-                    let req = client
-                        .get(&test_url)
-                        .header("User-Agent", "WriterApp/1.0")
-                        .header("Accept", "application/vnd.github+json");
-
-                    let req = if !token.is_empty() {
-                        req.header("Authorization", format!("Bearer {}", token))
-                    } else {
-                        req
-                    };
-
-                    match req.send() {
-                        Ok(resp) => {
-                            let status = resp.status().as_u16();
-                            let msg = if status == 200 {
-                                "网络连通测试成功".to_string()
-                            } else {
-                                format!("网络可达 (HTTP {})", status)
-                            };
-                            probe_summary.push(NetworkProbeResult {
-                                mode: mode_name.clone(),
-                                success: true,
-                                status: "ok".to_string(),
-                                message: msg,
-                                raw_error: None,
-                            });
-
-                            let mut working_config = config.clone();
-                            working_config.proxy_type = p_type.clone();
-                            working_config.proxy_host = p_host.clone();
-                            working_config.proxy_port = *p_port;
-                            working_config.proxy_enabled = *p_type != "none";
-                            let final_client = build_http_client(Some(&working_config))?;
-                            return Ok((
-                                ProbedClient {
-                                    client: final_client,
-                                    mode: mode_name.clone(),
-                                },
-                                probe_summary,
-                            ));
-                        }
-                        Err(e) => {
-                            let raw = e.to_string();
-                            let sanitized = if !token.is_empty() {
-                                raw.replace(&token, "***TOKEN***")
-                            } else {
-                                raw.clone()
-                            };
-                            let truncated = if sanitized.len() > 200 {
-                                format!(
-                                    "{}...[truncated {} bytes]",
-                                    &sanitized[..200],
-                                    sanitized.len() - 200
-                                )
-                            } else {
-                                sanitized
-                            };
-                            let (status_code, msg) = Self::classify_reqwest_error(&e);
-                            probe_summary.push(NetworkProbeResult {
-                                mode: mode_name.clone(),
-                                success: false,
-                                status: status_code,
-                                message: msg,
-                                raw_error: Some(truncated),
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    probe_summary.push(NetworkProbeResult {
-                        mode: mode_name.clone(),
-                        success: false,
-                        status: "client_build_failed".to_string(),
-                        message: "无法构建 HTTP 客户端".to_string(),
-                        raw_error: Some(e.to_string()),
-                    });
-                }
-            }
-        }
-
-        let error_detail = probe_summary
-            .iter()
-            .map(|p| {
-                let err_suffix = p
-                    .raw_error
-                    .as_ref()
-                    .map(|e| format!(" ({})", e))
-                    .unwrap_or_default();
-                format!(
-                    "  [{}] {}: {}{}",
-                    if p.success { "OK" } else { "FAIL" },
-                    p.mode,
-                    p.message,
-                    err_suffix
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        Err(crate::Error::Other(format!(
-            "network_probe_failed: 所有网络路径探测均失败:\n{}",
-            error_detail
-        )))
+    pub(crate) fn build_direct_client() -> crate::Result<reqwest::blocking::Client> {
+        reqwest::blocking::Client::builder()
+            .user_agent("WriterApp/1.0")
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| crate::Error::Other(format!("Failed to build HTTP client: {}", e)))
     }
 
     pub(crate) fn api_base_url(remote_url: &str) -> String {
@@ -300,11 +66,6 @@ impl SyncBackend for GitHubApiBackend {
             .sanitized_url
             .clone();
         result.transport = "https".to_string();
-        result.app_proxy_status = if config.proxy_enabled {
-            "已启用".to_string()
-        } else {
-            "未启用".to_string()
-        };
 
         if !config.android_has_internet_permission {
             result.user_message = None;
@@ -322,18 +83,15 @@ impl SyncBackend for GitHubApiBackend {
         let api_base = Self::api_base_url(&config.remote_url);
         let _masked_url = mask_token_in_url(&api_base);
 
-        let probed_res = Self::build_auto_client(config, secrets, None);
-        let (client, mode, probe_summary) = match probed_res {
-            Ok((p, summary)) => (p.client, p.mode, summary),
+        let client = match Self::build_direct_client() {
+            Ok(c) => c,
             Err(e) => {
                 result.user_message = None;
                 result.error_category = "network_probe_failed".to_string();
+                result.raw_error = Some(e.to_string());
                 return Ok(result);
             }
         };
-
-        result.chosen_network_mode = Some(mode.clone());
-        result.network_probe_summary = probe_summary;
 
         let api_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
 

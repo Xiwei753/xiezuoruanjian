@@ -36,10 +36,6 @@ pub struct SyncBackend {
     sync_branch: qt_property!(QString; READ sync_branch WRITE set_sync_branch NOTIFY sync_config_changed),
     sync_auto_sync: qt_property!(bool; READ sync_auto_sync WRITE set_sync_auto_sync NOTIFY sync_config_changed),
     sync_interval: qt_property!(u32; READ sync_interval WRITE set_sync_interval NOTIFY sync_config_changed),
-    sync_proxy_enabled: qt_property!(bool; READ sync_proxy_enabled WRITE set_sync_proxy_enabled NOTIFY sync_config_changed),
-    sync_proxy_type: qt_property!(QString; READ sync_proxy_type WRITE set_sync_proxy_type NOTIFY sync_config_changed),
-    sync_proxy_host: qt_property!(QString; READ sync_proxy_host WRITE set_sync_proxy_host NOTIFY sync_config_changed),
-    sync_proxy_port: qt_property!(u16; READ sync_proxy_port WRITE set_sync_proxy_port NOTIFY sync_config_changed),
     sync_username: qt_property!(QString; READ sync_username WRITE set_sync_username NOTIFY sync_config_changed),
     has_sync_token: qt_property!(bool; READ has_sync_token NOTIFY sync_config_changed),
     sync_operation_state: qt_property!(QString; READ sync_operation_state NOTIFY sync_action_completed),
@@ -134,34 +130,6 @@ impl SyncBackend {
     }
     fn set_sync_interval(&mut self, val: u32) {
         self.with_app_mut((), |app| app.set_sync_interval(val));
-        self.sync_config_changed();
-    }
-    fn sync_proxy_enabled(&self) -> bool {
-        self.with_app(false, |app| app.sync_proxy_enabled())
-    }
-    fn set_sync_proxy_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_sync_proxy_enabled(val));
-        self.sync_config_changed();
-    }
-    fn sync_proxy_type(&self) -> QString {
-        self.with_app("".into(), |app| app.sync_proxy_type())
-    }
-    fn set_sync_proxy_type(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_sync_proxy_type(val));
-        self.sync_config_changed();
-    }
-    fn sync_proxy_host(&self) -> QString {
-        self.with_app("".into(), |app| app.sync_proxy_host())
-    }
-    fn set_sync_proxy_host(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_sync_proxy_host(val));
-        self.sync_config_changed();
-    }
-    fn sync_proxy_port(&self) -> u16 {
-        self.with_app(0, |app| app.sync_proxy_port())
-    }
-    fn set_sync_proxy_port(&mut self, val: u16) {
-        self.with_app_mut((), |app| app.set_sync_proxy_port(val));
         self.sync_config_changed();
     }
     fn sync_username(&self) -> QString {
@@ -336,50 +304,6 @@ impl AppBackend {
         self.sync_config_changed();
     }
 
-    // AppBackend::sync_proxy_type
-    pub(crate) fn sync_proxy_type(&self) -> QString {
-        self.current_sync_proxy_type.clone().into()
-    }
-
-    // AppBackend::set_sync_proxy_type
-    pub(crate) fn set_sync_proxy_type(&mut self, val: QString) {
-        self.current_sync_proxy_type = val.to_string();
-        self.sync_config_changed();
-    }
-
-    // AppBackend::sync_proxy_host
-    pub(crate) fn sync_proxy_host(&self) -> QString {
-        self.current_sync_proxy_host.clone().into()
-    }
-
-    // AppBackend::set_sync_proxy_host
-    pub(crate) fn set_sync_proxy_host(&mut self, val: QString) {
-        self.current_sync_proxy_host = val.to_string();
-        self.sync_config_changed();
-    }
-
-    // AppBackend::sync_proxy_port
-    pub(crate) fn sync_proxy_port(&self) -> u16 {
-        self.current_sync_proxy_port
-    }
-
-    // AppBackend::set_sync_proxy_port
-    pub(crate) fn set_sync_proxy_port(&mut self, val: u16) {
-        self.current_sync_proxy_port = val;
-        self.sync_config_changed();
-    }
-
-    // AppBackend::sync_proxy_enabled
-    pub(crate) fn sync_proxy_enabled(&self) -> bool {
-        self.current_sync_proxy_enabled
-    }
-
-    // AppBackend::set_sync_proxy_enabled
-    pub(crate) fn set_sync_proxy_enabled(&mut self, val: bool) {
-        self.current_sync_proxy_enabled = val;
-        self.sync_config_changed();
-    }
-
     // AppBackend::sync_username
     pub(crate) fn sync_username(&self) -> QString {
         self.current_sync_username.clone().into()
@@ -533,10 +457,6 @@ impl AppBackend {
                 };
                 self.current_sync_auto_sync = config.auto_sync;
                 self.current_sync_interval = config.sync_interval_seconds;
-                self.current_sync_proxy_enabled = config.proxy_enabled;
-                self.current_sync_proxy_type = config.proxy_type.clone();
-                self.current_sync_proxy_host = config.proxy_host.clone();
-                self.current_sync_proxy_port = config.proxy_port;
                 self.current_sync_username = config.username.clone();
             } else {
                 self.current_sync_enabled = false;
@@ -582,10 +502,6 @@ impl AppBackend {
                     branch: "main".to_string(),
                     auto_sync: false,
                     sync_interval_seconds: 300,
-                    proxy_enabled: false,
-                    proxy_type: "none".to_string(),
-                    proxy_host: "".to_string(),
-                    proxy_port: 0,
                     username: "".to_string(),
                     android_has_internet_permission: false,
                     android_has_access_network_state_permission: false,
@@ -609,10 +525,6 @@ impl AppBackend {
             };
             c.auto_sync = self.current_sync_auto_sync;
             c.sync_interval_seconds = self.current_sync_interval;
-            c.proxy_enabled = self.current_sync_proxy_enabled;
-            c.proxy_type = self.current_sync_proxy_type.clone();
-            c.proxy_host = self.current_sync_proxy_host.clone();
-            c.proxy_port = self.current_sync_proxy_port;
             c.username = self.current_sync_username.clone();
 
             if let Some(ref extracted_user) = parsed.extracted_username {

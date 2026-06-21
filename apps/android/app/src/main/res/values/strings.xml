@@ -92,12 +92,6 @@
     <string name="pref_https_token">HTTPS Token (PAT)</string>
     <string name="pref_auto_sync">自动同步</string>
     <string name="pref_sync_interval">同步间隔 (秒)</string>
-    <string name="pref_proxy_enable">启用代理 (Proxy)</string>
-    <string name="pref_proxy_type">代理类型</string>
-    <string name="pref_proxy_host">代理主机</string>
-    <string name="pref_proxy_port">代理端口</string>
-    <string name="pref_proxy_hint">推荐自动检测，软件会先尝试系统网络/VPN/TUN，再尝试手机本机 Clash 常用端口（7890/7891）。若自动检测无结果会显示完整探测摘要。</string>
-    <string name="sync_error_proxy_unavailable">代理不可用或端口不通，请检查配置。</string>
     <string name="token_configured">Token 已配置</string>
     <string name="token_input_active">Token 已输入，保存/测试时会使用</string>
     <string name="token_not_configured">Token 未配置</string>
@@ -129,13 +123,6 @@
     <string name="action_more_project">作品更多操作</string>
     <string name="action_more_volume">分卷更多操作</string>
     <string name="action_more_chapter">章节更多操作</string>
-
-    <string-array name="proxy_types">
-        <item>自动检测（推荐）</item>
-        <item>关闭 / 强制直连</item>
-        <item>HTTP</item>
-        <item>SOCKS5（实验）</item>
-    </string-array>
 
     <!-- Action Registry Debug -->
     <string name="action_registry_title">功能注册表</string>
