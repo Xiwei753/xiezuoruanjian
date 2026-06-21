@@ -326,7 +326,7 @@ data class SyncDiagnosticsResult(
     @SerializedName("remote_url_sanitized") val remoteUrlSanitized: String,
     val transport: String,
     @SerializedName("error_category") val errorCategory: String,
-    @SerializedName("user_message") val userMessage: String,
+    @SerializedName("user_message") val userMessage: String?,
     @SerializedName("raw_error") val rawError: String?,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
