@@ -9,7 +9,7 @@ sealed class BridgeResult<out T> {
     data class Error(
         val envelope: ResultEnvelope<Nothing>
     ) : BridgeResult<Nothing>() {
-        val message: String get() = envelope.errorCode ?: ""
+        val message: String get() = envelope.messageKey ?: envelope.errorCode ?: ""
         val code: String? get() = envelope.errorCode
     }
     object NotLoaded : BridgeResult<Nothing>() {
@@ -30,6 +30,8 @@ data class ResultEnvelope<out T>(
     val success: Boolean,
     val data: T? = null,
     val errorCode: String? = null,
+    val messageKey: String? = null,
+    val messageArgs: Map<String, String> = emptyMap(),
     val userMessage: String? = null,
     val rawError: String? = null,
     val warnings: List<String> = emptyList(),

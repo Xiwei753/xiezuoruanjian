@@ -35,7 +35,13 @@ interface NativeJsonEnvelope {
   success: boolean
   data?: Record<string, Object>
   errorCode?: string
+  messageKey?: string
+  messageArgs?: Record<string, string>
   userMessage?: string
+  rawError?: string
+  warnings?: string[]
+  changedPaths?: string[]
+  changedEntities?: ChangedEntity[]
 }
 
 interface ChapterLocationResult {
@@ -98,10 +104,13 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
         success: obj.success,
         data: obj.data as T | undefined,
         errorCode: obj.errorCode as string | undefined,
+        messageKey: obj.messageKey,
+        messageArgs: obj.messageArgs,
         userMessage: obj.userMessage,
-        warnings: [] as string[],
-        changedPaths: [] as string[],
-        changedEntities: [] as ChangedEntity[]
+        rawError: obj.rawError,
+        warnings: obj.warnings ?? [] as string[],
+        changedPaths: obj.changedPaths ?? [] as string[],
+        changedEntities: obj.changedEntities ?? [] as ChangedEntity[]
       }
       return result
     } catch (e) {

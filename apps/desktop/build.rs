@@ -376,11 +376,11 @@ fn compile_translations() -> Vec<PathBuf> {
                             qm_files.push(qm_path);
                         } else {
                             let stderr = String::from_utf8_lossy(&out.stderr);
-                            println!("cargo:warning=lrelease failed for {}: {}", path.display(), stderr);
+                            panic!("lrelease failed for {}: {}", path.display(), stderr);
                         }
                     }
                     Err(e) => {
-                        println!("cargo:warning=Failed to run lrelease on {}: {}", path.display(), e);
+                        panic!("Failed to run lrelease on {}: {}", path.display(), e);
                     }
                 }
             }
@@ -500,5 +500,13 @@ fn main() {
         "cargo:warning=Desktop Qt library path: {}",
         format_paths(&qt_info.library_paths)
     );
+    // Verify that zh_CN.qm was generated
+    let zh_cn_qm = Path::new("i18n/zh_CN.qm");
+    if !zh_cn_qm.exists() {
+        panic!(
+            "i18n/zh_CN.qm not found after build. Ensure lrelease successfully compiled the translation files."
+        );
+    }
+
     config.build("src/main.rs");
 }

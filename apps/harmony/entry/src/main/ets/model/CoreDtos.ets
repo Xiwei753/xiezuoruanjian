@@ -224,6 +224,8 @@ export interface ResultEnvelope<T> {
   success: boolean
   data?: T
   errorCode?: string
+  messageKey?: string
+  messageArgs?: Record<string, string>
   userMessage?: string
   rawError?: string
   warnings: string[]
