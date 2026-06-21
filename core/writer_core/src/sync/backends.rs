@@ -92,8 +92,9 @@ pub(crate) fn build_http_client(
         if cfg.proxy_enabled && !cfg.proxy_host.is_empty() && cfg.proxy_port > 0 {
             let proxy_url = match cfg.proxy_type.as_str() {
                 "http" => format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port),
+                "https" => format!("https://{}:{}", cfg.proxy_host, cfg.proxy_port),
                 "socks5" => format!("socks5h://{}:{}", cfg.proxy_host, cfg.proxy_port),
-                _ => format!("http://{}:{}", cfg.proxy_host, cfg.proxy_port),
+                _ => format!("https://{}:{}", cfg.proxy_host, cfg.proxy_port),
             };
             let proxy = reqwest::Proxy::all(&proxy_url)
                 .map_err(|e| crate::Error::Other(format!("Failed to configure proxy: {}", e)))?;
