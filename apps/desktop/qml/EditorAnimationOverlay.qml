@@ -46,11 +46,6 @@ Item {
                 root._handleEvent(events[i])
             }
         }
-
-        // Clear all ghosts when chapter loads or settings change
-        function onPlain_text_changed() {
-            root.clearAll()
-        }
     }
 
     onSuppressedChanged: {
