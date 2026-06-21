@@ -11,16 +11,6 @@ use std::time::Instant;
 use super::{sujian_editor_debug_enabled, SujianEditorItem};
 use super::cursor_controller::CursorUpdateResult;
 
-/// AnimatedSkipRange is retained as a struct definition for API compatibility
-/// but is no longer used for skipping glyphs in the static layer.
-/// The static layer now always renders the full text.
-/// static layer repaints with the full text.
-#[derive(Clone, Debug)]
-pub struct AnimatedSkipRange {
-    pub byte_start: usize,
-    pub byte_end: usize,
-}
-
 pub struct ScrollBuffer {
     pub image: QImage,
     pub buffer_scroll_y: f64,
@@ -198,8 +188,8 @@ impl SujianEditorItem {
                 self.delete_animation = None;
             }
         }
-        // animated_skip_ranges is disabled for stability — the static
-        // layer always renders the full text. No skip range cleanup needed.
+        // AnimatedSkipRange has been removed — the static layer always
+        // renders the full text. No skip range cleanup needed.
     }
 
     /// 渲染静态正文到 painter。不包含任何动画内容。

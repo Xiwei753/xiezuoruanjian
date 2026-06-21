@@ -114,16 +114,19 @@ struct MainWorkspace {
   @State sessionId: string = ''
   @State sessionStartTime: number = 0
 
-  // ── 编辑器动画状态 ──
-  @State typingAnimationEnabled: boolean = false
-  @State smoothCursorEnabled: boolean = false
+  // ── 编辑器动画状态（降级：Harmony 写作区动画暂时关闭）──
+  // Harmony 写作区动画存在多源问题（content/TextArea/onContentChange/getCaretOffset/scrollOffsetY
+  // 多个来源控制同一个视觉结果），等桌面/Android 稳定后再做。
+  // 当前保留原生 TextArea 稳定输入、保存、字数统计。
+  @State typingAnimationEnabled: boolean = false  // 强制关闭，不从设置读取
+  @State smoothCursorEnabled: boolean = false     // 强制关闭，不从设置读取
   @State cursorVisible: boolean = true
   @State lastInsertedText: string = ''
-  @State showInsertAnimation: boolean = false
+  @State showInsertAnimation: boolean = false     // 禁用
   @State cursorBlinkOpacity: number = 1.0
   @State insertAnimX: number = 0
   @State insertAnimY: number = 0
-  @State showDeleteAnimation: boolean = false
+  @State showDeleteAnimation: boolean = false     // 禁用
   @State deleteAnimText: string = ''
   @State deleteAnimX: number = 0
   @State deleteAnimY: number = 0
@@ -325,9 +328,10 @@ struct MainWorkspace {
           lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
-        // 读取编辑器动画开关
-        this.typingAnimationEnabled = result.data.editorTypingAnimationEnabled ?? false
-        this.smoothCursorEnabled = result.data.editorSmoothCursorEnabled ?? false
+        // 编辑器动画开关 — 降级禁用，不从设置读取
+        // Harmony 写作区动画等桌面/Android 稳定后再做
+        this.typingAnimationEnabled = false
+        this.smoothCursorEnabled = false
 
         // 更新自动保存间隔
         if (this.autoSaveObserver) {
@@ -407,7 +411,8 @@ struct MainWorkspace {
     const newLength = text.length
     const changed = this.findChangedRange(oldContent, text)
 
-    // 插入动画（防御性编码 + 滚动偏移补偿）
+    // 插入动画 — 已降级禁用（typingAnimationEnabled 强制 false，不会进入）
+    // 等桌面/Android 稳定后再做 Harmony 写作区动画
     if (this.typingAnimationEnabled && changed.insertedText.length > 0 && changed.insertedText.length <= 3 && !this.isScrolling) {
       if (this.caretOffsetApiAvailable) {
         try {
@@ -437,8 +442,7 @@ struct MainWorkspace {
       }
     }
 
-    // 删除动画（防御性编码 + 吞回效果 + 滚动偏移补偿）
-    // 只取一次当前光标坐标（删除后位置），起点用稳定退化方案计算
+    // 删除动画 — 已降级禁用（typingAnimationEnabled 强制 false，不会进入）
     if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
       if (this.caretOffsetApiAvailable) {
         try {
@@ -478,7 +482,7 @@ struct MainWorkspace {
       }
     }
 
-    // 平滑光标（防御性编码 + 滚动偏移补偿）
+    // 平滑光标 — 已降级禁用（smoothCursorEnabled 强制 false，不会进入）
     if (this.smoothCursorEnabled && !this.isScrolling) {
       if (this.caretOffsetApiAvailable) {
         try {
@@ -1158,7 +1162,7 @@ struct MainWorkspace {
                 .placeholderColor(this.themeConfig.colors.textHint)
                 .onChange((value: string): void => { this.onContentChange(value) })
 
-              // 打字动画 overlay：新字符淡入效果（真实光标坐标定位）
+              // 打字动画 overlay — 已降级禁用（typingAnimationEnabled 强制 false，不会渲染）
               if (this.typingAnimationEnabled && this.showInsertAnimation) {
                 Text(this.lastInsertedText)
                   .fontSize(this.settings.editorFontSize)
@@ -1169,7 +1173,7 @@ struct MainWorkspace {
                   .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseOut })
               }
 
-              // 删除动画 overlay（吞回效果：从旧光标位置飞向新光标位置）
+              // 删除动画 overlay — 已降级禁用（typingAnimationEnabled 强制 false，不会渲染）
               if (this.typingAnimationEnabled && this.showDeleteAnimation) {
                 Text(this.deleteAnimText)
                   .fontSize(this.settings.editorFontSize)
@@ -1181,7 +1185,7 @@ struct MainWorkspace {
                   .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
               }
 
-              // 自定义光标 overlay（闪烁竖线，真实光标坐标定位）
+              // 自定义光标 overlay — 已降级禁用（smoothCursorEnabled 强制 false，不会渲染）
               if (this.smoothCursorEnabled) {
                 Column()
                   .width(2)

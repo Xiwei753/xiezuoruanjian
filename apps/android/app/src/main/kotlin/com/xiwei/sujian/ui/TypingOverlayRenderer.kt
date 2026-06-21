@@ -130,11 +130,8 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
             }
         }
 
-        // When animations finish, clear skip ranges so the static text
-        // becomes fully visible again on the next draw
-        if (hadFinishedAnims) {
-            editText.renderLayer?.clearSkipRanges()
-        }
+        // Animations finished — no skip range cleanup needed.
+        // Static text is always fully drawn by the system; overlay is purely additive.
 
         return hasMore || activeAnims.isNotEmpty()
     }

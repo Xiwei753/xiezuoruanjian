@@ -18,7 +18,7 @@ use qmetaobject::prelude::*;
 use qmetaobject::{
     QMouseEvent, QQuickItem, QRectF, QString,
 };
-use rendering::{InsertAnimation, DeleteAnimation, ScrollBuffer, AnimatedSkipRange};
+use rendering::{InsertAnimation, DeleteAnimation, ScrollBuffer};
 pub use rendering::AnimatedGlyph;
 use std::cell::Cell;
 use std::time::Instant;
@@ -141,11 +141,6 @@ pub struct SujianEditorItem {
     last_animation_events_json: QString,
     insert_animation: Option<InsertAnimation>,
     delete_animation: Option<DeleteAnimation>,
-    /// Byte ranges to skip during static text rendering while an animation
-    /// is active. For insert animations, the newly inserted glyphs are
-    /// skipped so the QML ghost overlay can animate them from the cursor
-    /// position. Cleared when the animation finishes.
-    animated_skip_ranges: Vec<AnimatedSkipRange>,
     preedit_text: String,
     preedit_cursor: usize,
     suppress_next_ime_commit: bool,
@@ -256,7 +251,6 @@ impl Default for SujianEditorItem {
             last_animation_events_json: "".into(),
             insert_animation: None,
             delete_animation: None,
-            animated_skip_ranges: Vec::new(),
             preedit_text: String::new(),
             preedit_cursor: 0,
             suppress_next_ime_commit: false,
@@ -716,14 +710,13 @@ impl SujianEditorItem {
 
         self.delete_animation = None;
         self.insert_animation = None;
-        self.animated_skip_ranges.clear();
+
 
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Insert {
                     let anim = self.create_insert_animation(event, origin_cx, origin_cy, cursor_h);
-                    // NOTE: animated_skip_ranges is disabled for stability.
-                    // The static layer now always renders the full text.
+                    // The static layer always renders the full text.
                     // The QML ghost overlay is purely additive — it draws
                     // on top of the static text, so a glyph-calculation
                     // error in the overlay can never cause text to disappear.
@@ -753,7 +746,7 @@ impl SujianEditorItem {
 
         self.insert_animation = None;
         self.delete_animation = None;
-        self.animated_skip_ranges.clear();
+
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
@@ -787,7 +780,7 @@ impl SujianEditorItem {
 
         self.insert_animation = None;
         self.delete_animation = None;
-        self.animated_skip_ranges.clear();
+
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
@@ -821,7 +814,7 @@ impl SujianEditorItem {
 
         self.insert_animation = None;
         self.delete_animation = None;
-        self.animated_skip_ranges.clear();
+
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 

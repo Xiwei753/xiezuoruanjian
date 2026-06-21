@@ -67,8 +67,9 @@ struct WritingPage {
   @State cursorX: number = 0
   @State cursorY: number = 0
   @State cursorVisible: boolean = true
-  @State typingAnimationEnabled: boolean = false
-  @State smoothCursorEnabled: boolean = false
+  // 编辑器动画状态 — 降级禁用（Harmony 写作区动画等桌面/Android 稳定后再做）
+  @State typingAnimationEnabled: boolean = false  // 强制关闭，不从设置读取
+  @State smoothCursorEnabled: boolean = false     // 强制关闭，不从设置读取
   @State lastInsertedText: string = ''
   @State showInsertAnimation: boolean = false
   @State insertAnimX: number = 0
@@ -208,8 +209,10 @@ struct WritingPage {
       const result = await this.bridge.getLocalSettings()
       if (result.success && result.data) {
         this.settings = result.data
-        this.typingAnimationEnabled = result.data.editorTypingAnimationEnabled ?? false
-        this.smoothCursorEnabled = result.data.editorSmoothCursorEnabled ?? false
+        // 编辑器动画开关 — 降级禁用，不从设置读取
+        // Harmony 写作区动画等桌面/Android 稳定后再做
+        this.typingAnimationEnabled = false
+        this.smoothCursorEnabled = false
         this.themeAdapter.updateFromSettings({
           theme: result.data.themeMode,
           fontSize: result.data.editorFontSize,

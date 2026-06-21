@@ -19,6 +19,11 @@ import android.view.inputmethod.BaseInputConnection
  * - **不做**：自己判断 count<=3、自己检测 composing、自己生成 AndroidEditorAnimationEvent
  * - **禁止**：向正文 Editable 注入透明 ForegroundColorSpan 隐藏文字
  *
+ * ## 动画裁判硬边界
+ * - Core provider 存在时，Core 是唯一裁判，本地 fallback 不运行
+ * - Core provider 不存在时，本地 fallback 才允许运行
+ * - Core 调用失败时，不 fallback 动画，只跳过动画并打日志
+ *
  * ## 使用场景
  * - 用户输入/删除字符时通过 Core 判断是否播放逐字动画
  * - Core 返回空事件列表时跳过动画（粘贴/大段替换/加载等场景）
@@ -166,7 +171,7 @@ class TypingAnimationController(
         val newCursorIndex = editText.selectionStart.coerceAtLeast(0)
 
         // ── Core 驱动路径 ──
-        // 如果有 animationEventProvider，走 Core 判断 should_animate 和事件语义
+        // 如果有 animationEventProvider，Core 是唯一裁判
         if (_animationEventProvider != null && typingAnimationEnabled && editText.layout != null) {
             val cause = determineCause(oldTextBeforeChange, newText, lastAddedStart, lastAddedCount)
 
@@ -250,16 +255,19 @@ class TypingAnimationController(
                 lastAddedCount = 0
                 return
             } catch (e: Exception) {
-                if (DEBUG_ANIM) {
-                    android.util.Log.w(TAG, "Core animation events failed, falling back", e)
-                }
-                // Core 调用失败，回退到下面的本地逻辑
+                // 硬边界：Core 调用失败时，不 fallback 到本地逻辑，只跳过动画并打日志
+                android.util.Log.w(TAG, "Core animation events failed, skipping animation (no local fallback)", e)
+                clearPendingDelete()
+                lastAddedStart = -1
+                lastAddedCount = 0
+                return
             }
         }
 
         // ── 本地回退路径 ──
-        // 当 animationEventProvider 为 null 或 Core 调用失败时使用
-        // 保持与原有逻辑兼容
+        // 仅当 animationEventProvider 为 null 时使用（Core 未初始化的场景）
+        // Core provider 存在时，上面已经 return，不会走到这里
+        // Core 调用失败时，上面也已 return（跳过动画），不会走到这里
 
         // 提交待处理的删除动画
         if (pendingDeleteStart >= 0 && typingAnimationEnabled && editText.layout != null) {
