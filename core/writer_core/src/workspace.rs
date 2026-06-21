@@ -1,4 +1,4 @@
-﻿//! # 工作区管理（Core 层）
+//! # 工作区管理（Core 层）
 //!
 //! 负责工作区的创建、验证、最近编辑记录。
 //! 工作区是整个应用的根目录，包含所有项目和配置。
@@ -24,7 +24,14 @@
 use crate::error::Result;
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
+
+/// 最近编辑列表最大条数。
+const MAX_RECENT_EDITS: usize = 20;
+
+/// 最近编辑缓存落盘防抖间隔。
+const RECENT_EDITS_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// 创建工作区目录结构和 manifest 文件。
 ///
@@ -65,18 +72,41 @@ pub struct RecentEdit {
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+type RecentEditsCache = HashMap<PathBuf, Vec<RecentEdit>>;
+
 /// 进程内缓存：避免频繁磁盘读取。
 /// Key = workspace_path，Value = 最近编辑列表。
 #[cfg(test)]
-pub static RECENT_EDITS_CACHE: OnceLock<Mutex<HashMap<PathBuf, Vec<RecentEdit>>>> = OnceLock::new();
+pub static RECENT_EDITS_CACHE: OnceLock<Mutex<RecentEditsCache>> = OnceLock::new();
 
 #[cfg(not(test))]
-static RECENT_EDITS_CACHE: OnceLock<Mutex<HashMap<PathBuf, Vec<RecentEdit>>>> = OnceLock::new();
+static RECENT_EDITS_CACHE: OnceLock<Mutex<RecentEditsCache>> = OnceLock::new();
+
+/// 锁定 recent_edits 缓存，返回 MutexGuard。
+///
+/// 将 Mutex poison 转为 `Error::Other`，避免生产代码因 panic 中断。
+fn lock_recent_edits_cache(
+    mutex: &Mutex<RecentEditsCache>,
+) -> Result<MutexGuard<'_, RecentEditsCache>> {
+    mutex
+        .lock()
+        .map_err(|_| crate::error::Error::Other("recent edits cache mutex poisoned".into()))
+}
+
+/// 锁定 LAST_FLUSH 计时器，返回 MutexGuard。
+fn lock_last_flush(
+    mutex: &Mutex<std::time::Instant>,
+) -> Result<MutexGuard<'_, std::time::Instant>> {
+    mutex
+        .lock()
+        .map_err(|_| crate::error::Error::Other("recent edits flush timer mutex poisoned".into()))
+}
 
 /// 获取最近编辑列表（优先从缓存读取，否则从磁盘加载）。
 pub fn get_recent_edits(workspace_path: &Path) -> Result<Vec<RecentEdit>> {
     let mutex = RECENT_EDITS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = mutex.lock().unwrap();
+    let mut cache = lock_recent_edits_cache(mutex)?;
 
     if let Some(edits) = cache.get(workspace_path) {
         return Ok(edits.to_vec());
@@ -94,9 +124,9 @@ pub fn get_recent_edits(workspace_path: &Path) -> Result<Vec<RecentEdit>> {
     Ok(edits)
 }
 
-/// 记录一次章节编辑（去重 + 插入头部 + 截断到 20 条 + 防抖落盘）。
+/// 记录一次章节编辑（去重 + 插入头部 + 截断到 MAX_RECENT_EDITS 条 + 防抖落盘）。
 ///
-/// 防抖策略：最多每 5 秒落盘一次，减少高频编辑时的 I/O 开销。
+/// 防抖策略：最多每 RECENT_EDITS_FLUSH_INTERVAL 落盘一次，减少高频编辑时的 I/O 开销。
 pub fn record_recent_edit(
     workspace_path: &Path,
     project_id: &str,
@@ -104,7 +134,7 @@ pub fn record_recent_edit(
     chapter_id: &str,
 ) -> Result<()> {
     let mutex = RECENT_EDITS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = mutex.lock().unwrap();
+    let mut cache = lock_recent_edits_cache(mutex)?;
 
     let mut edits = if let Some(e) = cache.get(workspace_path) {
         e.to_vec()
@@ -132,18 +162,18 @@ pub fn record_recent_edit(
         },
     );
 
-    // Keep only top 20
-    edits.truncate(20);
+    // Keep only top MAX_RECENT_EDITS
+    edits.truncate(MAX_RECENT_EDITS);
 
     cache.insert(workspace_path.to_path_buf(), edits.to_vec());
 
-    // Basic Debounce: Only flush to disk at most once every 5 seconds to reduce I/O.
+    // Debounce: only flush to disk at most once every RECENT_EDITS_FLUSH_INTERVAL.
     static LAST_FLUSH: OnceLock<Mutex<std::time::Instant>> = OnceLock::new();
     let flush_mutex = LAST_FLUSH
-        .get_or_init(|| Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(10)));
-    let mut last_flush = flush_mutex.lock().unwrap();
+        .get_or_init(|| Mutex::new(std::time::Instant::now() - RECENT_EDITS_FLUSH_INTERVAL * 2));
+    let mut last_flush = lock_last_flush(flush_mutex)?;
 
-    if last_flush.elapsed().as_secs() >= 5 {
+    if last_flush.elapsed() >= RECENT_EDITS_FLUSH_INTERVAL {
         let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
         let content = serde_json::to_string_pretty(&edits)?;
         crate::storage::atomic_write_string(&recent_path, &content)?;
@@ -156,7 +186,7 @@ pub fn record_recent_edit(
 /// 强制将 recent_edits 缓存落盘（用于应用退出、切换工作区等场景）。
 pub fn flush_recent_edits(workspace_path: &Path) -> Result<()> {
     let mutex = RECENT_EDITS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let cache = mutex.lock().unwrap();
+    let cache = lock_recent_edits_cache(mutex)?;
 
     if let Some(edits) = cache.get(workspace_path) {
         let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");

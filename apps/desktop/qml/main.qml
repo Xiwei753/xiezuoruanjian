@@ -228,6 +228,7 @@ ApplicationWindow {
     onClosing: {
         if (appController.inWriting) {
             editorBackend.flush_writing_stats();
+            editorBackend.flush_recent_edits();
         }
     }
 

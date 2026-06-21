@@ -422,6 +422,7 @@ impl AppBackend {
     pub(crate) fn close_workspace(&mut self) {
         self.debug_log("workspace", "close_workspace_start", "");
         self.flush_writing_stats();
+        self.flush_recent_edits();
         // Clear workspace state
         self.current_workspace = "".to_string();
         self.current_has_workspace = false;
