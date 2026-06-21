@@ -132,7 +132,7 @@ QtObject {
         if (res.success) {
             refreshState(qsTr("打开工作区成功"));
         } else {
-            emitError(res.userMessage || res.message || qsTr("打开工作区失败"));
+            emitError(qsTr("打开工作区失败"));
             refreshState(qsTr("打开工作区失败"));
         }
     }
@@ -153,7 +153,7 @@ QtObject {
         if (res.success) {
             refreshState(qsTr("打开工作区成功"));
         } else {
-            emitError(res.userMessage || res.message || qsTr("打开工作区失败"));
+            emitError(qsTr("打开工作区失败"));
             refreshState(qsTr("打开工作区失败"));
         }
     }
@@ -165,7 +165,7 @@ QtObject {
             else refreshState(qsTr("刷新操作结果失败"));
             return true;
         }
-        emitError(res.userMessage || res.message || fallbackMessage || qsTr("操作失败"));
+        emitError(fallbackMessage || qsTr("操作失败"));
         return false;
     }
 

@@ -22,7 +22,7 @@ QtObject {
             var res = appController.parseJson(api.list_starmaps_json(), qsTr("加载星图列表失败"));
             if (!res) return [];
             if (res.success) return res.data || [];
-            appController.emitError(res.userMessage || res.message || qsTr("加载星图列表失败"));
+            appController.emitError(qsTr("加载星图列表失败"));
             return [];
         } catch (e) {
             appController.emitError(qsTr("后端调用失败: ") + e);

@@ -85,12 +85,13 @@
                             android:textColor="?attr/colorPrimary"/>
                     </LinearLayout>
 
+                    <!-- Font Size — range from Core settings_presentation: min=12, max=72, step=1 -->
                     <com.google.android.material.slider.Slider
                         android:id="@+id/sbFontSize"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:valueFrom="12.0"
-                        android:valueTo="32.0"
+                        android:valueTo="72.0"
                         android:stepSize="1.0"
                         android:layout_marginBottom="16dp"/>
 
@@ -114,6 +115,7 @@
                             android:textColor="?attr/colorPrimary"/>
                     </LinearLayout>
 
+                    <!-- Line Spacing — range from Core settings_presentation: min=1.0, max=3.0, step=0.1 -->
                     <com.google.android.material.slider.Slider
                         android:id="@+id/sbLineSpacing"
                         android:layout_width="match_parent"
@@ -177,6 +179,7 @@
                             android:textColor="?attr/colorPrimary"/>
                     </LinearLayout>
 
+                    <!-- Indent Width — range from Core settings_presentation: min=0.0, max=8.0, step=0.5 -->
                     <com.google.android.material.slider.Slider
                         android:id="@+id/sbAutoIndentWidth"
                         android:layout_width="match_parent"
@@ -215,6 +218,7 @@
                             android:textColor="?attr/colorPrimary"/>
                     </LinearLayout>
 
+                    <!-- Typing Animation Duration — range from Core settings_presentation: min=0, max=1000, step=10 -->
                     <com.google.android.material.slider.Slider
                         android:id="@+id/sbTypingAnimationDuration"
                         android:layout_width="match_parent"
@@ -252,6 +256,7 @@
                             android:textColor="?attr/colorPrimary"/>
                     </LinearLayout>
 
+                    <!-- Smooth Cursor Duration — range from Core settings_presentation: min=0, max=1000, step=10 -->
                     <com.google.android.material.slider.Slider
                         android:id="@+id/sbSmoothCursorDuration"
                         android:layout_width="match_parent"
@@ -313,6 +318,7 @@
                             android:textColor="?attr/colorPrimary"/>
                     </LinearLayout>
 
+                    <!-- Auto Save Delay — range from Core settings_presentation: min=1, max=10, step=1 -->
                     <com.google.android.material.slider.Slider
                         android:id="@+id/sbAutoSaveDelay"
                         android:layout_width="match_parent"
@@ -429,6 +435,7 @@
                             android:textColor="?attr/colorPrimary"/>
                     </LinearLayout>
 
+                    <!-- Sync Interval — range from Core settings_presentation: min=60, max=3600, step=60 -->
                     <com.google.android.material.slider.Slider
                         android:id="@+id/sbSyncInterval"
                         android:layout_width="match_parent"

@@ -65,7 +65,7 @@ QtObject {
             layoutData = res.data.layout;
             buildModels();
         } else {
-            setError(res.userMessage || res.message || qsTr("加载星图数据失败"));
+            setError(qsTr("加载星图数据失败"));
         }
     }
 
@@ -209,7 +209,7 @@ QtObject {
             loadGraph();
             selectNode(res.data.id);
         } else {
-            setError(res.userMessage || res.message || qsTr("创建节点失败"));
+            setError(qsTr("创建节点失败"));
         }
     }
 
@@ -220,7 +220,7 @@ QtObject {
             clearError();
             loadGraph();
         } else {
-            setError(res.userMessage || res.message || qsTr("创建连线失败"));
+            setError(qsTr("创建连线失败"));
         }
     }
 
@@ -233,7 +233,7 @@ QtObject {
         }
         var res = normalizeBackendResult(backendRef.save_starmap_layout(starmapId, JSON.stringify({ kind: "Freeform", nodes: layoutNodes })), qsTr("保存布局失败"));
         if (res.success) clearError();
-        else setError(res.userMessage || res.message || qsTr("保存布局失败"));
+        else setError(qsTr("保存布局失败"));
     }
 
     function updateNode(nodeId, patch) {
@@ -251,7 +251,7 @@ QtObject {
                 }
             }
         } else {
-            setError(res.userMessage || res.message || qsTr("更新节点失败"));
+            setError(qsTr("更新节点失败"));
         }
     }
 
@@ -263,7 +263,7 @@ QtObject {
             loadGraph();
             clearSelection();
         } else {
-            setError(res.userMessage || res.message || qsTr("删除节点失败"));
+            setError(qsTr("删除节点失败"));
         }
     }
 
@@ -282,7 +282,7 @@ QtObject {
                 }
             }
         } else {
-            setError(res.userMessage || res.message || qsTr("更新连线失败"));
+            setError(qsTr("更新连线失败"));
         }
     }
 
@@ -294,7 +294,7 @@ QtObject {
             loadGraph();
             clearSelection();
         } else {
-            setError(res.userMessage || res.message || qsTr("删除连线失败"));
+            setError(qsTr("删除连线失败"));
         }
     }
 

@@ -1440,18 +1440,16 @@ impl SujianEditorItem {
     }
 
     fn index_at_line_x(&self, line: &VisualLine, x: f64) -> usize {
-        let snapshot = self
-            .editor_layout
-            .cache()
-            .expect("index_at_line_x requires an existing layout snapshot");
+        let Some(snapshot) = self.editor_layout.cache() else {
+            return line.start;
+        };
         self.editor_layout.index_at_line_x(snapshot, line, x)
     }
 
     fn cursor_line_and_x(&self, lines: &[VisualLine]) -> Option<(usize, f64)> {
-        let snapshot = self
-            .editor_layout
-            .cache()
-            .expect("cursor_line_and_x requires an existing layout snapshot");
+        let Some(snapshot) = self.editor_layout.cache() else {
+            return None;
+        };
         debug_assert_eq!(lines.len(), snapshot.lines.len());
         self.editor_layout.cursor_line_and_x(
             snapshot,

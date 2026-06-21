@@ -318,7 +318,7 @@ ScrollView {
                                 if (obj.success) {
                                     workspaceDiagText.text = JSON.stringify(obj.data, null, 2)
                                 } else {
-                                    workspaceDiagText.text = qsTr("诊断失败: ") + (obj.userMessage || obj.errorCode || qsTr("未知错误"))
+                                    workspaceDiagText.text = qsTr("诊断失败: ") + (obj.errorCode || qsTr("未知错误"))
                                 }
                             } catch(e) {
                                 workspaceDiagText.text = qsTr("解析诊断失败: ") + e
@@ -342,7 +342,7 @@ ScrollView {
                         onClicked: {
                             if (workspaceDiagText.text.length > 0 && root.backendRef) {
                                 var result = JSON.parse(root.backendRef.copy_text_to_clipboard(workspaceDiagText.text))
-                                workspaceDiagText.text = result.success ? qsTr("诊断已复制") : (qsTr("复制失败: ") + (result.userMessage || result.message || ""))
+                                workspaceDiagText.text = result.success ? qsTr("诊断已复制") : qsTr("复制失败")
                             }
                         }
                         contentItem: AppText {

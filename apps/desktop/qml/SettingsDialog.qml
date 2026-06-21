@@ -121,6 +121,7 @@ Dialog {
                     theme: root.dt
                     label: qsTr("字体大小")
                     valueText: Math.round(value) + " px"
+                    // range from Core settings_presentation: min=12, max=72, step=1
                     from: 12.0
                     to: 72.0
                     stepSize: 1.0
@@ -132,6 +133,7 @@ Dialog {
                     theme: root.dt
                     label: qsTr("行距倍数")
                     valueText: Number(value).toFixed(1) + "x"
+                    // range from Core settings_presentation: min=1.0, max=3.0, step=0.1
                     from: 1.0
                     to: 3.0
                     stepSize: 0.1
@@ -158,6 +160,7 @@ Dialog {
                     theme: root.dt
                     label: qsTr("首行缩进宽度")
                     valueText: Number(value).toFixed(1) + qsTr(" 字符")
+                    // range from Core settings_presentation: min=0.0, max=8.0, step=0.5
                     from: 0.0
                     to: 8.0
                     stepSize: 0.5
@@ -177,7 +180,8 @@ Dialog {
                     theme: root.dt
                     label: qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
-                    from: 30
+                    // range from Core settings_presentation: min=0, max=1000, step=10
+                    from: 0
                     to: 1000
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.saveAndNotify() }
@@ -196,7 +200,8 @@ Dialog {
                     theme: root.dt
                     label: qsTr("平滑光标持续时间")
                     valueText: Math.round(value) + " ms"
-                    from: 30
+                    // range from Core settings_presentation: min=0, max=1000, step=10
+                    from: 0
                     to: 1000
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }
@@ -222,6 +227,7 @@ Dialog {
                     theme: root.dt
                     label: qsTr("自动保存延迟")
                     valueText: Math.round(value) + qsTr(" 秒")
+                    // range from Core settings_presentation: min=1, max=10, step=1
                     from: 1
                     to: 10
                     stepSize: 1

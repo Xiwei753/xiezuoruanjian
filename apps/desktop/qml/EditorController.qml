@@ -367,8 +367,8 @@ QtObject {
             return true;
         } else {
             if (result && result.errorCode === "EMPTY_OVERWRITE_BLOCKED") {
-                logWriterWarning("empty_save_blocked", "blocked by core: " + (result.userMessage || ""));
-                controller.emptySaveBlocked(result.userMessage || qsTr("检测到异常空内容覆盖，已阻止保存。"));
+                logWriterWarning("empty_save_blocked", "blocked by core: " + (result.errorCode || ""));
+                controller.emptySaveBlocked(qsTr("检测到异常空内容覆盖，已阻止保存。"));
             }
             return false;
         }
@@ -387,7 +387,7 @@ QtObject {
         var result = backendRef.open_chapter(pId, vId, cId);
 
         if (!result.success) {
-            console.error("[SujianDebug] Failed to open chapter:", result.userMessage || result.rawError);
+            console.error("[SujianDebug] Failed to open chapter:", result.errorCode || result.rawError);
             isLoadingChapter = false;
             return null;
         }

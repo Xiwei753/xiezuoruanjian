@@ -328,10 +328,27 @@ fn compile_translations() -> Vec<PathBuf> {
         return qm_files;
     }
 
-    // Find lrelease
-    let Some(lrelease) = find_lrelease() else {
-        println!("cargo:warning=lrelease not found; skipping .ts → .qm compilation. Install qt6-qttools-devel or set LRELEASE env var.");
+    // Check if there are .ts files that need compilation
+    let has_ts_files = fs::read_dir(i18n_dir)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|e| e.path().extension().is_some_and(|ext| ext == "ts"))
+        })
+        .unwrap_or(false);
+
+    if !has_ts_files {
         return qm_files;
+    }
+
+    // Find lrelease — required when .ts files exist
+    let Some(lrelease) = find_lrelease() else {
+        panic!(
+            "lrelease not found but .ts translation files exist in i18n/. \
+             Install qt6-qttools-devel (or qt6-tools on some distros) or set the LRELEASE env var. \
+             The .qm files are required by the embedded qrc resource."
+        );
     };
 
     println!("cargo:warning=Using lrelease: {}", lrelease.display());

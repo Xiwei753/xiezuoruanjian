@@ -125,7 +125,7 @@ pub fn default_settings_presentation() -> SettingsPresentation {
                         order: 2,
                         platform_visibility: All,
                         min_value: Some(12.0),
-                        max_value: Some(32.0),
+                        max_value: Some(72.0), // Desktop 大屏需要更大字号范围，取三端最大值
                         step_value: Some(1.0),
                         select_options: None,
                         requires_restart: false,

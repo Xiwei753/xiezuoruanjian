@@ -9,14 +9,14 @@ sealed class BridgeResult<out T> {
     data class Error(
         val envelope: ResultEnvelope<Nothing>
     ) : BridgeResult<Nothing>() {
-        val message: String get() = envelope.userMessage ?: ""
+        val message: String get() = envelope.errorCode ?: ""
         val code: String? get() = envelope.errorCode
     }
     object NotLoaded : BridgeResult<Nothing>() {
         val envelope: ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
             errorCode = "NATIVE_NOT_LOADED",
-            userMessage = "Native bridge not loaded"
+            userMessage = null
         )
     }
 }
@@ -45,7 +45,7 @@ data class ResultEnvelope<out T>(
         fun error(errorCode: String, userMessage: String): ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
             errorCode = errorCode,
-            userMessage = userMessage,
+            userMessage = null,
             rawError = userMessage
         )
     }
