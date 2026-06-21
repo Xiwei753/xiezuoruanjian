@@ -694,12 +694,16 @@ Rectangle {
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
                         contentWidth: availableWidth
-                        contentHeight: root.useSujianEditorItem ? sujianEditor.content_height : editorCanvas.implicitHeight
+                        contentHeight: root.useSujianEditorItem
+                            ? Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
+                            : editorCanvas.implicitHeight
                         
                         function clampScroll() {
                             if (contentItem) {
                                 var maxScroll = Math.max(0, contentHeight - height);
-                                if (contentItem.contentY > maxScroll) {
+                                // Only clamp if contentY exceeds the valid range.
+                                // Do NOT force contentY to 0 when contentHeight is still updating.
+                                if (maxScroll > 0 && contentItem.contentY > maxScroll) {
                                     contentItem.contentY = maxScroll;
                                 }
                             }
@@ -924,6 +928,19 @@ Rectangle {
                         repeat: true
                         onTriggered: {
                             sujianEditor.tick_cursor_animation()
+                        }
+                    }
+
+                    // 打字动画 tick - 检测 Rust 侧动画完成，清除 skip ranges 并重绘静态层
+                    Timer {
+                        id: typingAnimationTick
+                        interval: 16
+                        running: root.useSujianEditorItem
+                                 && sujianEditor.typing_animation_enabled
+                                 && sujianEditor.editor_enabled
+                        repeat: true
+                        onTriggered: {
+                            sujianEditor.tick_typing_animation()
                         }
                     }
 

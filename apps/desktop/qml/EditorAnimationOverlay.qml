@@ -85,7 +85,7 @@ Item {
                     "width": gr.w,
                     "height": gr.h,
                     "duration": duration,
-                    "ghostColor": editorItem.cursor_color || "#006497",
+                    "ghostColor": editorItem.text_color || "#E2E2E5",
                     "glyphText": gr.char || "",
                     "glyphFontFamily": editorItem.font_family || "",
                     "glyphFontPixelSize": editorItem.font_pixel_size || 0

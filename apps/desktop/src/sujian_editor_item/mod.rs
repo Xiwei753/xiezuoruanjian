@@ -18,7 +18,7 @@ use qmetaobject::prelude::*;
 use qmetaobject::{
     QMouseEvent, QQuickItem, QRectF, QString,
 };
-use rendering::{InsertAnimation, DeleteAnimation, ScrollBuffer};
+use rendering::{InsertAnimation, DeleteAnimation, ScrollBuffer, AnimatedSkipRange};
 pub use rendering::AnimatedGlyph;
 use std::cell::Cell;
 use std::time::Instant;
@@ -111,6 +111,7 @@ pub struct SujianEditorItem {
     cancel_preedit: qt_method!(fn(&mut self)),
     flush_content_height: qt_method!(fn(&mut self)),
     tick_cursor_animation: qt_method!(fn(&mut self)),
+    tick_typing_animation: qt_method!(fn(&mut self)),
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
 
@@ -140,6 +141,11 @@ pub struct SujianEditorItem {
     last_animation_events_json: QString,
     insert_animation: Option<InsertAnimation>,
     delete_animation: Option<DeleteAnimation>,
+    /// Byte ranges to skip during static text rendering while an animation
+    /// is active. For insert animations, the newly inserted glyphs are
+    /// skipped so the QML ghost overlay can animate them from the cursor
+    /// position. Cleared when the animation finishes.
+    animated_skip_ranges: Vec<AnimatedSkipRange>,
     preedit_text: String,
     preedit_cursor: usize,
     suppress_next_ime_commit: bool,
@@ -221,6 +227,7 @@ impl Default for SujianEditorItem {
             cancel_preedit: Default::default(),
             flush_content_height: Default::default(),
             tick_cursor_animation: Default::default(),
+            tick_typing_animation: Default::default(),
             long_press_at: Default::default(),
             select_word_at: Default::default(),
             buffer: EditorBuffer::default(),
@@ -249,6 +256,7 @@ impl Default for SujianEditorItem {
             last_animation_events_json: "".into(),
             insert_animation: None,
             delete_animation: None,
+            animated_skip_ranges: Vec::new(),
             preedit_text: String::new(),
             preedit_cursor: 0,
             suppress_next_ime_commit: false,
@@ -609,7 +617,7 @@ impl SujianEditorItem {
 
     fn visual_changed(&mut self) {
         self.invalidate_layout_cache();
-        self.recalculate_content_height_quiet();
+        self.recalculate_content_height_and_emit();
         self.visual_settings_changed();
         self.update_cursor_visual_position();
         self.request_static_repaint();
@@ -618,7 +626,7 @@ impl SujianEditorItem {
     fn emit_content_changed(&mut self) {
         self.text_revision = self.text_revision.wrapping_add(1);
         self.invalidate_layout_cache();
-        self.recalculate_content_height_quiet();
+        self.recalculate_content_height_and_emit();
         self.plain_text_changed();
         self.text_changed();
         self.cursor_position_changed();
@@ -641,6 +649,38 @@ impl SujianEditorItem {
         let still_animating = self.cursor_ctrl.tick_animation();
         self.cursor_rect_changed();
         if still_animating {
+            self.request_frame_update();
+        }
+    }
+
+    /// Tick the typing animation (insert/delete). When the animation finishes,
+    /// clear the animated_skip_ranges and request a repaint so the static
+    /// layer renders the full text again.
+    fn tick_typing_animation(&mut self) {
+        let now = Instant::now();
+        let insert_done = self.insert_animation.as_ref().is_some_and(|a| a.is_finished(now));
+        let delete_done = self.delete_animation.as_ref().is_some_and(|a| a.is_finished(now));
+
+        if insert_done {
+            self.insert_animation = None;
+        }
+        if delete_done {
+            self.delete_animation = None;
+        }
+
+        if insert_done || delete_done {
+            let had_skips = !self.animated_skip_ranges.is_empty();
+            self.animated_skip_ranges.clear();
+            if had_skips {
+                // Invalidate scroll buffer so the static layer repaints
+                // with the full text (no more skipped ranges).
+                self.scroll_buffer = None;
+                self.request_static_repaint();
+            }
+        }
+
+        // If any animation is still running, keep ticking
+        if self.insert_animation.is_some() || self.delete_animation.is_some() {
             self.request_frame_update();
         }
     }
@@ -683,11 +723,21 @@ impl SujianEditorItem {
 
         self.delete_animation = None;
         self.insert_animation = None;
+        self.animated_skip_ranges.clear();
 
         if self.current_typing_animation_enabled && !self.current_is_scrolling {
             for event in &events {
                 if event.kind == EditorAnimationKind::Insert {
                     let anim = self.create_insert_animation(event, origin_cx, origin_cy, cursor_h);
+                    // Set skip range: during insert animation, skip rendering
+                    // the newly inserted glyphs in the static layer so the
+                    // QML ghost overlay can animate them from cursor position.
+                    let range_start = event.range_start;
+                    let range_end = range_start + event.range_len;
+                    self.animated_skip_ranges.push(AnimatedSkipRange {
+                        byte_start: range_start,
+                        byte_end: range_end,
+                    });
                     self.insert_animation = Some(anim);
                     break;
                 }
@@ -714,6 +764,7 @@ impl SujianEditorItem {
 
         self.insert_animation = None;
         self.delete_animation = None;
+        self.animated_skip_ranges.clear();
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
@@ -747,6 +798,7 @@ impl SujianEditorItem {
 
         self.insert_animation = None;
         self.delete_animation = None;
+        self.animated_skip_ranges.clear();
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
@@ -780,6 +832,7 @@ impl SujianEditorItem {
 
         self.insert_animation = None;
         self.delete_animation = None;
+        self.animated_skip_ranges.clear();
 
         let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
 
@@ -1344,6 +1397,18 @@ impl SujianEditorItem {
         }
     }
 
+    /// Recalculate content height and immediately emit `content_height_changed`
+    /// if the height changed. This ensures QML ScrollView always gets the
+    /// latest contentHeight without relying on a deferred flush.
+    fn recalculate_content_height_and_emit(&mut self) {
+        let next = self.compute_content_height();
+        if (self.current_content_height - next).abs() > 0.5 {
+            self.current_content_height = next;
+            self.content_height_dirty.set(false);
+            self.content_height_changed();
+        }
+    }
+
     fn compute_content_height(&mut self) -> f32 {
         let width = self.bounding_width();
         let padding = self.current_padding;
@@ -1561,7 +1626,7 @@ impl QQuickItem for SujianEditorItem {
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
         self.scroll_buffer = None;
-        self.recalculate_content_height_quiet();
+        self.recalculate_content_height_and_emit();
         self.cursor_ctrl.force_snap_next = true;
         let _ = self.update_cursor_visual_position();
         self.request_static_repaint();

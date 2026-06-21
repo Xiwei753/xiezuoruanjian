@@ -107,7 +107,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
 
         val iterator = activeAnims.iterator()
         var hasMore = false
-
+        var hadFinishedAnims = false
 
         while (iterator.hasNext()) {
             val anim = iterator.next()
@@ -124,9 +124,16 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
 
             if (anim.progress >= 1f) {
                 activeAnims.remove(anim)
+                hadFinishedAnims = true
             } else {
                 hasMore = true
             }
+        }
+
+        // When animations finish, clear skip ranges so the static text
+        // becomes fully visible again on the next draw
+        if (hadFinishedAnims) {
+            editText.renderLayer?.clearSkipRanges()
         }
 
         return hasMore || activeAnims.isNotEmpty()

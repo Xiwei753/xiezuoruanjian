@@ -103,7 +103,7 @@ Item {
             target: root.insertOpacityAnim
             property: "currentOpacity"
             from: 0.0
-            to: 0.6
+            to: 1.0
             duration: root.duration
             easing.type: Easing.OutCubic
         }
