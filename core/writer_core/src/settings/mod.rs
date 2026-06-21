@@ -22,6 +22,23 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+/// 跨端设置安全范围常量。
+///
+/// 各端 UI 应使用这些常量作为滑块/输入的 min/max，
+/// 以确保同步后设置值在所有平台上有效。
+pub mod ranges {
+    pub const FONT_SIZE_MIN: f32 = 12.0;
+    pub const FONT_SIZE_MAX: f32 = 72.0;
+    pub const LINE_SPACING_MIN: f32 = 1.0;
+    pub const LINE_SPACING_MAX: f32 = 3.0;
+    pub const INDENT_WIDTH_MIN: f32 = 0.0;
+    pub const INDENT_WIDTH_MAX: f32 = 8.0;
+    pub const ANIMATION_DURATION_MIN_MS: u64 = 30;
+    pub const ANIMATION_DURATION_MAX_MS: u64 = 1000;
+    pub const AUTO_SAVE_DELAY_MIN_MS: u64 = 1000;
+    pub const AUTO_SAVE_DELAY_MAX_MS: u64 = 10000;
+}
+
 /// 本地设置（不同步到其他设备）。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -107,6 +124,18 @@ fn default_editor_smooth_cursor_duration_ms() -> u64 {
     80
 }
 
+impl LocalSettings {
+    /// 将所有设置项 clamp 到安全范围内。
+    pub fn validate(&mut self) {
+        self.editor_font_size = self.editor_font_size.clamp(ranges::FONT_SIZE_MIN, ranges::FONT_SIZE_MAX);
+        self.editor_line_spacing_multiplier = self.editor_line_spacing_multiplier.clamp(ranges::LINE_SPACING_MIN, ranges::LINE_SPACING_MAX);
+        self.auto_indent_width = self.auto_indent_width.clamp(ranges::INDENT_WIDTH_MIN, ranges::INDENT_WIDTH_MAX);
+        self.editor_typing_animation_duration_ms = self.editor_typing_animation_duration_ms.clamp(ranges::ANIMATION_DURATION_MIN_MS, ranges::ANIMATION_DURATION_MAX_MS);
+        self.editor_smooth_cursor_duration_ms = self.editor_smooth_cursor_duration_ms.clamp(ranges::ANIMATION_DURATION_MIN_MS, ranges::ANIMATION_DURATION_MAX_MS);
+        self.auto_save_delay_ms = self.auto_save_delay_ms.clamp(ranges::AUTO_SAVE_DELAY_MIN_MS, ranges::AUTO_SAVE_DELAY_MAX_MS);
+    }
+}
+
 impl Default for LocalSettings {
     fn default() -> Self {
         Self {
@@ -149,7 +178,9 @@ pub fn load_local_settings(workspace_path: &Path) -> Result<LocalSettings> {
         return Ok(LocalSettings::default());
     }
     let content = fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&content)?)
+    let mut settings: LocalSettings = serde_json::from_str(&content)?;
+    settings.validate();
+    Ok(settings)
 }
 
 pub fn save_local_settings(workspace_path: &Path, settings: &LocalSettings) -> Result<()> {
@@ -270,5 +301,54 @@ mod tests {
 
         let local_after = load_local_settings(temp_dir.path()).unwrap();
         assert_eq!(local_after.editor_font_size, 14.0);
+    }
+
+    #[test]
+    fn test_ranges_constants_exist() {
+        // 验证常量存在且值合理
+        assert_eq!(ranges::FONT_SIZE_MIN, 12.0);
+        assert_eq!(ranges::FONT_SIZE_MAX, 72.0);
+        assert_eq!(ranges::LINE_SPACING_MIN, 1.0);
+        assert_eq!(ranges::LINE_SPACING_MAX, 3.0);
+        assert_eq!(ranges::INDENT_WIDTH_MIN, 0.0);
+        assert_eq!(ranges::INDENT_WIDTH_MAX, 8.0);
+        assert_eq!(ranges::ANIMATION_DURATION_MIN_MS, 30);
+        assert_eq!(ranges::ANIMATION_DURATION_MAX_MS, 1000);
+        assert_eq!(ranges::AUTO_SAVE_DELAY_MIN_MS, 1000);
+        assert_eq!(ranges::AUTO_SAVE_DELAY_MAX_MS, 10000);
+    }
+
+    #[test]
+    fn test_validate_clamps_values() {
+        let mut settings = LocalSettings {
+            editor_font_size: 999.0,
+            editor_line_spacing_multiplier: 10.0,
+            auto_indent_width: 100.0,
+            editor_typing_animation_duration_ms: 5000,
+            editor_smooth_cursor_duration_ms: 0,
+            auto_save_delay_ms: 50,
+            ..LocalSettings::default()
+        };
+        settings.validate();
+        assert_eq!(settings.editor_font_size, ranges::FONT_SIZE_MAX);
+        assert_eq!(settings.editor_line_spacing_multiplier, ranges::LINE_SPACING_MAX);
+        assert_eq!(settings.auto_indent_width, ranges::INDENT_WIDTH_MAX);
+        assert_eq!(settings.editor_typing_animation_duration_ms, ranges::ANIMATION_DURATION_MAX_MS);
+        assert_eq!(settings.editor_smooth_cursor_duration_ms, ranges::ANIMATION_DURATION_MIN_MS);
+        assert_eq!(settings.auto_save_delay_ms, ranges::AUTO_SAVE_DELAY_MIN_MS);
+
+        // 验证低于下限也被 clamp
+        let mut settings_low = LocalSettings {
+            editor_font_size: 1.0,
+            editor_line_spacing_multiplier: 0.2,
+            auto_indent_width: -5.0,
+            auto_save_delay_ms: 100,
+            ..LocalSettings::default()
+        };
+        settings_low.validate();
+        assert_eq!(settings_low.editor_font_size, ranges::FONT_SIZE_MIN);
+        assert_eq!(settings_low.editor_line_spacing_multiplier, ranges::LINE_SPACING_MIN);
+        assert_eq!(settings_low.auto_indent_width, ranges::INDENT_WIDTH_MIN);
+        assert_eq!(settings_low.auto_save_delay_ms, ranges::AUTO_SAVE_DELAY_MIN_MS);
     }
 }
