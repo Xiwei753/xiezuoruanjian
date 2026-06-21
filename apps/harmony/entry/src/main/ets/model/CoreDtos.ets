@@ -212,7 +212,7 @@ export interface SyncDiagnosticsResult {
   remoteUrlSanitized: string
   transport: string
   errorCategory: string
-  userMessage: string
+  userMessage?: string
   rawError?: string
   chosenNetworkMode?: string
   networkProbeSummary?: NetworkProbeResult[]

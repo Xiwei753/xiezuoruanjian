@@ -341,10 +341,10 @@ struct WorkspacePage {
 
   async deleteVolume(volumeId: string) {
     AlertDialog.show({
-      title: $r('app.string.confirm_delete') as string,
-      message: $r('app.string.confirm_delete_volume') as string,
-      primaryButton: { value: $r('app.string.cancel') as string, action: () => {} },
-      secondaryButton: { value: $r('app.string.delete') as string, action: () => this.doDeleteVolume(volumeId) }
+      title: $r('app.string.confirm_delete'),
+      message: $r('app.string.confirm_delete_volume'),
+      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
+      secondaryButton: { value: $r('app.string.delete'), action: () => this.doDeleteVolume(volumeId) }
     })
   }
 
@@ -361,10 +361,10 @@ struct WorkspacePage {
 
   async deleteChapter(chapterId: string) {
     AlertDialog.show({
-      title: $r('app.string.confirm_delete') as string,
-      message: $r('app.string.confirm_delete_chapter') as string,
-      primaryButton: { value: $r('app.string.cancel') as string, action: () => {} },
-      secondaryButton: { value: $r('app.string.delete') as string, action: () => this.doDeleteChapter(chapterId) }
+      title: $r('app.string.confirm_delete'),
+      message: $r('app.string.confirm_delete_chapter'),
+      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
+      secondaryButton: { value: $r('app.string.delete'), action: () => this.doDeleteChapter(chapterId) }
     })
   }
 

@@ -532,11 +532,11 @@ struct Index {
 
   async deleteProject(projectId: string) {
     AlertDialog.show({
-      title: $r('app.string.confirm_delete') as string,
-      message: $r('app.string.confirm_delete_project') as string,
-      primaryButton: { value: $r('app.string.cancel') as string, action: () => {} },
+      title: $r('app.string.confirm_delete'),
+      message: $r('app.string.confirm_delete_project'),
+      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
       secondaryButton: {
-        value: $r('app.string.delete') as string,
+        value: $r('app.string.delete'),
         action: () => {
           this.doDeleteProject(projectId)
         }

@@ -595,7 +595,7 @@ struct StarMapPage {
                 .margin({ right: 8 })
 
               Column() {
-                 Text(edge.label || $r('app.string.unnamed_relation') as string)
+                 Text(edge.label || getContext(this).resourceManager.getStringSync($r('app.string.unnamed_relation').id))
                   .fontSize(13)
                   .fontColor(this.themeConfig.colors.textPrimary)
 

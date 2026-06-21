@@ -129,7 +129,7 @@ struct SettingsPage {
           this.saveMessage = ''
         }, 2000)
       } else {
-        this.saveMessage = MessageKeyMapper.resolveMessage(result.messageKey, result.messageArgs, result.errorCode)
+        this.saveMessage = MessageKeyMapper.resolveMessage(getContext(this), result.messageKey, result.messageArgs, result.errorCode)
       }
     } catch (err) {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
@@ -150,7 +150,7 @@ struct SettingsPage {
           this.syncMessage = ''
         }, 3000)
       } else {
-        this.syncMessage = MessageKeyMapper.resolveMessage(result.messageKey, result.messageArgs, result.errorCode)
+        this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), result.messageKey, result.messageArgs, result.errorCode)
       }
     } catch (err) {
       this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
@@ -311,9 +311,9 @@ struct SettingsPage {
           .layoutWeight(1)
 
         Select([
-          { value: $r('app.string.follow_system') as string, icon: '' },
-          { value: $r('app.string.light_mode') as string, icon: '' },
-          { value: $r('app.string.dark_mode') as string, icon: '' }
+          { value: getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id), icon: '' },
+          { value: getContext(this).resourceManager.getStringSync($r('app.string.light_mode').id), icon: '' },
+          { value: getContext(this).resourceManager.getStringSync($r('app.string.dark_mode').id), icon: '' }
         ] as SettingsSelectOption[])
           .selected(this.getThemeIndex())
           .value(this.getThemeName())
@@ -604,7 +604,7 @@ struct SettingsPage {
             { value: 'GitHub', icon: '' },
             { value: 'GitLab', icon: '' },
             { value: 'Gitea', icon: '' },
-            { value: $r('app.string.custom') as string, icon: '' }
+            { value: getContext(this).resourceManager.getStringSync($r('app.string.custom').id), icon: '' }
           ] as SettingsSelectOption[])
             .selected(this.getSyncProviderIndex())
             .value(this.getSyncProviderName())
@@ -704,8 +704,10 @@ struct SettingsPage {
             .justifyContent(FlexAlign.SpaceAround)
             .margin({ bottom: 12 })
 
-            // User message
-            Text(this.syncDiagnostics.userMessage)
+            // User message — 优先用 errorCategory 走 MessageKeyMapper，否则直接显示 userMessage
+            Text(this.syncDiagnostics.errorCategory && this.syncDiagnostics.errorCategory.length > 0
+              ? MessageKeyMapper.resolveMessage(getContext(this), `error.${this.syncDiagnostics.errorCategory}`, undefined, undefined)
+              : (this.syncDiagnostics.userMessage ?? ''))
               .fontSize(14)
               .fontColor(this.syncDiagnostics.success ? this.themeConfig.colors.success : this.themeConfig.colors.error)
               .margin({ bottom: 8 })

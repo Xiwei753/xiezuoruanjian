@@ -447,14 +447,14 @@ struct WritingPage {
 
   async clearContent() {
     AlertDialog.show({
-      title: $r('app.string.confirm_clear') as string,
-      message: $r('app.string.confirm_clear_message') as string,
+      title: $r('app.string.confirm_clear'),
+      message: $r('app.string.confirm_clear_message'),
       primaryButton: {
-        value: $r('app.string.cancel') as string,
+        value: $r('app.string.cancel'),
         action: () => {}
       },
       secondaryButton: {
-        value: $r('app.string.confirm_clear_action') as string,
+        value: $r('app.string.confirm_clear_action'),
         action: () => {
           this.doClearContent()
         }

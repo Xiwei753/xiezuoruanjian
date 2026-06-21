@@ -18,12 +18,23 @@
 /// 如果 messageKey 不在已知列表中，返回 "error.other"。
 pub fn resolve_message_key(message_key: &str) -> &'static str {
     match message_key {
-        "error.io" | "error.json" | "error.invalid_workspace" | "error.project_not_found"
-        | "error.volume_not_found" | "error.chapter_not_found" | "error.empty_overwrite_blocked"
-        | "error.not_implemented" | "error.refuse_delete_workspace_root"
-        | "error.invalid_delete_target" | "error.sync_conflict" | "error.sync_failed"
-        | "error.other" | "error.core_error" | "error.clipboard_unavailable"
-        | "error.json_parse" | "error.empty_title" => message_key,
+        "error.io" => "error.io",
+        "error.json" => "error.json",
+        "error.invalid_workspace" => "error.invalid_workspace",
+        "error.project_not_found" => "error.project_not_found",
+        "error.volume_not_found" => "error.volume_not_found",
+        "error.chapter_not_found" => "error.chapter_not_found",
+        "error.empty_overwrite_blocked" => "error.empty_overwrite_blocked",
+        "error.not_implemented" => "error.not_implemented",
+        "error.refuse_delete_workspace_root" => "error.refuse_delete_workspace_root",
+        "error.invalid_delete_target" => "error.invalid_delete_target",
+        "error.sync_conflict" => "error.sync_conflict",
+        "error.sync_failed" => "error.sync_failed",
+        "error.other" => "error.other",
+        "error.core_error" => "error.core_error",
+        "error.clipboard_unavailable" => "error.clipboard_unavailable",
+        "error.json_parse" => "error.json_parse",
+        "error.empty_title" => "error.empty_title",
         _ => "error.other",
     }
 }

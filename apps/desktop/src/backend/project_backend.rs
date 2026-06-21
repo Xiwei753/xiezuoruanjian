@@ -181,13 +181,23 @@ impl ProjectBackend {
         project_id: QString,
         volume_id: QString,
         chapter_id: QString,
-        action_id: QString,
+        _action_id: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut("{}".into(), |app| {
-            app.select_tree_item_json(item_type, project_id, volume_id, chapter_id, action_id)
-        });
+        let item_type_str = item_type.to_string();
+        match item_type_str.as_str() {
+            "project" => {
+                self.with_app_mut((), |app| app.select_project(project_id));
+            }
+            "volume" => {
+                self.with_app_mut((), |app| app.select_volume(project_id, volume_id));
+            }
+            "chapter" => {
+                self.with_app_mut((), |app| app.select_chapter(project_id, volume_id, chapter_id));
+            }
+            _ => {}
+        }
         self.selected_item_changed();
-        qjson_object_from_json(&out.to_string())
+        bridge_success_object(serde_json::json!({}))
     }
     fn delete_project_result(&mut self, project_id: QString, action_id: QString) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| {

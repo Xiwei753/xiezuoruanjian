@@ -710,7 +710,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       remoteUrlSanitized: 'https://github.com/***',
       transport: 'https',
       errorCategory: '',
-      userMessage: '同步诊断完成，一切正常',
+      userMessage: undefined,
       rawError: undefined,
       chosenNetworkMode: undefined,
       networkProbeSummary: undefined
