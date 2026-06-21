@@ -67,7 +67,7 @@ struct WritingPage {
   @State cursorX: number = 0
   @State cursorY: number = 0
   @State cursorVisible: boolean = true
-  // 编辑器动画状态 — 降级禁用（Harmony 写作区动画等桌面/Android 稳定后再做）
+  // 编辑器动画状态 — 当前 Harmony 动画禁用，等待桌面/Android 稳定后再实现
   @State typingAnimationEnabled: boolean = false  // 强制关闭，不从设置读取
   @State smoothCursorEnabled: boolean = false     // 强制关闭，不从设置读取
   @State lastInsertedText: string = ''

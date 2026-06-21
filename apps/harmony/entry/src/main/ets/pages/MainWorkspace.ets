@@ -104,10 +104,8 @@ struct MainWorkspace {
   @State sessionId: string = ''
   @State sessionStartTime: number = 0
 
-  // ── 编辑器动画状态（降级：Harmony 写作区动画暂时关闭）──
-  // Harmony 写作区动画存在多源问题（content/TextArea/onContentChange/getCaretOffset/scrollOffsetY
-  // 多个来源控制同一个视觉结果），等桌面/Android 稳定后再做。
-  // 当前保留原生 TextArea 稳定输入、保存、字数统计。
+  // ── 编辑器动画状态 — 当前 Harmony 动画禁用，等待桌面/Android 稳定后再实现 ──
+  // 不测动画。第一版目标：能写、能保存、能滚动、能切换章节。
   // 禁用的 overlay 代码已移至 HarmonyAnimationOverlayDisabled.ets
   @State typingAnimationEnabled: boolean = false  // 强制关闭，不从设置读取
   @State smoothCursorEnabled: boolean = false     // 强制关闭，不从设置读取
@@ -285,8 +283,7 @@ struct MainWorkspace {
           lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
-        // 编辑器动画开关 — 降级禁用，不从设置读取
-        // Harmony 写作区动画等桌面/Android 稳定后再做
+        // 编辑器动画开关 — 当前 Harmony 动画禁用，等待桌面/Android 稳定后再实现
         this.typingAnimationEnabled = false
         this.smoothCursorEnabled = false
 
@@ -363,7 +360,7 @@ struct MainWorkspace {
   }
 
   onContentChange(text: string) {
-    // 动画已降级禁用（typingAnimationEnabled 强制 false）
+    // 当前 Harmony 动画禁用（typingAnimationEnabled 强制 false）
     // 禁用的动画代码已移至 HarmonyAnimationOverlayDisabled.ets
 
     this.content = text

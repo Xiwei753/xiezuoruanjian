@@ -67,7 +67,7 @@ class EditorRenderLayer(private val editText: WriterEditText) {
     /**
      * 添加一个 typing animation。
      * TypingAnimationController 应通过此方法添加动画，而不是直接操作 TypingOverlayRenderer。
-     * 不再添加 skip range —— 静态正文永远完整绘制，动画只做附加 overlay。
+     * 静态正文永远完整绘制，动画只做附加 overlay。
      */
     fun addTypingAnim(anim: OverlayAnim) {
         if (isScrolling) {

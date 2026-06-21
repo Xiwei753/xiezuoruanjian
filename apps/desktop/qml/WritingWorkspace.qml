@@ -931,19 +931,6 @@ Rectangle {
                         }
                     }
 
-                    // 打字动画 tick - 检测 Rust 侧动画完成，清除 skip ranges 并重绘静态层
-                    Timer {
-                        id: typingAnimationTick
-                        interval: 16
-                        running: root.useSujianEditorItem
-                                 && sujianEditor.typing_animation_enabled
-                                 && sujianEditor.editor_enabled
-                        repeat: true
-                        onTriggered: {
-                            sujianEditor.tick_typing_animation()
-                        }
-                    }
-
                     // QML overlay 层 - 消费 Core animation events，叠加动画效果
                     EditorAnimationOverlay {
                         id: sujianAnimationOverlay

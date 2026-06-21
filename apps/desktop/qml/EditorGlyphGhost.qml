@@ -2,9 +2,10 @@
 // EditorGlyphGhost.qml — 单个 glyph ghost 动画效果
 // =============================================================================
 // 渲染吐字（insert）和吞字（delete）动画。
-// insert: scale 0.6→1.0, opacity 0→0.6, 从光标位置位移到 glyph 位置
-// delete: scale 1.0→0.4, opacity 0.7→0, 从 glyph 位置位移到光标位置
+// insert: scale 0.72→1.0, opacity 0→0.85→0, 从光标位置位移到 glyph 位置
+// delete: scale 1.0→0.45, opacity 0.75→0, 从 glyph 位置位移到光标位置
 // 动画结束后自动 destroy。
+// 不影响静态正文显示 — 正文层永远完整渲染，ghost 只是附加 overlay。
 
 import QtQuick
 
@@ -26,8 +27,8 @@ Item {
     property real glyphWidth: 0
     property real glyphHeight: 0
 
-    // 动画时长
-    property int duration: 160
+    // 动画时长（clamped to 80~180ms）
+    property int duration: Math.max(80, Math.min(180, 160))
 
     // 颜色
     property color ghostColor: "#E2E2E5"
@@ -60,7 +61,7 @@ Item {
     }
 
     property var deleteOpacityAnim: QtObject {
-        property real currentOpacity: 1.0
+        property real currentOpacity: 0.75
     }
 
     // 当前位置（动画中间值）
@@ -78,6 +79,9 @@ Item {
     }
 
     // ── Insert 并行动画组 ──
+    // opacity: 0 → 0.85 → 0 (peak at midpoint via SequentialAnimation)
+    // scale: 0.72 → 1.0
+    // position: cursor → glyph
 
     ParallelAnimation {
         id: insertAnim
@@ -99,17 +103,27 @@ Item {
             duration: root.duration
             easing.type: Easing.OutCubic
         }
-        NumberAnimation {
-            target: root.insertOpacityAnim
-            property: "currentOpacity"
-            from: 0.0
-            to: 1.0
-            duration: root.duration
-            easing.type: Easing.OutCubic
+        SequentialAnimation {
+            NumberAnimation {
+                target: root.insertOpacityAnim
+                property: "currentOpacity"
+                from: 0.0
+                to: 0.85
+                duration: root.duration * 0.5
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: root.insertOpacityAnim
+                property: "currentOpacity"
+                from: 0.85
+                to: 0.0
+                duration: root.duration * 0.5
+                easing.type: Easing.InCubic
+            }
         }
         ScaleAnimator {
             target: ghostText
-            from: 0.6
+            from: 0.72
             to: 1.0
             duration: root.duration
             easing.type: Easing.OutCubic
@@ -119,6 +133,9 @@ Item {
     }
 
     // ── Delete 并行动画组 ──
+    // opacity: 0.75 → 0
+    // scale: 1.0 → 0.45
+    // position: glyph → cursor
 
     ParallelAnimation {
         id: deleteAnim
@@ -143,7 +160,7 @@ Item {
         NumberAnimation {
             target: root.deleteOpacityAnim
             property: "currentOpacity"
-            from: 0.7
+            from: 0.75
             to: 0.0
             duration: root.duration
             easing.type: Easing.InCubic
@@ -151,7 +168,7 @@ Item {
         ScaleAnimator {
             target: ghostText
             from: 1.0
-            to: 0.4
+            to: 0.45
             duration: root.duration
             easing.type: Easing.InCubic
         }

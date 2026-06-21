@@ -18,10 +18,8 @@ use qmetaobject::prelude::*;
 use qmetaobject::{
     QMouseEvent, QQuickItem, QRectF, QString,
 };
-use rendering::{InsertAnimation, DeleteAnimation, ScrollBuffer};
-pub use rendering::AnimatedGlyph;
+use rendering::ScrollBuffer;
 use std::cell::Cell;
-use std::time::Instant;
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorAnimationEvent, EditorAnimationKind, GlyphRect};
 
 cpp! {{
@@ -111,7 +109,6 @@ pub struct SujianEditorItem {
     cancel_preedit: qt_method!(fn(&mut self)),
     flush_content_height: qt_method!(fn(&mut self)),
     tick_cursor_animation: qt_method!(fn(&mut self)),
-    tick_typing_animation: qt_method!(fn(&mut self)),
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
 
@@ -139,8 +136,6 @@ pub struct SujianEditorItem {
     last_summary: QString,
     last_event_count: u32,
     last_animation_events_json: QString,
-    insert_animation: Option<InsertAnimation>,
-    delete_animation: Option<DeleteAnimation>,
     preedit_text: String,
     preedit_cursor: usize,
     suppress_next_ime_commit: bool,
@@ -222,7 +217,6 @@ impl Default for SujianEditorItem {
             cancel_preedit: Default::default(),
             flush_content_height: Default::default(),
             tick_cursor_animation: Default::default(),
-            tick_typing_animation: Default::default(),
             long_press_at: Default::default(),
             select_word_at: Default::default(),
             buffer: EditorBuffer::default(),
@@ -249,8 +243,6 @@ impl Default for SujianEditorItem {
             last_summary: "".into(),
             last_event_count: 0,
             last_animation_events_json: "".into(),
-            insert_animation: None,
-            delete_animation: None,
             preedit_text: String::new(),
             preedit_cursor: 0,
             suppress_next_ime_commit: false,
@@ -558,8 +550,7 @@ impl SujianEditorItem {
         self.current_is_scrolling = value;
         if value {
             self.cursor_ctrl.animation = None;
-            self.insert_animation = None;
-            self.delete_animation = None;
+            // Animation overlay clearing is handled by QML EditorAnimationOverlay.suppressed
             self.cursor_ctrl.force_snap_next = true;
             self.request_static_repaint();
             return;
@@ -653,24 +644,9 @@ impl SujianEditorItem {
         }
     }
 
-    /// Tick the typing animation (insert/delete).
-    fn tick_typing_animation(&mut self) {
-        let now = Instant::now();
-        let insert_done = self.insert_animation.as_ref().is_some_and(|a| a.is_finished(now));
-        let delete_done = self.delete_animation.as_ref().is_some_and(|a| a.is_finished(now));
-
-        if insert_done {
-            self.insert_animation = None;
-        }
-        if delete_done {
-            self.delete_animation = None;
-        }
-
-        // If any animation is still running, keep ticking
-        if self.insert_animation.is_some() || self.delete_animation.is_some() {
-            self.request_frame_update();
-        }
-    }
+    // tick_typing_animation() removed: Rust no longer manages animation display
+    // lifecycle.  QML EditorAnimationOverlay owns animation state and ghosts
+    // self-destroy on completion.
 
     fn clear_undo_stack(&mut self) {
         self.buffer.undo_stack.clear();
@@ -688,14 +664,6 @@ impl SujianEditorItem {
         self.preedit_text.clear();
         self.preedit_cursor = 0;
 
-        // 保存光标位置（用于动画）
-        let origin_cx = self.cursor_ctrl.target_x;
-        let origin_cy = self.cursor_ctrl.target_y;
-        let cursor_h = self.editor_layout.cursor_height(
-            self.current_font_pixel_size as f64,
-            &self.current_font_family.to_string(),
-        );
-
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
@@ -706,25 +674,9 @@ impl SujianEditorItem {
             EditorTransactionCause::ImeComposition
         };
         let new = self.buffer.snapshot();
-        let events = self.record_transaction(old, new, cause, true);
-
-        self.delete_animation = None;
-        self.insert_animation = None;
-
-
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            for event in &events {
-                if event.kind == EditorAnimationKind::Insert {
-                    let anim = self.create_insert_animation(event, origin_cx, origin_cy, cursor_h);
-                    // The static layer always renders the full text.
-                    // The QML ghost overlay is purely additive — it draws
-                    // on top of the static text, so a glyph-calculation
-                    // error in the overlay can never cause text to disappear.
-                    self.insert_animation = Some(anim);
-                    break;
-                }
-            }
-        }
+        let _events = self.record_transaction(old, new, cause, true);
+        // Animation lifecycle is owned by QML EditorAnimationOverlay.
+        // Rust only provides glyph rect data via animation_events_json.
 
         self.emit_content_changed();
     }
@@ -738,27 +690,12 @@ impl SujianEditorItem {
         if !self.buffer.delete_backward() {
             return;
         }
-        let old_text = old.text.clone();
         self.buffer.push_undo(old.clone());
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
-        let new_text = new.text.clone();
 
-        self.insert_animation = None;
-        self.delete_animation = None;
-
-
-        let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            for event in &events {
-                if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, &new_text);
-                    self.delete_animation = Some(anim);
-                    break;
-                }
-            }
-        }
+        let _events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        // Animation lifecycle is owned by QML EditorAnimationOverlay.
 
         self.emit_content_changed();
     }
@@ -772,27 +709,12 @@ impl SujianEditorItem {
         if !self.buffer.delete_forward() {
             return;
         }
-        let old_text = old.text.clone();
         self.buffer.push_undo(old.clone());
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
-        let new_text = new.text.clone();
 
-        self.insert_animation = None;
-        self.delete_animation = None;
-
-
-        let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            for event in &events {
-                if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, &new_text);
-                    self.delete_animation = Some(anim);
-                    break;
-                }
-            }
-        }
+        let _events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        // Animation lifecycle is owned by QML EditorAnimationOverlay.
 
         self.emit_content_changed();
     }
@@ -806,27 +728,12 @@ impl SujianEditorItem {
         if !self.buffer.delete_selection() {
             return;
         }
-        let old_text = old.text.clone();
         self.buffer.push_undo(old.clone());
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
-        let new_text = new.text.clone();
 
-        self.insert_animation = None;
-        self.delete_animation = None;
-
-
-        let events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-
-        if self.current_typing_animation_enabled && !self.current_is_scrolling {
-            for event in &events {
-                if event.kind == EditorAnimationKind::Delete {
-                    let anim = self.create_delete_animation(event, &old_text, &new_text);
-                    self.delete_animation = Some(anim);
-                    break;
-                }
-            }
-        }
+        let _events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        // Animation lifecycle is owned by QML EditorAnimationOverlay.
 
         self.emit_content_changed();
     }
@@ -1120,70 +1027,6 @@ impl SujianEditorItem {
         events
     }
 
-    fn create_insert_animation(
-        &mut self,
-        event: &EditorAnimationEvent,
-        origin_cx: f64,
-        origin_cy: f64,
-        cursor_h: f64,
-    ) -> InsertAnimation {
-        let width = self.bounding_width();
-        let snapshot = self.layout_snapshot(width);
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = &self.current_font_family.to_string();
-
-        let mut glyphs = Vec::new();
-        let range_start = event.range_start;
-        let range_end = range_start + event.range_len;
-
-        for (line_idx, line) in snapshot.lines.iter().enumerate() {
-            if line.end <= range_start || line.start >= range_end {
-                continue;
-            }
-            if line.para_text.is_empty() {
-                continue;
-            }
-            let seg_start = range_start.max(line.start);
-            let seg_end = range_end.min(line.end);
-            if seg_start >= seg_end {
-                continue;
-            }
-
-            let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
-            let glyph_data = self.editor_layout.glyph_positions_on_line(
-                line,
-                seg_start,
-                seg_end,
-                font_size,
-                font_family,
-            );
-            for (abs_byte, x_pos, ch_w) in glyph_data {
-                if abs_byte >= self.buffer.text.len() {
-                    continue;
-                }
-                let ch = self.buffer.text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
-                let ch_str = ch.to_string();
-                glyphs.push(AnimatedGlyph {
-                    byte_start: abs_byte,
-                    byte_end: abs_byte + ch_str.len(),
-                    text: ch_str,
-                    rect: (line.x + x_pos, line.y - self.current_scroll_y as f64, ch_w, line.height),
-                    baseline_y,
-                    line_index: line_idx,
-                });
-            }
-        }
-
-        let duration_ms = self.current_typing_animation_duration_ms.max(30) as u64;
-
-        InsertAnimation {
-            glyphs,
-            origin_cursor_rect: (origin_cx, origin_cy, 2.0, cursor_h),
-            start_time: Instant::now(),
-            duration_ms,
-        }
-    }
-
     /// 为 Insert/Delete 类型 animation events 填充 glyph_rects 数据
     ///
     /// 通过 EditorLayout 的 glyph_positions_on_line 获取字符位置
@@ -1294,81 +1137,6 @@ impl SujianEditorItem {
                     // Cursor 类型不需要 glyph rects
                 }
             }
-        }
-    }
-
-    fn create_delete_animation(
-        &mut self,
-        event: &EditorAnimationEvent,
-        old_text: &str,
-        new_text: &str,
-    ) -> DeleteAnimation {
-        let width = self.bounding_width();
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = &self.current_font_family.to_string();
-
-        // Old layout: glyph positions of the deleted text via Qt glyph runs
-        let old_snapshot = self.layout_snapshot_for_text(old_text, width);
-        let mut glyphs = Vec::new();
-        let range_start = event.range_start;
-        let range_end = range_start + event.range_len;
-
-        for (line_idx, line) in old_snapshot.lines.iter().enumerate() {
-            if line.end <= range_start || line.start >= range_end {
-                continue;
-            }
-            if line.para_text.is_empty() {
-                continue;
-            }
-            let seg_start = range_start.max(line.start);
-            let seg_end = range_end.min(line.end);
-            if seg_start >= seg_end {
-                continue;
-            }
-
-            let baseline_y = self.editor_layout.text_baseline_y(line, font_size, font_family);
-            let glyph_data = self.editor_layout.glyph_positions_on_line(
-                line,
-                seg_start,
-                seg_end,
-                font_size,
-                font_family,
-            );
-            for (abs_byte, x_pos, ch_w) in glyph_data {
-                if abs_byte >= old_text.len() {
-                    continue;
-                }
-                let ch = old_text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
-                let ch_str = ch.to_string();
-                glyphs.push(AnimatedGlyph {
-                    byte_start: abs_byte,
-                    byte_end: abs_byte + ch_str.len(),
-                    text: ch_str,
-                    rect: (line.x + x_pos, line.y - self.current_scroll_y as f64, ch_w, line.height),
-                    baseline_y,
-                    line_index: line_idx,
-                });
-            }
-        }
-
-        // New layout: compute the cursor rect after deletion
-        let new_snapshot = self.layout_snapshot_for_text(new_text, width);
-        let new_cursor_byte = event.new_cursor.index;
-        let new_cursor_rect = self.editor_layout.caret_rect(
-            &new_snapshot,
-            new_cursor_byte,
-            CaretAffinity::Downstream,
-            0.0,
-            self.current_viewport_height.max(1.0) as f64,
-        );
-
-        let duration_ms = self.current_typing_animation_duration_ms.max(30) as u64;
-
-        DeleteAnimation {
-            glyphs,
-            target_cursor_rect: (new_cursor_rect.x, new_cursor_rect.y, 2.0, new_cursor_rect.h),
-            start_time: Instant::now(),
-            duration_ms,
         }
     }
 
@@ -1728,8 +1496,8 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // 清理已完成的动画（包括 overlay）
-        self.cleanup_finished_animations();
+        // Animation lifecycle is owned by QML EditorAnimationOverlay.
+        // No Rust-side animation cleanup needed.
 
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {

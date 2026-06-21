@@ -19,9 +19,10 @@ import kotlin.math.sqrt
  * - **做**：打字动画的计算和绘制
  * - **不做**：文本内容管理（由 EditText 负责）
  *
- * ## 使用场景
- * - 用户输入字符时的动画反馈
- * - 支持逐字符的弹出动画效果
+ * ## 动画参数
+ * - Insert: opacity 0→0.75→0, scale 0.72→1.0, duration 80~180ms
+ * - Delete: opacity 0.75→0, scale 1.0→0.45, duration 80~180ms
+ * - 静态正文永远由系统完整绘制，动画只做 overlay（附加绘制）
  */
 
 data class OverlayAnim(
@@ -107,7 +108,6 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
 
         val iterator = activeAnims.iterator()
         var hasMore = false
-        var hadFinishedAnims = false
 
         while (iterator.hasNext()) {
             val anim = iterator.next()
@@ -124,13 +124,11 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
 
             if (anim.progress >= 1f) {
                 activeAnims.remove(anim)
-                hadFinishedAnims = true
             } else {
                 hasMore = true
             }
         }
 
-        // Animations finished — no skip range cleanup needed.
         // Static text is always fully drawn by the system; overlay is purely additive.
 
         return hasMore || activeAnims.isNotEmpty()
@@ -151,19 +149,22 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
         for (anim in activeAnims) {
             var i = anim.insertedStart
             var drawnCodepoints = 0
-            var skippedNewlines = 0
 
             // Apply decelerate interpolation dynamically
             val interpolatedProgress = 1f - (1f - anim.progress) * (1f - anim.progress)
 
             if (anim.isDeletion) {
+                // ── Delete animation ──
+                // opacity: 0.75 → 0
+                // scale: 1.0 → 0.45
+                // position: glyph → cursor
                 val destX = if (anim.endX >= 0f) anim.endX else anim.startX
                 val destY = if (anim.endY >= 0f) anim.endY else anim.startY
 
                 val currentX = anim.startX + (destX - anim.startX) * interpolatedProgress
                 val currentY = anim.startY + (destY - anim.startY) * interpolatedProgress
-                val scale = 1f - 0.38f * interpolatedProgress
-                paint.alpha = (originalAlpha * (1f - interpolatedProgress)).toInt().coerceIn(0, 255)
+                val scale = 1f - 0.55f * interpolatedProgress  // 1.0 → 0.45
+                paint.alpha = (originalAlpha * 0.75f * (1f - interpolatedProgress)).toInt().coerceIn(0, 255)
 
                 var offsetX = 0f
                 for (idx in anim.codePoints.indices) {
@@ -185,6 +186,10 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
                     drawnCodepoints++
                 }
             } else {
+                // ── Insert animation ──
+                // opacity: 0 → 0.75 → 0 (peak at midpoint)
+                // scale: 0.72 → 1.0
+                // position: cursor → glyph
                 for (idx in anim.codePoints.indices) {
                     val cp = anim.codePoints[idx]
                     val charCount = Character.charCount(cp)
@@ -193,7 +198,6 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
                     val isNewline = (cp == '\n'.code || cp == '\r'.code)
 
                     if (isNewline) {
-                        skippedNewlines++
                         i += charCount
                         continue
                     }
@@ -224,13 +228,26 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
                     val currentX = sX + (destX - sX) * interpolatedProgress
                     val currentY = sY + (destY - sY) * interpolatedProgress
 
-                    paint.alpha = (originalAlpha * interpolatedProgress).toInt().coerceIn(0, 255)
+                    // Scale: 0.72 → 1.0
+                    val scale = 0.72f + 0.28f * interpolatedProgress
+
+                    // Opacity: 0 → 0.75 → 0 (peak at midpoint)
+                    val opacity = if (interpolatedProgress < 0.5f) {
+                        interpolatedProgress * 2f * 0.75f
+                    } else {
+                        (1f - interpolatedProgress) * 2f * 0.75f
+                    }
+                    paint.alpha = (originalAlpha * opacity).toInt().coerceIn(0, 255)
+
+                    canvas.save()
+                    canvas.scale(scale, scale, currentX + padX, currentY + padY)
                     canvas.drawText(
                         textToDraw,
                         currentX + padX,
                         currentY + padY,
                         paint
                     )
+                    canvas.restore()
 
                     drawnCodepoints++
                     i += charCount
@@ -238,7 +255,7 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
             }
 
             if (DEBUG_ANIM) {
-                android.util.Log.d(TAG, "onDraw - insertedStart: ${anim.insertedStart}, visibleAnimatedCodepoints: $drawnCodepoints, skippedNewlines: $skippedNewlines, overlayCount: ${activeAnims.size}")
+                android.util.Log.d(TAG, "onDraw - insertedStart: ${anim.insertedStart}, visibleAnimatedCodepoints: $drawnCodepoints, overlayCount: ${activeAnims.size}")
             }
         }
 

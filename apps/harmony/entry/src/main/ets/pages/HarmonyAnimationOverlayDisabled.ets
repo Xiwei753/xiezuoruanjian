@@ -1,16 +1,14 @@
 /**
  * HarmonyAnimationOverlayDisabled.ets
  *
- * ⚠️ DISABLED — Harmony 写作区动画代码，当前不可用。
- *
- * 原因：Harmony TextArea 的 content/onContentChange/getCaretOffset/scrollOffsetY
- * 多个来源控制同一个视觉结果，存在多源问题。等桌面/Android 稳定后再做。
- *
- * 当前保留此文件仅作为参考，避免后续 agent 误以为动画已可用。
- * MainWorkspace.ets 中 typingAnimationEnabled / smoothCursorEnabled 强制 false，
- * 不会渲染任何 overlay。
+ * 当前 Harmony 动画禁用，等待桌面/Android 稳定后再实现。
  *
  * 第一版 Harmony 目标：能写、能保存、能滚动、能切换章节。
+ * 不测动画。
+ *
+ * 当前保留此文件仅作为参考，避免后续 agent 误以为动画已可用。
+ * MainWorkspace.ets / WritingPage.ets 中 typingAnimationEnabled / smoothCursorEnabled 强制 false，
+ * 不会渲染任何 overlay。
  */
 
 // ── 插入动画 overlay（已禁用）──

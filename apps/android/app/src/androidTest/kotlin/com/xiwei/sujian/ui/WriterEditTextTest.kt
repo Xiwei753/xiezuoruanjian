@@ -54,7 +54,6 @@ class WriterEditTextTest {
         editText.text?.append("B")
         editText.text?.append("C")
 
-        // EditorRenderLayer 不再持有 skip ranges / active spans，
         // 静态正文永远由系统完整绘制，动画只做 overlay
         val layer = editText.renderLayer
         assertNotNull(layer)

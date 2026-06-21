@@ -6,7 +6,6 @@ use qmetaobject::{
     QImage, QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF,
     QString,
 };
-use std::time::Instant;
 
 use super::{sujian_editor_debug_enabled, SujianEditorItem};
 use super::cursor_controller::CursorUpdateResult;
@@ -113,84 +112,20 @@ impl CursorAnimationState {
     }
 }
 
-// TextMaskRange and StaticTextRenderPlan removed: static layer now always
-// renders the full text.  Animation overlay is purely additive — it draws
-// on top of the static text, so a glyph-calculation error in the overlay
-// can never cause text to disappear.
-
-#[derive(Clone, Debug)]
-pub struct AnimatedGlyph {
-    pub byte_start: usize,
-    pub byte_end: usize,
-    pub text: String,
-    pub rect: (f64, f64, f64, f64),
-    pub baseline_y: f64,
-    pub line_index: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct InsertAnimation {
-    pub glyphs: Vec<AnimatedGlyph>,
-    pub origin_cursor_rect: (f64, f64, f64, f64),
-    pub start_time: Instant,
-    pub duration_ms: u64,
-}
-
-impl InsertAnimation {
-    pub fn progress(&self, now: Instant) -> f64 {
-        let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
-        (elapsed_ms / self.duration_ms as f64).min(1.0)
-    }
-
-    pub fn is_finished(&self, now: Instant) -> bool {
-        now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct DeleteAnimation {
-    pub glyphs: Vec<AnimatedGlyph>,
-    pub target_cursor_rect: (f64, f64, f64, f64),
-    pub start_time: Instant,
-    pub duration_ms: u64,
-}
-
-impl DeleteAnimation {
-    pub fn progress(&self, now: Instant) -> f64 {
-        let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
-        (elapsed_ms / self.duration_ms as f64).min(1.0)
-    }
-
-    pub fn is_finished(&self, now: Instant) -> bool {
-        now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
-    }
-}
+// Animation display lifecycle has been removed from Rust.  Rust now only
+// provides glyph rect data via fill_glyph_rects_for_events() and the
+// animation_events_json QML property.  QML EditorAnimationOverlay owns the
+// animation lifecycle (creating ghosts, playing easing/opacity/scale/position,
+// destroying on completion).  The static layer always renders the full text;
+// animation overlay is purely additive.
 
 impl SujianEditorItem {
-    pub(crate) fn has_active_animation(&self) -> bool {
-        let now = Instant::now();
-        self.insert_animation.as_ref().is_some_and(|a| !a.is_finished(now))
-            || self.delete_animation.as_ref().is_some_and(|a| !a.is_finished(now))
-    }
+    // has_active_animation() removed: Rust no longer manages animation display
+    // lifecycle.  QML EditorAnimationOverlay owns animation state.
 
-    // static_text_render_plan() removed: the static layer now always renders
-    // the full text without masks.  The animation overlay is purely additive.
-
-    pub(crate) fn cleanup_finished_animations(&mut self) {
-        let now = Instant::now();
-        if let Some(ref anim) = self.insert_animation {
-            if anim.is_finished(now) {
-                self.insert_animation = None;
-            }
-        }
-        if let Some(ref anim) = self.delete_animation {
-            if anim.is_finished(now) {
-                self.delete_animation = None;
-            }
-        }
-        // AnimatedSkipRange has been removed — the static layer always
-        // renders the full text. No skip range cleanup needed.
-    }
+    // cleanup_finished_animations() removed: Rust no longer tracks animation
+    // start_time/duration/progress/is_finished.  QML ghosts self-destroy on
+    // completion.
 
     /// 渲染静态正文到 painter。不包含任何动画内容。
     /// buffer_scroll_y 和 buffer_h 定义缓冲区可见范围。
@@ -583,13 +518,11 @@ impl SujianEditorItem {
     }
 }
 
-// compute_visible_segments and related helpers removed — the static layer
-// no longer uses masks.  All text is always rendered in full.
+// Static text always renders full content. Animation must not affect text correctness.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_scroll_y_cache_and_buffer_hit() {
@@ -637,128 +570,4 @@ mod tests {
         let (src_y_clamp, src_h_clamp) = scroll_buffer.clamp_source_rect(3000.0, vp_h);
         assert!(src_y_clamp + src_h_clamp <= 3500.0);
     }
-
-    #[test]
-    fn test_insert_animation_glyph_ranges() {
-        let text = "hello world";
-        let glyphs = vec![
-            AnimatedGlyph {
-                byte_start: 6,
-                byte_end: 11,
-                text: "world".to_string(),
-                rect: (50.0, 0.0, 40.0, 20.0),
-                baseline_y: 16.0,
-                line_index: 0,
-            },
-        ];
-        let insert_anim = InsertAnimation {
-            glyphs,
-            origin_cursor_rect: (50.0, 0.0, 2.0, 20.0),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        };
-        assert!(!insert_anim.is_finished(Instant::now()));
-        assert_eq!(insert_anim.glyphs[0].byte_start, 6);
-        assert_eq!(insert_anim.glyphs[0].byte_end, 11);
-    }
-
-    #[test]
-    fn test_delete_animation_uses_old_layout_and_new_cursor() {
-        let old_text = "hello";
-        let new_text = "he";
-        let glyphs = vec![
-            AnimatedGlyph {
-                byte_start: 2,
-                byte_end: 3,
-                text: "l".to_string(),
-                rect: (20.0, 0.0, 8.0, 20.0),
-                baseline_y: 16.0,
-                line_index: 0,
-            },
-            AnimatedGlyph {
-                byte_start: 3,
-                byte_end: 4,
-                text: "l".to_string(),
-                rect: (28.0, 0.0, 8.0, 20.0),
-                baseline_y: 16.0,
-                line_index: 0,
-            },
-            AnimatedGlyph {
-                byte_start: 4,
-                byte_end: 5,
-                text: "o".to_string(),
-                rect: (36.0, 0.0, 8.0, 20.0),
-                baseline_y: 16.0,
-                line_index: 0,
-            },
-        ];
-        let delete_anim = DeleteAnimation {
-            glyphs,
-            target_cursor_rect: (20.0, 0.0, 2.0, 20.0),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        };
-        assert!(!delete_anim.is_finished(Instant::now()));
-        assert_eq!(delete_anim.glyphs.len(), 3);
-        assert_eq!(delete_anim.glyphs[0].text, "l");
-        assert_eq!(delete_anim.target_cursor_rect.0, 20.0);
-    }
-
-    #[test]
-    fn test_unicode_delete_animation_no_panic() {
-        let old_text = "你好🙂世界";
-        let glyphs: Vec<AnimatedGlyph> = old_text
-            .char_indices()
-            .map(|(i, c)| AnimatedGlyph {
-                byte_start: i,
-                byte_end: i + c.len_utf8(),
-                text: c.to_string(),
-                rect: (0.0, 0.0, 10.0, 20.0),
-                baseline_y: 16.0,
-                line_index: 0,
-            })
-            .collect();
-        let delete_anim = DeleteAnimation {
-            glyphs,
-            target_cursor_rect: (0.0, 0.0, 2.0, 20.0),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        };
-        for g in &delete_anim.glyphs {
-            assert!(g.byte_start < old_text.len());
-            assert!(g.byte_end <= old_text.len());
-            assert!(old_text.is_char_boundary(g.byte_start));
-            assert!(old_text.is_char_boundary(g.byte_end));
-        }
-    }
-
-    #[test]
-    fn test_emoji_delete_animation_no_panic() {
-        let old_text = "a🙂b";
-        let glyphs: Vec<AnimatedGlyph> = old_text
-            .char_indices()
-            .map(|(i, c)| AnimatedGlyph {
-                byte_start: i,
-                byte_end: i + c.len_utf8(),
-                text: c.to_string(),
-                rect: (0.0, 0.0, 10.0, 20.0),
-                baseline_y: 16.0,
-                line_index: 0,
-            })
-            .collect();
-        assert_eq!(glyphs.len(), 3);
-        assert_eq!(glyphs[0].text, "a");
-        assert_eq!(glyphs[1].text, "🙂");
-        assert_eq!(glyphs[2].text, "b");
-    }
-
-    #[test]
-    fn test_mixed_text_insert_delete_no_panic() {
-        let text = "a，b🙂c";
-        for (i, c) in text.char_indices() {
-            assert!(text.is_char_boundary(i));
-            assert_eq!(&text[i..i + c.len_utf8()], c.to_string());
-        }
-    }
-
 }

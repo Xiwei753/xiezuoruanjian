@@ -2,9 +2,17 @@
 // EditorAnimationOverlay.qml — QML overlay animation layer for SujianEditorItem
 // =============================================================================
 // Consumes EditorAnimationEvent JSON from Rust core and renders short-lived
-// insert/delete animations as QML items. This is the new animation route:
+// insert/delete animations as QML items. This is the only animation route:
 // Core transaction → animation_events_json signal → QML overlay rendering.
 // The static text texture (Layer 0) and QML cursor remain unchanged.
+//
+// Rules:
+// - glyphRects > 8: no animation
+// - contains newline: no animation
+// - IME composing: no animation (only commit events)
+// - paste: no animation (Core already filters this)
+// - scroll/settings/load/chapter switch: clearAll()
+// - No rectangle highlight fallback — if glyphRects is empty, skip animation
 
 import QtQuick
 
@@ -38,6 +46,17 @@ Item {
                 root._handleEvent(events[i])
             }
         }
+
+        // Clear all ghosts when chapter loads or settings change
+        function onPlain_text_changed() {
+            root.clearAll()
+        }
+    }
+
+    onSuppressedChanged: {
+        if (suppressed) {
+            root.clearAll()
+        }
     }
 
     function _handleEvent(event) {
@@ -64,124 +83,90 @@ Item {
     function _createInsertAnimation(event) {
         var cursorRectX = editorItem.cursor_rect_x
         var cursorRectY = editorItem.cursor_rect_y
-        var cursorRectH = editorItem.cursor_rect_height
-        var duration = event.durationMs || 160
+        var duration = Math.max(80, Math.min(180, event.durationMs || 160))
 
-        if (event.glyphRects && Array.isArray(event.glyphRects) && event.glyphRects.length > 0) {
-            // ── Glyph Ghost 路径 ──
-            var component = Qt.createComponent("EditorGlyphGhost.qml")
-            if (component.status !== Component.Ready) return
+        if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
+            // No glyph rects — skip animation entirely, no rectangle fallback
+            return
+        }
 
-            for (var i = 0; i < event.glyphRects.length; i++) {
-                var gr = event.glyphRects[i]
-                var ghost = component.createObject(root, {
-                    "animKind": "insert",
-                    "startX": cursorRectX,
-                    "startY": cursorRectY,
-                    "endX": gr.x,
-                    "endY": gr.y,
-                    "glyphWidth": gr.w,
-                    "glyphHeight": gr.h,
-                    "width": gr.w,
-                    "height": gr.h,
-                    "duration": duration,
-                    "ghostColor": editorItem.text_color || "#E2E2E5",
-                    "glyphText": gr.char || "",
-                    "glyphFontFamily": editorItem.font_family || "",
-                    "glyphFontPixelSize": editorItem.font_pixel_size || 0
-                })
+        // Multi-char limit: > 8 glyphs → no animation
+        if (event.glyphRects.length > 8) return
 
-                _trackGhost(ghost)
-            }
-        } else {
-            // ── Fallback: 旧矩形高亮路径 ──
-            var text = event.text || ""
-            var charCount = text.length
-            if (charCount === 0) return
+        // Newline check: if any glyph char is newline, skip
+        for (var ci = 0; ci < event.glyphRects.length; ci++) {
+            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") return
+        }
 
-            var fontSize = editorItem.font_pixel_size || 16
-            var charWidth = fontSize * 0.6
-            var highlightWidth = Math.min(charCount, 8) * charWidth
-            var highlightX = cursorRectX - highlightWidth
-            var highlightY = cursorRectY
-            var highlightHeight = cursorRectH
+        // ── Glyph Ghost path ──
+        var component = Qt.createComponent("EditorGlyphGhost.qml")
+        if (component.status !== Component.Ready) return
 
-            var component = Qt.createComponent("EditorAnimationHighlight.qml")
-            if (component.status !== Component.Ready) return
-
-            var anim = component.createObject(root, {
-                "x": highlightX,
-                "y": highlightY,
-                "width": highlightWidth,
-                "height": highlightHeight,
+        for (var i = 0; i < event.glyphRects.length; i++) {
+            var gr = event.glyphRects[i]
+            var ghost = component.createObject(root, {
+                "animKind": "insert",
+                "startX": cursorRectX,
+                "startY": cursorRectY,
+                "endX": gr.x,
+                "endY": gr.y,
+                "glyphWidth": gr.w,
+                "glyphHeight": gr.h,
+                "width": gr.w,
+                "height": gr.h,
                 "duration": duration,
-                "color": editorItem.selection_color || "#006497",
-                "animKind": "insert"
+                "ghostColor": editorItem.text_color || "#E2E2E5",
+                "glyphText": gr.char || "",
+                "glyphFontFamily": editorItem.font_family || "",
+                "glyphFontPixelSize": editorItem.font_pixel_size || 0
             })
 
-            _trackGhost(anim)
+            _trackGhost(ghost)
         }
     }
 
     function _createDeleteAnimation(event) {
         var cursorRectX = editorItem.cursor_rect_x
         var cursorRectY = editorItem.cursor_rect_y
-        var cursorRectH = editorItem.cursor_rect_height
-        var duration = event.durationMs || 160
+        var duration = Math.max(80, Math.min(180, event.durationMs || 160))
 
-        if (event.glyphRects && Array.isArray(event.glyphRects) && event.glyphRects.length > 0) {
-            // ── Glyph Ghost 路径 ──
-            var component = Qt.createComponent("EditorGlyphGhost.qml")
-            if (component.status !== Component.Ready) return
+        if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
+            // No glyph rects — skip animation entirely, no rectangle fallback
+            return
+        }
 
-            for (var i = 0; i < event.glyphRects.length; i++) {
-                var gr = event.glyphRects[i]
-                var ghost = component.createObject(root, {
-                    "animKind": "delete",
-                    "startX": gr.x,
-                    "startY": gr.y,
-                    "endX": cursorRectX,
-                    "endY": cursorRectY,
-                    "glyphWidth": gr.w,
-                    "glyphHeight": gr.h,
-                    "width": gr.w,
-                    "height": gr.h,
-                    "duration": duration,
-                    "ghostColor": editorItem.text_color || "#E2E2E5",
-                    "glyphText": gr.char || "",
-                    "glyphFontFamily": editorItem.font_family || "",
-                    "glyphFontPixelSize": editorItem.font_pixel_size || 0
-                })
+        // Multi-char limit: > 8 glyphs → no animation
+        if (event.glyphRects.length > 8) return
 
-                _trackGhost(ghost)
-            }
-        } else {
-            // ── Fallback: 旧矩形高亮路径 ──
-            var text = event.text || ""
-            var charCount = text.length
-            if (charCount === 0) return
+        // Newline check: if any glyph char is newline, skip
+        for (var ci = 0; ci < event.glyphRects.length; ci++) {
+            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") return
+        }
 
-            var fontSize = editorItem.font_pixel_size || 16
-            var charWidth = fontSize * 0.6
-            var ghostWidth = Math.min(charCount, 8) * charWidth
-            var ghostX = cursorRectX
-            var ghostY = cursorRectY
-            var ghostHeight = cursorRectH
+        // ── Glyph Ghost path ──
+        var component = Qt.createComponent("EditorGlyphGhost.qml")
+        if (component.status !== Component.Ready) return
 
-            var component = Qt.createComponent("EditorAnimationHighlight.qml")
-            if (component.status !== Component.Ready) return
-
-            var anim = component.createObject(root, {
-                "x": ghostX,
-                "y": ghostY,
-                "width": ghostWidth,
-                "height": ghostHeight,
+        for (var i = 0; i < event.glyphRects.length; i++) {
+            var gr = event.glyphRects[i]
+            var ghost = component.createObject(root, {
+                "animKind": "delete",
+                "startX": gr.x,
+                "startY": gr.y,
+                "endX": cursorRectX,
+                "endY": cursorRectY,
+                "glyphWidth": gr.w,
+                "glyphHeight": gr.h,
+                "width": gr.w,
+                "height": gr.h,
                 "duration": duration,
-                "color": editorItem.text_color || "#E2E2E5",
-                "animKind": "delete"
+                "ghostColor": editorItem.text_color || "#E2E2E5",
+                "glyphText": gr.char || "",
+                "glyphFontFamily": editorItem.font_family || "",
+                "glyphFontPixelSize": editorItem.font_pixel_size || 0
             })
 
-            _trackGhost(anim)
+            _trackGhost(ghost)
         }
     }
 
