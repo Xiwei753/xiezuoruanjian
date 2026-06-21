@@ -623,7 +623,7 @@ mod tests {
 
         assert_eq!(res["success"], false);
         assert_eq!(res["errorCode"], "CORE_ERROR");
-        assert!(res["userMessage"].as_str().ok_or("No userMessage")?.contains("不能为空"));
+        assert_eq!(res["messageKey"], "error.empty_title");
 
         Ok(())
     }

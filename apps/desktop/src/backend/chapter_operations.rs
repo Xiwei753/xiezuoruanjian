@@ -79,7 +79,7 @@ impl AppBackend {
                     "success": false,
                     "errorCode": "CORE_ERROR",
                     "messageKey": "error.io",
-                    "userMessage": format!("读取章节失败: {}", e),
+
                     "rawError": format!("{}", e),
                     "warnings": [],
                     "changedPaths": [],
@@ -93,7 +93,7 @@ impl AppBackend {
             "success": false,
             "errorCode": "INVALID_WORKSPACE",
             "messageKey": "error.invalid_workspace",
-            "userMessage": "后端未初始化",
+
             "rawError": "Core not initialized",
             "warnings": [],
             "changedPaths": [],
@@ -133,12 +133,12 @@ impl AppBackend {
                 }
                 Err(e) => {
                     self.debug_error("chapter", "open_chapter_failed", &e.to_string());
-                    return bridge_error_object(&format!("读取章节失败: {}", e), "CORE_ERROR");
+                    return bridge_error_object("error.io", "CORE_ERROR", &format!("读取章节失败: {}", e));
                 }
             }
         }
 
-        bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
+        bridge_error_object("error.invalid_workspace", "INVALID_WORKSPACE", "Core not initialized")
     }
 
     pub(crate) fn save_chapter(
@@ -192,7 +192,7 @@ impl AppBackend {
                     serde_to_qjson_object(serde_json::json!({
                         "success": true,
                         "data": serde_json::to_value(receipt).unwrap_or_default(),
-                        "userMessage": "保存成功",
+
                         "changedEntities": ["ChapterContent"]
                     }))
                 }
@@ -210,12 +210,12 @@ impl AppBackend {
                         );
                         let msg = blocked_empty_overwrite_user_message();
                         self.current_save_status = msg.to_string();
-                        self.set_error(msg);
+                        self.set_error("error.empty_overwrite_blocked");
                         serde_to_qjson_object(serde_json::json!({
                             "success": false,
                             "errorCode": blocked_empty_overwrite_error_code(),
                             "messageKey": "error.empty_overwrite_blocked",
-                            "userMessage": msg,
+                            "messageArgs": {},
                             "rawError": e.to_string(),
                             "changedEntities": []
                         }))
@@ -225,7 +225,7 @@ impl AppBackend {
                             "success": false,
                             "errorCode": "CORE_ERROR",
                             "messageKey": "error.core_error",
-                            "userMessage": format!("保存失败: {}", e),
+                            "messageArgs": {},
                             "rawError": e.to_string(),
                             "changedEntities": []
                         }))
@@ -235,7 +235,7 @@ impl AppBackend {
         } else {
             self.debug_error("chapter", "save_chapter_failed", "core_not_initialized");
             self.current_save_status = "保存失败".to_string();
-            bridge_error_object("后端未初始化", "INVALID_WORKSPACE")
+        bridge_error_object("error.invalid_workspace", "INVALID_WORKSPACE", "Core not initialized")
         };
 
         self.save_status_changed();
@@ -281,16 +281,17 @@ impl AppBackend {
                         );
                         self.current_save_status = "已清空".to_string();
                     } else {
-                        let err_msg = format!(
-                            "清空章节失败: {}",
-                            envelope
-                                .get("userMessage")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("未知错误")
-                        );
-                        self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
+                        let message_key = envelope
+                            .get("messageKey")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("error.core_error");
+                        let raw_err = envelope
+                            .get("rawError")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("未知错误");
+                        self.debug_error("chapter", "clear_chapter_content_failed", raw_err);
                         self.current_save_status = "清空失败".to_string();
-                        self.set_error(&err_msg);
+                        self.set_error(message_key);
                     }
                     self.save_status_changed();
                     self.workspace_content_changed();
@@ -301,7 +302,7 @@ impl AppBackend {
                     self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
                     self.current_save_status = "清空失败".to_string();
                     self.save_status_changed();
-                    bridge_error_object(&err_msg, "JSON_ERROR")
+                    bridge_error_object("error.json_parse", "JSON_ERROR", &err_msg)
                 }
             }
         } else {
@@ -312,8 +313,8 @@ impl AppBackend {
             );
             self.current_save_status = "清空失败".to_string();
             self.save_status_changed();
-            self.set_error("清空章节失败: 后端未初始化");
-            bridge_error_object("清空章节失败: 后端未初始化", "INVALID_WORKSPACE")
+            self.set_error("error.invalid_workspace");
+            bridge_error_object("error.invalid_workspace", "INVALID_WORKSPACE", "Core not initialized")
         }
     }
 }

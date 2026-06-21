@@ -56,15 +56,15 @@ pub(crate) fn serde_to_qjson_array(value: serde_json::Value) -> QJsonArray {
     }
 }
 
-pub(crate) fn bridge_error_object(message: &str, code: &str) -> QJsonObject {
-    // message 现在是本地化后的用户可见文案（来自 message_key_mapper 或调用方传入）
-    // rawError 放技术细节
+pub(crate) fn bridge_error_object(message_key: &str, code: &str, raw_error: &str) -> QJsonObject {
+    // messageKey 供 QML 侧做 qsTr 翻译，rawError 放技术细节
+    // 不再输出 userMessage，用户可见文案由 QML 侧根据 messageKey 翻译
     serde_to_qjson_object(serde_json::json!({
         "success": false,
         "errorCode": code,
-        "messageKey": "error.core_error",
-        "userMessage": message,
-        "rawError": message,
+        "messageKey": message_key,
+        "messageArgs": {},
+        "rawError": raw_error,
         "warnings": [],
         "changedPaths": [],
         "changedEntities": []
@@ -84,7 +84,7 @@ pub(crate) fn bridge_success_object(data: serde_json::Value) -> QJsonObject {
 pub(crate) fn qjson_object_from_json(raw: &str) -> QJsonObject {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value) => serde_to_qjson_object(value),
-        Err(e) => bridge_error_object(&format!("无效 Bridge 返回: {}", e), "JSON_ERROR"),
+        Err(e) => bridge_error_object("error.json_parse", "JSON_ERROR", &format!("无效 Bridge 返回: {}", e)),
     }
 }
 

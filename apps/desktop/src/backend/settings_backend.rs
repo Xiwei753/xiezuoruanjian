@@ -508,12 +508,12 @@ impl AppBackend {
                     .as_str()
                     .unwrap_or("UNKNOWN");
                 let message_key = local_envelope["messageKey"].as_str().unwrap_or("");
-                let user_message = if !message_key.is_empty() {
-                    crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                let resolved_key = if !message_key.is_empty() {
+                    crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                 } else {
-                    local_envelope["userMessage"].as_str().unwrap_or("保存本地设置失败")
+                    "error.other".to_string()
                 };
-                error_msg = Some(format!("{} ({})", user_message, error_code));
+                error_msg = Some(format!("{} ({})", resolved_key, error_code));
             }
 
             let mut syncable = core.load_syncable_settings().unwrap_or_else(|_| {
@@ -546,12 +546,12 @@ impl AppBackend {
                     .as_str()
                     .unwrap_or("UNKNOWN");
                 let message_key = syncable_envelope["messageKey"].as_str().unwrap_or("");
-                let user_message = if !message_key.is_empty() {
-                    crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                let resolved_key = if !message_key.is_empty() {
+                    crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                 } else {
-                    syncable_envelope["userMessage"].as_str().unwrap_or("保存同步设置失败")
+                    "error.other".to_string()
                 };
-                error_msg = Some(format!("{} ({})", user_message, error_code));
+                error_msg = Some(format!("{} ({})", resolved_key, error_code));
             }
         } else {
             error_msg = Some("Core 未初始化".to_string());

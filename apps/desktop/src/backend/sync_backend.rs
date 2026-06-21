@@ -646,12 +646,12 @@ impl AppBackend {
             if config_envelope["success"] != true {
                 let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
                 let message_key = config_envelope["messageKey"].as_str().unwrap_or("");
-                let user_message = if !message_key.is_empty() {
-                    crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                let resolved_key = if !message_key.is_empty() {
+                    crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                 } else {
-                    config_envelope["userMessage"].as_str().unwrap_or("保存同步配置失败")
+                    "error.other".to_string()
                 };
-                error_msg = Some(format!("{} ({})", user_message, error_code));
+                error_msg = Some(format!("{} ({})", resolved_key, error_code));
             } else {
                 let secrets_result = api.save_sync_secrets(s);
                 let secrets_json = match secrets_result {
@@ -669,12 +669,12 @@ impl AppBackend {
                         .as_str()
                         .unwrap_or("UNKNOWN");
                     let message_key = secrets_envelope["messageKey"].as_str().unwrap_or("");
-                    let user_message = if !message_key.is_empty() {
-                        crate::backend::message_key_mapper::message_key_to_qstr_key(message_key)
+                    let resolved_key = if !message_key.is_empty() {
+                        crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                     } else {
-                        secrets_envelope["userMessage"].as_str().unwrap_or("保存同步凭证失败")
+                        "error.other".to_string()
                     };
-                    error_msg = Some(format!("{} ({})", user_message, error_code));
+                    error_msg = Some(format!("{} ({})", resolved_key, error_code));
                 }
             }
         } else {

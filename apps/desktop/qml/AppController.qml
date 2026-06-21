@@ -47,7 +47,32 @@ QtObject {
         return Math.random().toString(36).substring(2, 8);
     }
 
+    function resolveMessageKey(messageKey) {
+        switch (messageKey) {
+        case "error.io": return qsTr("文件读写失败，请检查工作区权限和磁盘状态");
+        case "error.json": return qsTr("数据文件格式异常，请检查工作区文件是否损坏");
+        case "error.invalid_workspace": return qsTr("不是有效的工作区");
+        case "error.project_not_found": return qsTr("作品不存在或已被删除");
+        case "error.volume_not_found": return qsTr("卷不存在或已被删除");
+        case "error.chapter_not_found": return qsTr("章节不存在或已被删除");
+        case "error.empty_overwrite_blocked": return qsTr("已阻止空内容覆盖现有章节");
+        case "error.not_implemented": return qsTr("该功能尚未实现");
+        case "error.refuse_delete_workspace_root": return qsTr("拒绝删除工作区根目录");
+        case "error.invalid_delete_target": return qsTr("删除目标无效");
+        case "error.sync_conflict": return qsTr("同步冲突，请手动处理冲突文件后重试");
+        case "error.sync_failed": return qsTr("同步失败，请检查网络和配置");
+        case "error.other": return qsTr("操作失败");
+        case "error.core_error": return qsTr("核心模块错误");
+        case "error.clipboard_unavailable": return qsTr("复制失败：未找到可用的剪贴板后端");
+        case "error.json_parse": return qsTr("数据解析失败");
+        default: return qsTr("操作失败");
+        }
+    }
+
     function emitError(message) {
+        if (message && message.startsWith("error.")) {
+            message = resolveMessageKey(message);
+        }
         errorMessage = message || qsTr("操作失败");
         errorRaised(errorMessage);
     }

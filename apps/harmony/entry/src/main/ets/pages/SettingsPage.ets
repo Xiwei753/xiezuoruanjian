@@ -13,6 +13,7 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, The
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
+import { MessageKeyMapper } from '../utils/MessageKeyMapper'
 
 interface SettingsSelectOption {
   value: string
@@ -128,7 +129,7 @@ struct SettingsPage {
           this.saveMessage = ''
         }, 2000)
       } else {
-        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
+        this.saveMessage = MessageKeyMapper.resolveMessage(result.messageKey, result.messageArgs, result.errorCode)
       }
     } catch (err) {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
@@ -149,7 +150,7 @@ struct SettingsPage {
           this.syncMessage = ''
         }, 3000)
       } else {
-        this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_failed').id)
+        this.syncMessage = MessageKeyMapper.resolveMessage(result.messageKey, result.messageArgs, result.errorCode)
       }
     } catch (err) {
       this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)

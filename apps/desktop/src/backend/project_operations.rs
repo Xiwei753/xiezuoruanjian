@@ -248,13 +248,11 @@ impl AppBackend {
     fn mutation_success_json(
         &mut self,
         data: serde_json::Value,
-        user_message: &str,
         changed_entities: Vec<&str>,
     ) -> QString {
         serde_json::json!({
             "success": true,
             "data": data,
-            "userMessage": user_message,
             "state": self.current_app_state_value(),
             "changedEntities": changed_entities
         })
@@ -262,13 +260,15 @@ impl AppBackend {
         .into()
     }
 
-    fn mutation_error_json(&mut self, user_message: String, raw_error: String) -> QString {
-        self.set_error(&user_message);
+    fn mutation_error_json(&mut self, message_key: String, raw_error: String) -> QString {
+        // message_key 供 QML 侧做 qsTr 翻译
+        // 不再输出 userMessage
+        self.set_error(&message_key);
         serde_json::json!({
             "success": false,
             "errorCode": "CORE_ERROR",
-            "messageKey": "error.core_error",
-            "userMessage": user_message,
+            "messageKey": message_key,
+            "messageArgs": {},
             "rawError": raw_error,
             "state": self.current_app_state_value(),
             "changedEntities": []
@@ -297,14 +297,10 @@ impl AppBackend {
                         .get("messageKey")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let user_msg = if !message_key.is_empty() {
-                        crate::backend::message_key_mapper::message_key_to_qstr_key(message_key).to_string()
+                    let resolved_key = if !message_key.is_empty() {
+                        crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                     } else {
-                        envelope
-                            .get("userMessage")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("操作失败")
-                            .to_string()
+                        "error.other".to_string()
                     };
                     let raw_error = envelope
                         .get("rawError")
@@ -313,12 +309,12 @@ impl AppBackend {
                         .to_string();
                     // 保留 messageKey 到 envelope 中，供 QML 侧做进一步分支
                     envelope["messageKey"] = serde_json::Value::String(message_key.to_string());
-                    self.mutation_error_json(user_msg, raw_error)
+                    self.mutation_error_json(resolved_key, raw_error)
                 }
             }
             Err(e) => {
                 let msg = format!("解析 envelope 失败: {}", e);
-                self.mutation_error_json(msg.clone(), msg)
+                self.mutation_error_json("error.json_parse".to_string(), msg)
             }
         }
     }
@@ -327,13 +323,11 @@ impl AppBackend {
         let title_str = title.to_string();
 
         if title_str.trim().is_empty() {
-            let msg = "作品名不能为空";
-            return self.mutation_error_json(msg.to_string(), msg.to_string());
+            return self.mutation_error_json("error.empty_title".to_string(), "作品名不能为空".to_string());
         }
 
         if !self.current_has_workspace || self.current_workspace.is_empty() {
-            let msg = "未打开工作区，无法创建作品。请先新建或打开一个工作区。";
-            return self.mutation_error_json(msg.to_string(), msg.to_string());
+            return self.mutation_error_json("error.invalid_workspace".to_string(), "未打开工作区，无法创建作品。请先新建或打开一个工作区。".to_string());
         }
 
         if let Some(api) = self.core_api() {
@@ -376,8 +370,7 @@ impl AppBackend {
                 }
             })
         } else {
-            let msg = "核心模块未初始化";
-            self.mutation_error_json(msg.to_string(), msg.to_string())
+            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
         }
     }
 
@@ -431,8 +424,7 @@ impl AppBackend {
                 );
             })
         } else {
-            let msg = "核心模块未初始化";
-            self.mutation_error_json(msg.to_string(), msg.to_string())
+            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
         }
     }
 
@@ -488,51 +480,8 @@ impl AppBackend {
                 );
             })
         } else {
-            let msg = "核心模块未初始化";
-            self.mutation_error_json(msg.to_string(), msg.to_string())
+            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
         }
-    }
-
-    pub(crate) fn select_tree_item_json(
-        &mut self,
-        item_type: QString,
-        project_id: QString,
-        volume_id: QString,
-        chapter_id: QString,
-        action_id: QString,
-    ) -> QString {
-        let t = item_type.to_string();
-        let action_id_str = action_id.to_string();
-        self.debug_log(
-            "tree",
-            "select_item_start",
-            &format!(
-                "[actionId={}] type={}, project_id={}, volume_id={}, chapter_id={}",
-                action_id_str,
-                t,
-                project_id.to_string(),
-                volume_id.to_string(),
-                chapter_id.to_string()
-            ),
-        );
-        if t == "project" {
-            self.select_project(project_id);
-        } else if t == "volume" {
-            self.select_volume(project_id, volume_id);
-        } else if t == "chapter" {
-            self.select_chapter(project_id, volume_id, chapter_id);
-        }
-        self.debug_log(
-            "tree",
-            "select_item_success",
-            &format!("[actionId={}] selection completed", action_id_str),
-        );
-        let final_res = serde_json::json!({
-            "success": true,
-            "userMessage": "选择成功",
-            "state": serde_json::from_str::<serde_json::Value>(&self.refresh_app_state_json().to_string()).unwrap_or_default()
-        });
-        final_res.to_string().into()
     }
 
     pub(crate) fn delete_project_json(
@@ -572,8 +521,7 @@ impl AppBackend {
                 );
             })
         } else {
-            let msg = "核心模块未初始化";
-            self.mutation_error_json(msg.to_string(), msg.to_string())
+            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
         }
     }
 
@@ -618,8 +566,7 @@ impl AppBackend {
                 );
             })
         } else {
-            let msg = "核心模块未初始化";
-            self.mutation_error_json(msg.to_string(), msg.to_string())
+            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
         }
     }
 
@@ -665,8 +612,7 @@ impl AppBackend {
                 );
             })
         } else {
-            let msg = "核心模块未初始化";
-            self.mutation_error_json(msg.to_string(), msg.to_string())
+            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
         }
     }
 
@@ -735,7 +681,7 @@ impl AppBackend {
             })
         } else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
-            self.mutation_error_json(format!("重命名作品失败: {}", raw_error), raw_error)
+            self.mutation_error_json("error.core_error".to_string(), raw_error)
         }
     }
 
@@ -796,7 +742,7 @@ impl AppBackend {
             })
         } else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
-            self.mutation_error_json(format!("重命名分卷失败: {}", raw_error), raw_error)
+            self.mutation_error_json("error.core_error".to_string(), raw_error)
         }
     }
 
@@ -862,7 +808,7 @@ impl AppBackend {
             })
         } else {
             let raw_error = WriterError::InvalidWorkspace.to_string();
-            self.mutation_error_json(format!("重命名章节失败: {}", raw_error), raw_error)
+            self.mutation_error_json("error.core_error".to_string(), raw_error)
         }
     }
 
