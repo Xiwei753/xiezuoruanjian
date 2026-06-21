@@ -1,5 +1,3 @@
-import { resourceManager } from '@kit.LocalizationKit'
-
 /**
  * 将 Core 返回的 messageKey + messageArgs 映射到 HarmonyOS string resource。
  *
