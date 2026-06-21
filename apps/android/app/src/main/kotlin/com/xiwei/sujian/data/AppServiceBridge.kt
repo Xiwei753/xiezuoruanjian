@@ -424,5 +424,67 @@ class AppServiceBridge(workspacePath: String) {
     fun resolveScreenPolicy(screenRole: uniffi.writer_core.ScreenRoleDto, shellMode: uniffi.writer_core.ShellModeDto): BridgeResult<uniffi.writer_core.ScreenPolicyDto> = wrapResult {
         service.resolveScreenPolicy(screenRole, shellMode)
     }
+
+    // ── Editor Animation ──
+
+    /**
+     * 调用 Core 的 EditorEngine 计算动画事件。
+     *
+     * Core 负责 should_animate 判断和事件语义（Insert/Delete/Cursor），
+     * Android 端负责坐标计算和渲染。
+     *
+     * @return Core 返回的动画事件列表 JSON 字符串，失败时返回空数组 "[]"
+     */
+    fun editorAnimationEvents(
+        oldText: String,
+        newText: String,
+        oldCursorIndex: UInt,
+        newCursorIndex: UInt,
+        cause: String,
+        maxAnimatedChars: UInt,
+        animationDurationMs: ULong
+    ): String {
+        return try {
+            val causeDto = when (cause) {
+                "Typing" -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
+                "Delete" -> uniffi.writer_core.EditorTransactionCauseDto.DELETE
+                "ImeComposition" -> uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION
+                "Paste" -> uniffi.writer_core.EditorTransactionCauseDto.PASTE
+                "Undo" -> uniffi.writer_core.EditorTransactionCauseDto.UNDO
+                "Redo" -> uniffi.writer_core.EditorTransactionCauseDto.REDO
+                "Load" -> uniffi.writer_core.EditorTransactionCauseDto.LOAD
+                "Format" -> uniffi.writer_core.EditorTransactionCauseDto.FORMAT
+                "Programmatic" -> uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
+                else -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
+            }
+            val events = service.editorAnimationEvents(
+                oldText, newText, oldCursorIndex, newCursorIndex,
+                causeDto, maxAnimatedChars, animationDurationMs
+            )
+            // 将 Core 返回的事件列表序列化为 JSON
+            gson.toJson(events.map { event ->
+                mapOf(
+                    "id" to event.id,
+                    "kind" to when (event.kind) {
+                        uniffi.writer_core.EditorAnimationKindDto.INSERT -> "insert"
+                        uniffi.writer_core.EditorAnimationKindDto.DELETE -> "delete"
+                        uniffi.writer_core.EditorAnimationKindDto.CURSOR -> "cursor"
+                    },
+                    "rangeStart" to event.rangeStart,
+                    "rangeLen" to event.rangeLen,
+                    "text" to event.text,
+                    "oldCursorIndex" to event.oldCursorIndex,
+                    "newCursorIndex" to event.newCursorIndex,
+                    "durationMs" to event.durationMs
+                )
+            })
+        } catch (e: UnsatisfiedLinkError) {
+            Log.e(TAG, "Native library is not loaded", e)
+            "[]"
+        } catch (e: Exception) {
+            Log.e(TAG, "editorAnimationEvents failed: ${e.message}", e)
+            "[]"
+        }
+    }
 }
 

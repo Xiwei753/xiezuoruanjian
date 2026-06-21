@@ -25,6 +25,7 @@ use std::sync::Mutex;
 
 use once_cell::sync::OnceCell;
 
+use crate::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
 use crate::facade::WriterCore;
 
 pub(crate) static CORE: OnceCell<Mutex<Option<WriterCore>>> = OnceCell::new();
@@ -164,4 +165,60 @@ pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
         Ok(v) => v,
         Err(_) => 0,
     }
+}
+
+/// # Safety
+/// `old_text`, `new_text`, `cause` must be valid null-terminated UTF-8 C strings.
+/// `old_cursor_index` and `new_cursor_index` are UTF-8 byte offsets.
+/// Returns a caller-owned JSON C string. Free with `writer_core_free_string`.
+///
+/// This is a **stateless** function that does not require `writer_core_init`.
+/// It computes animation events purely from the input parameters.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_editor_animation_events(
+    old_text: *const c_char,
+    new_text: *const c_char,
+    old_cursor_index: u32,
+    new_cursor_index: u32,
+    cause: *const c_char,
+    max_animated_chars: u32,
+    animation_duration_ms: u32,
+) -> *mut c_char {
+    let old = match c_str_to_rust(old_text) {
+        Ok(s) => s,
+        Err(_) => return err_json("INVALID_ARG", "old_text is null or invalid UTF-8"),
+    };
+    let new = match c_str_to_rust(new_text) {
+        Ok(s) => s,
+        Err(_) => return err_json("INVALID_ARG", "new_text is null or invalid UTF-8"),
+    };
+    let cause_str = match c_str_to_rust(cause) {
+        Ok(s) => s,
+        Err(_) => return err_json("INVALID_ARG", "cause is null or invalid UTF-8"),
+    };
+
+    let core_cause = match cause_str.as_str() {
+        "Typing" => EditorTransactionCause::Typing,
+        "Delete" => EditorTransactionCause::Delete,
+        "ImeComposition" => EditorTransactionCause::ImeComposition,
+        "Paste" => EditorTransactionCause::Paste,
+        "Undo" => EditorTransactionCause::Undo,
+        "Redo" => EditorTransactionCause::Redo,
+        "Load" => EditorTransactionCause::Load,
+        "Format" => EditorTransactionCause::Format,
+        "Programmatic" => EditorTransactionCause::Programmatic,
+        _ => EditorTransactionCause::Typing,
+    };
+
+    let old_sel = EditorSelection::collapsed(&old, old_cursor_index as usize);
+    let new_sel = EditorSelection::collapsed(&new, new_cursor_index as usize);
+
+    let mut engine = EditorEngine::with_animation_limits(
+        max_animated_chars as usize,
+        animation_duration_ms as u64,
+    );
+    let transaction = engine.create_transaction(old, new, old_sel, new_sel, core_cause);
+    let events = engine.animation_events(&transaction);
+
+    ok_json(events)
 }

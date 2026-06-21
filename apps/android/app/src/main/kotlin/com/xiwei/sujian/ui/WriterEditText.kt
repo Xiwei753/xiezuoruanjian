@@ -73,6 +73,24 @@ class WriterEditText @JvmOverloads constructor(
         typingAnimationController?.setTypingAnimationEnabled(enabled, durationMs)
     }
 
+    /**
+     * 设置 Core 动画事件提供者。
+     *
+     * 调用此方法后，TypingAnimationController 将通过 Core 的 EditorEngine
+     * 判断 should_animate 和事件语义，而非本地 count<=3 判断。
+     *
+     * 通常在 EditorActivity 初始化 Core 连接后调用：
+     * ```kotlin
+     * writerEditText.setAnimationEventProvider(AnimationEventProvider { old, new, ... ->
+     *     service.editorAnimationEvents(old, new, ...)
+     * })
+     * ```
+     */
+    fun setAnimationEventProvider(provider: AnimationEventProvider) {
+        if (!controllersReady) return
+        typingAnimationController?.setAnimationEventProvider(provider)
+    }
+
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         if (!controllersReady) return
         lastSmoothEnabled = enabled
@@ -300,10 +318,11 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     fun performCopy() {
+        val editable = text ?: return
         val selStart = selectionStart
         val selEnd = selectionEnd
-        if (selStart != selEnd && selStart >= 0 && selEnd <= text!!.length) {
-            val selectedText = text!!.subSequence(selStart, selEnd).toString()
+        if (selStart != selEnd && selStart >= 0 && selEnd <= editable.length) {
+            val selectedText = editable.subSequence(selStart, selEnd).toString()
             val clipboard = android.content.ClipData.newPlainText("text", selectedText)
             val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
             cm.setPrimaryClip(clipboard)
@@ -311,32 +330,29 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     fun onPerformCut() {
+        val editable = text ?: return
         val selStart = selectionStart
         val selEnd = selectionEnd
-        if (selStart != selEnd && selStart >= 0 && selEnd <= text!!.length) {
-            val selectedText = text!!.subSequence(selStart, selEnd).toString()
+        if (selStart != selEnd && selStart >= 0 && selEnd <= editable.length) {
+            val selectedText = editable.subSequence(selStart, selEnd).toString()
             val clipboard = android.content.ClipData.newPlainText("text", selectedText)
             val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
             cm.setPrimaryClip(clipboard)
             // 删除选中文本 - 需要禁用动画，避免 TextWatcher 冲突
-            text!!.delete(selStart, selEnd)
+            editable.delete(selStart, selEnd)
         }
     }
 
     fun performPasteFromSystem(id: Int) {
+        val editable = text ?: return
         val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val clip = cm.primaryClip ?: return
         if (clip.itemCount > 0) {
             val pasteText = clip.getItemAt(0)?.text?.toString() ?: return
             val selStart = selectionStart
             val selEnd = selectionEnd
-            if (selStart >= 0 && selEnd <= text!!.length) {
-                if (id == android.R.id.pasteAsPlainText) {
-                    // 纯文本粘贴：直接替换
-                    text!!.replace(selStart, selEnd, pasteText)
-                } else {
-                    text!!.replace(selStart, selEnd, pasteText)
-                }
+            if (selStart >= 0 && selEnd <= editable.length) {
+                editable.replace(selStart, selEnd, pasteText)
             }
         }
     }
